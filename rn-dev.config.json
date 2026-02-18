@@ -1,0 +1,10 @@
+{
+  "platform": {
+    "darwin": "ios",
+    "win32": "android",
+    "linux": "android"
+  },
+  "ios": {
+    "simulator": "iPhone 17 Pro"
+  }
+}

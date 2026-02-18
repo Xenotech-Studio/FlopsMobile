@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "android": "react-native run-android",
+    "dev": "node scripts/dev.js",
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start",
@@ -16,6 +17,7 @@
     "react-native-safe-area-context": "^5.5.2"
   },
   "devDependencies": {
+    "concurrently": "^9.1.2",
     "@babel/core": "^7.25.2",
     "@babel/preset-env": "^7.25.3",
     "@babel/runtime": "^7.25.0",
