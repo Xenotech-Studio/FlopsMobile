@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "android": "react-native run-android",
+    "build": "node scripts/build.js",
     "dev": "node scripts/dev.js",
     "ios": "react-native run-ios --mode Debug",
     "lint": "eslint .",
