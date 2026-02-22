@@ -51,7 +51,7 @@ export function LoginScreen() {
     <SafeAreaView style={styles.safeContainer} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.select({ ios: 'padding', android: 'height' })}
       >
         <View style={styles.card}>
         <Text style={styles.title}>登录</Text>

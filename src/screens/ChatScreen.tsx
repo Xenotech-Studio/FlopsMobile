@@ -387,7 +387,7 @@ export function ChatScreen() {
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
         style={styles.keyboardView}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.select({ ios: 'padding', android: 'height' })}
         keyboardVerticalOffset={0}
       >
         <View style={styles.header}>
