@@ -5,7 +5,7 @@
   "scripts": {
     "android": "react-native run-android",
     "dev": "node scripts/dev.js",
-    "ios": "react-native run-ios",
+    "ios": "react-native run-ios --mode Debug",
     "lint": "eslint .",
     "start": "react-native start",
     "test": "jest"

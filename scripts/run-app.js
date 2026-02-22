@@ -46,6 +46,7 @@ function run() {
 
   const args = ['react-native', `run-${target}`];
   if (target === 'ios') {
+    args.push('--mode', 'Debug');
     const simulator = getIosSimulator();
     if (simulator) {
       args.push('--simulator', simulator);

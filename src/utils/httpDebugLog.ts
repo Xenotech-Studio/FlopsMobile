@@ -63,14 +63,20 @@ function logRequest(method: string, url: string, headers: Record<string, string>
   const h = truncate(JSON.stringify(maskSecretHeaders(headers), null, 0), MAX_HEADERS_LOG);
   const b = body == null ? '(无)' : truncate(sanitizeBodyForLog(body), MAX_BODY_LOG);
   const lines = [`${TAG} >>> ${method} ${url}`, `${TAG}     Request Headers: ${h}`, `${TAG}     Request Body: ${b}`];
-  lines.forEach((l) => { logLine('warn', l); pushInAppLog(l); });
+  lines.forEach((l) => { logLine('log', l); pushInAppLog(l); });
 }
 
-function logResponse(status: number, statusText: string, headers: Record<string, string>, body: string | null) {
+function logResponse(
+  status: number,
+  statusText: string,
+  headers: Record<string, string>,
+  body: string | null,
+  level: 'log' | 'warn' = 'log'
+) {
   const h = truncate(JSON.stringify(maskSecretHeaders(headers), null, 0), MAX_HEADERS_LOG);
   const b = body == null ? '(无)' : truncate(body, MAX_BODY_LOG);
   const lines = [`${TAG} <<< ${status} ${statusText}`, `${TAG}     Response Headers: ${h}`, `${TAG}     Response Body: ${b}`];
-  lines.forEach((l) => { logLine('warn', l); pushInAppLog(l); });
+  lines.forEach((l) => { logLine(level, l); pushInAppLog(l); });
 }
 
 /**
@@ -99,17 +105,18 @@ export async function fetchWithDebugLog(
     const res = await (fetch as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>)(input, init);
     const resHeaders = headersToObject(res.headers);
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
+    const responseLevel: 'log' | 'warn' = res.ok ? 'log' : 'warn';
 
     if (ENABLE_HTTP_DEBUG) {
       if (contentType.includes('event-stream') || contentType.includes('stream')) {
-        logResponse(res.status, res.statusText, resHeaders, '[streaming，不打印 body]');
+        logResponse(res.status, res.statusText, resHeaders, '[streaming，不打印 body]', responseLevel);
       } else {
         try {
           const clone = res.clone();
           const text = await clone.text();
-          logResponse(res.status, res.statusText, resHeaders, text);
+          logResponse(res.status, res.statusText, resHeaders, text, responseLevel);
         } catch (e) {
-          logResponse(res.status, res.statusText, resHeaders, `(读取 body 失败: ${e})`);
+          logResponse(res.status, res.statusText, resHeaders, `(读取 body 失败: ${e})`, responseLevel);
         }
       }
     }
