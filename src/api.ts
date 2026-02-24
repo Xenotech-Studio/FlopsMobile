@@ -14,6 +14,7 @@ export type ChatStreamEvent =
   | { type: 'thinking' }
   | { type: 'checking_tools' }
   | { type: 'tool_start'; tool_name: string; arguments?: string }
+  | { type: 'tool_stream'; tool_name: string; chunk: string }
   | { type: 'tool_result'; tool_name: string; result: unknown }
   | { type: 'safety_confirmation_required'; tool_name: string; review_id: string; command?: string; cwd?: string; arguments?: string; review?: Record<string, unknown>; conversation_id?: string }
   | { type: 'safety_review'; tool_name: string; review: Record<string, unknown> }

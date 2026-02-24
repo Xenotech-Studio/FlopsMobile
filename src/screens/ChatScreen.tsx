@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
@@ -19,11 +18,14 @@ import {
   submitSafetyDecision,
   type ChatStreamEvent,
 } from '../api';
+import { MarkdownContent } from '../components/MarkdownContent';
 
 type Message =
   | { role: 'user'; content: string }
   | { role: 'assistant'; content: string; blocks?: StreamBlock[] }
   | { role: 'error'; content: string };
+
+type ToolResult = { stdout?: string; error?: string; success?: boolean };
 
 type StreamBlock =
   | { type: 'text'; content: string }
@@ -32,7 +34,8 @@ type StreamBlock =
       tool_name: string;
       status: string;
       arguments?: string;
-      result?: unknown;
+      streaming_content?: string;
+      result?: ToolResult | unknown;
       review_id?: string;
       conversation_id?: string;
       review?: Record<string, unknown>;
@@ -116,7 +119,7 @@ export function ChatScreen() {
           for (let i = 0; i < localBlocks.length; i++) {
             const b = localBlocks[i];
             if (b.type === 'tool' && b.tool_name === name && b.status !== 'completed') {
-              localBlocks[i] = { ...b, status: 'running', arguments: event.arguments };
+              localBlocks[i] = { ...b, status: 'running', arguments: event.arguments, streaming_content: '' };
               updated = true;
               break;
             }
@@ -127,9 +130,25 @@ export function ChatScreen() {
               tool_name: name,
               status: 'running',
               arguments: event.arguments,
+              streaming_content: '',
             });
           }
           syncBlocks();
+        }
+        if (event.type === 'tool_stream') {
+          const name = String(event.tool_name || 'local_cursor_agent');
+          const chunk = typeof (event as { chunk?: string }).chunk === 'string' ? (event as { chunk: string }).chunk : '';
+          if (chunk) {
+            for (let i = localBlocks.length - 1; i >= 0; i--) {
+              const b = localBlocks[i];
+              if (b.type === 'tool' && b.tool_name === name && b.status === 'running') {
+                const cur = b.streaming_content ?? '';
+                localBlocks[i] = { ...b, streaming_content: cur + chunk };
+                break;
+              }
+            }
+            syncBlocks();
+          }
         }
         if (event.type === 'tool_result') {
           setStreamStatus('tool_result');
@@ -304,7 +323,160 @@ export function ChatScreen() {
     [session, conversationId]
   );
 
+  function parseCursorAgentArgs(block: StreamBlock): { prompt: string; cwd: string } {
+    if (block.type !== 'tool') return { prompt: '', cwd: '' };
+    const raw = block.arguments;
+    if (raw == null || raw === '') return { prompt: '', cwd: '' };
+    try {
+      const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      return {
+        prompt: String(obj.prompt ?? '').trim(),
+        cwd: String(obj.cwd ?? '').trim(),
+      };
+    } catch {
+      return { prompt: String(raw).slice(0, 500), cwd: '' };
+    }
+  }
+
+  function renderCursorAgentBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    const { prompt, cwd } = parseCursorAgentArgs(block);
+    const isAwaiting = block.status === 'awaiting_confirmation' && Boolean(block.review_id);
+    const isSubmitting = submittingReviewId && submittingReviewId === block.review_id;
+
+    if (isAwaiting) {
+      const review = block.review as { reason?: string; advice?: string; decision?: string } | undefined;
+      return (
+        <View key={key} style={styles.toolCard}>
+          <Text style={styles.toolCardHeader}>Cursor Agent · {block.status}</Text>
+          {block.cwd ? <Text style={styles.toolCardSafetyMeta}>cwd: {block.cwd}</Text> : null}
+          {review?.reason ? <Text style={styles.toolCardSafetyReason}>{review.reason}</Text> : null}
+          {review?.advice ? (
+            <Text
+              style={[
+                styles.toolCardSafetyAdvice,
+                review.decision === 'need_confirm_after_warning' && styles.toolCardSafetyAdviceDanger,
+              ]}
+            >
+              {review.advice}
+            </Text>
+          ) : null}
+          <View style={styles.safetyActions}>
+            <TouchableOpacity
+              style={styles.safetyBtn}
+              onPress={() => handleSafetyDecision(block.review_id!, 'reject')}
+              disabled={!!isSubmitting}
+            >
+              <Text style={styles.safetyBtnText}>拒绝</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.safetyBtn, styles.safetyBtnPrimary]}
+              onPress={() => handleSafetyDecision(block.review_id!, 'approve')}
+              disabled={!!isSubmitting}
+            >
+              <Text style={styles.safetyBtnPrimaryText}>
+                {isSubmitting ? '提交中...' : '确认执行'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      );
+    }
+
+    const result = block.result as ToolResult | undefined;
+    const replyText =
+      block.streaming_content ??
+      (result && typeof result.stdout === 'string' ? result.stdout : '') ??
+      '';
+    const errorMsg = result && typeof result.error === 'string' ? result.error : null;
+    const hasError = Boolean(errorMsg || (result && result.success === false));
+    const isRunning = block.status === 'running';
+
+    return (
+      <View key={key} style={styles.cursorAgentWrap}>
+        <View style={styles.cursorAgentPromptCard}>
+          <Text style={styles.cursorAgentPromptLabel}>提问</Text>
+          <Text style={styles.cursorAgentPromptText}>{prompt || '(无 prompt)'}</Text>
+          {cwd ? <Text style={styles.cursorAgentPromptMeta}>cwd: {cwd}</Text> : null}
+        </View>
+        <View style={styles.cursorAgentReply}>
+          <Text style={styles.cursorAgentReplyLabel}>回答</Text>
+          {hasError && errorMsg ? (
+            <Text style={styles.cursorAgentReplyError}>{errorMsg}</Text>
+          ) : replyText ? (
+            <View style={styles.cursorAgentReplyBody}>
+              <MarkdownContent text={replyText} showCopyButton />
+            </View>
+          ) : isRunning ? (
+            <Text style={styles.cursorAgentReplyLoading}>Cursor 正在分析并输出…</Text>
+          ) : (
+            <Text style={styles.cursorAgentReplyEmpty}>暂无输出</Text>
+          )}
+        </View>
+      </View>
+    );
+  }
+
+  function renderToolBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    if (block.tool_name === 'local_cursor_agent') {
+      return renderCursorAgentBlock(block, key);
+    }
+    const isAwaiting = block.status === 'awaiting_confirmation' && Boolean(block.review_id);
+    const isSubmitting = submittingReviewId && submittingReviewId === block.review_id;
+    return (
+      <View key={key} style={styles.toolCard}>
+        <Text style={styles.toolCardHeader}>
+          {block.tool_name} · {block.status}
+        </Text>
+        {block.arguments ? (
+          <Text style={styles.toolCardBody} numberOfLines={10}>
+            args: {String(block.arguments)}
+          </Text>
+        ) : null}
+        {block.streaming_content ? (
+          <Text style={styles.toolCardBody} numberOfLines={15}>
+            {block.streaming_content}
+          </Text>
+        ) : null}
+        {block.result != null && (
+          <Text style={styles.toolCardBody} numberOfLines={10}>
+            {typeof block.result === 'string'
+              ? block.result
+              : JSON.stringify(block.result)}
+          </Text>
+        )}
+        {isAwaiting && block.review_id ? (
+          <View style={styles.safetyActions}>
+            <TouchableOpacity
+              style={styles.safetyBtn}
+              onPress={() => handleSafetyDecision(block.review_id!, 'reject')}
+              disabled={!!isSubmitting}
+            >
+              <Text style={styles.safetyBtnText}>拒绝</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.safetyBtn, styles.safetyBtnPrimary]}
+              onPress={() => handleSafetyDecision(block.review_id!, 'approve')}
+              disabled={!!isSubmitting}
+            >
+              <Text style={styles.safetyBtnPrimaryText}>
+                {isSubmitting ? '提交中...' : '确认执行'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+
   if (!session) return null;
+
+  const lastAssistantIdx = (() => {
+    let last = -1;
+    messages.forEach((m, i) => {
+      if (m.role === 'assistant') last = i;
+    });
+    return last;
+  })();
 
   const renderMessage = (msg: Message, idx: number) => {
     if (msg.role === 'error') {
@@ -315,6 +487,13 @@ export function ChatScreen() {
       );
     }
     const isUser = msg.role === 'user';
+    const isLastAssistant = !isUser && msg.role === 'assistant' && idx === lastAssistantIdx;
+    let lastTextBlockIdx = -1;
+    if (!isUser && msg.role === 'assistant' && msg.blocks?.length) {
+      msg.blocks.forEach((b, i) => {
+        if (b.type === 'text') lastTextBlockIdx = i;
+      });
+    }
     return (
       <View
         key={`${msg.role}-${idx}`}
@@ -325,48 +504,22 @@ export function ChatScreen() {
           {!isUser && msg.role === 'assistant' && msg.blocks && msg.blocks.length > 0 ? (
             msg.blocks.map((block, bi) =>
               block.type === 'text' ? (
-                <Text key={bi} style={styles.assistantText} selectable>
-                  {block.content}
-                </Text>
-              ) : (
-                <View key={bi} style={styles.toolCard}>
-                  <Text style={styles.toolCardHeader}>
-                    {block.tool_name} · {block.status}
-                  </Text>
-                  {block.result != null && (
-                    <Text style={styles.toolCardBody} numberOfLines={5}>
-                      {typeof block.result === 'string'
-                        ? block.result
-                        : JSON.stringify(block.result)}
-                    </Text>
-                  )}
-                  {block.status === 'awaiting_confirmation' && block.review_id && (
-                    <View style={styles.safetyActions}>
-                      <TouchableOpacity
-                        style={styles.safetyBtn}
-                        onPress={() => handleSafetyDecision(block.review_id!, 'reject')}
-                        disabled={!!submittingReviewId}
-                      >
-                        <Text style={styles.safetyBtnText}>拒绝</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.safetyBtn, styles.safetyBtnPrimary]}
-                        onPress={() => handleSafetyDecision(block.review_id!, 'approve')}
-                        disabled={!!submittingReviewId}
-                      >
-                        <Text style={styles.safetyBtnPrimaryText}>
-                          {submittingReviewId === block.review_id ? '提交中...' : '确认执行'}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
+                <View key={bi} style={styles.assistantTextBlock}>
+                  <MarkdownContent
+                    text={block.content}
+                    showCopyButton={isLastAssistant && bi === lastTextBlockIdx}
+                  />
                 </View>
+              ) : (
+                renderToolBlock(block, `msg-tool-${idx}-${bi}`)
               )
             )
           ) : (
-            <Text style={isUser ? styles.userText : styles.assistantText} selectable>
-              {msg.content}
-            </Text>
+            isUser ? (
+              <Text style={styles.userText} selectable>{msg.content}</Text>
+            ) : (
+              <MarkdownContent text={msg.content} showCopyButton={isLastAssistant} />
+            )
           )}
         </View>
       </View>
@@ -431,46 +584,28 @@ export function ChatScreen() {
           <View style={[styles.bubbleWrap, styles.assistantBubbleWrap]}>
             <View style={[styles.bubble, styles.assistantBubble]}>
               <Text style={styles.bubbleRole}>Flops (streaming)</Text>
-              <Text style={styles.streamStatus}>{streamStatusLabel}</Text>
+              {streamStatus === 'checking_tools' ? (
+                <Text style={styles.streamStatus}>Checking tools...</Text>
+              ) : null}
+              {streamStatus === 'tool_running' ? (
+                <Text style={styles.streamStatus}>Running local tools...</Text>
+              ) : null}
               {currentAssistantBlocks.length > 0 ? (
                 currentAssistantBlocks.map((block, bi) =>
                   block.type === 'text' ? (
-                    <Text key={bi} style={styles.assistantText} selectable>
-                      {block.content}
-                    </Text>
-                  ) : (
-                    <View key={bi} style={styles.toolCard}>
-                      <Text style={styles.toolCardHeader}>
-                        {block.tool_name} · {block.status}
-                      </Text>
-                      {block.status === 'awaiting_confirmation' && block.review_id && (
-                        <View style={styles.safetyActions}>
-                          <TouchableOpacity
-                            style={styles.safetyBtn}
-                            onPress={() => handleSafetyDecision(block.review_id!, 'reject')}
-                            disabled={!!submittingReviewId}
-                          >
-                            <Text style={styles.safetyBtnText}>拒绝</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={[styles.safetyBtn, styles.safetyBtnPrimary]}
-                            onPress={() => handleSafetyDecision(block.review_id!, 'approve')}
-                            disabled={!!submittingReviewId}
-                          >
-                            <Text style={styles.safetyBtnPrimaryText}>
-                              {submittingReviewId === block.review_id ? '提交中...' : '确认执行'}
-                            </Text>
-                          </TouchableOpacity>
-                        </View>
-                      )}
+                    <View key={bi} style={styles.assistantTextBlock}>
+                      <MarkdownContent text={block.content} />
                     </View>
+                  ) : (
+                    renderToolBlock(block, `stream-tool-${bi}`)
                   )
                 )
-              ) : (
-                <Text style={styles.assistantText} selectable>
-                  {streamingText || streamStatusLabel}
-                </Text>
-              )}
+              ) : null}
+              {currentAssistantBlocks.length === 0 ? (
+                <View style={styles.assistantTextBlock}>
+                  <MarkdownContent text={streamingText || streamStatusLabel} />
+                </View>
+              ) : null}
             </View>
           </View>
         ) : null}
@@ -533,7 +668,7 @@ const styles = StyleSheet.create({
   welcomeSubtitle: { fontSize: 15, color: '#6b7280' },
   bubbleWrap: { marginBottom: 12 },
   userBubbleWrap: { alignItems: 'flex-end' },
-  assistantBubbleWrap: { alignItems: 'flex-start' },
+  assistantBubbleWrap: { width: '100%' },
   bubble: {
     maxWidth: '85%',
     paddingHorizontal: 14,
@@ -541,28 +676,96 @@ const styles = StyleSheet.create({
     borderRadius: 14,
   },
   userBubble: { backgroundColor: '#0f172a' },
-  assistantBubble: { backgroundColor: '#f3f4f6', borderWidth: 1, borderColor: '#e5e7eb' },
+  assistantBubble: {
+    width: '100%',
+    maxWidth: '100%',
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    borderRadius: 0,
+    paddingVertical: 8,
+    paddingHorizontal: 0,
+  },
   bubbleRole: { fontSize: 12, color: '#6b7280', marginBottom: 4 },
   userText: { fontSize: 16, color: '#fff' },
   assistantText: { fontSize: 16, color: '#111827', lineHeight: 22 },
   streamStatus: { fontSize: 14, color: '#6b7280', fontStyle: 'italic' },
   errorWrap: { marginBottom: 12, padding: 12, backgroundColor: '#fef2f2', borderRadius: 8 },
   errorText: { color: '#dc2626', fontSize: 14 },
+  assistantTextBlock: { marginTop: 4 },
   toolCard: {
     marginTop: 8,
     padding: 10,
-    backgroundColor: '#fff',
+    backgroundColor: '#eff6ff',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  toolCardHeader: { fontSize: 12, fontWeight: '600', color: '#1f2937', marginBottom: 6 },
+  toolCardBody: { fontSize: 12, color: '#1e293b', marginTop: 4 },
+  toolCardSafetyMeta: { fontSize: 11, color: '#64748b', marginTop: 4 },
+  toolCardSafetyReason: { fontSize: 12, color: '#334155', marginTop: 4 },
+  toolCardSafetyAdvice: {
+    fontSize: 12,
+    marginTop: 6,
+    padding: 6,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fafc',
   },
-  toolCardHeader: { fontSize: 13, fontWeight: '600', color: '#374151' },
-  toolCardBody: { fontSize: 12, color: '#6b7280', marginTop: 4 },
+  toolCardSafetyAdviceDanger: {
+    color: '#991b1b',
+    backgroundColor: '#fff1f2',
+    borderColor: '#fecdd3',
+  },
   safetyActions: { flexDirection: 'row', gap: 8, marginTop: 8 },
   safetyBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6, backgroundColor: '#e5e7eb' },
   safetyBtnPrimary: { backgroundColor: '#0f172a' },
   safetyBtnText: { color: '#374151', fontSize: 14 },
   safetyBtnPrimaryText: { color: '#fff', fontSize: 14 },
+  cursorAgentWrap: { marginTop: 4, gap: 12 },
+  cursorAgentPromptCard: {
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#f9fafb',
+  },
+  cursorAgentPromptLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#6b7280',
+    marginBottom: 6,
+    letterSpacing: 0.4,
+  },
+  cursorAgentPromptText: { fontSize: 14, lineHeight: 20, color: '#111827' },
+  cursorAgentPromptMeta: { fontSize: 12, color: '#6b7280', marginTop: 8 },
+  cursorAgentReply: {
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#fff',
+  },
+  cursorAgentReplyLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#1d4ed8',
+    marginBottom: 8,
+    letterSpacing: 0.4,
+  },
+  cursorAgentReplyBody: { marginTop: 0 },
+  cursorAgentReplyLoading: { fontSize: 13, color: '#6b7280', fontStyle: 'italic' },
+  cursorAgentReplyEmpty: { fontSize: 13, color: '#6b7280', fontStyle: 'italic' },
+  cursorAgentReplyError: {
+    fontSize: 13,
+    color: '#b91c1c',
+    backgroundColor: '#fef2f2',
+    padding: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
   composer: {
     flexDirection: 'row',
     alignItems: 'center',
