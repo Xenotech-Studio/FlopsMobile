@@ -4,10 +4,13 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   StyleSheet,
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Modal,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSession } from '../context/SessionContext';
@@ -16,8 +19,13 @@ import {
   streamChat,
   cancelConversation,
   submitSafetyDecision,
+  listConversations,
+  getConversation,
   type ChatStreamEvent,
+  type ConversationListItem,
+  type ConversationMessage,
 } from '../api';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import { MarkdownContent } from '../components/MarkdownContent';
 
 type Message =
@@ -45,6 +53,70 @@ type StreamBlock =
 
 const STREAM_TIMEOUT_MS = 300000;
 
+/** 解析 tool 消息的 content 为 result 对象 */
+function parseToolResult(msg: ConversationMessage): unknown {
+  if (!msg || msg.role !== 'tool') return null;
+  const raw = typeof msg.content === 'string' ? msg.content : '';
+  if (!raw.trim()) return null;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
+}
+
+/** 将服务端一轮 assistant + tool 消息合并为一条本地 assistant（含 blocks） */
+function coalesceAssistantTurn(messages: ConversationMessage[]): Message | null {
+  if (!messages || messages.length === 0) return null;
+  const blocks: StreamBlock[] = [];
+  let fullContent = '';
+  let i = 0;
+  while (i < messages.length) {
+    const msg = messages[i];
+    if (msg.role === 'assistant') {
+      const text = (msg.content != null ? String(msg.content) : '').trim();
+      if (text) {
+        blocks.push({ type: 'text', content: text });
+        fullContent += (fullContent ? '\n\n' : '') + text;
+      }
+      const toolCalls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+      if (toolCalls.length > 0) {
+        for (let j = 0; j < toolCalls.length; j++) {
+          const tc = toolCalls[j];
+          const fn = typeof tc === 'object' && tc && tc.function ? tc.function : {};
+          const name = (fn.name != null && fn.name !== '') ? fn.name : 'unknown';
+          const args =
+            typeof fn.arguments === 'string'
+              ? fn.arguments
+              : JSON.stringify(fn.arguments != null ? fn.arguments : {});
+          const toolMsg = messages[i + 1 + j];
+          const result = toolMsg && toolMsg.role === 'tool' ? parseToolResult(toolMsg) : null;
+          blocks.push({
+            type: 'tool',
+            tool_name: name,
+            status: 'completed',
+            arguments: args,
+            result,
+          });
+        }
+        i += 1 + toolCalls.length;
+        continue;
+      }
+      i++;
+    } else if (msg.role === 'tool') {
+      i++;
+    } else {
+      i++;
+    }
+  }
+  if (blocks.length === 0) return null;
+  return {
+    role: 'assistant',
+    content: fullContent || '(empty)',
+    blocks,
+  };
+}
+
 export function ChatScreen() {
   const { session, logout } = useSession();
   const [conversationId, setConversationId] = useState('');
@@ -56,9 +128,16 @@ export function ChatScreen() {
   const [currentAssistantBlocks, setCurrentAssistantBlocks] = useState<StreamBlock[]>([]);
   const [error, setError] = useState('');
   const [submittingReviewId, setSubmittingReviewId] = useState('');
+  /** 工具卡片展示状态：key -> 'collapsed' | 'preview' | 'full' */
+  const [toolCardViewMode, setToolCardViewMode] = useState<Record<string, 'collapsed' | 'preview' | 'full'>>({});
+  const [historyModalVisible, setHistoryModalVisible] = useState(false);
+  const [historyList, setHistoryList] = useState<ConversationListItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const abortRef = useRef<AbortController | null>(null);
   const manualStopRef = useRef(false);
+  /** 仅在有新消息/回复完成时滚到底部，避免展开折叠工具卡片时误滚 */
+  const shouldScrollToEndRef = useRef(false);
 
   const canSend = Boolean(session && messageInput.trim() && !loading);
 
@@ -72,6 +151,7 @@ export function ChatScreen() {
     setCurrentAssistantBlocks([]);
     setStreamStatus('thinking');
     setMessages((prev) => [...prev, { role: 'user', content: nextMessage }]);
+    shouldScrollToEndRef.current = true;
 
     let convId = conversationId;
     if (!convId) {
@@ -219,6 +299,7 @@ export function ChatScreen() {
       await streamChat(session, convId, nextMessage, onEvent, controller.signal);
       clearTimeout(timeout);
       if (streamDone || finalText.trim()) {
+        shouldScrollToEndRef.current = true;
         setMessages((prev) => [
           ...prev,
           {
@@ -231,6 +312,7 @@ export function ChatScreen() {
     } catch (e) {
       clearTimeout(timeout);
       if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
+        shouldScrollToEndRef.current = true;
         const stoppedPrefix = '[已停止]\n';
         const text = (finalText || '').trim();
         setMessages((prev) => [
@@ -242,6 +324,7 @@ export function ChatScreen() {
           },
         ]);
       } else {
+        shouldScrollToEndRef.current = true;
         const msg =
           (e as { name?: string })?.name === 'AbortError'
             ? '已手动停止本轮执行。'
@@ -267,6 +350,7 @@ export function ChatScreen() {
     const snapshotBlocks = [...currentAssistantBlocks];
     const snapshotText = streamingText;
     if (snapshotBlocks.length > 0 || (snapshotText && snapshotText.trim())) {
+      shouldScrollToEndRef.current = true;
       const stoppedPrefix = '[已停止]\n';
       const text = (snapshotText || '').trim();
       setMessages((prev) => [
@@ -306,6 +390,83 @@ export function ChatScreen() {
       setError(e instanceof Error ? e.message : '创建会话失败');
     }
   }, [session, loading]);
+
+  const openHistoryModal = useCallback(async () => {
+    if (!session) return;
+    setHistoryModalVisible(true);
+    setHistoryLoading(true);
+    setHistoryList([]);
+    setError('');
+    try {
+      const { conversations } = await listConversations(session);
+      setHistoryList(conversations ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '获取历史对话失败');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [session]);
+
+  /** 将服务端消息列表转为本地 Message[]：过滤 system，合并 assistant+tool 为带 blocks 的 assistant */
+  const rawMessagesToLocal = useCallback((raw: ConversationMessage[]): Message[] => {
+    const out: Message[] = [];
+    let assistantGroup: ConversationMessage[] = [];
+    const flushAssistant = () => {
+      const one = coalesceAssistantTurn(assistantGroup);
+      if (one) out.push(one);
+      assistantGroup = [];
+    };
+    for (const msg of raw ?? []) {
+      if (!msg || typeof msg.role !== 'string') continue;
+      if (msg.role === 'system') continue;
+      if (msg.role === 'user') {
+        flushAssistant();
+        const content = typeof msg.content === 'string' ? msg.content : '';
+        out.push({ role: 'user', content });
+        continue;
+      }
+      if (msg.role === 'assistant' || msg.role === 'tool') {
+        assistantGroup.push(msg);
+        continue;
+      }
+    }
+    flushAssistant();
+    return out;
+  }, []);
+
+  const formatHistoryTime = useCallback((isoString: string) => {
+    try {
+      const d = new Date(isoString);
+      if (Number.isNaN(d.getTime())) return isoString;
+      return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+    } catch {
+      return isoString;
+    }
+  }, []);
+
+  const switchToConversation = useCallback(
+    async (id: string) => {
+      if (!session) return;
+      setHistoryModalVisible(false);
+      setError('');
+      setLoading(true);
+      try {
+        const { conversation } = await getConversation(session, id);
+        const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
+        const local = rawMessagesToLocal(raw);
+        setConversationId(id);
+        setMessages(local);
+        setStreamingText('');
+        setCurrentAssistantBlocks([]);
+        setStreamStatus('');
+      } catch (e) {
+        setError(e instanceof Error ? e.message : '打开对话失败');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [session, rawMessagesToLocal]
+  );
 
   const handleSafetyDecision = useCallback(
     async (reviewId: string, decision: 'approve' | 'reject') => {
@@ -416,54 +577,114 @@ export function ChatScreen() {
     );
   }
 
+  const setToolCardMode = useCallback((cardKey: string, mode: 'collapsed' | 'preview' | 'full') => {
+    setToolCardViewMode((prev) => ({ ...prev, [cardKey]: mode }));
+  }, []);
+
   function renderToolBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
     if (block.tool_name === 'local_cursor_agent') {
       return renderCursorAgentBlock(block, key);
     }
+    const viewMode = toolCardViewMode[key] ?? 'collapsed';
     const isAwaiting = block.status === 'awaiting_confirmation' && Boolean(block.review_id);
     const isSubmitting = submittingReviewId && submittingReviewId === block.review_id;
+
+    if (viewMode === 'collapsed') {
+      return (
+        <Pressable
+          key={key}
+          style={({ pressed }) => [styles.toolCard, styles.toolCardCollapsed, pressed && styles.toolCardCollapsedPressed]}
+          onPress={() => setToolCardMode(key, 'preview')}
+          accessibilityLabel="点击展开"
+        >
+          <Text style={styles.toolCardCollapsedName} numberOfLines={1}>
+            {block.tool_name}
+          </Text>
+          <Text
+            style={[
+              styles.toolCardBadge,
+              block.status === 'completed' ? styles.toolCardBadgeOk : undefined,
+            ]}
+          >
+            {block.status === 'completed' ? '成功' : block.status}
+          </Text>
+        </Pressable>
+      );
+    }
+
+    const isFull = viewMode === 'full';
+    const resultText =
+      block.result != null
+        ? typeof block.result === 'string'
+          ? block.result
+          : JSON.stringify(block.result, null, 2)
+        : '';
+
     return (
       <View key={key} style={styles.toolCard}>
-        <Text style={styles.toolCardHeader}>
-          {block.tool_name} · {block.status}
-        </Text>
-        {block.arguments ? (
-          <Text style={styles.toolCardBody} numberOfLines={10}>
-            args: {String(block.arguments)}
+        <Pressable
+          onPress={() => {
+            if (!isFull) setToolCardMode(key, 'collapsed');
+          }}
+          style={({ pressed }) => (pressed && !isFull ? styles.toolCardContentPressed : undefined)}
+          accessibilityLabel={isFull ? undefined : '点击收起'}
+        >
+          <Text style={styles.toolCardHeader}>
+            {block.tool_name} · {block.status}
           </Text>
-        ) : null}
-        {block.streaming_content ? (
-          <Text style={styles.toolCardBody} numberOfLines={15}>
-            {block.streaming_content}
-          </Text>
-        ) : null}
-        {block.result != null && (
-          <Text style={styles.toolCardBody} numberOfLines={10}>
-            {typeof block.result === 'string'
-              ? block.result
-              : JSON.stringify(block.result)}
-          </Text>
-        )}
-        {isAwaiting && block.review_id ? (
-          <View style={styles.safetyActions}>
-            <TouchableOpacity
-              style={styles.safetyBtn}
-              onPress={() => handleSafetyDecision(block.review_id!, 'reject')}
-              disabled={!!isSubmitting}
+          {block.arguments ? (
+            <Text style={styles.toolCardBody} numberOfLines={10}>
+              args: {String(block.arguments)}
+            </Text>
+          ) : null}
+          {isAwaiting && block.review_id ? (
+            <View style={styles.safetyActions}>
+              <TouchableOpacity
+                style={styles.safetyBtn}
+                onPress={() => handleSafetyDecision(block.review_id!, 'reject')}
+                disabled={!!isSubmitting}
+              >
+                <Text style={styles.safetyBtnText}>拒绝</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.safetyBtn, styles.safetyBtnPrimary]}
+                onPress={() => handleSafetyDecision(block.review_id!, 'approve')}
+                disabled={!!isSubmitting}
+              >
+                <Text style={styles.safetyBtnPrimaryText}>
+                  {isSubmitting ? '提交中...' : '确认执行'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          {block.streaming_content ? (
+            <Text style={styles.toolCardBody} numberOfLines={15}>
+              {block.streaming_content}
+            </Text>
+          ) : null}
+          {block.result != null ? (
+            <Text
+              style={styles.toolCardBody}
+              numberOfLines={isFull ? undefined : 3}
             >
-              <Text style={styles.safetyBtnText}>拒绝</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.safetyBtn, styles.safetyBtnPrimary]}
-              onPress={() => handleSafetyDecision(block.review_id!, 'approve')}
-              disabled={!!isSubmitting}
-            >
-              <Text style={styles.safetyBtnPrimaryText}>
-                {isSubmitting ? '提交中...' : '确认执行'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
+              result: {resultText}
+            </Text>
+          ) : null}
+        </Pressable>
+        <Pressable
+          style={({ pressed }) => [
+            styles.toolCardExpandRow,
+            pressed && styles.toolCardExpandRowPressed,
+          ]}
+          onPress={() => setToolCardMode(key, isFull ? 'preview' : 'full')}
+          accessibilityLabel={isFull ? '收起' : '完全展开'}
+        >
+          <Ionicons
+            name={isFull ? 'chevron-up' : 'chevron-down'}
+            size={16}
+            color="#64748b"
+          />
+        </Pressable>
       </View>
     );
   }
@@ -548,6 +769,13 @@ export function ChatScreen() {
         <View style={styles.headerActions}>
           <TouchableOpacity
             style={styles.headerBtn}
+            onPress={openHistoryModal}
+            disabled={loading}
+          >
+            <Text style={styles.headerBtnText}>历史</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.headerBtn}
             onPress={handleNewConversation}
             disabled={loading}
           >
@@ -558,6 +786,60 @@ export function ChatScreen() {
           </TouchableOpacity>
         </View>
       </View>
+
+      <Modal
+        visible={historyModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setHistoryModalVisible(false)}
+      >
+        <View style={styles.historyModalOverlay}>
+          <View style={styles.historyModalContent}>
+            <View style={styles.historyModalHead}>
+              <Text style={styles.historyModalTitle}>历史对话</Text>
+              <TouchableOpacity
+                style={styles.historyModalClose}
+                onPress={() => setHistoryModalVisible(false)}
+                accessibilityLabel="关闭"
+              >
+                <Text style={styles.historyModalCloseText}>×</Text>
+              </TouchableOpacity>
+            </View>
+            {historyLoading ? (
+              <View style={styles.historyModalLoading}>
+                <ActivityIndicator size="large" color="#0f172a" />
+              </View>
+            ) : historyList.length === 0 ? (
+              <View style={styles.historyModalEmpty}>
+                <Text style={styles.historyModalEmptyText}>暂无历史对话</Text>
+              </View>
+            ) : (
+              <ScrollView style={styles.historyModalList} keyboardShouldPersistTaps="handled">
+                {historyList.map((conv) => (
+                  <TouchableOpacity
+                    key={conv.id}
+                    style={[
+                      styles.historyModalItem,
+                      conv.id === conversationId && styles.historyModalItemActive,
+                    ]}
+                    onPress={() => switchToConversation(conv.id)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.historyModalItemTitle} numberOfLines={1}>
+                      {conv.title && conv.title.trim() ? conv.title.trim() : '新对话'}
+                    </Text>
+                    {conv.updated_at ? (
+                      <Text style={styles.historyModalItemMeta} numberOfLines={1}>
+                        {formatHistoryTime(conv.updated_at)}
+                      </Text>
+                    ) : null}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
       {error ? <Text style={styles.globalError}>{error}</Text> : null}
       {conversationId ? (
         <Text style={styles.convMeta} numberOfLines={1}>
@@ -569,7 +851,12 @@ export function ChatScreen() {
         ref={scrollRef}
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
-        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
+        onContentSizeChange={() => {
+          if (shouldScrollToEndRef.current) {
+            shouldScrollToEndRef.current = false;
+            scrollRef.current?.scrollToEnd({ animated: true });
+          }
+        }}
         keyboardShouldPersistTaps="handled"
       >
         {showEmpty ? (
@@ -675,7 +962,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 14,
   },
-  userBubble: { backgroundColor: '#0f172a' },
+  userBubble: { backgroundColor: '#000000' },
   assistantBubble: {
     width: '100%',
     maxWidth: '100%',
@@ -694,12 +981,56 @@ const styles = StyleSheet.create({
   assistantTextBlock: { marginTop: 4 },
   toolCard: {
     marginTop: 8,
+    marginBottom: 10,
+    marginLeft: -2,
+    marginRight: 4,
     padding: 10,
-    backgroundColor: '#eff6ff',
+    backgroundColor: '#f0f0f0',
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#dbeafe',
+    borderColor: '#e5e5e5',
   },
+  toolCardCollapsed: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 36,
+  },
+  toolCardCollapsedPressed: { backgroundColor: '#e5e5e5' },
+  toolCardCollapsedName: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#1f2937',
+    flex: 1,
+    marginRight: 8,
+  },
+  toolCardBadge: {
+    fontSize: 11,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#d4d4d4',
+    color: '#525252',
+    backgroundColor: '#e5e5e5',
+  },
+  toolCardBadgeOk: {
+    color: '#374151',
+    backgroundColor: '#e5e5e5',
+    borderColor: '#d4d4d4',
+  },
+  toolCardContentPressed: { opacity: 0.95 },
+  toolCardExpandRow: {
+    marginTop: 8,
+    marginHorizontal: -10,
+    marginBottom: -10,
+    paddingVertical: 2,
+    paddingHorizontal: 10,
+    paddingBottom: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toolCardExpandRowPressed: { backgroundColor: '#e5e5e5' },
   toolCardHeader: { fontSize: 12, fontWeight: '600', color: '#1f2937', marginBottom: 6 },
   toolCardBody: { fontSize: 12, color: '#1e293b', marginTop: 4 },
   toolCardSafetyMeta: { fontSize: 11, color: '#64748b', marginTop: 4 },
@@ -710,8 +1041,8 @@ const styles = StyleSheet.create({
     padding: 6,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#dbeafe',
-    backgroundColor: '#f8fafc',
+    borderColor: '#e5e5e5',
+    backgroundColor: '#f8f8f8',
   },
   toolCardSafetyAdviceDanger: {
     color: '#991b1b',
@@ -720,7 +1051,7 @@ const styles = StyleSheet.create({
   },
   safetyActions: { flexDirection: 'row', gap: 8, marginTop: 8 },
   safetyBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6, backgroundColor: '#e5e7eb' },
-  safetyBtnPrimary: { backgroundColor: '#0f172a' },
+  safetyBtnPrimary: { backgroundColor: '#000000' },
   safetyBtnText: { color: '#374151', fontSize: 14 },
   safetyBtnPrimaryText: { color: '#fff', fontSize: 14 },
   cursorAgentWrap: { marginTop: 4, gap: 12 },
@@ -744,13 +1075,13 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#dbeafe',
+    borderColor: '#e5e5e5',
     backgroundColor: '#fff',
   },
   cursorAgentReplyLabel: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#1d4ed8',
+    color: '#525252',
     marginBottom: 8,
     letterSpacing: 0.4,
   },
@@ -790,11 +1121,48 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#0f172a',
+    backgroundColor: '#000000',
     alignItems: 'center',
     justifyContent: 'center',
   },
   sendBtnStop: { backgroundColor: '#dc2626' },
   sendBtnDisabled: { opacity: 0.5 },
   sendBtnText: { color: '#fff', fontSize: 18 },
+  historyModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  historyModalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    maxHeight: '80%',
+    overflow: 'hidden',
+  },
+  historyModalHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  historyModalTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
+  historyModalClose: { padding: 4 },
+  historyModalCloseText: { fontSize: 24, color: '#6b7280' },
+  historyModalLoading: { padding: 40, alignItems: 'center' },
+  historyModalEmpty: { padding: 40, alignItems: 'center' },
+  historyModalEmptyText: { fontSize: 15, color: '#6b7280' },
+  historyModalList: { maxHeight: 400 },
+  historyModalItem: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  historyModalItemActive: { backgroundColor: '#f0f0f0' },
+  historyModalItemTitle: { fontSize: 15, fontWeight: '600', color: '#111827' },
+  historyModalItemMeta: { fontSize: 12, color: '#6b7280', marginTop: 2 },
 });

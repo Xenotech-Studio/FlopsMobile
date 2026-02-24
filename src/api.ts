@@ -72,6 +72,69 @@ export async function login(
   };
 }
 
+export type ConversationListItem = {
+  id: string;
+  title?: string;
+  created_at?: string;
+  updated_at?: string;
+  message_count?: number;
+};
+
+export type ConversationMessage = {
+  role: string;
+  content?: string;
+  metadata?: Record<string, unknown>;
+  tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }>;
+};
+
+export type Conversation = {
+  id: string;
+  title?: string;
+  created_at?: string;
+  updated_at?: string;
+  messages?: ConversationMessage[];
+};
+
+/**
+ * 获取对话列表：GET /api/conversations
+ */
+export async function listConversations(
+  session: Session
+): Promise<{ conversations: ConversationListItem[] }> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/conversations`, {
+    method: 'GET',
+    headers: authHeaders(session.access_token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `获取对话列表失败: ${res.status}`);
+  }
+  const data = (await res.json()) as ConversationListItem[] | { conversations?: ConversationListItem[] };
+  const list = Array.isArray(data) ? data : (data as { conversations?: ConversationListItem[] }).conversations ?? [];
+  return { conversations: list };
+}
+
+/**
+ * 获取单个对话详情（含消息）：GET /api/conversations/:id
+ */
+export async function getConversation(
+  session: Session,
+  conversationId: string
+): Promise<{ conversation: Conversation }> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/conversations/${conversationId}`, {
+    method: 'GET',
+    headers: authHeaders(session.access_token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `获取对话失败: ${res.status}`);
+  }
+  const conversation = (await res.json()) as Conversation;
+  return { conversation };
+}
+
 /**
  * 创建会话：POST /api/conversations
  */
