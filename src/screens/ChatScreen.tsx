@@ -120,6 +120,7 @@ function coalesceAssistantTurn(messages: ConversationMessage[]): Message | null 
 export function ChatScreen() {
   const { session, logout } = useSession();
   const [conversationId, setConversationId] = useState('');
+  const [conversationTitle, setConversationTitle] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [messageInput, setMessageInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -159,6 +160,7 @@ export function ChatScreen() {
         const { id } = await createConversation(session);
         convId = id;
         setConversationId(id);
+        setConversationTitle(nextMessage.slice(0, 50) || '新对话');
       } catch (e) {
         setError(e instanceof Error ? e.message : '创建会话失败');
         setMessages((prev) => [...prev, { role: 'error', content: String(e) }]);
@@ -344,6 +346,207 @@ export function ChatScreen() {
     }
   }, [session, conversationId, messageInput, loading]);
 
+  /** 回退到第 (afterUserIndex+1) 条 user 消息处并重新生成该条 AI 回复 */
+  const handleRegenerate = useCallback(
+    async (afterUserIndex: number) => {
+      if (!session || !conversationId || loading || afterUserIndex == null) return;
+      setMessages((prev) => {
+        let userCount = 0;
+        let keepThroughIdx = -1;
+        for (let i = 0; i < prev.length; i++) {
+          if (prev[i].role === 'user') {
+            userCount++;
+            if (userCount === afterUserIndex + 1) {
+              keepThroughIdx = i;
+              break;
+            }
+          }
+        }
+        if (keepThroughIdx < 0) return prev;
+        return prev.slice(0, keepThroughIdx + 1);
+      });
+    setError('');
+    setLoading(true);
+    setStreamingText('');
+    setCurrentAssistantBlocks([]);
+    setStreamStatus('thinking');
+    shouldScrollToEndRef.current = true;
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    manualStopRef.current = false;
+    let finalText = '';
+    let streamDone = false;
+    const localBlocks: StreamBlock[] = [];
+
+    const syncBlocks = () => {
+      setCurrentAssistantBlocks([...localBlocks]);
+      finalText = localBlocks
+        .filter((b): b is { type: 'text'; content: string } => b.type === 'text')
+        .map((b) => b.content)
+        .join('');
+      setStreamingText(finalText);
+    };
+
+    const onEvent = (event: ChatStreamEvent) => {
+      if ('error' in event && event.error) throw new Error(event.error);
+      if ('type' in event) {
+        if (event.type === 'thinking') setStreamStatus('thinking');
+        if (event.type === 'checking_tools') setStreamStatus('checking_tools');
+        if (event.type === 'tool_start') {
+          setStreamStatus('tool_running');
+          const name = String(event.tool_name || 'unknown');
+          let updated = false;
+          for (let i = 0; i < localBlocks.length; i++) {
+            const b = localBlocks[i];
+            if (b.type === 'tool' && b.tool_name === name && b.status !== 'completed') {
+              localBlocks[i] = { ...b, status: 'running', arguments: event.arguments, streaming_content: '' };
+              updated = true;
+              break;
+            }
+          }
+          if (!updated) {
+            localBlocks.push({
+              type: 'tool',
+              tool_name: name,
+              status: 'running',
+              arguments: event.arguments,
+              streaming_content: '',
+            });
+          }
+          syncBlocks();
+        }
+        if (event.type === 'tool_stream') {
+          const name = String(event.tool_name || 'local_cursor_agent');
+          const chunk = typeof (event as { chunk?: string }).chunk === 'string' ? (event as { chunk: string }).chunk : '';
+          if (chunk) {
+            for (let i = localBlocks.length - 1; i >= 0; i--) {
+              const b = localBlocks[i];
+              if (b.type === 'tool' && b.tool_name === name && b.status === 'running') {
+                const cur = b.streaming_content ?? '';
+                localBlocks[i] = { ...b, streaming_content: cur + chunk };
+                break;
+              }
+            }
+            syncBlocks();
+          }
+        }
+        if (event.type === 'tool_result') {
+          setStreamStatus('tool_result');
+          const name = event.tool_name;
+          for (let i = localBlocks.length - 1; i >= 0; i--) {
+            const b = localBlocks[i];
+            if (b.type === 'tool' && b.tool_name === name) {
+              localBlocks[i] = { ...b, status: 'completed', result: event.result };
+              break;
+            }
+          }
+          syncBlocks();
+        }
+        if (event.type === 'safety_confirmation_required') {
+          setStreamStatus('awaiting_safety_confirmation');
+          const name = event.tool_name;
+          let updated = false;
+          for (let i = localBlocks.length - 1; i >= 0; i--) {
+            const b = localBlocks[i];
+            if (b.type === 'tool' && b.tool_name === name) {
+              localBlocks[i] = {
+                ...b,
+                status: 'awaiting_confirmation',
+                arguments: event.command ?? (event as { arguments?: string }).arguments,
+                review_id: event.review_id,
+                conversation_id: event.conversation_id || conversationId,
+                review: event.review,
+                command: event.command,
+                cwd: event.cwd,
+              };
+              updated = true;
+              break;
+            }
+          }
+          if (!updated) {
+            localBlocks.push({
+              type: 'tool',
+              tool_name: name,
+              status: 'awaiting_confirmation',
+              review_id: event.review_id,
+              conversation_id: event.conversation_id || conversationId,
+              review: event.review,
+              command: event.command,
+              cwd: event.cwd,
+            });
+          }
+          syncBlocks();
+        }
+      }
+      if ('content' in event && typeof event.content === 'string' && event.content.length > 0) {
+        setStreamStatus('streaming_text');
+        const last = localBlocks[localBlocks.length - 1];
+        if (last && last.type === 'text') {
+          last.content += event.content;
+        } else {
+          localBlocks.push({ type: 'text', content: event.content });
+        }
+        syncBlocks();
+      }
+      if ('done' in event && event.done === true) streamDone = true;
+    };
+
+    const timeout = setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
+    try {
+      await streamChat(session, conversationId, '', onEvent, controller.signal, {
+        regenerate: true,
+        after_user_index: afterUserIndex,
+      });
+      clearTimeout(timeout);
+      if (streamDone || finalText.trim()) {
+        shouldScrollToEndRef.current = true;
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: finalText.trim() || '(empty response)',
+            blocks: localBlocks.length ? localBlocks : undefined,
+          },
+        ]);
+      }
+    } catch (e) {
+      clearTimeout(timeout);
+      if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
+        shouldScrollToEndRef.current = true;
+        const stoppedPrefix = '[已停止]\n';
+        const text = (finalText || '').trim();
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: text ? `${stoppedPrefix}${text}` : '[已停止]',
+            blocks: localBlocks.length ? [{ type: 'text', content: stoppedPrefix }, ...localBlocks] : undefined,
+          },
+        ]);
+      } else {
+        shouldScrollToEndRef.current = true;
+        const msg =
+          (e as { name?: string })?.name === 'AbortError'
+            ? '已手动停止本轮执行。'
+            : e instanceof Error
+              ? e.message
+              : String(e);
+        setMessages((prev) => [...prev, { role: 'error', content: msg }]);
+      }
+    } finally {
+      abortRef.current = null;
+      manualStopRef.current = false;
+      setSubmittingReviewId('');
+      setLoading(false);
+      setStreamingText('');
+      setCurrentAssistantBlocks([]);
+      setStreamStatus('');
+    }
+  },
+    [session, conversationId, loading]
+  );
+
   const handleStop = useCallback(async () => {
     setError('');
     manualStopRef.current = true;
@@ -380,11 +583,13 @@ export function ChatScreen() {
     if (loading) return;
     setError('');
     setConversationId('');
+    setConversationTitle('');
     setMessages([]);
     try {
       if (session) {
         const { id } = await createConversation(session);
         setConversationId(id);
+        setConversationTitle('新对话');
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : '创建会话失败');
@@ -455,6 +660,7 @@ export function ChatScreen() {
         const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
         const local = rawMessagesToLocal(raw);
         setConversationId(id);
+        setConversationTitle(conversation?.title?.trim() || '新对话');
         setMessages(local);
         setStreamingText('');
         setCurrentAssistantBlocks([]);
@@ -709,6 +915,10 @@ export function ChatScreen() {
     }
     const isUser = msg.role === 'user';
     const isLastAssistant = !isUser && msg.role === 'assistant' && idx === lastAssistantIdx;
+    const afterUserIndex =
+      !isUser && msg.role === 'assistant'
+        ? messages.slice(0, idx).filter((m) => m.role === 'user').length - 1
+        : -1;
     let lastTextBlockIdx = -1;
     if (!isUser && msg.role === 'assistant' && msg.blocks?.length) {
       msg.blocks.forEach((b, i) => {
@@ -729,6 +939,9 @@ export function ChatScreen() {
                   <MarkdownContent
                     text={block.content}
                     showCopyButton={isLastAssistant && bi === lastTextBlockIdx}
+                    showRegenerateButton={bi === lastTextBlockIdx}
+                    onRegenerate={afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined}
+                    regenerateDisabled={!conversationId || loading}
                   />
                 </View>
               ) : (
@@ -739,7 +952,13 @@ export function ChatScreen() {
             isUser ? (
               <Text style={styles.userText} selectable>{msg.content}</Text>
             ) : (
-              <MarkdownContent text={msg.content} showCopyButton={isLastAssistant} />
+              <MarkdownContent
+                text={msg.content}
+                showCopyButton={isLastAssistant}
+                showRegenerateButton
+                onRegenerate={afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined}
+                regenerateDisabled={!conversationId || loading}
+              />
             )
           )}
         </View>
@@ -765,7 +984,11 @@ export function ChatScreen() {
         keyboardVerticalOffset={0}
       >
         <View style={styles.header}>
-        <Text style={styles.headerTitle}>Flops</Text>
+        <View style={styles.headerTitleWrap}>
+          <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
+            {conversationId ? (conversationTitle || '新对话') : 'Flops'}
+          </Text>
+        </View>
         <View style={styles.headerActions}>
           <TouchableOpacity
             style={styles.headerBtn}
@@ -841,11 +1064,6 @@ export function ChatScreen() {
         </View>
       </Modal>
       {error ? <Text style={styles.globalError}>{error}</Text> : null}
-      {conversationId ? (
-        <Text style={styles.convMeta} numberOfLines={1}>
-          Conversation: {conversationId}
-        </Text>
-      ) : null}
 
       <ScrollView
         ref={scrollRef}
@@ -859,6 +1077,7 @@ export function ChatScreen() {
         }}
         keyboardShouldPersistTaps="handled"
       >
+        <View style={styles.chatContentWrap}>
         {showEmpty ? (
           <View style={styles.emptyStage}>
             <Text style={styles.welcomeTitle}>Hi, {session.user_id}</Text>
@@ -896,6 +1115,7 @@ export function ChatScreen() {
             </View>
           </View>
         ) : null}
+        </View>
       </ScrollView>
 
       <View style={styles.composer}>
@@ -936,30 +1156,42 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
+    gap: 12,
+  },
+  headerTitleWrap: {
+    flex: 1,
+    minWidth: 0,
   },
   headerTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
-  headerActions: { flexDirection: 'row', gap: 12 },
+  headerActions: { flexDirection: 'row', gap: 12, flexShrink: 0 },
   headerBtn: { paddingVertical: 4, paddingHorizontal: 8 },
   headerBtnText: { fontSize: 14, color: '#374151' },
-  globalError: { color: '#dc2626', fontSize: 13, paddingHorizontal: 16, paddingVertical: 6 },
-  convMeta: { fontSize: 11, color: '#6b7280', paddingHorizontal: 16, marginBottom: 4 },
+  globalError: { color: '#dc2626', fontSize: 13, paddingHorizontal: 28, paddingVertical: 8 },
   scroll: { flex: 1 },
-  scrollContent: { padding: 16, paddingBottom: 24 },
+  scrollContent: {
+    paddingHorizontal: 28,
+    paddingVertical: 20,
+    paddingBottom: 32,
+    alignItems: 'center',
+  },
+  chatContentWrap: {
+    width: '100%',
+    maxWidth: 380,
+  },
   emptyStage: { flex: 1, paddingVertical: 40 },
   welcomeTitle: { fontSize: 22, fontWeight: '700', color: '#0f172a', marginBottom: 8 },
   welcomeSubtitle: { fontSize: 15, color: '#6b7280' },
-  bubbleWrap: { marginBottom: 12 },
+  bubbleWrap: { marginBottom: 18 },
   userBubbleWrap: { alignItems: 'flex-end' },
   assistantBubbleWrap: { width: '100%' },
   bubble: {
     maxWidth: '85%',
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderRadius: 14,
   },
   userBubble: { backgroundColor: '#000000' },
@@ -969,24 +1201,24 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     borderWidth: 0,
     borderRadius: 0,
-    paddingVertical: 8,
-    paddingHorizontal: 0,
+    paddingVertical: 10,
+    paddingHorizontal: 4,
   },
-  bubbleRole: { fontSize: 12, color: '#6b7280', marginBottom: 4 },
+  bubbleRole: { fontSize: 12, color: '#6b7280', marginBottom: 6 },
   userText: { fontSize: 16, color: '#fff' },
-  assistantText: { fontSize: 16, color: '#111827', lineHeight: 22 },
+  assistantText: { fontSize: 16, color: '#111827', lineHeight: 24 },
   streamStatus: { fontSize: 14, color: '#6b7280', fontStyle: 'italic' },
-  errorWrap: { marginBottom: 12, padding: 12, backgroundColor: '#fef2f2', borderRadius: 8 },
+  errorWrap: { marginBottom: 18, padding: 14, backgroundColor: '#fef2f2', borderRadius: 8 },
   errorText: { color: '#dc2626', fontSize: 14 },
-  assistantTextBlock: { marginTop: 4 },
+  assistantTextBlock: { marginTop: 10 },
   toolCard: {
-    marginTop: 8,
-    marginBottom: 10,
-    marginLeft: -2,
-    marginRight: 4,
-    padding: 10,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 10,
+    marginTop: 14,
+    marginBottom: 14,
+    marginLeft: 0,
+    marginRight: 0,
+    padding: 14,
+    backgroundColor: '#f5f5f5',
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e5e5e5',
   },
@@ -1031,14 +1263,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   toolCardExpandRowPressed: { backgroundColor: '#e5e5e5' },
-  toolCardHeader: { fontSize: 12, fontWeight: '600', color: '#1f2937', marginBottom: 6 },
-  toolCardBody: { fontSize: 12, color: '#1e293b', marginTop: 4 },
-  toolCardSafetyMeta: { fontSize: 11, color: '#64748b', marginTop: 4 },
-  toolCardSafetyReason: { fontSize: 12, color: '#334155', marginTop: 4 },
+  toolCardHeader: { fontSize: 13, fontWeight: '600', color: '#1f2937', marginBottom: 8 },
+  toolCardBody: { fontSize: 13, color: '#1e293b', marginTop: 6, lineHeight: 20 },
+  toolCardSafetyMeta: { fontSize: 11, color: '#64748b', marginTop: 6 },
+  toolCardSafetyReason: { fontSize: 12, color: '#334155', marginTop: 6 },
   toolCardSafetyAdvice: {
     fontSize: 12,
-    marginTop: 6,
-    padding: 6,
+    marginTop: 10,
+    padding: 10,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#e5e5e5',
@@ -1054,10 +1286,10 @@ const styles = StyleSheet.create({
   safetyBtnPrimary: { backgroundColor: '#000000' },
   safetyBtnText: { color: '#374151', fontSize: 14 },
   safetyBtnPrimaryText: { color: '#fff', fontSize: 14 },
-  cursorAgentWrap: { marginTop: 4, gap: 12 },
+  cursorAgentWrap: { marginTop: 8, gap: 14 },
   cursorAgentPromptCard: {
-    padding: 12,
-    borderRadius: 10,
+    padding: 14,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e5e7eb',
     backgroundColor: '#f9fafb',
@@ -1066,14 +1298,14 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     color: '#6b7280',
-    marginBottom: 6,
+    marginBottom: 8,
     letterSpacing: 0.4,
   },
-  cursorAgentPromptText: { fontSize: 14, lineHeight: 20, color: '#111827' },
-  cursorAgentPromptMeta: { fontSize: 12, color: '#6b7280', marginTop: 8 },
+  cursorAgentPromptText: { fontSize: 14, lineHeight: 22, color: '#111827' },
+  cursorAgentPromptMeta: { fontSize: 12, color: '#6b7280', marginTop: 10 },
   cursorAgentReply: {
-    padding: 12,
-    borderRadius: 10,
+    padding: 14,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e5e5e5',
     backgroundColor: '#fff',
@@ -1082,10 +1314,10 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     color: '#525252',
-    marginBottom: 8,
+    marginBottom: 10,
     letterSpacing: 0.4,
   },
-  cursorAgentReplyBody: { marginTop: 0 },
+  cursorAgentReplyBody: { marginTop: 4 },
   cursorAgentReplyLoading: { fontSize: 13, color: '#6b7280', fontStyle: 'italic' },
   cursorAgentReplyEmpty: { fontSize: 13, color: '#6b7280', fontStyle: 'italic' },
   cursorAgentReplyError: {
@@ -1100,20 +1332,20 @@ const styles = StyleSheet.create({
   composer: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    paddingBottom: 24,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 28,
     borderTopWidth: 1,
     borderTopColor: '#e5e7eb',
-    gap: 8,
+    gap: 10,
   },
   composerInput: {
     flex: 1,
     borderWidth: 1,
     borderColor: '#d1d5db',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    borderRadius: 22,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
     fontSize: 16,
     color: '#111827',
   },

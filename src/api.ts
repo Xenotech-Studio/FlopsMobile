@@ -154,21 +154,33 @@ export async function createConversation(session: Session): Promise<{ id: string
   return { id: data.id };
 }
 
+export type StreamChatOptions = {
+  /** 重新回答：不发送新消息，让服务端截断后重新流式生成 */
+  regenerate?: boolean;
+  /** 0-based 的第几条 user 消息后重新生成（不传则最后一条） */
+  after_user_index?: number;
+};
+
 /**
  * 流式聊天：POST /api/conversations/:id/chat，SSE 解析后按事件回调
+ * options.regenerate 为 true 时请求重新回答最后一条 user 消息，可不传 message。
  */
 export async function streamChat(
   session: Session,
   conversationId: string,
   message: string,
   onEvent: (event: ChatStreamEvent) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: StreamChatOptions
 ): Promise<void> {
   const base = session.server_base_url;
+  const body = options?.regenerate
+    ? { regenerate: true, ...(options.after_user_index != null && { after_user_index: options.after_user_index }) }
+    : { message };
   const res = await fetchWithDebugLog(`${base}api/conversations/${conversationId}/chat`, {
     method: 'POST',
     headers: authHeaders(session.access_token),
-    body: JSON.stringify({ message }),
+    body: JSON.stringify(body),
     signal,
     // RN 默认 fetch 无 response.body，需用 react-native-fetch-api 并开启流式
     reactNative: { textStreaming: true },
