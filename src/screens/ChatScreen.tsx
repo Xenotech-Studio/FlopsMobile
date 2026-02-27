@@ -53,6 +53,27 @@ type StreamBlock =
 
 const STREAM_TIMEOUT_MS = 300000;
 
+const TOOL_PACKAGE_NAV_NAMES = ['open_tool_packages', 'close_tool_packages'];
+
+function getToolPackageNavLabel(name: string, argsStr: string | undefined): string {
+  let paths: string[] = [];
+  try {
+    const obj = typeof argsStr === 'string' ? JSON.parse(argsStr || '{}') : argsStr || {};
+    paths = Array.isArray(obj.package_paths) ? obj.package_paths : [];
+  } catch {
+    // ignore
+  }
+  const list = paths.map((p) => (typeof p === 'string' ? p : String(p))).filter(Boolean);
+  const isOpen = name === 'open_tool_packages';
+  if (list.length === 0) return isOpen ? '工具包已激活' : '工具包已关闭';
+  if (list.length === 1) return `${list[0]} 工具包已${isOpen ? '激活' : '关闭'}`;
+  return `${list[0]} 等 ${list.length} 个工具包已${isOpen ? '激活' : '关闭'}`;
+}
+
+function isToolPackageNavBlock(b: { type: string; tool_name?: string }): boolean {
+  return b.type === 'tool' && b.tool_name != null && TOOL_PACKAGE_NAV_NAMES.includes(b.tool_name);
+}
+
 /** 解析 tool 消息的 content 为 result 对象 */
 function parseToolResult(msg: ConversationMessage): unknown {
   if (!msg || msg.role !== 'tool') return null;
@@ -791,6 +812,15 @@ export function ChatScreen() {
     if (block.tool_name === 'local_cursor_agent') {
       return renderCursorAgentBlock(block, key);
     }
+    if (block.tool_name === 'open_tool_packages' || block.tool_name === 'close_tool_packages') {
+      return (
+        <View key={key} style={styles.toolPackageNavLine}>
+          <Text style={styles.toolPackageNavLineText}>
+            {getToolPackageNavLabel(block.tool_name, block.arguments)}
+          </Text>
+        </View>
+      );
+    }
     const viewMode = toolCardViewMode[key] ?? 'collapsed';
     const isAwaiting = block.status === 'awaiting_confirmation' && Boolean(block.review_id);
     const isSubmitting = submittingReviewId && submittingReviewId === block.review_id;
@@ -933,9 +963,14 @@ export function ChatScreen() {
         <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
           {!isUser && <Text style={styles.bubbleRole}>Flops</Text>}
           {!isUser && msg.role === 'assistant' && msg.blocks && msg.blocks.length > 0 ? (
-            msg.blocks.map((block, bi) =>
-              block.type === 'text' ? (
-                <View key={bi} style={styles.assistantTextBlock}>
+            msg.blocks.map((block, bi) => {
+              const prevBlock = msg.blocks[bi - 1];
+              const compactAbove = prevBlock != null && isToolPackageNavBlock(prevBlock);
+              return block.type === 'text' ? (
+                <View
+                  key={bi}
+                  style={[styles.assistantTextBlock, compactAbove && styles.assistantTextBlockCompactAbove]}
+                >
                   <MarkdownContent
                     text={block.content}
                     showCopyButton={isLastAssistant && bi === lastTextBlockIdx}
@@ -946,8 +981,8 @@ export function ChatScreen() {
                 </View>
               ) : (
                 renderToolBlock(block, `msg-tool-${idx}-${bi}`)
-              )
-            )
+              );
+            })
           ) : (
             isUser ? (
               <Text style={styles.userText} selectable>{msg.content}</Text>
@@ -1097,15 +1132,20 @@ export function ChatScreen() {
                 <Text style={styles.streamStatus}>Running local tools...</Text>
               ) : null}
               {currentAssistantBlocks.length > 0 ? (
-                currentAssistantBlocks.map((block, bi) =>
-                  block.type === 'text' ? (
-                    <View key={bi} style={styles.assistantTextBlock}>
+                currentAssistantBlocks.map((block, bi) => {
+                  const prevBlock = currentAssistantBlocks[bi - 1];
+                  const compactAbove = prevBlock != null && isToolPackageNavBlock(prevBlock);
+                  return block.type === 'text' ? (
+                    <View
+                      key={bi}
+                      style={[styles.assistantTextBlock, compactAbove && styles.assistantTextBlockCompactAbove]}
+                    >
                       <MarkdownContent text={block.content} />
                     </View>
                   ) : (
                     renderToolBlock(block, `stream-tool-${bi}`)
-                  )
-                )
+                  );
+                })
               ) : null}
               {currentAssistantBlocks.length === 0 ? (
                 <View style={styles.assistantTextBlock}>
@@ -1211,9 +1251,19 @@ const styles = StyleSheet.create({
   errorWrap: { marginBottom: 18, padding: 14, backgroundColor: '#fef2f2', borderRadius: 8 },
   errorText: { color: '#dc2626', fontSize: 14 },
   assistantTextBlock: { marginTop: 10 },
+  assistantTextBlockCompactAbove: { marginTop: 8 },
+  toolPackageNavLine: {
+    marginTop: -4,
+    paddingVertical: 2,
+  },
+  toolPackageNavLineText: {
+    fontSize: 12,
+    color: '#9ca3af',
+    lineHeight: 18,
+  },
   toolCard: {
-    marginTop: 14,
-    marginBottom: 14,
+    marginTop: 4,
+    marginBottom: 4,
     marginLeft: 0,
     marginRight: 0,
     padding: 14,
