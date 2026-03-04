@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
- * yarn dev [ios|android] [--quick]: start Metro + run app.
+ * yarn dev [ios|android|android:real] [--quick]: start Metro + run app.
  * --quick: 跳过清理 cache（不传 --reset-cache）、端口被占用时跳过确认直接使用下一可用端口。
- * Platform: 1) yarn dev ios / yarn dev android  2) rn-dev.config.json (per OS)  3) OS default.
+ * android:real: 仅 Android，优先选择真机（排除 emulator-*），未找到真机则报错。
+ * Platform: 1) yarn dev ios / yarn dev android / yarn dev android:real  2) rn-dev.config.json (per OS)  3) OS default.
  */
 const path = require('path');
 const fs = require('fs');
@@ -114,16 +115,16 @@ function getPlatformFromConfig() {
 
 const argv = process.argv.slice(2);
 const quick = argv.includes('--quick');
-const argOverride = argv.find((a) => a === 'ios' || a === 'android'); // yarn dev ios | yarn dev ios --quick
+const argOverride = argv.find((a) => a === 'ios' || a === 'android' || a === 'android:real');
 const configPlatform = getPlatformFromConfig();
 const isDarwin = process.platform === 'darwin';
 const osDefault = isDarwin ? 'ios' : 'android';
 
-const target = (argOverride === 'ios' || argOverride === 'android')
+const target = (argOverride === 'ios' || argOverride === 'android' || argOverride === 'android:real')
   ? argOverride
   : (configPlatform || osDefault);
 
-if (target === 'android') {
+if (target === 'android' || target === 'android:real') {
   ensureAndroidSdkConfigured();
 }
 

@@ -6,12 +6,30 @@
  */
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 
-const target = process.argv[2] || 'ios'; // ios | android
+const target = process.argv[2] || 'ios'; // ios | android | android:real
 const METRO_PORT = parseInt(process.argv[3] || process.env.METRO_PORT || '8081', 10);
 const POLL_INTERVAL_MS = 800;
 const METRO_WAIT_TIMEOUT_MS = 60000;
+
+/**
+ * 通过 adb devices 找第一个非模拟器设备（serial 不以 emulator- 开头）。
+ * @returns {string|null} 设备 id 或 null
+ */
+function getFirstRealAndroidDevice() {
+  try {
+    const out = execSync('adb devices', { encoding: 'utf8' });
+    const lines = out.split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('List of devices')) continue;
+      const serial = trimmed.split(/\s+/)[0];
+      if (serial && !serial.startsWith('emulator-')) return serial;
+    }
+  } catch (_) {}
+  return null;
+}
 
 function getIosSimulator() {
   try {
@@ -44,7 +62,8 @@ function run() {
     env.RCT_NO_LAUNCH_PACKAGER = '1';
   }
 
-  const args = ['react-native', `run-${target}`];
+  const runTarget = target === 'android:real' ? 'android' : target;
+  const args = ['react-native', `run-${runTarget}`];
   if (target === 'ios') {
     args.push('--mode', 'Debug');
     const simulator = getIosSimulator();
@@ -52,8 +71,17 @@ function run() {
       args.push('--simulator', simulator);
     }
   }
-  if (target === 'android') {
+  if (runTarget === 'android') {
     args.push('--no-packager', '--port', String(METRO_PORT));
+    if (target === 'android:real') {
+      const deviceId = getFirstRealAndroidDevice();
+      if (!deviceId) {
+        console.error('\n[android:real] 未检测到真机。请连接设备并开启 USB 调试，或使用 yarn dev android 跑模拟器。');
+        process.exit(1);
+      }
+      args.push('--device', deviceId);
+      console.log(`[android:real] 使用真机: ${deviceId}`);
+    }
   }
 
   const child = spawn('npx', args, {
