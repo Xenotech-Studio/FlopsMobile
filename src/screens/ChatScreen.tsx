@@ -211,6 +211,9 @@ export function ChatScreen() {
         setConversationId(event.conversation_id);
         convId = event.conversation_id;
       }
+      if ('type' in event && event.type === 'conversation_title' && typeof (event as { title?: string }).title === 'string') {
+        setConversationTitle((event as { title: string }).title);
+      }
       if ('error' in event && event.error) throw new Error(event.error);
       if ('type' in event) {
         if (event.type === 'thinking') setStreamStatus('thinking');
