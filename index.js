@@ -12,8 +12,11 @@ global.fetch = function fetchWithStreamingSupport(input, init) {
   return originalFetch(input, init);
 };
 
-import { AppRegistry } from 'react-native';
+import { AppRegistry, LogBox } from 'react-native';
 import App from './App';
 import { name as appName } from './app.json';
+
+// 依赖（如 @react-navigation/stack）内部仍使用 InteractionManager，RN 0.82+ 会打弃用警告，暂时屏蔽
+LogBox.ignoreLogs(['InteractionManager has been deprecated']);
 
 AppRegistry.registerComponent(appName, () => App);

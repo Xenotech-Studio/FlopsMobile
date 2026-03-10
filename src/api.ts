@@ -136,6 +136,24 @@ export async function getConversation(
 }
 
 /**
+ * 删除会话：DELETE /api/conversations/:id
+ */
+export async function deleteConversation(
+  session: Session,
+  conversationId: string
+): Promise<void> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/conversations/${conversationId}`, {
+    method: 'DELETE',
+    headers: authHeaders(session.access_token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `删除对话失败: ${res.status}`);
+  }
+}
+
+/**
  * 创建会话：POST /api/conversations
  */
 export async function createConversation(session: Session): Promise<{ id: string }> {

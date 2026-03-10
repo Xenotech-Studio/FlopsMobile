@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -9,20 +9,21 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  Modal,
   ActivityIndicator,
+  PanResponder,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRoute, useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSession } from '../context/SessionContext';
+import type { RootStackParamList } from '../navigation/types';
 import {
   createConversation,
   streamChat,
   cancelConversation,
   submitSafetyDecision,
-  listConversations,
   getConversation,
   type ChatStreamEvent,
-  type ConversationListItem,
   type ConversationMessage,
 } from '../api';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -138,10 +139,15 @@ function coalesceAssistantTurn(messages: ConversationMessage[]): Message | null 
   };
 }
 
+type ChatRouteParams = RootStackParamList['Chat'];
+
 export function ChatScreen() {
-  const { session, logout } = useSession();
-  const [conversationId, setConversationId] = useState('');
-  const [conversationTitle, setConversationTitle] = useState('');
+  const { session } = useSession();
+  const route = useRoute();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Chat'>>();
+  const params = (route.params ?? undefined) as ChatRouteParams | undefined;
+  const [conversationId, setConversationId] = useState(params?.conversationId ?? '');
+  const [conversationTitle, setConversationTitle] = useState(params?.conversationTitle ?? '');
   const [messages, setMessages] = useState<Message[]>([]);
   const [messageInput, setMessageInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -152,9 +158,6 @@ export function ChatScreen() {
   const [submittingReviewId, setSubmittingReviewId] = useState('');
   /** 工具卡片展示状态：key -> 'collapsed' | 'preview' | 'full' */
   const [toolCardViewMode, setToolCardViewMode] = useState<Record<string, 'collapsed' | 'preview' | 'full'>>({});
-  const [historyModalVisible, setHistoryModalVisible] = useState(false);
-  const [historyList, setHistoryList] = useState<ConversationListItem[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const abortRef = useRef<AbortController | null>(null);
   const manualStopRef = useRef(false);
@@ -620,22 +623,6 @@ export function ChatScreen() {
     }
   }, [session, loading]);
 
-  const openHistoryModal = useCallback(async () => {
-    if (!session) return;
-    setHistoryModalVisible(true);
-    setHistoryLoading(true);
-    setHistoryList([]);
-    setError('');
-    try {
-      const { conversations } = await listConversations(session);
-      setHistoryList(conversations ?? []);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '获取历史对话失败');
-    } finally {
-      setHistoryLoading(false);
-    }
-  }, [session]);
-
   /** 将服务端消息列表转为本地 Message[]：过滤 system，合并 assistant+tool 为带 blocks 的 assistant */
   const rawMessagesToLocal = useCallback((raw: ConversationMessage[]): Message[] => {
     const out: Message[] = [];
@@ -663,40 +650,28 @@ export function ChatScreen() {
     return out;
   }, []);
 
-  const formatHistoryTime = useCallback((isoString: string) => {
-    try {
-      const d = new Date(isoString);
-      if (Number.isNaN(d.getTime())) return isoString;
-      return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
-    } catch {
-      return isoString;
-    }
-  }, []);
-
-  const switchToConversation = useCallback(
-    async (id: string) => {
-      if (!session) return;
-      setHistoryModalVisible(false);
-      setError('');
-      setLoading(true);
-      try {
-        const { conversation } = await getConversation(session, id);
+  // 从历史对话列表进入时，根据路由参数加载对话
+  useEffect(() => {
+    const id = params?.conversationId;
+    if (!id || !session) return;
+    let cancelled = false;
+    setLoading(true);
+    getConversation(session, id)
+      .then(({ conversation }) => {
+        if (cancelled) return;
         const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
-        const local = rawMessagesToLocal(raw);
+        setMessages(rawMessagesToLocal(raw));
         setConversationId(id);
         setConversationTitle(conversation?.title?.trim() || '新对话');
-        setMessages(local);
-        setStreamingText('');
-        setCurrentAssistantBlocks([]);
-        setStreamStatus('');
-      } catch (e) {
-        setError(e instanceof Error ? e.message : '打开对话失败');
-      } finally {
-        setLoading(false);
-      }
-    },
-    [session, rawMessagesToLocal]
-  );
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : '打开对话失败');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [params?.conversationId, session, rawMessagesToLocal]);
 
   const handleSafetyDecision = useCallback(
     async (reviewId: string, decision: 'approve' | 'reject') => {
@@ -810,6 +785,19 @@ export function ChatScreen() {
   const setToolCardMode = useCallback((cardKey: string, mode: 'collapsed' | 'preview' | 'full') => {
     setToolCardViewMode((prev) => ({ ...prev, [cardKey]: mode }));
   }, []);
+
+  const canGoBack = navigation.canGoBack();
+  const leftEdgePan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 10,
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dx > 60 && gestureState.moveX <= 40) {
+          navigation.goBack();
+        }
+      },
+    })
+  ).current;
 
   function renderToolBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
     if (block.tool_name === 'local_cursor_agent') {
@@ -1016,12 +1004,28 @@ export function ChatScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      {canGoBack ? (
+        <View
+          style={styles.leftEdgeGesture}
+          {...leftEdgePan.panHandlers}
+          pointerEvents="box-only"
+        />
+      ) : null}
       <KeyboardAvoidingView
         style={styles.keyboardView}
         behavior={Platform.select({ ios: 'padding', android: 'height' })}
         keyboardVerticalOffset={0}
       >
         <View style={styles.header}>
+        {canGoBack ? (
+          <TouchableOpacity
+            style={styles.headerBackBtn}
+            onPress={() => navigation.goBack()}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="chevron-back" size={24} color="#374151" />
+          </TouchableOpacity>
+        ) : null}
         <View style={styles.headerTitleWrap}>
           <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
             {conversationId ? (conversationTitle || '新对话') : 'Flops'}
@@ -1030,77 +1034,14 @@ export function ChatScreen() {
         <View style={styles.headerActions}>
           <TouchableOpacity
             style={styles.headerBtn}
-            onPress={openHistoryModal}
-            disabled={loading}
-          >
-            <Text style={styles.headerBtnText}>历史</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.headerBtn}
             onPress={handleNewConversation}
             disabled={loading}
           >
             <Text style={styles.headerBtnText}>新对话</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.headerBtn} onPress={logout}>
-            <Text style={styles.headerBtnText}>退出</Text>
-          </TouchableOpacity>
         </View>
       </View>
 
-      <Modal
-        visible={historyModalVisible}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setHistoryModalVisible(false)}
-      >
-        <View style={styles.historyModalOverlay}>
-          <View style={styles.historyModalContent}>
-            <View style={styles.historyModalHead}>
-              <Text style={styles.historyModalTitle}>历史对话</Text>
-              <TouchableOpacity
-                style={styles.historyModalClose}
-                onPress={() => setHistoryModalVisible(false)}
-                accessibilityLabel="关闭"
-              >
-                <Text style={styles.historyModalCloseText}>×</Text>
-              </TouchableOpacity>
-            </View>
-            {historyLoading ? (
-              <View style={styles.historyModalLoading}>
-                <ActivityIndicator size="large" color="#0f172a" />
-              </View>
-            ) : historyList.length === 0 ? (
-              <View style={styles.historyModalEmpty}>
-                <Text style={styles.historyModalEmptyText}>暂无历史对话</Text>
-              </View>
-            ) : (
-              <ScrollView style={styles.historyModalList} keyboardShouldPersistTaps="handled">
-                {historyList.map((conv) => (
-                  <TouchableOpacity
-                    key={conv.id}
-                    style={[
-                      styles.historyModalItem,
-                      conv.id === conversationId && styles.historyModalItemActive,
-                    ]}
-                    onPress={() => switchToConversation(conv.id)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.historyModalItemTitle} numberOfLines={1}>
-                      {conv.title && conv.title.trim() ? conv.title.trim() : '新对话'}
-                    </Text>
-                    {conv.updated_at ? (
-                      <Text style={styles.historyModalItemMeta} numberOfLines={1}>
-                        {formatHistoryTime(conv.updated_at)}
-                      </Text>
-                    ) : null}
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            )}
-          </View>
-        </View>
-      </Modal>
       {error ? <Text style={styles.globalError}>{error}</Text> : null}
 
       <ScrollView
@@ -1204,6 +1145,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
     gap: 12,
+  },
+  headerBackBtn: {
+    padding: 4,
+    marginRight: 4,
+  },
+  leftEdgeGesture: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 24,
+    zIndex: 10,
   },
   headerTitleWrap: {
     flex: 1,
@@ -1413,41 +1366,4 @@ const styles = StyleSheet.create({
   sendBtnStop: { backgroundColor: '#dc2626' },
   sendBtnDisabled: { opacity: 0.5 },
   sendBtnText: { color: '#fff', fontSize: 18 },
-  historyModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  historyModalContent: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    maxHeight: '80%',
-    overflow: 'hidden',
-  },
-  historyModalHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  historyModalTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
-  historyModalClose: { padding: 4 },
-  historyModalCloseText: { fontSize: 24, color: '#6b7280' },
-  historyModalLoading: { padding: 40, alignItems: 'center' },
-  historyModalEmpty: { padding: 40, alignItems: 'center' },
-  historyModalEmptyText: { fontSize: 15, color: '#6b7280' },
-  historyModalList: { maxHeight: 400 },
-  historyModalItem: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
-  },
-  historyModalItemActive: { backgroundColor: '#f0f0f0' },
-  historyModalItemTitle: { fontSize: 15, fontWeight: '600', color: '#111827' },
-  historyModalItemMeta: { fontSize: 12, color: '#6b7280', marginTop: 2 },
 });

@@ -85,8 +85,26 @@ function getDefaultSdkPath() {
   return null;
 }
 
+function getSdkDirFromLocalProperties() {
+  const localProp = path.join(projectRoot, 'android', 'local.properties');
+  if (!fs.existsSync(localProp)) return null;
+  try {
+    const content = fs.readFileSync(localProp, 'utf8');
+    const m = content.match(/sdk\.dir=(.+)/);
+    if (m) {
+      const dir = m[1].trim().replace(/^["']|["']$/g, '').replace(/\\/g, path.sep);
+      return dir;
+    }
+  } catch (_) {}
+  return null;
+}
+
 function ensureAndroidSdkConfigured() {
-  const sdkDir = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || getDefaultSdkPath();
+  const sdkDir =
+    process.env.ANDROID_HOME ||
+    process.env.ANDROID_SDK_ROOT ||
+    getSdkDirFromLocalProperties() ||
+    getDefaultSdkPath();
   if (!sdkDir || !fs.existsSync(sdkDir)) {
     console.error('\n[android] Android SDK 未配置。');
     console.error('请任选其一：');
