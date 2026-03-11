@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Platform,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
@@ -18,8 +19,15 @@ import { useSession } from '../context/SessionContext';
 import type { TasksStackParamList } from '../navigation/types';
 import type { TaskItem, Project } from '../taskApi';
 import { TaskRow } from '../components/TaskRow';
-import { TaskFilterSheet } from '../components/TaskFilterSheet';
+import { TaskFilterSheet, type StatusLevel } from '../components/TaskFilterSheet';
+import { shadowCircleButton, shadowFab, shadowSoft, borderLight } from '../theme/shadows';
+import { LIST_TOP_EXTRA, LIST_PADDING_BOTTOM_WITH_FOOTER } from '../theme/layout';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import { filterTasksByStatusLevel } from '../utils/taskFilters';
+
+const STATUS_KEY = 'statusLevel_todayTasks';
+const SHOW_TIME_KEY = 'showTimeLabels_todayTasks';
+const SHOW_PROJECT_KEY = 'showProjectName_todayTasks';
 
 type Nav = StackNavigationProp<TasksStackParamList, 'TasksHome'>;
 
@@ -47,10 +55,50 @@ export function TasksHomeScreen() {
     shouldShowEndTodayButton,
     endToday,
     clearError,
+    isAheadOfToday,
+    cancelAheadOfToday,
   } = useTask();
 
   const [refreshing, setRefreshing] = useState(false);
   const [filterVisible, setFilterVisible] = useState(false);
+  const [statusLevel, setStatusLevel] = useState<StatusLevel>(3);
+  const [showTimeLabels, setShowTimeLabels] = useState(false);
+  const [showProjectName, setShowProjectName] = useState(true);
+
+  const filteredTodayTasks = useMemo(
+    () => filterTasksByStatusLevel(todayTasks, statusLevel),
+    [todayTasks, statusLevel]
+  );
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [s, t, p] = await Promise.all([
+          AsyncStorage.getItem(STATUS_KEY),
+          AsyncStorage.getItem(SHOW_TIME_KEY),
+          AsyncStorage.getItem(SHOW_PROJECT_KEY),
+        ]);
+        if (s !== null) {
+          const v = parseInt(s, 10);
+          if (v >= 0 && v <= 3) setStatusLevel(v as StatusLevel);
+        }
+        if (t !== null) setShowTimeLabels(t === 'true');
+        if (p !== null) setShowProjectName(p === 'true');
+      } catch {
+        // ignore
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    AsyncStorage.setItem(STATUS_KEY, String(statusLevel));
+  }, [statusLevel]);
+  useEffect(() => {
+    AsyncStorage.setItem(SHOW_TIME_KEY, String(showTimeLabels));
+  }, [showTimeLabels]);
+  useEffect(() => {
+    AsyncStorage.setItem(SHOW_PROJECT_KEY, String(showProjectName));
+  }, [showProjectName]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -113,7 +161,7 @@ export function TasksHomeScreen() {
         </TouchableOpacity>
         <View style={styles.topBarCenter}>
           <Text style={styles.todayTitle}>{formatTodayDate(todayDate)}</Text>
-          <Text style={styles.todaySubtitle}>今日 {todayTasks.length} 个任务</Text>
+          <Text style={styles.todaySubtitle}>今日 {filteredTodayTasks.length} 个任务</Text>
         </View>
         <TouchableOpacity
           style={styles.circleBtn}
@@ -140,12 +188,13 @@ export function TasksHomeScreen() {
           </View>
         ) : (
           <FlatList
-            data={todayTasks}
+            data={filteredTodayTasks}
             keyExtractor={(item) => item.id}
             renderItem={({ item }) => (
               <TaskRow
                 task={item}
-                showProjectName
+                showProjectName={showProjectName}
+                showTimeLabel={showTimeLabels}
                 projectName={projects.find((p) => p.id === item.project_id)?.name ?? undefined}
                 onPress={() => onTaskPress(item)}
                 onToggleCompletion={() => toggleTaskCompletion(item)}
@@ -161,8 +210,8 @@ export function TasksHomeScreen() {
               </View>
             }
             contentContainerStyle={[
-              todayTasks.length === 0 ? styles.emptyList : styles.listContent,
-              { paddingTop: headerHeight },
+              filteredTodayTasks.length === 0 ? styles.emptyList : styles.listContent,
+              { paddingTop: headerHeight + LIST_TOP_EXTRA },
             ]}
           />
         )}
@@ -183,6 +232,17 @@ export function TasksHomeScreen() {
       <TaskFilterSheet
         visible={filterVisible}
         onClose={() => setFilterVisible(false)}
+        showOnlyMine={false}
+        onShowOnlyMineChange={() => {}}
+        statusLevel={statusLevel}
+        onStatusLevelChange={setStatusLevel}
+        showTimeLabels={showTimeLabels}
+        onShowTimeLabelsChange={setShowTimeLabels}
+        showProjectName={showProjectName}
+        onShowProjectNameChange={setShowProjectName}
+        showOnlyMineToggle={false}
+        isAheadOfToday={isAheadOfToday}
+        onCancelAheadOfToday={cancelAheadOfToday}
       />
     </View>
   );
@@ -212,11 +272,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 2,
+    ...shadowCircleButton,
   },
   topBarCenter: { alignItems: 'center', flex: 1 },
   todayTitle: { fontSize: 20, fontWeight: '700', color: '#0f172a' },
@@ -224,8 +280,8 @@ const styles = StyleSheet.create({
   errorBar: { backgroundColor: '#fef2f2', padding: 12 },
   errorText: { fontSize: 14, color: '#dc2626', textAlign: 'center' },
   loadingText: { marginTop: 12, fontSize: 14, color: '#6b7280' },
-  listContent: { paddingBottom: 100 },
-  emptyList: { flex: 1, paddingBottom: 100 },
+  listContent: { paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
+  emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
   empty: { paddingVertical: 48, alignItems: 'center' },
   emptyText: { marginTop: 12, fontSize: 16, color: '#9ca3af' },
   footer: {
@@ -243,9 +299,8 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     backgroundColor: '#fff',
     borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.08)',
-    ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.12, shadowRadius: 2 }, android: { elevation: 2 } }),
+    ...borderLight,
+    ...shadowSoft,
   },
   endTodayText: { fontSize: 16, fontWeight: '500', color: '#111827' },
   footerSpacer: { flex: 1 },
@@ -256,8 +311,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.08)',
-    ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.12, shadowRadius: 2 }, android: { elevation: 2 } }),
+    ...borderLight,
+    ...shadowFab,
   },
 });

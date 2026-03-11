@@ -15,6 +15,8 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
 import { listConversations, deleteConversation, type ConversationListItem } from '../api';
 import type { RootStackParamList } from '../navigation/types';
+import { shadowFab, borderLight } from '../theme/shadows';
+import { LIST_PADDING_BOTTOM_WITH_FOOTER } from '../theme/layout';
 
 function formatTime(isoString: string): string {
   try {
@@ -179,8 +181,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 12, fontSize: 15, color: '#6b7280' },
-  listContent: { paddingBottom: 100 },
-  emptyList: { flex: 1, paddingBottom: 100 },
+  listContent: { paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
+  emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
   emptyWrap: {
     flex: 1,
     justifyContent: 'center',
@@ -230,12 +232,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.12,
-    shadowRadius: 2,
-    elevation: 2,
-    borderWidth: 0.5,
-    borderColor: 'rgba(0,0,0,0.08)',
+    ...borderLight,
+    ...shadowFab,
   },
 });

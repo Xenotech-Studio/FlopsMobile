@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
+import { shadowSoftSubtle } from '../theme/shadows';
 
 const EDGE_WIDTH = 24;
 const SWIPE_THRESHOLD = 60;
@@ -151,11 +152,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     alignItems: 'center',
     marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 3,
-    elevation: 2,
+    ...shadowSoftSubtle,
   },
   avatarWrap: {
     width: 72,

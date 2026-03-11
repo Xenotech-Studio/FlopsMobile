@@ -5,6 +5,7 @@
 import React from 'react';
 import { StatusBar, useColorScheme, View, ActivityIndicator, StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SessionProvider, useSession } from './src/context/SessionContext';
@@ -41,9 +42,11 @@ function AppContent() {
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       {session ? (
         <NavigationContainer ref={navigationRef} initialState={initialNavState}>
-          <TaskProvider>
-            <RootNavigator />
-          </TaskProvider>
+          <BottomSheetModalProvider>
+            <TaskProvider>
+              <RootNavigator />
+            </TaskProvider>
+          </BottomSheetModalProvider>
         </NavigationContainer>
       ) : (
         <LoginScreen />

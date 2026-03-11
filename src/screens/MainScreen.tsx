@@ -14,6 +14,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import { shadowMenu } from '../theme/shadows';
 import { ConversationListScreen } from './ConversationListScreen';
 import { TasksNavigator } from './TasksNavigator';
 import { CalendarPlaceholderScreen } from './CalendarPlaceholderScreen';
@@ -105,11 +106,7 @@ const headerStyles = StyleSheet.create({
     backgroundColor: '#fff',
     borderRadius: 12,
     paddingVertical: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 8,
+    ...shadowMenu,
   },
   menuItem: {
     flexDirection: 'row',

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -7,7 +7,9 @@ import {
   ActivityIndicator,
   StyleSheet,
   TouchableOpacity,
+  Alert,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { StackActions } from '@react-navigation/native';
@@ -17,8 +19,17 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useTask } from '../context/TaskContext';
 import type { TasksStackParamList } from '../navigation/types';
 import { TaskRow } from '../components/TaskRow';
-import { TaskFilterSheet } from '../components/TaskFilterSheet';
+import { TaskFilterSheet, type StatusLevel } from '../components/TaskFilterSheet';
+import { shadowCircleButton, shadowFab, borderLight } from '../theme/shadows';
+import { LIST_TOP_EXTRA, LIST_PADDING_BOTTOM_DEFAULT } from '../theme/layout';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import {
+  filterTasksByStatusLevel,
+  filterTasksByShowOnlyMine,
+} from '../utils/taskFilters';
+
+const SHOW_TIME_KEY = 'showTimeLabels_projectDetail';
+const SHOW_PROJECT_KEY = 'showProjectName_projectDetail';
 
 type Route = RouteProp<TasksStackParamList, 'ProjectDetail'>;
 
@@ -47,6 +58,47 @@ export function ProjectDetailScreen() {
   const insets = useSafeAreaInsets();
   const [refreshing, setRefreshing] = useState(false);
   const [filterVisible, setFilterVisible] = useState(false);
+  const [showOnlyMine, setShowOnlyMine] = useState(false);
+  const [statusLevel, setStatusLevel] = useState<StatusLevel>(1);
+  const [showTimeLabels, setShowTimeLabels] = useState(false);
+  const [showProjectName, setShowProjectName] = useState(false);
+
+  const statusKey = useMemo(() => `statusLevel_project_${projectId}`, [projectId]);
+
+  const filteredProjectTasks = useMemo(() => {
+    const byMine = filterTasksByShowOnlyMine(projectTasks, showOnlyMine);
+    return filterTasksByStatusLevel(byMine, statusLevel);
+  }, [projectTasks, showOnlyMine, statusLevel]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [s, t, p] = await Promise.all([
+          AsyncStorage.getItem(statusKey),
+          AsyncStorage.getItem(SHOW_TIME_KEY),
+          AsyncStorage.getItem(SHOW_PROJECT_KEY),
+        ]);
+        if (s !== null) {
+          const v = parseInt(s, 10);
+          if (v >= 0 && v <= 3) setStatusLevel(v as StatusLevel);
+        }
+        if (t !== null) setShowTimeLabels(t === 'true');
+        if (p !== null) setShowProjectName(p === 'true');
+      } catch {
+        // ignore
+      }
+    })();
+  }, [statusKey]);
+
+  useEffect(() => {
+    AsyncStorage.setItem(statusKey, String(statusLevel));
+  }, [statusLevel, statusKey]);
+  useEffect(() => {
+    AsyncStorage.setItem(SHOW_TIME_KEY, String(showTimeLabels));
+  }, [showTimeLabels]);
+  useEffect(() => {
+    AsyncStorage.setItem(SHOW_PROJECT_KEY, String(showProjectName));
+  }, [showProjectName]);
 
   const onBack = useCallback(() => {
     navigation.dispatch(StackActions.pop(1));
@@ -103,12 +155,13 @@ export function ProjectDetailScreen() {
           </View>
         ) : (
           <FlatList
-            data={projectTasks}
+            data={filteredProjectTasks}
             keyExtractor={(item) => item.id}
             renderItem={({ item }) => (
               <TaskRow
                 task={item}
-                showProjectName={false}
+                showProjectName={showProjectName}
+                showTimeLabel={showTimeLabels}
                 onPress={() => onTaskPress(item.id)}
                 onToggleCompletion={() => toggleTaskCompletion(item)}
               />
@@ -123,8 +176,8 @@ export function ProjectDetailScreen() {
               </View>
             }
             contentContainerStyle={[
-              projectTasks.length === 0 ? styles.emptyList : styles.listContent,
-              { paddingTop: headerHeight },
+              filteredProjectTasks.length === 0 ? styles.emptyList : styles.listContent,
+              { paddingTop: headerHeight + LIST_TOP_EXTRA },
             ]}
           />
         )}
@@ -138,6 +191,16 @@ export function ProjectDetailScreen() {
       <TaskFilterSheet
         visible={filterVisible}
         onClose={() => setFilterVisible(false)}
+        showOnlyMine={showOnlyMine}
+        onShowOnlyMineChange={setShowOnlyMine}
+        statusLevel={statusLevel}
+        onStatusLevelChange={setStatusLevel}
+        showTimeLabels={showTimeLabels}
+        onShowTimeLabelsChange={setShowTimeLabels}
+        showProjectName={showProjectName}
+        onShowProjectNameChange={setShowProjectName}
+        showOnlyMineToggle={true}
+        onShowDeletedTasks={() => Alert.alert('近期删除', '敬请期待')}
       />
     </View>
   );
@@ -165,18 +228,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 2,
+    ...shadowCircleButton,
   },
   topBarCenter: { alignItems: 'center', flex: 1 },
   topBarTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 12, fontSize: 14, color: '#6b7280' },
-  listContent: { paddingBottom: 24 },
-  emptyList: { flex: 1, paddingBottom: 24 },
+  listContent: { paddingBottom: LIST_PADDING_BOTTOM_DEFAULT },
+  emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_DEFAULT },
   empty: { paddingVertical: 48, alignItems: 'center' },
   emptyText: { marginTop: 12, fontSize: 16, color: '#9ca3af' },
   fab: {
@@ -189,12 +248,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.08)',
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.12,
-    shadowRadius: 2,
+    ...borderLight,
+    ...shadowFab,
   },
 });

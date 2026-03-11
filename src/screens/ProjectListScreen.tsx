@@ -16,6 +16,7 @@ import { useTask } from '../context/TaskContext';
 import type { TasksStackParamList } from '../navigation/types';
 import type { Project } from '../taskApi';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import { LIST_PADDING_BOTTOM_DEFAULT } from '../theme/layout';
 
 type Nav = StackNavigationProp<TasksStackParamList, 'ProjectList'>;
 
@@ -129,8 +130,8 @@ const styles = StyleSheet.create({
   closeBtn: { padding: 4 },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 12, fontSize: 14, color: '#6b7280' },
-  listContent: { paddingBottom: 24 },
-  emptyList: { flex: 1, paddingBottom: 24 },
+  listContent: { paddingBottom: LIST_PADDING_BOTTOM_DEFAULT },
+  emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_DEFAULT },
   empty: { paddingVertical: 48, alignItems: 'center' },
   emptyText: { marginTop: 12, fontSize: 16, color: '#9ca3af' },
   projectRow: {

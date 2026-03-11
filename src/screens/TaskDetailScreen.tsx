@@ -20,6 +20,7 @@ import { useTask } from '../context/TaskContext';
 import type { TasksStackParamList } from '../navigation/types';
 import type { TaskItem, Project, NewTaskPayload } from '../taskApi';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import { shadowCircleButton } from '../theme/shadows';
 
 type Route = RouteProp<TasksStackParamList, 'TaskDetail'>;
 
@@ -287,11 +288,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 2,
+    ...shadowCircleButton,
   },
   topBarCenter: { alignItems: 'center', flex: 1 },
   topBarTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a' },

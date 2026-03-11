@@ -2,6 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import type { TaskItem } from '../taskApi';
+import {
+  TASK_ROW_MIN_HEIGHT,
+  TASK_ROW_PADDING_VERTICAL,
+  TASK_ROW_PADDING_LEFT,
+  TASK_ROW_PADDING_RIGHT,
+} from '../theme/layout';
 
 const RING_SIZE = 24;
 const RING_STROKE = 2;
@@ -40,11 +46,24 @@ function getTaskColor(task: TaskItem): string {
   return '#d98f33';
 }
 
+/** 与 FlowTaskIOS 一致：今天/明天/昨天 + 时间，其它显示 M月d日 HH:mm */
+function formatDateAndTime(d: Date): string {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const timeStr = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const dayDiff = Math.round((dDate.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
+  if (dayDiff === 0) return `今天 ${timeStr}`;
+  if (dayDiff === 1) return `明天 ${timeStr}`;
+  if (dayDiff === -1) return `昨天 ${timeStr}`;
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${timeStr}`;
+}
+
 function formatTimeLabel(task: TaskItem): string {
   if (task.done && task.completed_time) {
     try {
       const d = new Date(task.completed_time);
-      return `完成于 ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+      return `完成于 ${formatDateAndTime(d)}`;
     } catch {
       return '';
     }
@@ -53,7 +72,7 @@ function formatTimeLabel(task: TaskItem): string {
   if (!raw || raw === '2025-02-28T23:59:59Z' || raw === '2025-02-28T00:00:00Z') return '';
   try {
     const d = new Date(raw);
-    return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+    return formatDateAndTime(d);
   } catch {
     return '';
   }
@@ -62,6 +81,7 @@ function formatTimeLabel(task: TaskItem): string {
 type TaskRowProps = {
   task: TaskItem;
   showProjectName?: boolean;
+  showTimeLabel?: boolean;
   projectName?: string;
   onPress: () => void;
   onToggleCompletion: () => void;
@@ -70,13 +90,14 @@ type TaskRowProps = {
 export function TaskRow({
   task,
   showProjectName,
+  showTimeLabel = true,
   projectName,
   onPress,
   onToggleCompletion,
 }: TaskRowProps) {
   const [visualDone, setVisualDone] = useState(task.done);
   const color = getTaskColor({ ...task, done: visualDone });
-  const timeStr = formatTimeLabel(task);
+  const timeStr = showTimeLabel ? formatTimeLabel(task) : null;
   const priority = task.priority && task.priority !== 'default' ? task.priority : null;
   const parts: string[] = [];
   if (showProjectName && projectName) parts.push(projectName);
@@ -145,8 +166,10 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
+    minHeight: TASK_ROW_MIN_HEIGHT,
+    paddingVertical: TASK_ROW_PADDING_VERTICAL,
+    paddingLeft: TASK_ROW_PADDING_LEFT,
+    paddingRight: TASK_ROW_PADDING_RIGHT,
     gap: 12,
   },
   iconTapArea: {
