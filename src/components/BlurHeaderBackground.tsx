@@ -1,9 +1,6 @@
 import React from 'react';
 import { View, StyleSheet, type ViewStyle } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
-// BlurView 在新架构下会与旧桥重复注册 "BlurView"，导致 Tried to register two views。
-// 依赖保留，待 @react-native-community/blur 或 RN 修复后再启用。
-// import { BlurView } from '@react-native-community/blur';
 
 const SOLID_WHITE = 'rgba(255,255,255,0.98)';
 
@@ -15,7 +12,6 @@ type BlurHeaderBackgroundProps = {
 
 /**
  * 顶栏背景：顶部纯色；下方为自上而下白到透明的渐变（上慢下快）。
- * 虚化暂关（见上方注释），恢复时在 <LinearGradient> 前加一层 BlurView 即可。
  */
 export function BlurHeaderBackground({ style, topSolidHeight = 0 }: BlurHeaderBackgroundProps) {
   const gradientStyle = [styles.gradient, topSolidHeight > 0 && { top: topSolidHeight }];
