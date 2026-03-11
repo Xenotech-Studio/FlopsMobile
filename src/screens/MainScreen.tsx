@@ -15,7 +15,7 @@ import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { ConversationListScreen } from './ConversationListScreen';
-import { TasksPlaceholderScreen } from './TasksPlaceholderScreen';
+import { TasksNavigator } from './TasksNavigator';
 import { CalendarPlaceholderScreen } from './CalendarPlaceholderScreen';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 
@@ -196,9 +196,10 @@ export function MainScreen() {
       />
       <Tab.Screen
         name="Tasks"
-        component={TasksPlaceholderScreen}
+        component={TasksNavigator}
         options={{
-          title: 'Tasks',
+          headerShown: false,
+          title: '任务',
           tabBarLabel: 'Tasks',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="checkmark-done" size={size} color={color} />

@@ -8,6 +8,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SessionProvider, useSession } from './src/context/SessionContext';
+import { TaskProvider } from './src/context/TaskContext';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import type { RootStackParamList } from './src/navigation/types';
@@ -40,7 +41,9 @@ function AppContent() {
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       {session ? (
         <NavigationContainer ref={navigationRef} initialState={initialNavState}>
-          <RootNavigator />
+          <TaskProvider>
+            <RootNavigator />
+          </TaskProvider>
         </NavigationContainer>
       ) : (
         <LoginScreen />
