@@ -1,18 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import Ionicons from 'react-native-vector-icons/Ionicons';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, TouchableOpacity, StyleSheet, PanResponder } from 'react-native';
 import type { TaskItem } from '../taskApi';
-import {
-  TASK_ROW_MIN_HEIGHT,
-  TASK_ROW_PADDING_VERTICAL,
-  TASK_ROW_PADDING_LEFT,
-  TASK_ROW_PADDING_RIGHT,
-} from '../theme/layout';
-
-const RING_SIZE = 24;
-const RING_STROKE = 2;
-const TAP_AREA_SIZE = 44;
-const CHECKMARK_SIZE = 12;
+import { TaskRowContextMenu, type RowPreview } from './TaskRowContextMenu';
+import { TaskRowContent } from './TaskRowContent';
 
 const priorityColors: Record<string, string> = {
   now: '#dc2626',
@@ -85,6 +75,8 @@ type TaskRowProps = {
   projectName?: string;
   onPress: () => void;
   onToggleCompletion: () => void;
+  /** 今日页拖拽排序：传入时右侧显示拖拽把手，长按把手可拖动 */
+  drag?: () => void;
 };
 
 export function TaskRow({
@@ -94,8 +86,45 @@ export function TaskRow({
   projectName,
   onPress,
   onToggleCompletion,
+  drag,
 }: TaskRowProps) {
   const [visualDone, setVisualDone] = useState(task.done);
+  const [contextMenuVisible, setContextMenuVisible] = useState(false);
+  const [anchorLayout, setAnchorLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [rowPreview, setRowPreview] = useState<RowPreview | null>(null);
+  const rowRef = useRef<View>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const contextMenuVisibleRef = useRef(false);
+  const dragRef = useRef(drag);
+  /** 本次触摸已触发了长按菜单，松手时不要再触发 onPress（避免进入详情） */
+  const openedMenuThisTouchRef = useRef(false);
+  contextMenuVisibleRef.current = contextMenuVisible;
+  dragRef.current = drag;
+
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current != null) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) =>
+        Math.abs(gestureState.dx) > 8 || Math.abs(gestureState.dy) > 8,
+      onPanResponderGrant: () => {
+        clearLongPressTimer();
+        if (contextMenuVisibleRef.current) {
+          setContextMenuVisible(false);
+          setAnchorLayout(null);
+          setRowPreview(null);
+        }
+        dragRef.current?.();
+      },
+    })
+  ).current;
+
   const color = getTaskColor({ ...task, done: visualDone });
   const timeStr = showTimeLabel ? formatTimeLabel(task) : null;
   const priority = task.priority && task.priority !== 'default' ? task.priority : null;
@@ -120,45 +149,79 @@ export function TaskRow({
     }
   };
 
+  const openContextMenu = () => {
+    openedMenuThisTouchRef.current = true;
+    setRowPreview({
+      title: task.title,
+      subtitle,
+      color: getTaskColor({ ...task, done: visualDone }),
+      visualDone,
+      doing,
+      priorityLabel: priority ? priorityLabels[priority] : null,
+      priorityColor: priority ? priorityColors[priority] : null,
+    });
+    rowRef.current?.measureInWindow((x, y, width, height) => {
+      setAnchorLayout({ x, y, width, height });
+      setContextMenuVisible(true);
+    });
+  };
+
   return (
-    <TouchableOpacity
-      style={styles.row}
-      onPress={onPress}
-      activeOpacity={0.7}
-    >
-      <TouchableOpacity
-        style={styles.iconTapArea}
-        onPress={(e) => {
-          e.stopPropagation();
-          handleToggle();
-        }}
-        activeOpacity={1}
+    <>
+      <View
+        ref={rowRef}
+        collapsable={false}
+        {...(drag ? panResponder.panHandlers : {})}
       >
-        <View style={[styles.ring, { borderColor: color }]}>
-          {visualDone ? (
-            <Ionicons name="checkmark" size={CHECKMARK_SIZE} color={color} />
-          ) : doing ? (
-            <Ionicons name="construct-outline" size={10} color={color} />
-          ) : null}
-        </View>
-      </TouchableOpacity>
-      <View style={styles.body}>
-        <Text
-          style={[styles.title, visualDone && styles.titleDone]}
-          numberOfLines={2}
+        <TouchableOpacity
+          style={styles.row}
+          onPress={() => {
+            if (openedMenuThisTouchRef.current) {
+              openedMenuThisTouchRef.current = false;
+              return;
+            }
+            onPress();
+          }}
+          onPressIn={
+            drag
+              ? () => {
+                  openedMenuThisTouchRef.current = false;
+                  longPressTimerRef.current = setTimeout(openContextMenu, 400);
+                }
+              : () => {
+                  openedMenuThisTouchRef.current = false;
+                }
+          }
+          onPressOut={drag ? clearLongPressTimer : undefined}
+          onLongPress={drag ? undefined : openContextMenu}
+          activeOpacity={0.7}
+          delayLongPress={drag ? undefined : 400}
         >
-          {task.title}
-        </Text>
-        {hasSubtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
-        {priority ? (
-          <View style={[styles.priorityBadge, { backgroundColor: `${priorityColors[priority]}20` }]}>
-            <Text style={[styles.priorityText, { color: priorityColors[priority] }]}>
-              {priorityLabels[priority]}
-            </Text>
-          </View>
-        ) : null}
+          <TaskRowContent
+            title={task.title}
+            subtitle={hasSubtitle ? subtitle : null}
+            color={color}
+            visualDone={visualDone}
+            doing={doing}
+            onRingPress={handleToggle}
+            priorityLabel={priority ? priorityLabels[priority] : null}
+            priorityColor={priority ? priorityColors[priority] : null}
+          />
+        </TouchableOpacity>
       </View>
-    </TouchableOpacity>
+      <TaskRowContextMenu
+        task={task}
+        visible={contextMenuVisible}
+        anchorLayout={anchorLayout}
+        rowPreview={rowPreview}
+        onClose={() => {
+          setContextMenuVisible(false);
+          setAnchorLayout(null);
+          setRowPreview(null);
+        }}
+        onDragInstead={drag}
+      />
+    </>
   );
 }
 
@@ -166,32 +229,7 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: TASK_ROW_MIN_HEIGHT,
-    paddingVertical: TASK_ROW_PADDING_VERTICAL,
-    paddingLeft: TASK_ROW_PADDING_LEFT,
-    paddingRight: TASK_ROW_PADDING_RIGHT,
-    gap: 12,
+    flex: 1,
+    alignSelf: 'stretch',
   },
-  iconTapArea: {
-    width: TAP_AREA_SIZE,
-    height: TAP_AREA_SIZE,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  ring: {
-    width: RING_SIZE,
-    height: RING_SIZE,
-    borderRadius: RING_SIZE / 2,
-    borderWidth: RING_STROKE,
-    backgroundColor: 'transparent',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  checkmark: {},
-  body: { flex: 1, minWidth: 0 },
-  title: { fontSize: 17, color: '#111827', fontWeight: '400' },
-  titleDone: { textDecorationLine: 'line-through', color: '#6b7280' },
-  subtitle: { fontSize: 12, color: '#9ca3af', marginTop: 2 },
-  priorityBadge: { alignSelf: 'flex-start', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginTop: 4 },
-  priorityText: { fontSize: 11, fontWeight: '600' },
 });

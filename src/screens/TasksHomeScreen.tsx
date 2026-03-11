@@ -3,12 +3,12 @@ import {
   View,
   Text,
   StyleSheet,
-  FlatList,
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
   Platform,
 } from 'react-native';
+import DraggableFlatList from 'react-native-draggable-flatlist';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -69,6 +69,11 @@ export function TasksHomeScreen() {
     () => filterTasksByStatusLevel(todayTasks, statusLevel),
     [todayTasks, statusLevel]
   );
+
+  const [localTaskOrder, setLocalTaskOrder] = useState<TaskItem[]>(filteredTodayTasks);
+  useEffect(() => {
+    setLocalTaskOrder(filteredTodayTasks);
+  }, [filteredTodayTasks]);
 
   useEffect(() => {
     (async () => {
@@ -187,10 +192,11 @@ export function TasksHomeScreen() {
             </View>
           </View>
         ) : (
-          <FlatList
-            data={filteredTodayTasks}
+          <DraggableFlatList<TaskItem>
+            data={localTaskOrder}
             keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
+            onDragEnd={({ data }) => setLocalTaskOrder(data)}
+            renderItem={({ item, drag }) => (
               <TaskRow
                 task={item}
                 showProjectName={showProjectName}
@@ -198,6 +204,7 @@ export function TasksHomeScreen() {
                 projectName={projects.find((p) => p.id === item.project_id)?.name ?? undefined}
                 onPress={() => onTaskPress(item)}
                 onToggleCompletion={() => toggleTaskCompletion(item)}
+                drag={drag}
               />
             )}
             refreshControl={
@@ -210,7 +217,7 @@ export function TasksHomeScreen() {
               </View>
             }
             contentContainerStyle={[
-              filteredTodayTasks.length === 0 ? styles.emptyList : styles.listContent,
+              localTaskOrder.length === 0 ? styles.emptyList : styles.listContent,
               { paddingTop: headerHeight + LIST_TOP_EXTRA },
             ]}
           />

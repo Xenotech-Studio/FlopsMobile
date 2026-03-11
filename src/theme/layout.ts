@@ -4,7 +4,7 @@
  */
 
 /** 任务列表：第一行距离 header 下方的额外间距 */
-export const LIST_TOP_EXTRA = 15;
+export const LIST_TOP_EXTRA = 5;
 
 /** 任务列表：有底部栏/ FAB 时的列表底部留白（今日页、对话列表等） */
 export const LIST_PADDING_BOTTOM_WITH_FOOTER = 100;
