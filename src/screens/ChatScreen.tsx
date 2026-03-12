@@ -7,6 +7,7 @@ import {
   Pressable,
   StyleSheet,
   ScrollView,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
@@ -152,8 +153,14 @@ export function ChatScreen() {
   const route = useRoute();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Chat'>>();
   const headerHeight = insets.top + 8 + 12 + HEADER_CIRCLE_BTN_SIZE;
-  /** 底部输入区高度（渐变 + 输入行），用于列表 paddingBottom 与绝对定位 */
-  const composerOverlayHeight = 140;
+  /** 底部渐变条高度（叠在滚动内容上，透明→白） */
+  const gradientStripHeight = 48;
+  /** 输入行高度（输入框+发送按钮） */
+  const inputRowHeight = 92;
+  /** 底部整块高度：渐变 + 输入行，贴屏幕底，渐变延伸到底无单独白底 */
+  const bottomOverlayHeight = gradientStripHeight + inputRowHeight;
+  /** 列表底部留白，让内容可滚入渐变下方 */
+  const scrollBottomPadding = bottomOverlayHeight + 12;
   const params = (route.params ?? undefined) as ChatRouteParams | undefined;
   const [conversationId, setConversationId] = useState(params?.conversationId ?? '');
   const [conversationTitle, setConversationTitle] = useState(params?.conversationTitle ?? '');
@@ -167,6 +174,7 @@ export function ChatScreen() {
   const [submittingReviewId, setSubmittingReviewId] = useState('');
   /** 工具卡片展示状态：key -> 'collapsed' | 'preview' | 'full' */
   const [toolCardViewMode, setToolCardViewMode] = useState<Record<string, 'collapsed' | 'preview' | 'full'>>({});
+  const [layoutResetKey, setLayoutResetKey] = useState(0);
   const scrollRef = useRef<ScrollView>(null);
   const abortRef = useRef<AbortController | null>(null);
   const manualStopRef = useRef(false);
@@ -659,6 +667,14 @@ export function ChatScreen() {
     return out;
   }, []);
 
+  // 仅当键盘收起时 remount KeyboardAvoidingView 以恢复布局；不在键盘打开时改 key，否则会 remount 导致输入框失焦、键盘瞬间收回
+  useEffect(() => {
+    const hide = Keyboard.addListener('keyboardDidHide', () => {
+      setLayoutResetKey((k) => k + 1);
+    });
+    return () => hide.remove();
+  }, []);
+
   // 从历史对话列表进入时，根据路由参数加载对话
   useEffect(() => {
     const id = params?.conversationId;
@@ -1050,6 +1066,7 @@ export function ChatScreen() {
       </View>
 
       <KeyboardAvoidingView
+        key={`kav-${layoutResetKey}`}
         style={styles.keyboardView}
         behavior={Platform.select({ ios: 'padding', android: 'height' })}
         keyboardVerticalOffset={0}
@@ -1058,109 +1075,112 @@ export function ChatScreen() {
           <Text style={[styles.globalError, { marginTop: headerHeight + 8 }]}>{error}</Text>
         ) : null}
 
-        <ScrollView
-        ref={scrollRef}
-        style={styles.scroll}
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingTop: headerHeight + 20, paddingBottom: composerOverlayHeight - 20 },
-        ]}
-        onContentSizeChange={() => {
-          if (shouldScrollToEndRef.current) {
-            shouldScrollToEndRef.current = false;
-            scrollRef.current?.scrollToEnd({ animated: true });
-          }
-        }}
-        keyboardShouldPersistTaps="handled"
-      >
-        <View style={styles.chatContentWrap}>
-        {showEmpty ? (
-          <View style={styles.emptyStage}>
-            <Text style={styles.welcomeTitle}>Hi, {session.user_id}</Text>
-            <Text style={styles.welcomeSubtitle}>输入第一句话开始对话。</Text>
-          </View>
-        ) : (
-          messages.map(renderMessage)
-        )}
-        {loading ? (
-          <View style={[styles.bubbleWrap, styles.assistantBubbleWrap]}>
-            <View style={[styles.bubble, styles.assistantBubble]}>
-              <Text style={styles.bubbleRole}>Flops (streaming)</Text>
-              {streamStatus === 'checking_tools' ? (
-                <Text style={styles.streamStatus}>Checking tools...</Text>
-              ) : null}
-              {streamStatus === 'tool_running' ? (
-                <Text style={styles.streamStatus}>Running local tools...</Text>
-              ) : null}
-              {currentAssistantBlocks.length > 0 ? (
-                currentAssistantBlocks.map((block, bi) => {
-                  const prevBlock = currentAssistantBlocks[bi - 1];
-                  const compactAbove = prevBlock != null && isToolPackageNavBlock(prevBlock);
-                  return block.type === 'text' ? (
-                    <View
-                      key={bi}
-                      style={[styles.assistantTextBlock, compactAbove && styles.assistantTextBlockCompactAbove]}
-                    >
-                      <MarkdownContent text={block.content} />
+        <View style={styles.scrollAndGradientWrap}>
+          <ScrollView
+            ref={scrollRef}
+            style={styles.scroll}
+            contentContainerStyle={[
+              styles.scrollContent,
+              { paddingTop: headerHeight + 20, paddingBottom: scrollBottomPadding },
+            ]}
+            keyboardDismissMode="on-drag"
+            onContentSizeChange={() => {
+              if (shouldScrollToEndRef.current) {
+                shouldScrollToEndRef.current = false;
+                scrollRef.current?.scrollToEnd({ animated: true });
+              }
+            }}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={styles.chatContentWrap}>
+            {showEmpty ? (
+              <View style={styles.emptyStage}>
+                <Text style={styles.welcomeTitle}>Hi, {session.user_id}</Text>
+                <Text style={styles.welcomeSubtitle}>输入第一句话开始对话。</Text>
+              </View>
+            ) : (
+              messages.map(renderMessage)
+            )}
+            {loading ? (
+              <View style={[styles.bubbleWrap, styles.assistantBubbleWrap]}>
+                <View style={[styles.bubble, styles.assistantBubble]}>
+                  <Text style={styles.bubbleRole}>Flops (streaming)</Text>
+                  {streamStatus === 'checking_tools' ? (
+                    <Text style={styles.streamStatus}>Checking tools...</Text>
+                  ) : null}
+                  {streamStatus === 'tool_running' ? (
+                    <Text style={styles.streamStatus}>Running local tools...</Text>
+                  ) : null}
+                  {currentAssistantBlocks.length > 0 ? (
+                    currentAssistantBlocks.map((block, bi) => {
+                      const prevBlock = currentAssistantBlocks[bi - 1];
+                      const compactAbove = prevBlock != null && isToolPackageNavBlock(prevBlock);
+                      return block.type === 'text' ? (
+                        <View
+                          key={bi}
+                          style={[styles.assistantTextBlock, compactAbove && styles.assistantTextBlockCompactAbove]}
+                        >
+                          <MarkdownContent text={block.content} />
+                        </View>
+                      ) : (
+                        renderToolBlock(block, `stream-tool-${bi}`)
+                      );
+                    })
+                  ) : null}
+                  {currentAssistantBlocks.length === 0 ? (
+                    <View style={styles.assistantTextBlock}>
+                      <MarkdownContent text={streamingText || streamStatusLabel} />
                     </View>
-                  ) : (
-                    renderToolBlock(block, `stream-tool-${bi}`)
-                  );
-                })
-              ) : null}
-              {currentAssistantBlocks.length === 0 ? (
-                <View style={styles.assistantTextBlock}>
-                  <MarkdownContent text={streamingText || streamStatusLabel} />
+                  ) : null}
                 </View>
-              ) : null}
+              </View>
+            ) : null}
+            </View>
+          </ScrollView>
+          {/* 底部整块贴屏底：渐变铺满整块并延伸到底，输入行叠在渐变底部，无单独白底 */}
+          <View style={[styles.bottomOverlay, { height: bottomOverlayHeight }]}>
+            <LinearGradient
+              colors={[
+                'rgba(255,255,255,0)',
+                'rgba(255,255,255,0.5)',
+                'rgba(255,255,255,0.9)',
+                'rgba(255,255,255,0.98)',
+              ]}
+              locations={[0, 0.45, 0.7, 1]}
+              style={StyleSheet.absoluteFill}
+              start={{ x: 0.5, y: 0 }}
+              end={{ x: 0.5, y: 1 }}
+              pointerEvents="none"
+            />
+            <View style={styles.inputRowInOverlay} pointerEvents="box-none">
+              <TextInput
+                style={styles.composerInput}
+                value={messageInput}
+                onChangeText={setMessageInput}
+                placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
+                placeholderTextColor="#9ca3af"
+                editable={!loading}
+                onSubmitEditing={handleSendMessage}
+                returnKeyType="send"
+              />
+              <Pressable
+                style={[
+                  styles.sendBtn,
+                  loading && styles.sendBtnStop,
+                  (!canSend && !loading) && styles.sendBtnDisabled,
+                ]}
+                onPress={loading ? handleStop : handleSendMessage}
+                disabled={!loading && !canSend}
+              >
+                {loading ? (
+                  <Ionicons name="stop" size={24} color="#fff" />
+                ) : (
+                  <Ionicons name="send" size={22} color="#fff" />
+                )}
+              </Pressable>
             </View>
           </View>
-        ) : null}
         </View>
-      </ScrollView>
-
-      <View style={[styles.composerArea, { height: composerOverlayHeight }]}>
-        <LinearGradient
-          colors={[
-            'rgba(255,255,255,0)',
-            'rgba(255,255,255,0.5)',
-            'rgba(255,255,255,0.9)',
-            'rgba(255,255,255,0.98)',
-          ]}
-          locations={[0.1, 0.3, 0.6, 1]}
-          style={StyleSheet.absoluteFill}
-          start={{ x: 0.5, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          pointerEvents="none"
-        />
-        <View style={styles.composerWrap} pointerEvents="box-none">
-        <TextInput
-          style={styles.composerInput}
-          value={messageInput}
-          onChangeText={setMessageInput}
-          placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
-          placeholderTextColor="#9ca3af"
-          editable={!loading}
-          onSubmitEditing={handleSendMessage}
-          returnKeyType="send"
-        />
-        <Pressable
-          style={[
-            styles.sendBtn,
-            loading && styles.sendBtnStop,
-            (!canSend && !loading) && styles.sendBtnDisabled,
-          ]}
-          onPress={loading ? handleStop : handleSendMessage}
-          disabled={!loading && !canSend}
-        >
-          {loading ? (
-            <Ionicons name="stop" size={24} color="#fff" />
-          ) : (
-            <Ionicons name="send" size={22} color="#fff" />
-          )}
-        </Pressable>
-        </View>
-      </View>
       </KeyboardAvoidingView>
     </View>
     </SafeAreaView>
@@ -1171,6 +1191,26 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   containerInner: { flex: 1 },
   keyboardView: { flex: 1 },
+  scrollAndGradientWrap: { flex: 1 },
+  bottomOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+  },
+  inputRowInOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 28,
+    gap: 12,
+  },
   topBar: {
     position: 'absolute',
     top: 0,
@@ -1376,25 +1416,6 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     borderWidth: 1,
     borderColor: '#fecaca',
-  },
-  composerArea: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    zIndex: 10,
-  },
-  composerWrap: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 28,
-    gap: 12,
   },
   composerInput: {
     flex: 1,
