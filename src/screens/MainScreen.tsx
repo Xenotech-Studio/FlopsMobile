@@ -17,7 +17,6 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { shadowMenu } from '../theme/shadows';
 import { ConversationListScreen } from './ConversationListScreen';
 import { TasksNavigator } from './TasksNavigator';
-import { CalendarPlaceholderScreen } from './CalendarPlaceholderScreen';
 import type { MainTabParamList, RootStackParamList } from '../navigation/types';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -200,17 +199,6 @@ export function MainScreen() {
           tabBarLabel: 'Tasks',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="checkmark-done" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tab.Screen
-        name="Calendar"
-        component={CalendarPlaceholderScreen}
-        options={{
-          title: 'Calendar',
-          tabBarLabel: 'Calendar',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="calendar" size={size} color={color} />
           ),
         }}
       />

@@ -7,6 +7,7 @@ import { TasksHomeScreen } from './TasksHomeScreen';
 import { ProjectListScreen } from './ProjectListScreen';
 import { ProjectDetailScreen } from './ProjectDetailScreen';
 import { TaskDetailScreen } from './TaskDetailScreen';
+import { TasksCalendarScreen } from './TasksCalendarScreen';
 import type { TasksStackParamList } from '../navigation/types';
 
 const Stack = createStackNavigator<TasksStackParamList>();
@@ -63,6 +64,11 @@ export function TasksNavigator() {
       <Stack.Screen
         name="TaskDetail"
         component={TaskDetailScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="TasksCalendar"
+        component={TasksCalendarScreen}
         options={{ headerShown: false }}
       />
     </Stack.Navigator>

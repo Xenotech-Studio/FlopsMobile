@@ -149,6 +149,10 @@ export function TasksHomeScreen() {
     [navigation]
   );
 
+  const onCalendarPress = useCallback(() => {
+    navigation.navigate('TasksCalendar');
+  }, [navigation]);
+
   if (!session) {
     return (
       <View style={styles.centered}>
@@ -234,6 +238,10 @@ export function TasksHomeScreen() {
       </View>
 
       <View style={[styles.footer, Platform.OS === 'ios' && { paddingBottom: 28 }]}>
+        <TouchableOpacity style={styles.calendarBtn} onPress={onCalendarPress} activeOpacity={0.7}>
+          <Ionicons name="calendar-outline" size={20} color="#111827" />
+          <Text style={styles.calendarBtnText}>日历</Text>
+        </TouchableOpacity>
         {showEndToday ? (
           <TouchableOpacity style={styles.endTodayBtn} onPress={endToday}>
             <Text style={styles.endTodayText}>结束今天</Text>
@@ -316,6 +324,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
+  calendarBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#fff',
+    borderRadius: 22,
+    ...borderLight,
+    ...shadowSoft,
+  },
+  calendarBtnText: { fontSize: 15, fontWeight: '600', color: '#111827' },
   endTodayBtn: {
     paddingHorizontal: 20,
     paddingVertical: 12,
