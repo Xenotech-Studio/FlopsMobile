@@ -12,6 +12,7 @@ import {
 import type { BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { shadowSheet } from '../theme/shadows';
+import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL } from '../theme/typography';
 import type { Project } from '../taskApi';
 
 type Props = {
@@ -85,7 +86,7 @@ export function ProjectSelectSheet({
             onPress={() => onSelectProject(item)}
             activeOpacity={0.7}
           >
-            <Ionicons name="folder-outline" size={24} color="#3b82f6" />
+            <Ionicons name="folder-outline" size={24} color="#111827" />
             <View style={styles.projectInfo}>
               <Text style={styles.projectName}>{item.name ?? item.id}</Text>
               {item.description && item.description.trim() ? (
@@ -122,9 +123,9 @@ const styles = StyleSheet.create({
     height: StyleSheet.hairlineWidth,
     backgroundColor: '#e5e7eb',
   },
-  title: { fontSize: 17, fontWeight: '600', color: '#111827' },
+  title: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: '#111827' },
   cancelBtn: { paddingVertical: 8, paddingHorizontal: 4 },
-  cancelText: { fontSize: 17, color: '#3b82f6' },
+  cancelText: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827' },
   scrollContent: {
     paddingBottom: 48,
     paddingTop: 8,
@@ -139,5 +140,5 @@ const styles = StyleSheet.create({
   },
   projectInfo: { flex: 1 },
   projectName: { fontSize: 16, color: '#111827' },
-  projectDesc: { fontSize: 12, color: '#6b7280', marginTop: 2 },
+  projectDesc: { fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280', marginTop: 2 },
 });

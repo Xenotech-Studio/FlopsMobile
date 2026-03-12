@@ -28,7 +28,7 @@ const markdownStyles = {
     marginVertical: 10,
   },
   fence: { color: '#111827', fontSize: 13 },
-  link: { color: '#2563eb' },
+  link: { color: '#111827' },
   strong: { fontWeight: '700' as const },
   em: { fontStyle: 'italic' as const },
   list_item: { marginVertical: 4 },

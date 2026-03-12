@@ -19,6 +19,7 @@ import {
 import type { BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { shadowSheet, shadowCard } from '../theme/shadows';
+import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL } from '../theme/typography';
 import { IOSStyleSwitch } from './IOSStyleSwitch';
 
 /** 渐进式状态筛选：与 FlowTaskIOS StatusLevel 一致 */
@@ -123,7 +124,7 @@ export function TaskFilterSheet({
                   onClose();
                 }}
               >
-                <Ionicons name="arrow-undo" size={20} color="#007AFF" />
+                <Ionicons name="arrow-undo" size={20} color="#111827" />
                 <Text style={styles.rowButtonText}>取消提前进入</Text>
                 <View style={{ flex: 1 }} />
               </TouchableOpacity>
@@ -213,7 +214,7 @@ export function TaskFilterSheet({
                   onShowDeletedTasks();
                 }}
               >
-                <Ionicons name="trash-outline" size={20} color="#007AFF" />
+                <Ionicons name="trash-outline" size={20} color="#111827" />
                 <Text style={styles.rowButtonText}>查看近期删除</Text>
                 <Ionicons name="chevron-forward" size={16} color="#9ca3af" />
               </TouchableOpacity>
@@ -237,7 +238,7 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 0,
   },
-  title: { fontSize: 17, fontWeight: '600', color: '#111827' },
+  title: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: '#111827' },
   doneBtnWrap: {
     paddingVertical: 8,
     paddingHorizontal: 16,
@@ -248,7 +249,7 @@ const styles = StyleSheet.create({
   scrollContent: { paddingBottom: 48, backgroundColor: '#f2f2f7' },
   section: { marginTop: 16, paddingHorizontal: 16 },
   sectionHeader: {
-    fontSize: 13,
+    fontSize: TASK_FONT_SIZE_SMALL,
     fontWeight: '400',
     color: '#6b7280',
     marginBottom: 12,
@@ -271,7 +272,7 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#e5e7eb',
   },
-  rowLabel: { fontSize: 17, color: '#111827' },
+  rowLabel: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827' },
   rowButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -279,7 +280,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     gap: 10,
   },
-  rowButtonText: { fontSize: 17, color: '#007AFF', flex: 1 },
+  rowButtonText: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827', flex: 1 },
   segmentWrap: { paddingVertical: 20, paddingHorizontal: 20 },
   segmentTrack: {
     height: 40,
@@ -293,14 +294,14 @@ const styles = StyleSheet.create({
     left: 0,
     top: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0,122,255,0.3)',
+    backgroundColor: 'rgba(17,24,39,0.15)',
     borderRadius: 20,
   },
   segmentThumb: {
     position: 'absolute',
     top: 2,
     bottom: 2,
-    backgroundColor: '#007AFF',
+    backgroundColor: '#111827',
     borderRadius: 18,
   },
   segmentLabels: {
@@ -318,14 +319,14 @@ const styles = StyleSheet.create({
     height: 40,
   },
   segmentLabelText: {
-    fontSize: 12,
+    fontSize: TASK_FONT_SIZE_SMALL,
     fontWeight: '600',
     color: '#111827',
   },
   segmentLabelTextActive: { color: '#fff' },
-  segmentLabelTextIncluded: { color: '#007AFF' },
+  segmentLabelTextIncluded: { color: '#6b7280' },
   segmentCaption: {
-    fontSize: 11,
+    fontSize: TASK_FONT_SIZE_SMALL,
     color: '#6b7280',
     marginTop: 16,
   },

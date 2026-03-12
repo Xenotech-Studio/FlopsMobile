@@ -7,7 +7,7 @@ import { View, Pressable, Switch, StyleSheet, Platform } from 'react-native';
 import { shadowToggleThumb } from '../theme/shadows';
 
 const DEFAULT_TRACK_OFF = '#d1d5db';
-const DEFAULT_TRACK_ON = '#34c759';
+const DEFAULT_TRACK_ON = '#374151';
 
 type Props = {
   value: boolean;

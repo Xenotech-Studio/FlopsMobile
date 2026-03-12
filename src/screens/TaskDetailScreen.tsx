@@ -31,7 +31,9 @@ import type { TasksStackParamList } from '../navigation/types';
 import type { TaskItem, Project, NewTaskPayload } from '../taskApi';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { IOSStyleSwitch } from '../components/IOSStyleSwitch';
+import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import { shadowCircleButton, shadowCard } from '../theme/shadows';
+import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 
 type Route = RouteProp<TasksStackParamList, 'TaskDetail'>;
 
@@ -65,14 +67,14 @@ function getTaskColor(opts: {
     return dq === 'reviewing' ? '#22c55e' : '#8fec8f';
   }
   if (priority === 'now') return '#fa5a17';
-  if (priority === 'later') return '#3b82f6';
+  if (priority === 'later') return '#6b7280';
   return '#d98f33';
 }
 
-/** 标题输入框写死行高，用行数 × 此行高得到高度，与 fontSize 20 匹配 */
+/** 标题输入框写死行高，用行数 × 此行高得到高度，与 TASK_FONT_SIZE_TITLE 匹配 */
 const TITLE_LINE_HEIGHT = 26;
 
-/** 备注区正文行高，与 fontSize 18 匹配，略大于段落标题 17；展开 meta 时最少 3 行、折叠时最少 5 行 */
+/** 备注区正文行高，与 fontSize 17 一致；展开 meta 时最少 3 行、折叠时最少 5 行 */
 const NOTE_LINE_HEIGHT = 24;
 const NOTE_MIN_LINES_EXPANDED = 3;
 const NOTE_MIN_LINES_COLLAPSED = 5;
@@ -246,7 +248,7 @@ export function TaskDetailScreen() {
   }, [task?.id, isCreate, projectId, todayDate]);
 
   useEffect(() => {
-    const marginTarget = titleLineCount <= 1 ? -2 : -4;
+    const marginTarget = titleLineCount <= 1 ? -1 : -3;
     const heightTarget = titleLineCount * TITLE_LINE_HEIGHT;
     Animated.parallel([
       Animated.timing(titleMarginTopAnim, {
@@ -742,8 +744,8 @@ export function TaskDetailScreen() {
                           activeOpacity={0.7}
                         >
                           <View style={styles.timeActionRow}>
-                            <Ionicons name="swap-horizontal-outline" size={18} color="#3b82f6" />
-                            <Text style={[styles.timeActionText, { color: '#3b82f6' }]}>
+                            <Ionicons name="swap-horizontal-outline" size={18} color="#111827" />
+                            <Text style={[styles.timeActionText, { color: '#111827' }]}>
                               {editedStartDateTime ? '切换为截止时间' : '转为起止时间'}
                             </Text>
                           </View>
@@ -805,8 +807,8 @@ export function TaskDetailScreen() {
                           activeOpacity={0.7}
                         >
                           <View style={styles.timeActionRow}>
-                            <Ionicons name="swap-horizontal-outline" size={18} color="#3b82f6" />
-                            <Text style={[styles.timeActionText, { color: '#3b82f6' }]}>
+                            <Ionicons name="swap-horizontal-outline" size={18} color="#111827" />
+                            <Text style={[styles.timeActionText, { color: '#111827' }]}>
                               转为起止时间
                             </Text>
                           </View>
@@ -989,9 +991,9 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
   circleBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: HEADER_CIRCLE_BTN_SIZE,
+    height: HEADER_CIRCLE_BTN_SIZE,
+    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#fff',
@@ -1003,7 +1005,7 @@ const styles = StyleSheet.create({
   createBtnText: { fontSize: 16, fontWeight: '600', color: '#0f172a' },
   createBtnTextDisabled: { color: '#9ca3af' },
   topBarCenter: { alignItems: 'center', flex: 1 },
-  topBarTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
+  topBarTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
   keyboardWrap: { flex: 1, backgroundColor: '#f2f2f7' },
   scroll: { flex: 1, backgroundColor: 'transparent' },
   scrollContent: { padding: 16, paddingBottom: 40, backgroundColor: '#f2f2f7' },
@@ -1026,7 +1028,7 @@ const styles = StyleSheet.create({
     ...shadowCard,
   },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f2f2f7' },
-  loadingText: { marginTop: 12, fontSize: 14, color: '#6b7280' },
+  loadingText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280' },
 
   /** 标题行（状态图标 + 任务名）：上边距固定 16，下边距由 titleLineCount 决定（1 行 14 / 多行 18） */
   sectionTitleRow: {
@@ -1049,7 +1051,7 @@ const styles = StyleSheet.create({
   /** 高度与 lineHeight 由 JS 按 titleLineCount × TITLE_LINE_HEIGHT 写死；marginTop -4 把整框上移，缓解贴底线 */
   titleInput: {
     flex: 1,
-    fontSize: 20,
+    fontSize: TASK_FONT_SIZE_TITLE,
     fontWeight: '600',
     color: '#111827',
     paddingVertical: 0,
@@ -1064,7 +1066,7 @@ const styles = StyleSheet.create({
     zIndex: -1,
   },
   titleMeasureText: {
-    fontSize: 20,
+    fontSize: TASK_FONT_SIZE_TITLE,
     fontWeight: '600',
     color: '#111827',
   },
@@ -1072,7 +1074,7 @@ const styles = StyleSheet.create({
   section: {},
   /** 区域标题：卡片外上方灰色小字 */
   sectionHeaderOuter: {
-    fontSize: 17,
+    fontSize: TASK_FONT_SIZE_SMALL,
     fontWeight: '400',
     color: '#6b7280',
     marginLeft: 10,
@@ -1080,7 +1082,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   sectionHeader: {
-    fontSize: 13,
+    fontSize: TASK_FONT_SIZE_SMALL,
     fontWeight: '600',
     color: '#6b7280',
     marginBottom: 8,
@@ -1097,10 +1099,10 @@ const styles = StyleSheet.create({
   },
   rowFirst: { paddingTop: 16 },
   rowLast: { paddingBottom: 16, borderBottomWidth: 0 },
-  rowLabel: { fontSize: 17, color: '#111827' },
-  rowValue: { fontSize: 17, color: '#6b7280' },
+  rowLabel: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827' },
+  rowValue: { fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280' },
   pickerRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  pickerRowText: { fontSize: 17, color: '#111827' },
+  pickerRowText: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827' },
 
   /** 时间卡片首行：与普通 row 一致 */
   timeRow: {
@@ -1114,8 +1116,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#e5e7eb',
   },
-  timeRowLabel: { fontSize: 17, color: '#111827', flex: 0 },
-  timeRowValue: { flex: 1, fontSize: 17, color: '#6b7280', textAlign: 'right' },
+  timeRowLabel: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827', flex: 0 },
+  timeRowValue: { flex: 1, fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280', textAlign: 'right' },
   timeBody: {},
   timePill: {
     backgroundColor: '#f3f4f6',
@@ -1129,8 +1131,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
-  timeActionText: { fontSize: 17, color: '#0f172a', fontWeight: '500' },
-  timeActionTextDanger: { fontSize: 17, color: '#dc2626', fontWeight: '500' },
+  timeActionText: { fontSize: TASK_FONT_SIZE_BODY, color: '#0f172a', fontWeight: '500' },
+  timeActionTextDanger: { fontSize: TASK_FONT_SIZE_BODY, color: '#dc2626', fontWeight: '500' },
 
   input: {
     borderWidth: 1,
@@ -1147,10 +1149,10 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
     paddingHorizontal: 8,
   },
-  /** 备注正文：19/24，比段落标题（17）略大，不加大加粗 */
+  /** 备注正文：与 Task 系统标准正文 17 一致 */
   noteInput: {
     textAlignVertical: 'top',
-    fontSize: 19,
+    fontSize: TASK_FONT_SIZE_BODY,
     fontWeight: '400',
     lineHeight: NOTE_LINE_HEIGHT,
     color: '#111827',
@@ -1158,8 +1160,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     minHeight: 0,
   },
-  summaryText: { fontSize: 17, fontWeight: '400', color: '#6b7280', marginLeft: 14, marginBottom: 10, lineHeight: 22 },
+  summaryText: { fontSize: TASK_FONT_SIZE_SMALL, fontWeight: '400', color: '#6b7280', marginLeft: 14, marginBottom: 10, lineHeight: 18 },
 
   savingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
-  savingText: { fontSize: 13, color: '#6b7280' },
+  savingText: { fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280' },
 });

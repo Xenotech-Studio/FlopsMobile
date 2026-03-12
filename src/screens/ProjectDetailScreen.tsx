@@ -10,6 +10,11 @@ import {
   TouchableOpacity,
   Alert,
 } from 'react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+} from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
@@ -23,7 +28,8 @@ import type { TaskItem } from '../taskApi';
 import { TaskRow } from '../components/TaskRow';
 import { TaskFilterSheet, type StatusLevel } from '../components/TaskFilterSheet';
 import { shadowCircleButton, shadowFab, borderLight } from '../theme/shadows';
-import { LIST_TOP_EXTRA, LIST_PADDING_BOTTOM_DEFAULT } from '../theme/layout';
+import { HEADER_CIRCLE_BTN_SIZE, LIST_TOP_EXTRA, LIST_PADDING_BOTTOM_DEFAULT } from '../theme/layout';
+import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { MonthCalendarScroll } from '../components/MonthCalendar';
 import {
@@ -35,32 +41,65 @@ import {
 const SHOW_TIME_KEY = 'showTimeLabels_projectDetail';
 const SHOW_PROJECT_KEY = 'showProjectName_projectDetail';
 
+/** 底部 Tab 胶囊内边距：胶囊左右留白、且 Tab 按钮 paddingVertical = 18 - 此值，改这里即可调整体松紧 */
+const TAB_CAPSULE_PADDING = 6;
+
+/** Tab 项横向 padding 规则：选中项 X+Y；未选中若一侧挨着选中则该侧 X-Y；贴行两端的一侧恒为 X+Y；其余 X */
+const TAB_PADDING_X = 14;
+const TAB_PADDING_Y = 4;
+
 type Tab = 'list' | 'calendar' | 'flow';
 type Route = RouteProp<TasksStackParamList, 'ProjectDetail'>;
+
+const TAB_ACTIVE_ANIM_DURATION = 200;
 
 function TabBtn({
   label,
   icon,
   active,
   onPress,
+  paddingLeft,
+  paddingRight,
 }: {
   label: string;
   icon: string;
   active: boolean;
   onPress: () => void;
+  paddingLeft: number;
+  paddingRight: number;
 }) {
+  const activeVal = useSharedValue(active ? 1 : 0);
+
+  useEffect(() => {
+    activeVal.value = withTiming(active ? 1 : 0, {
+      duration: TAB_ACTIVE_ANIM_DURATION,
+    });
+  }, [active, activeVal]);
+
+  const animatedBgStyle = useAnimatedStyle(() => ({
+    opacity: activeVal.value,
+  }));
+
   return (
     <TouchableOpacity
-      style={[tabBtnStyles.btn, active && tabBtnStyles.btnActive]}
+      style={[tabBtnStyles.btn, { paddingLeft, paddingRight }]}
       onPress={onPress}
       activeOpacity={0.7}
     >
-      <Ionicons
-        name={icon as any}
-        size={14}
-        color={active ? '#fff' : '#111827'}
+      <Animated.View
+        style={[tabBtnStyles.btnBg, animatedBgStyle]}
+        pointerEvents="none"
       />
-      <Text style={[tabBtnStyles.label, active && tabBtnStyles.labelActive]}>{label}</Text>
+      <View style={tabBtnStyles.btnContent}>
+        <Ionicons
+          name={icon as any}
+          size={16}
+          color={active ? '#fff' : '#111827'}
+        />
+        <Text style={[tabBtnStyles.label, active && tabBtnStyles.labelActive]}>
+          {label}
+        </Text>
+      </View>
     </TouchableOpacity>
   );
 }
@@ -69,15 +108,51 @@ const tabBtnStyles = StyleSheet.create({
   btn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 22,
+    paddingVertical: 18 - TAB_CAPSULE_PADDING,
+    borderRadius: 999,
+    overflow: 'hidden',
   },
-  btnActive: { backgroundColor: '#3b82f6' },
-  label: { fontSize: 12, fontWeight: '600', color: '#111827' },
+  btnBg: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#111827',
+    borderRadius: 999,
+  },
+  btnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    zIndex: 1,
+  },
+  label: { fontSize: TASK_FONT_SIZE_SMALL, fontWeight: '600', color: '#111827' },
   labelActive: { color: '#fff' },
 });
+
+function getTabPadding(
+  index: number,
+  activeList: [boolean, boolean, boolean]
+): { paddingLeft: number; paddingRight: number } {
+  const [a0, a1, a2] = activeList;
+  const active = activeList[index];
+  const isLeftOuter = index === 0;
+  const isRightOuter = index === 2;
+  const leftAdjacentSelected = index > 0 && activeList[index - 1];
+  const rightAdjacentSelected = index < 2 && activeList[index + 1];
+  const paddingLeft = isLeftOuter
+    ? TAB_PADDING_X + TAB_PADDING_Y
+    : active
+      ? TAB_PADDING_X + TAB_PADDING_Y
+      : leftAdjacentSelected
+        ? TAB_PADDING_X - TAB_PADDING_Y
+        : TAB_PADDING_X;
+  const paddingRight = isRightOuter
+    ? TAB_PADDING_X + TAB_PADDING_Y
+    : active
+      ? TAB_PADDING_X + TAB_PADDING_Y
+      : rightAdjacentSelected
+        ? TAB_PADDING_X - TAB_PADDING_Y
+        : TAB_PADDING_X;
+  return { paddingLeft, paddingRight };
+}
 
 function ProjectCalendarTab({
   headerHeight,
@@ -142,7 +217,7 @@ const calendarTabStyles = StyleSheet.create({
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: '#e5e7eb', marginVertical: 8 },
   tasksScroll: { flex: 1 },
   empty: { paddingVertical: 48, alignItems: 'center' },
-  emptyText: { marginTop: 12, fontSize: 16, color: '#9ca3af' },
+  emptyText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#9ca3af' },
 });
 
 export function ProjectDetailScreen() {
@@ -348,9 +423,29 @@ export function ProjectDetailScreen() {
       </View>
       <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 12) + 4 }]}>
         <View style={styles.tabCapsule}>
-          <TabBtn label="列表" icon="list" active={tab === 'list'} onPress={() => setTab('list')} />
-          <TabBtn label="日历" icon="calendar" active={tab === 'calendar'} onPress={() => setTab('calendar')} />
-          <TabBtn label="Flow" icon="git-network-outline" active={tab === 'flow'} onPress={() => setTab('flow')} />
+          {([
+            { tab: 'list' as Tab, label: '列表', icon: 'list' },
+            { tab: 'calendar' as Tab, label: '日历', icon: 'calendar' },
+            { tab: 'flow' as Tab, label: 'Flow', icon: 'git-network-outline' },
+          ] as const).map(({ tab: t, label, icon }, i) => {
+            const activeList: [boolean, boolean, boolean] = [
+              tab === 'list',
+              tab === 'calendar',
+              tab === 'flow',
+            ];
+            const { paddingLeft, paddingRight } = getTabPadding(i, activeList);
+            return (
+              <TabBtn
+                key={t}
+                label={label}
+                icon={icon}
+                active={tab === t}
+                onPress={() => setTab(t)}
+                paddingLeft={paddingLeft}
+                paddingRight={paddingRight}
+              />
+            );
+          })}
         </View>
         <View style={{ flex: 1 }} />
         <TouchableOpacity style={styles.fab} onPress={onCreateTask}>
@@ -391,22 +486,22 @@ const styles = StyleSheet.create({
   },
   mainContent: { flex: 1 },
   circleBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: HEADER_CIRCLE_BTN_SIZE,
+    height: HEADER_CIRCLE_BTN_SIZE,
+    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#fff',
     ...shadowCircleButton,
   },
   topBarCenter: { alignItems: 'center', flex: 1 },
-  topBarTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
+  topBarTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { marginTop: 12, fontSize: 14, color: '#6b7280' },
+  loadingText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280' },
   listContent: { paddingBottom: LIST_PADDING_BOTTOM_DEFAULT },
   emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_DEFAULT },
   empty: { paddingVertical: 48, alignItems: 'center' },
-  emptyText: { marginTop: 12, fontSize: 16, color: '#9ca3af' },
+  emptyText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#9ca3af' },
   bottomBar: {
     position: 'absolute',
     left: 0,
@@ -420,10 +515,11 @@ const styles = StyleSheet.create({
   tabCapsule: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    justifyContent: 'center',
+    height: 56,
+    paddingHorizontal: TAB_CAPSULE_PADDING,
     backgroundColor: '#fff',
-    borderRadius: 28,
+    borderRadius: 999,
     ...borderLight,
     ...shadowCircleButton,
   },
@@ -442,5 +538,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  flowPlaceholderText: { marginTop: 12, fontSize: 16, color: '#9ca3af' },
+  flowPlaceholderText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#9ca3af' },
 });

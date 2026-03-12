@@ -6,7 +6,7 @@ import { TaskRowContent } from './TaskRowContent';
 
 const priorityColors: Record<string, string> = {
   now: '#dc2626',
-  later: '#2563eb',
+  later: '#6b7280',
   default: '#6b7280',
 };
 
@@ -32,7 +32,7 @@ function getTaskColor(task: TaskItem): string {
     return task.done_quality === 'reviewing' ? '#22c55e' : '#8fec8f';
   }
   if (task.priority === 'now') return '#fa5a17';
-  if (task.priority === 'later') return '#3b82f6';
+  if (task.priority === 'later') return '#6b7280';
   return '#d98f33';
 }
 

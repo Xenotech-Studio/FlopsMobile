@@ -16,7 +16,9 @@ import { useTask } from '../context/TaskContext';
 import type { TasksStackParamList } from '../navigation/types';
 import type { Project } from '../taskApi';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
-import { LIST_PADDING_BOTTOM_DEFAULT } from '../theme/layout';
+import { HEADER_CIRCLE_BTN_SIZE, LIST_PADDING_BOTTOM_DEFAULT } from '../theme/layout';
+import { shadowCircleButton } from '../theme/shadows';
+import { TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 
 type Nav = StackNavigationProp<TasksStackParamList, 'ProjectList'>;
 
@@ -52,12 +54,10 @@ export function ProjectListScreen() {
     <View style={styles.container}>
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <BlurHeaderBackground style={StyleSheet.absoluteFill} topSolidHeight={insets.top + 8} />
-        <Text style={styles.title}>项目</Text>
-        <TouchableOpacity
-          onPress={onClose}
-          style={styles.closeBtn}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        >
+        <View style={styles.titleWrap}>
+          <Text style={styles.title}>项目</Text>
+        </View>
+        <TouchableOpacity style={styles.circleBtn} onPress={onClose} activeOpacity={0.7}>
           <Ionicons name="close" size={24} color="#374151" />
         </TouchableOpacity>
       </View>
@@ -80,10 +80,17 @@ export function ProjectListScreen() {
                 activeOpacity={0.7}
               >
                 <Ionicons name="folder-outline" size={24} color="#374151" />
-                <View style={styles.projectInfo}>
-                  <Text style={styles.projectName}>{item.name ?? item.id}</Text>
+                <View
+                  style={[
+                    styles.projectInfo,
+                    !item.description && styles.projectInfoCenter,
+                  ]}
+                >
+                  <Text style={styles.projectName} numberOfLines={1}>
+                    {item.name ?? item.id}
+                  </Text>
                   {item.description ? (
-                    <Text style={styles.projectDesc} numberOfLines={2}>
+                    <Text style={styles.projectDesc} numberOfLines={1}>
                       {item.description}
                     </Text>
                   ) : null}
@@ -126,24 +133,42 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
   mainContent: { flex: 1 },
-  title: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
-  closeBtn: { padding: 4 },
+  titleWrap: { flex: 1, justifyContent: 'center' },
+  title: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
+  circleBtn: {
+    width: HEADER_CIRCLE_BTN_SIZE,
+    height: HEADER_CIRCLE_BTN_SIZE,
+    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...shadowCircleButton,
+  },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { marginTop: 12, fontSize: 14, color: '#6b7280' },
-  listContent: { paddingBottom: LIST_PADDING_BOTTOM_DEFAULT },
+  loadingText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280' },
+  listContent: {
+    paddingBottom: LIST_PADDING_BOTTOM_DEFAULT,
+    paddingHorizontal: 16,
+  },
   emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_DEFAULT },
   empty: { paddingVertical: 48, alignItems: 'center' },
-  emptyText: { marginTop: 12, fontSize: 16, color: '#9ca3af' },
+  emptyText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#9ca3af' },
   projectRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
+    minHeight: 76,
+    paddingVertical: 18,
+    paddingHorizontal: 0,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#e5e7eb',
     gap: 12,
   },
   projectInfo: { flex: 1 },
+  projectInfoCenter: { justifyContent: 'center' },
   projectName: { fontSize: 16, fontWeight: '600', color: '#111827' },
-  projectDesc: { fontSize: 13, color: '#6b7280', marginTop: 2 },
+  projectDesc: {
+    fontSize: TASK_FONT_SIZE_SMALL,
+    color: '#6b7280',
+    marginTop: 4,
+  },
 });

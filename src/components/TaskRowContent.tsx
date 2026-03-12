@@ -10,6 +10,7 @@ import {
   TASK_ROW_PADDING_LEFT,
   TASK_ROW_PADDING_RIGHT,
 } from '../theme/layout';
+import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL } from '../theme/typography';
 
 const RING_SIZE = 24;
 const RING_STROKE = 2;
@@ -120,9 +121,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   body: { flex: 1, minWidth: 0 },
-  title: { fontSize: 17, color: '#111827', fontWeight: '400' },
+  title: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827', fontWeight: '400' },
   titleDone: { textDecorationLine: 'line-through', color: '#6b7280' },
-  subtitle: { fontSize: 12, color: '#9ca3af', marginTop: 2 },
+  subtitle: { fontSize: TASK_FONT_SIZE_SMALL, color: '#9ca3af', marginTop: 2 },
   priorityBadge: {
     alignSelf: 'flex-start',
     paddingHorizontal: 6,

@@ -21,7 +21,9 @@ import type { TaskItem } from '../taskApi';
 import { TaskRow } from '../components/TaskRow';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { MonthCalendarScroll } from '../components/MonthCalendar';
+import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import { shadowCircleButton } from '../theme/shadows';
+import { TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { isTaskBelongToDay } from '../utils/taskFilters';
 
 type Nav = StackNavigationProp<TasksStackParamList, 'TasksCalendar'>;
@@ -120,19 +122,19 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
   circleBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: HEADER_CIRCLE_BTN_SIZE,
+    height: HEADER_CIRCLE_BTN_SIZE,
+    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#fff',
     ...shadowCircleButton,
   },
   topBarCenter: { alignItems: 'center', flex: 1 },
-  title: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
+  title: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
   calendarArea: { flex: 1 },
   tasksScroll: { flex: 1 },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: '#e5e7eb', marginVertical: 8 },
   empty: { paddingVertical: 48, alignItems: 'center' },
-  emptyText: { marginTop: 12, fontSize: 16, color: '#9ca3af' },
+  emptyText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#9ca3af' },
 });

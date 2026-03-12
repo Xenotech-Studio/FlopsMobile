@@ -14,6 +14,7 @@ import {
   type NativeScrollEvent,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL } from '../theme/typography';
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 
@@ -262,7 +263,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   arrowBtn: { padding: 4 },
-  monthTitle: { fontSize: 17, fontWeight: '600', color: '#111827' },
+  monthTitle: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: '#111827' },
   weekdayRow: {
     flexDirection: 'row',
     marginBottom: 6,
@@ -270,7 +271,7 @@ const styles = StyleSheet.create({
   weekdayText: {
     flex: 1,
     textAlign: 'center',
-    fontSize: 12,
+    fontSize: TASK_FONT_SIZE_SMALL,
     color: '#6b7280',
     fontWeight: '500',
   },
@@ -303,7 +304,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   cellCircleSelected: {
-    backgroundColor: '#3b82f6',
+    backgroundColor: '#111827',
   },
   cellCircleSelectedOther: {
     backgroundColor: '#111827',
@@ -311,14 +312,14 @@ const styles = StyleSheet.create({
   cellText: { fontSize: 15, color: '#111827', fontWeight: '500' },
   cellTextOtherMonth: { color: '#d1d5db' },
   cellTextSelected: { color: '#fff', fontWeight: '600' },
-  cellTextToday: { color: '#3b82f6', fontWeight: '800' },
+  cellTextToday: { color: '#111827', fontWeight: '800' },
   dot: {
     position: 'absolute',
     bottom: 5,
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#3b82f6',
+    backgroundColor: '#111827',
   },
 });
 
@@ -513,5 +514,5 @@ const scrollStyles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  monthTitle: { fontSize: 17, fontWeight: '600', color: '#111827' },
+  monthTitle: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: '#111827' },
 });

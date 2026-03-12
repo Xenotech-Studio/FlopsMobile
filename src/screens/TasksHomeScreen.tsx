@@ -22,7 +22,8 @@ import { TaskRow } from '../components/TaskRow';
 import { TaskFilterSheet, type StatusLevel } from '../components/TaskFilterSheet';
 import { ProjectSelectSheet } from '../components/ProjectSelectSheet';
 import { shadowCircleButton, shadowFab, shadowSoft, borderLight } from '../theme/shadows';
-import { LIST_TOP_EXTRA, LIST_PADDING_BOTTOM_WITH_FOOTER } from '../theme/layout';
+import { HEADER_CIRCLE_BTN_SIZE, LIST_TOP_EXTRA, LIST_PADDING_BOTTOM_WITH_FOOTER } from '../theme/layout';
+import { TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { filterTasksByStatusLevel } from '../utils/taskFilters';
 
@@ -296,24 +297,24 @@ const styles = StyleSheet.create({
   },
   mainContent: { flex: 1 },
   circleBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: HEADER_CIRCLE_BTN_SIZE,
+    height: HEADER_CIRCLE_BTN_SIZE,
+    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#fff',
     ...shadowCircleButton,
   },
   topBarCenter: { alignItems: 'center', flex: 1 },
-  todayTitle: { fontSize: 20, fontWeight: '700', color: '#0f172a' },
-  todaySubtitle: { fontSize: 13, color: '#6b7280', marginTop: 4 },
+  todayTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
+  todaySubtitle: { fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280', marginTop: 4 },
   errorBar: { backgroundColor: '#fef2f2', padding: 12 },
   errorText: { fontSize: 14, color: '#dc2626', textAlign: 'center' },
-  loadingText: { marginTop: 12, fontSize: 14, color: '#6b7280' },
+  loadingText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280' },
   listContent: { paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
   emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
   empty: { paddingVertical: 48, alignItems: 'center' },
-  emptyText: { marginTop: 12, fontSize: 16, color: '#9ca3af' },
+  emptyText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#9ca3af' },
   footer: {
     position: 'absolute',
     left: 0,
@@ -331,9 +332,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     backgroundColor: '#fff',
-    borderRadius: 22,
+    borderRadius: Platform.OS === 'android' ? 999 : 22,
+    marginLeft: 12,
+    marginBottom: 8,
     ...borderLight,
-    ...shadowSoft,
+    ...(Platform.OS === 'ios' ? shadowSoft : { elevation: 0 }),
   },
   calendarBtnText: { fontSize: 15, fontWeight: '600', color: '#111827' },
   endTodayBtn: {
