@@ -7,9 +7,7 @@ import {
   View,
   Text,
   TouchableOpacity,
-  Pressable,
   StyleSheet,
-  Switch,
   useWindowDimensions,
   Platform,
 } from 'react-native';
@@ -20,7 +18,8 @@ import {
 } from '@gorhom/bottom-sheet';
 import type { BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import { shadowSheet, shadowCard, shadowToggleThumb } from '../theme/shadows';
+import { shadowSheet, shadowCard } from '../theme/shadows';
+import { IOSStyleSwitch } from './IOSStyleSwitch';
 
 /** 渐进式状态筛选：与 FlowTaskIOS StatusLevel 一致 */
 export type StatusLevel = 0 | 1 | 2 | 3;
@@ -30,40 +29,6 @@ export const STATUS_LABELS: Record<StatusLevel, string> = {
   2: '待验收',
   3: '已完成',
 };
-
-/** Android 上用自定义样式，视觉与 iOS 一致（长条轨道 + 白圆 thumb） */
-function FilterSwitch({
-  value,
-  onValueChange,
-}: {
-  value: boolean;
-  onValueChange: (v: boolean) => void;
-}) {
-  if (Platform.OS === 'android') {
-    return (
-      <Pressable
-        onPress={() => onValueChange(!value)}
-        style={[
-          styles.iosToggleTrack,
-          value && styles.iosToggleTrackOn,
-          { justifyContent: value ? 'flex-end' : 'flex-start' },
-        ]}
-        accessibilityRole="switch"
-        accessibilityState={{ checked: value }}
-      >
-        <View style={styles.iosToggleThumb} />
-      </Pressable>
-    );
-  }
-  return (
-    <Switch
-      value={value}
-      onValueChange={onValueChange}
-      trackColor={{ false: '#d1d5db', true: '#34c759' }}
-      thumbColor="#fff"
-    />
-  );
-}
 
 type TaskFilterSheetProps = {
   visible: boolean;
@@ -172,7 +137,7 @@ export function TaskFilterSheet({
             <View style={styles.card}>
               <View style={styles.row}>
                 <Text style={styles.rowLabel}>只看我的</Text>
-                <FilterSwitch value={showOnlyMine} onValueChange={onShowOnlyMineChange} />
+                <IOSStyleSwitch value={showOnlyMine} onValueChange={onShowOnlyMineChange} />
               </View>
             </View>
           </View>
@@ -229,11 +194,11 @@ export function TaskFilterSheet({
           <View style={styles.card}>
             <View style={styles.row}>
               <Text style={styles.rowLabel}>持续显示任务时间</Text>
-              <FilterSwitch value={showTimeLabels} onValueChange={onShowTimeLabelsChange} />
+              <IOSStyleSwitch value={showTimeLabels} onValueChange={onShowTimeLabelsChange} />
             </View>
             <View style={[styles.row, styles.rowBorder]}>
               <Text style={styles.rowLabel}>显示项目名称</Text>
-              <FilterSwitch value={showProjectName} onValueChange={onShowProjectNameChange} />
+              <IOSStyleSwitch value={showProjectName} onValueChange={onShowProjectNameChange} />
             </View>
           </View>
         </View>
@@ -363,28 +328,5 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#6b7280',
     marginTop: 16,
-  },
-  iosToggleTrack: {
-    width: 51,
-    height: 31,
-    borderRadius: 16,
-    padding: 2,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#d1d5db',
-    ...Platform.select({
-      ios: {},
-      android: { elevation: 0 },
-    }),
-  },
-  iosToggleTrackOn: {
-    backgroundColor: '#34c759',
-  },
-  iosToggleThumb: {
-    width: 27,
-    height: 27,
-    borderRadius: 14,
-    backgroundColor: '#fff',
-    ...shadowToggleThumb,
   },
 });

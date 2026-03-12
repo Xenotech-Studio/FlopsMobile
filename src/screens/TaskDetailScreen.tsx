@@ -16,7 +16,6 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  Switch,
   Modal,
   Dimensions,
   Animated,
@@ -31,6 +30,7 @@ import { useTask } from '../context/TaskContext';
 import type { TasksStackParamList } from '../navigation/types';
 import type { TaskItem, Project, NewTaskPayload } from '../taskApi';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import { IOSStyleSwitch } from '../components/IOSStyleSwitch';
 import { shadowCircleButton, shadowCard } from '../theme/shadows';
 
 type Route = RouteProp<TasksStackParamList, 'TaskDetail'>;
@@ -554,24 +554,24 @@ export function TaskDetailScreen() {
                 {!editedDone && (
                   <View style={[styles.row, styles.rowFirst]}>
                     <Text style={[styles.rowLabel, { color: taskColor }]}>进行中</Text>
-                    <Switch
+                    <IOSStyleSwitch
                       value={editedDoing}
                       onValueChange={setEditedDoing}
-                      trackColor={{ false: '#e5e7eb', true: taskColor }}
-                      thumbColor="#fff"
+                      trackColorOff="#e5e7eb"
+                      trackColorOn={taskColor}
                     />
                   </View>
                 )}
                 <View style={[styles.row, editedDone && styles.rowFirst, editedType !== 'task' && styles.rowLast]}>
                   <Text style={[styles.rowLabel, { color: taskColor }]}>已完成</Text>
-                  <Switch
+                  <IOSStyleSwitch
                     value={editedDone}
                     onValueChange={(v) => {
                       setEditedDone(v);
                       if (v) setEditedDoing(false);
                     }}
-                    trackColor={{ false: '#e5e7eb', true: taskColor }}
-                    thumbColor="#fff"
+                    trackColorOff="#e5e7eb"
+                    trackColorOn={taskColor}
                   />
                 </View>
                 {editedType === 'task' && (
