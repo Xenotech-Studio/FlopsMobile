@@ -20,6 +20,7 @@ import type { TasksStackParamList } from '../navigation/types';
 import type { TaskItem, Project } from '../taskApi';
 import { TaskRow } from '../components/TaskRow';
 import { TaskFilterSheet, type StatusLevel } from '../components/TaskFilterSheet';
+import { ProjectSelectSheet } from '../components/ProjectSelectSheet';
 import { shadowCircleButton, shadowFab, shadowSoft, borderLight } from '../theme/shadows';
 import { LIST_TOP_EXTRA, LIST_PADDING_BOTTOM_WITH_FOOTER } from '../theme/layout';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
@@ -61,6 +62,7 @@ export function TasksHomeScreen() {
 
   const [refreshing, setRefreshing] = useState(false);
   const [filterVisible, setFilterVisible] = useState(false);
+  const [showProjectSelect, setShowProjectSelect] = useState(false);
   const [statusLevel, setStatusLevel] = useState<StatusLevel>(3);
   const [showTimeLabels, setShowTimeLabels] = useState(false);
   const [showProjectName, setShowProjectName] = useState(true);
@@ -133,12 +135,19 @@ export function TasksHomeScreen() {
 
   const onCreateTask = useCallback(() => {
     if (projects.length === 0) return;
-    const first = projects[0];
-    navigation.navigate('TaskDetail', {
-      projectId: first.id,
-      projectName: first.name ?? first.id,
-    });
-  }, [navigation, projects]);
+    setShowProjectSelect(true);
+  }, [projects]);
+
+  const onSelectProjectForCreate = useCallback(
+    (project: Project) => {
+      setShowProjectSelect(false);
+      navigation.navigate('TaskDetail', {
+        projectId: project.id,
+        projectName: project.name ?? project.id,
+      });
+    },
+    [navigation]
+  );
 
   if (!session) {
     return (
@@ -236,6 +245,12 @@ export function TasksHomeScreen() {
         </TouchableOpacity>
       </View>
 
+      <ProjectSelectSheet
+        visible={showProjectSelect}
+        onClose={() => setShowProjectSelect(false)}
+        projects={projects}
+        onSelectProject={onSelectProjectForCreate}
+      />
       <TaskFilterSheet
         visible={filterVisible}
         onClose={() => setFilterVisible(false)}
