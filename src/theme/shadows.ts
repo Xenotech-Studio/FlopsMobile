@@ -23,13 +23,13 @@ export const shadowSheet = Platform.select({
   android: { elevation: 8 },
 });
 
-/** 白色卡片（筛选面板内卡片等）：iOS 阴影，Android 用 border 替代 elevation */
+/** 白色卡片（筛选面板内卡片、任务详情卡片等）：iOS 轻阴影，Android 用 border */
 export const shadowCard = Platform.select({
   ios: {
     shadowColor: '#000' as const,
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
   },
   android: {
     elevation: 0,
