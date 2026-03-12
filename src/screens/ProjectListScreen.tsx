@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,8 @@ import {
   RefreshControl,
   ActivityIndicator,
   StyleSheet,
+  PanResponder,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -22,21 +24,44 @@ import { TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography'
 
 type Nav = StackNavigationProp<TasksStackParamList, 'ProjectList'>;
 
+const EDGE_WIDTH = 24;
+const SWIPE_THRESHOLD = 60;
+
 export function ProjectListScreen() {
   const navigation = useNavigation<Nav>();
   const insets = useSafeAreaInsets();
+  const { width: screenWidth } = useWindowDimensions();
   const { projects, loadProjects, loadTasks, isLoadingProjects } = useTask();
   const [refreshing, setRefreshing] = useState(false);
+
+  const onClose = useCallback(() => {
+    navigation.goBack();
+  }, [navigation]);
+
+  const gestureStartX = useRef(0);
+  const rightEdgeSwipeToClose = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 10,
+      onPanResponderGrant: (evt) => {
+        gestureStartX.current = evt.nativeEvent.pageX;
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (
+          gestureState.dx < -SWIPE_THRESHOLD &&
+          gestureStartX.current >= screenWidth - EDGE_WIDTH - 20
+        ) {
+          onClose();
+        }
+      },
+    })
+  ).current;
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await Promise.all([loadTasks(true), loadProjects(true)]);
     setRefreshing(false);
   }, [loadTasks, loadProjects]);
-
-  const onClose = useCallback(() => {
-    navigation.goBack();
-  }, [navigation]);
 
   const onProjectPress = useCallback(
     (project: Project) => {
@@ -52,6 +77,11 @@ export function ProjectListScreen() {
 
   return (
     <View style={styles.container}>
+      <View
+        style={styles.rightEdgeGesture}
+        {...rightEdgeSwipeToClose.panHandlers}
+        pointerEvents="box-only"
+      />
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <BlurHeaderBackground style={StyleSheet.absoluteFill} topSolidHeight={insets.top + 8} />
         <View style={styles.titleWrap}>
@@ -120,6 +150,14 @@ export function ProjectListScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
+  rightEdgeGesture: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: EDGE_WIDTH,
+    zIndex: 10,
+  },
   topBar: {
     position: 'absolute',
     top: 0,

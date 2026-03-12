@@ -28,7 +28,7 @@ export function BlurHeaderBackground({ style, topSolidHeight = 0 }: BlurHeaderBa
           'rgba(255,255,255,0.2)',
           'rgba(255,255,255,0.05)',
         ]}
-        locations={[0, 0.45, 0.7, 0.88, 1]}
+        locations={[0, 0.6, 0.75, 0.95, 1]}
         style={gradientStyle}
         start={{ x: 0.5, y: 0 }}
         end={{ x: 0.5, y: 1 }}

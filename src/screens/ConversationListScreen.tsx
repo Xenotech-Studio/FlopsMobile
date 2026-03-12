@@ -8,15 +8,25 @@ import {
   StyleSheet,
   RefreshControl,
   Alert,
+  PanResponder,
+  Modal,
+  Pressable,
+  useWindowDimensions,
 } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
 import { listConversations, deleteConversation, type ConversationListItem } from '../api';
 import type { RootStackParamList } from '../navigation/types';
-import { shadowFab, borderLight } from '../theme/shadows';
-import { LIST_PADDING_BOTTOM_WITH_FOOTER } from '../theme/layout';
+import { shadowFab, borderLight, shadowMenu, shadowCircleButton } from '../theme/shadows';
+import { LIST_PADDING_BOTTOM_WITH_FOOTER, HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
+import { TASK_FONT_SIZE_TITLE } from '../theme/typography';
+import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+
+const EDGE_WIDTH = 24;
+const SWIPE_THRESHOLD = 60;
 
 function formatTime(isoString: string): string {
   try {
@@ -30,12 +40,14 @@ function formatTime(isoString: string): string {
 
 export function ConversationListScreen() {
   const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
+  const { width: winWidth } = useWindowDimensions();
   const { session } = useSession();
-  // 当前在 Main 的 Tab 里，要点进「具体聊天页」需用根 Stack 导航
-  const rootNav = navigation.getParent();
+  const rootNav = navigation.getParent() as NavigationProp<RootStackParamList> | undefined;
   const [list, setList] = useState<ConversationListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
 
   const loadList = useCallback(async (isRefresh = false) => {
     if (!session) return;
@@ -69,10 +81,29 @@ export function ConversationListScreen() {
   );
 
   const onNewConversation = useCallback(() => {
-    (rootNav as NavigationProp<RootStackParamList> | undefined)?.navigate('Chat', undefined);
+    setMenuVisible(false);
+    rootNav?.navigate('Chat', undefined);
   }, [rootNav]);
 
   const swipeableRefs = useRef<Map<string, Swipeable | null>>(new Map());
+  const gestureStartX = useRef(0);
+  const leftEdgeOpenProfile = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 10,
+      onPanResponderGrant: (evt) => {
+        gestureStartX.current = evt.nativeEvent.pageX;
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (
+          gestureState.dx > SWIPE_THRESHOLD &&
+          gestureStartX.current <= EDGE_WIDTH + 20
+        ) {
+          (rootNav as NavigationProp<RootStackParamList> | undefined)?.navigate('Profile');
+        }
+      },
+    })
+  ).current;
 
   const onDeleteConversation = useCallback(
     async (conv: ConversationListItem) => {
@@ -106,6 +137,8 @@ export function ConversationListScreen() {
   ), []);
 
   if (!session) return null;
+
+  const headerHeight = insets.top + 8 + 12 + HEADER_CIRCLE_BTN_SIZE;
 
   const renderItem = ({ item }: { item: ConversationListItem }) => (
     <Swipeable
@@ -147,8 +180,64 @@ export function ConversationListScreen() {
 
   return (
     <View style={styles.container}>
+      <View
+        style={styles.leftEdgeGesture}
+        {...leftEdgeOpenProfile.panHandlers}
+        pointerEvents="box-only"
+      />
+      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+        <BlurHeaderBackground style={StyleSheet.absoluteFill} topSolidHeight={insets.top + 8} />
+        <TouchableOpacity
+          style={styles.circleBtn}
+          onPress={() => rootNav?.navigate('Profile')}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="person-outline" size={22} color="#374151" />
+        </TouchableOpacity>
+        <View style={styles.topBarCenter}>
+          <Text style={styles.topBarTitle}>对话</Text>
+        </View>
+        <TouchableOpacity
+          style={styles.circleBtn}
+          onPress={() => setMenuVisible(true)}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="menu" size={24} color="#374151" />
+        </TouchableOpacity>
+      </View>
+
+      <Modal
+        visible={menuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenuVisible(false)}
+      >
+        <Pressable style={styles.menuOverlay} onPress={() => setMenuVisible(false)}>
+          <View
+            style={[
+              styles.menuPanel,
+              {
+                top: insets.top + 8 + 12 + HEADER_CIRCLE_BTN_SIZE + 8,
+                right: 16,
+                minWidth: Math.min(winWidth * 0.5, 200),
+              },
+            ]}
+            onStartShouldSetResponder={() => true}
+          >
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={onNewConversation}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="add-circle-outline" size={20} color="#374151" />
+              <Text style={styles.menuItemText}>新建对话</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
+
       {loading && list.length === 0 ? (
-        <View style={styles.centered}>
+        <View style={[styles.centered, { paddingTop: headerHeight }]}>
           <ActivityIndicator size="large" color="#0f172a" />
           <Text style={styles.loadingText}>加载中...</Text>
         </View>
@@ -157,7 +246,10 @@ export function ConversationListScreen() {
           data={list}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
-          contentContainerStyle={list.length === 0 ? styles.emptyList : styles.listContent}
+          contentContainerStyle={[
+            list.length === 0 ? styles.emptyList : styles.listContent,
+            { paddingTop: headerHeight },
+          ]}
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
               <Ionicons name="chatbubbles-outline" size={64} color="#d1d5db" />
@@ -179,6 +271,53 @@ export function ConversationListScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
+  leftEdgeGesture: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: EDGE_WIDTH,
+    zIndex: 10,
+  },
+  topBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  circleBtn: {
+    width: HEADER_CIRCLE_BTN_SIZE,
+    height: HEADER_CIRCLE_BTN_SIZE,
+    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    ...shadowCircleButton,
+  },
+  topBarCenter: { alignItems: 'center', flex: 1 },
+  topBarTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
+  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
+  menuPanel: {
+    position: 'absolute',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingVertical: 8,
+    ...shadowMenu,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  menuItemText: { fontSize: 16, color: '#111827' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 12, fontSize: 15, color: '#6b7280' },
   listContent: { paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },

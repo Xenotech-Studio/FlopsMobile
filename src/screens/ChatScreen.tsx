@@ -12,7 +12,8 @@ import {
   ActivityIndicator,
   PanResponder,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import LinearGradient from 'react-native-linear-gradient';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSession } from '../context/SessionContext';
@@ -28,6 +29,10 @@ import {
 } from '../api';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { MarkdownContent } from '../components/MarkdownContent';
+import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
+import { TASK_FONT_SIZE_TITLE } from '../theme/typography';
+import { shadowCircleButton, shadowFab, shadowSoft, borderLight } from '../theme/shadows';
 
 type Message =
   | { role: 'user'; content: string }
@@ -143,8 +148,12 @@ type ChatRouteParams = RootStackParamList['Chat'];
 
 export function ChatScreen() {
   const { session } = useSession();
+  const insets = useSafeAreaInsets();
   const route = useRoute();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Chat'>>();
+  const headerHeight = insets.top + 8 + 12 + HEADER_CIRCLE_BTN_SIZE;
+  /** 底部输入区高度（渐变 + 输入行），用于列表 paddingBottom 与绝对定位 */
+  const composerOverlayHeight = 140;
   const params = (route.params ?? undefined) as ChatRouteParams | undefined;
   const [conversationId, setConversationId] = useState(params?.conversationId ?? '');
   const [conversationTitle, setConversationTitle] = useState(params?.conversationTitle ?? '');
@@ -1003,7 +1012,8 @@ export function ChatScreen() {
           : 'Thinking...';
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <View style={styles.containerInner}>
       {canGoBack ? (
         <View
           style={styles.leftEdgeGesture}
@@ -1011,43 +1021,50 @@ export function ChatScreen() {
           pointerEvents="box-only"
         />
       ) : null}
-      <KeyboardAvoidingView
-        style={styles.keyboardView}
-        behavior={Platform.select({ ios: 'padding', android: 'height' })}
-        keyboardVerticalOffset={0}
-      >
-        <View style={styles.header}>
+      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+        <BlurHeaderBackground style={StyleSheet.absoluteFill} topSolidHeight={insets.top + 8} />
         {canGoBack ? (
           <TouchableOpacity
-            style={styles.headerBackBtn}
+            style={styles.circleBtn}
             onPress={() => navigation.goBack()}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            activeOpacity={0.7}
           >
             <Ionicons name="chevron-back" size={24} color="#374151" />
           </TouchableOpacity>
-        ) : null}
+        ) : (
+          <View style={styles.circleBtn} />
+        )}
         <View style={styles.headerTitleWrap}>
           <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
             {conversationId ? (conversationTitle || '新对话') : 'Flops'}
           </Text>
         </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            style={styles.headerBtn}
-            onPress={handleNewConversation}
-            disabled={loading}
-          >
-            <Text style={styles.headerBtnText}>新对话</Text>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          style={styles.circleBtn}
+          onPress={handleNewConversation}
+          disabled={loading}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="add" size={24} color="#374151" />
+        </TouchableOpacity>
       </View>
 
-      {error ? <Text style={styles.globalError}>{error}</Text> : null}
+      <KeyboardAvoidingView
+        style={styles.keyboardView}
+        behavior={Platform.select({ ios: 'padding', android: 'height' })}
+        keyboardVerticalOffset={0}
+      >
+        {error ? (
+          <Text style={[styles.globalError, { marginTop: headerHeight + 8 }]}>{error}</Text>
+        ) : null}
 
-      <ScrollView
+        <ScrollView
         ref={scrollRef}
         style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingTop: headerHeight + 20, paddingBottom: composerOverlayHeight - 20 },
+        ]}
         onContentSizeChange={() => {
           if (shouldScrollToEndRef.current) {
             shouldScrollToEndRef.current = false;
@@ -1102,7 +1119,21 @@ export function ChatScreen() {
         </View>
       </ScrollView>
 
-      <View style={styles.composer}>
+      <View style={[styles.composerArea, { height: composerOverlayHeight }]}>
+        <LinearGradient
+          colors={[
+            'rgba(255,255,255,0)',
+            'rgba(255,255,255,0.5)',
+            'rgba(255,255,255,0.9)',
+            'rgba(255,255,255,0.98)',
+          ]}
+          locations={[0.1, 0.3, 0.6, 1]}
+          style={StyleSheet.absoluteFill}
+          start={{ x: 0.5, y: 0 }}
+          end={{ x: 0.5, y: 1 }}
+          pointerEvents="none"
+        />
+        <View style={styles.composerWrap} pointerEvents="box-none">
         <TextInput
           style={styles.composerInput}
           value={messageInput}
@@ -1113,7 +1144,7 @@ export function ChatScreen() {
           onSubmitEditing={handleSendMessage}
           returnKeyType="send"
         />
-        <TouchableOpacity
+        <Pressable
           style={[
             styles.sendBtn,
             loading && styles.sendBtnStop,
@@ -1123,32 +1154,43 @@ export function ChatScreen() {
           disabled={!loading && !canSend}
         >
           {loading ? (
-            <Text style={styles.sendBtnText}>■</Text>
+            <Ionicons name="stop" size={24} color="#fff" />
           ) : (
-            <Text style={styles.sendBtnText}>↑</Text>
+            <Ionicons name="send" size={22} color="#fff" />
           )}
-        </TouchableOpacity>
+        </Pressable>
         </View>
+      </View>
       </KeyboardAvoidingView>
+    </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
+  containerInner: { flex: 1 },
   keyboardView: { flex: 1 },
-  header: {
+  topBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-    gap: 12,
+    paddingBottom: 12,
   },
-  headerBackBtn: {
-    padding: 4,
-    marginRight: 4,
+  circleBtn: {
+    width: HEADER_CIRCLE_BTN_SIZE,
+    height: HEADER_CIRCLE_BTN_SIZE,
+    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    ...shadowCircleButton,
   },
   leftEdgeGesture: {
     position: 'absolute',
@@ -1161,11 +1203,11 @@ const styles = StyleSheet.create({
   headerTitleWrap: {
     flex: 1,
     minWidth: 0,
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+    paddingHorizontal: 8,
   },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
-  headerActions: { flexDirection: 'row', gap: 12, flexShrink: 0 },
-  headerBtn: { paddingVertical: 4, paddingHorizontal: 8 },
-  headerBtnText: { fontSize: 14, color: '#374151' },
+  headerTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
   globalError: { color: '#dc2626', fontSize: 13, paddingHorizontal: 28, paddingVertical: 8 },
   scroll: { flex: 1 },
   scrollContent: {
@@ -1335,35 +1377,48 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#fecaca',
   },
-  composer: {
+  composerArea: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+  },
+  composerWrap: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingHorizontal: 20,
+    paddingTop: 12,
     paddingBottom: 28,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-    gap: 10,
+    gap: 12,
   },
   composerInput: {
     flex: 1,
+    backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 22,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
+    borderColor: 'rgba(0,0,0,0.10)',
+    borderRadius: 28,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
     fontSize: 16,
     color: '#111827',
+    ...(Platform.OS === 'ios' ? shadowSoft : {}),
   },
   sendBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#000000',
+    width: 52,
+    height: 52,
+    borderRadius: 28,
+    backgroundColor: '#0f172a',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 0,
+    overflow: 'hidden',
+    ...(Platform.OS === 'ios' ? shadowFab : {}),
   },
   sendBtnStop: { backgroundColor: '#dc2626' },
   sendBtnDisabled: { opacity: 0.5 },
-  sendBtnText: { color: '#fff', fontSize: 18 },
 });

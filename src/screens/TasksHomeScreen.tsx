@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   RefreshControl,
   ActivityIndicator,
   Platform,
+  PanResponder,
 } from 'react-native';
 import DraggableFlatList from 'react-native-draggable-flatlist';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -27,6 +28,8 @@ import { TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography'
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { filterTasksByStatusLevel } from '../utils/taskFilters';
 
+const EDGE_WIDTH = 24;
+const SWIPE_THRESHOLD = 60;
 const STATUS_KEY = 'statusLevel_todayTasks';
 const SHOW_TIME_KEY = 'showTimeLabels_todayTasks';
 const SHOW_PROJECT_KEY = 'showProjectName_todayTasks';
@@ -154,6 +157,25 @@ export function TasksHomeScreen() {
     navigation.navigate('TasksCalendar');
   }, [navigation]);
 
+  const gestureStartX = useRef(0);
+  const leftEdgeOpenProjectList = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 10,
+      onPanResponderGrant: (evt) => {
+        gestureStartX.current = evt.nativeEvent.pageX;
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (
+          gestureState.dx > SWIPE_THRESHOLD &&
+          gestureStartX.current <= EDGE_WIDTH + 20
+        ) {
+          navigation.navigate('ProjectList');
+        }
+      },
+    })
+  ).current;
+
   if (!session) {
     return (
       <View style={styles.centered}>
@@ -168,6 +190,11 @@ export function TasksHomeScreen() {
 
   return (
     <View style={styles.container}>
+      <View
+        style={styles.leftEdgeGesture}
+        {...leftEdgeOpenProjectList.panHandlers}
+        pointerEvents="box-only"
+      />
       {/* 顶部栏：毛玻璃 + 渐变，绝对定位；列表内容在其下滚动 */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <BlurHeaderBackground style={StyleSheet.absoluteFill} topSolidHeight={insets.top + 8} />
@@ -281,6 +308,14 @@ export function TasksHomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
+  leftEdgeGesture: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: EDGE_WIDTH,
+    zIndex: 10,
+  },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   placeholderText: { fontSize: 16, color: '#6b7280' },
   topBar: {
