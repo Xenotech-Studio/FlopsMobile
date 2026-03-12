@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, TouchableOpacity, StyleSheet, PanResponder } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, PanResponder, Platform } from 'react-native';
 import type { TaskItem } from '../taskApi';
 import { TaskRowContextMenu, type RowPreview } from './TaskRowContextMenu';
 import { TaskRowContent } from './TaskRowContent';
@@ -75,9 +75,16 @@ type TaskRowProps = {
   projectName?: string;
   onPress: () => void;
   onToggleCompletion: () => void;
-  /** 今日页拖拽排序：传入时右侧显示拖拽把手，长按把手可拖动 */
+  /** 今日页拖拽排序。500ms 可拖拽（iOS 直接进拖拽，Android 移动后拖拽）；同时开始剩余 500ms 计时，无大幅移动则满 1000ms 出菜单。 */
   drag?: () => void;
 };
+
+/** 直接拖拽前需按住的最短时间（ms） */
+const DRAG_ACTIVATION_DELAY_MS = 500;
+/** 长按打开上下文菜单的总时长（ms） */
+const CONTEXT_MENU_DELAY_MS = 1000;
+/** 进入可拖拽后的剩余计时（ms），到时无大幅移动则打开菜单 */
+const REMAINING_FOR_MENU_MS = CONTEXT_MENU_DELAY_MS - DRAG_ACTIVATION_DELAY_MS;
 
 export function TaskRow({
   task,
@@ -89,11 +96,14 @@ export function TaskRow({
   drag,
 }: TaskRowProps) {
   const [visualDone, setVisualDone] = useState(task.done);
+  const [dragReadyVisual, setDragReadyVisual] = useState(false);
   const [contextMenuVisible, setContextMenuVisible] = useState(false);
   const [anchorLayout, setAnchorLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [rowPreview, setRowPreview] = useState<RowPreview | null>(null);
   const rowRef = useRef<View>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragActivationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragReadyRef = useRef(false);
   const contextMenuVisibleRef = useRef(false);
   const dragRef = useRef(drag);
   /** 本次触摸已触发了长按菜单，松手时不要再触发 onPress（避免进入详情） */
@@ -108,13 +118,24 @@ export function TaskRow({
     }
   };
 
+  const clearDragActivationTimer = () => {
+    if (dragActivationTimerRef.current != null) {
+      clearTimeout(dragActivationTimerRef.current);
+      dragActivationTimerRef.current = null;
+    }
+    dragReadyRef.current = false;
+    setDragReadyVisual(false);
+  };
+
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (_, gestureState) =>
-        Math.abs(gestureState.dx) > 8 || Math.abs(gestureState.dy) > 8,
+        dragReadyRef.current &&
+        (Math.abs(gestureState.dx) > 8 || Math.abs(gestureState.dy) > 8),
       onPanResponderGrant: () => {
         clearLongPressTimer();
+        clearDragActivationTimer();
         if (contextMenuVisibleRef.current) {
           setContextMenuVisible(false);
           setAnchorLayout(null);
@@ -150,6 +171,7 @@ export function TaskRow({
   };
 
   const openContextMenu = () => {
+    setDragReadyVisual(false);
     openedMenuThisTouchRef.current = true;
     setRowPreview({
       title: task.title,
@@ -174,7 +196,7 @@ export function TaskRow({
         {...(drag ? panResponder.panHandlers : {})}
       >
         <TouchableOpacity
-          style={styles.row}
+          style={[styles.row, drag && dragReadyVisual && styles.rowDragReady]}
           onPress={() => {
             if (openedMenuThisTouchRef.current) {
               openedMenuThisTouchRef.current = false;
@@ -186,16 +208,33 @@ export function TaskRow({
             drag
               ? () => {
                   openedMenuThisTouchRef.current = false;
-                  longPressTimerRef.current = setTimeout(openContextMenu, 400);
+                  clearDragActivationTimer();
+                  dragReadyRef.current = false;
+                  dragActivationTimerRef.current = setTimeout(() => {
+                    dragActivationTimerRef.current = null;
+                    dragReadyRef.current = true;
+                    setDragReadyVisual(true);
+                    if (Platform.OS === 'ios') {
+                      dragRef.current?.();
+                    }
+                    longPressTimerRef.current = setTimeout(openContextMenu, REMAINING_FOR_MENU_MS);
+                  }, DRAG_ACTIVATION_DELAY_MS);
                 }
               : () => {
                   openedMenuThisTouchRef.current = false;
                 }
           }
-          onPressOut={drag ? clearLongPressTimer : undefined}
+          onPressOut={
+            drag
+              ? () => {
+                  clearDragActivationTimer();
+                  clearLongPressTimer();
+                }
+              : undefined
+          }
           onLongPress={drag ? undefined : openContextMenu}
           activeOpacity={0.7}
-          delayLongPress={drag ? undefined : 400}
+          delayLongPress={drag ? undefined : CONTEXT_MENU_DELAY_MS}
         >
           <TaskRowContent
             title={task.title}
@@ -231,5 +270,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
     alignSelf: 'stretch',
+  },
+  /** 按住 500ms 进入“可拖拽”时的视觉反馈：与页面同色背景 + 轻微阴影；安卓用淡边框替代强 elevation，避免阴影挡住卡片 */
+  rowDragReady: {
+    backgroundColor: '#fff',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 6,
+      },
+      android: {
+        elevation: 0,
+        borderWidth: 1,
+        borderColor: 'rgba(0,0,0,0.08)',
+      },
+      default: {},
+    }),
   },
 });
