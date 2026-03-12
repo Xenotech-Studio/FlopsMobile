@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, TouchableOpacity, StyleSheet, PanResponder, Platform } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, PanResponder, Platform, Vibration } from 'react-native';
+import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import type { TaskItem } from '../taskApi';
 import { TaskRowContextMenu, type RowPreview } from './TaskRowContextMenu';
 import { TaskRowContent } from './TaskRowContent';
@@ -214,6 +215,11 @@ export function TaskRow({
                     dragActivationTimerRef.current = null;
                     dragReadyRef.current = true;
                     setDragReadyVisual(true);
+                    if (Platform.OS === 'android') {
+                      Vibration.vibrate(15);
+                    } else {
+                      ReactNativeHapticFeedback.trigger('impactHeavy', { enableVibrateFallback: true });
+                    }
                     if (Platform.OS === 'ios') {
                       dragRef.current?.();
                     }
