@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { ConversationListScreen } from './ConversationListScreen';
 import { TasksNavigator } from './TasksNavigator';
+import { DocsPlaceholderScreen } from './DocsPlaceholderScreen';
 import type { MainTabParamList } from '../navigation/types';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -69,6 +70,17 @@ export function MainScreen() {
           tabBarLabel: 'Tasks',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="checkmark-done" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="Docs"
+        component={DocsPlaceholderScreen}
+        options={{
+          title: 'Docs',
+          tabBarLabel: 'Docs',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="document-text" size={size} color={color} />
           ),
         }}
       />

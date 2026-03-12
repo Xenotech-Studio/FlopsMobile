@@ -11,6 +11,7 @@ export type RootStackParamList = {
 export type MainTabParamList = {
   Chat: undefined;
   Tasks: undefined;
+  Docs: undefined;
 };
 
 /** Tasks 标签页内栈：今日 -> 项目列表(左滑入) -> 项目详情 -> 任务详情；今日左下角可进日历 */
