@@ -1,7 +1,7 @@
 /**
  * 用户信息与设置页，从左侧滑入；含账户信息、关于/检查更新、退出登录。
  */
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -15,12 +15,14 @@ import {
   Platform,
   Linking,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
 import { shadowSoftSubtle } from '../theme/shadows';
+import { getCurrentUserInfo } from '../api';
 import { APP_VERSION } from '../appVersion';
 import {
   getLatest,
@@ -57,6 +59,20 @@ export function ProfileScreen() {
   const [downloadError, setDownloadError] = useState('');
   const [downloadedPath, setDownloadedPath] = useState<string | null>(null);
   const [downloadedVersion, setDownloadedVersion] = useState<string | null>(null);
+  const [userInfo, setUserInfo] = useState<{ avatarUrl?: string; nickname?: string } | null>(null);
+
+  useEffect(() => {
+    if (!session) {
+      setUserInfo(null);
+      return;
+    }
+    getCurrentUserInfo(serverBaseUrl, session.user_id, session.access_token)
+      .then((info) => {
+        if (info) setUserInfo({ avatarUrl: info.avatarUrl, nickname: info.nickname });
+        else setUserInfo(null);
+      })
+      .catch(() => setUserInfo(null));
+  }, [session, serverBaseUrl]);
 
   const rightEdgeClose = useRef(
     PanResponder.create({
@@ -206,9 +222,13 @@ export function ProfileScreen() {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
         <View style={styles.userCard}>
           <View style={styles.avatarWrap}>
-            <Text style={styles.avatarText}>{initial}</Text>
+            {userInfo?.avatarUrl ? (
+              <Image source={{ uri: userInfo.avatarUrl }} style={styles.avatarImage} />
+            ) : (
+              <Text style={styles.avatarText}>{initial}</Text>
+            )}
           </View>
-          <Text style={styles.userId}>{session.user_id}</Text>
+          <Text style={styles.userId}>{userInfo?.nickname || session.user_id}</Text>
           <Text style={styles.userMeta}>已连接 · Flops</Text>
         </View>
 
@@ -433,6 +453,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
   },
   avatarText: { fontSize: 28, fontWeight: '700', color: '#fff' },
   userId: { fontSize: 18, fontWeight: '600', color: '#111827' },

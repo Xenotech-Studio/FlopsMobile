@@ -72,6 +72,34 @@ export async function login(
   };
 }
 
+/** 当前用户信息（含头像、昵称），来自 GET /api/user/{user_id} */
+export type CurrentUserInfo = {
+  id?: string;
+  nickname?: string;
+  avatarUrl?: string;
+  [key: string]: unknown;
+};
+
+/**
+ * 获取当前用户信息（含 avatarUrl、nickname），用于账户页展示头像等
+ */
+export async function getCurrentUserInfo(
+  serverBaseUrl: string,
+  userId: string,
+  accessToken: string
+): Promise<CurrentUserInfo | null> {
+  const base = ensureSlash(serverBaseUrl);
+  const url = `${base}api/user/${encodeURIComponent(userId)}?access_token=${encodeURIComponent(accessToken)}`;
+  try {
+    const res = await fetchWithDebugLog(url);
+    if (!res.ok) return null;
+    const data = (await res.json()) as CurrentUserInfo;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 export type ConversationListItem = {
   id: string;
   title?: string;
