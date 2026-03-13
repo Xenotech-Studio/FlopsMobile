@@ -66,6 +66,9 @@ yarn-error.log
 # testing
 /coverage
 
+# Upload config (contains FLOPS_ACCESS_TOKEN)
+upload-config.json
+
 # Yarn
 .yarn/*
 !.yarn/patches

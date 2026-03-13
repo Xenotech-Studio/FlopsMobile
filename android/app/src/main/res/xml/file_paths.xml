@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 应用内更新：暴露 cache 目录给安装器，供 Android 7+ FileProvider 使用 -->
+<paths>
+    <cache-path name="apk_cache" path="." />
+</paths>

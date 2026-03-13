@@ -19,3 +19,18 @@ buildscript {
 }
 
 apply plugin: "com.facebook.react.rootproject"
+
+// @isudaji/react-native-install-apk 使用 compileSdkVersion 23，需强制与根项目一致；已评估则直接改，否则 afterEvaluate
+project.subprojects(new groovy.lang.Closure(this) {
+    Object doCall(Object sub) {
+        if (!sub.name.contains("install-apk")) return null
+        def applySdk = {
+            if (sub.plugins.hasPlugin("com.android.library")) {
+                sub.android.compileSdkVersion rootProject.ext.compileSdkVersion
+                sub.android.buildToolsVersion rootProject.ext.buildToolsVersion
+            }
+        }
+        if (sub.state.executed) applySdk() else sub.afterEvaluate(applySdk)
+        return null
+    }
+})

@@ -1,0 +1,64 @@
+diff --git a/node_modules/@isudaji/react-native-install-apk/android/build.gradle b/node_modules/@isudaji/react-native-install-apk/android/build.gradle
+index c5bb9ba..ffd36fa 100644
+--- a/node_modules/@isudaji/react-native-install-apk/android/build.gradle
++++ b/node_modules/@isudaji/react-native-install-apk/android/build.gradle
+@@ -22,4 +22,5 @@ dependencies {
+   // compile "com.facebook.react:react-native:+"
+   // TODO: compile by deprecated on gradle 3.x, please use implementation or api instead it.
+   implementation "com.facebook.react:react-native:+"
++  implementation "androidx.core:core:1.12.0"
+ }
+diff --git a/node_modules/@isudaji/react-native-install-apk/android/src/main/java/com/camnpr/react_native_install_apk/InstallApkModule.java b/node_modules/@isudaji/react-native-install-apk/android/src/main/java/com/camnpr/react_native_install_apk/InstallApkModule.java
+index 869908b..9e00b98 100644
+--- a/node_modules/@isudaji/react-native-install-apk/android/src/main/java/com/camnpr/react_native_install_apk/InstallApkModule.java
++++ b/node_modules/@isudaji/react-native-install-apk/android/src/main/java/com/camnpr/react_native_install_apk/InstallApkModule.java
+@@ -2,10 +2,11 @@ package com.camnpr.react_native_install_apk;
+ 
+ import android.content.Intent;
+ import android.net.Uri;
++import android.os.Build;
++
++import androidx.core.content.FileProvider;
+ 
+-import com.facebook.react.bridge.Callback;
+ import com.facebook.react.bridge.ReactApplicationContext;
+-import com.facebook.react.bridge.ReactContext;
+ import com.facebook.react.bridge.ReactContextBaseJavaModule;
+ import com.facebook.react.bridge.ReactMethod;
+ 
+@@ -13,6 +14,7 @@ import java.io.File;
+ 
+ /**
+  * Created by camnpr on 2023/01/21.
++ * Android 7+ 使用 FileProvider 暴露 content://，否则 file:// 会触发 FileUriExposedException 导致崩溃。
+  */
+ public class InstallApkModule extends ReactContextBaseJavaModule {
+   private ReactApplicationContext _context = null;
+@@ -29,15 +31,21 @@ public class InstallApkModule extends ReactContextBaseJavaModule {
+ 
+   @ReactMethod
+   public void install(String path) {
+-    String cmd = "chmod 777 " + path;
+-    try {
+-      Runtime.getRuntime().exec(cmd);
+-    } catch (Exception e) {
+-      e.printStackTrace();
++    File file = new File(path);
++    if (!file.exists()) {
++      return;
+     }
++    String authority = _context.getApplicationContext().getPackageName() + ".fileprovider";
+     Intent intent = new Intent(Intent.ACTION_VIEW);
+     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+-    intent.setDataAndType(Uri.parse("file://" + path), "application/vnd.android.package-archive");
++
++    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
++      intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
++      Uri uri = FileProvider.getUriForFile(_context.getApplicationContext(), authority, file);
++      intent.setDataAndType(uri, "application/vnd.android.package-archive");
++    } else {
++      intent.setDataAndType(Uri.parse("file://" + path), "application/vnd.android.package-archive");
++    }
+     _context.startActivity(intent);
+   }
+ }

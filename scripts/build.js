@@ -64,10 +64,16 @@ function normalizeArtifact(token) {
 }
 
 function parseArgs(argv) {
-  // Defaults: android + apk
+  // Defaults: android + apk. 末尾可加 upload（仅 android 构建后上传）
   let platform = 'android';
   let artifact = 'apk';
+  let doUpload = false;
   let index = 0;
+
+  if (argv[argv.length - 1] === 'upload') {
+    doUpload = true;
+    argv = argv.slice(0, -1);
+  }
 
   const maybePlatform = normalizePlatform(argv[0]);
   const maybeArtifact = normalizeArtifact(argv[0]);
@@ -87,7 +93,7 @@ function parseArgs(argv) {
   }
 
   if (argv[index]) {
-    fail(`无法识别的参数：${argv[index]}。用法：yarn build [android|ios] [apk|aab|ipa]`);
+    fail(`无法识别的参数：${argv[index]}。用法：yarn build [android|ios] [apk|aab|ipa] [upload]`);
   }
 
   if (platform === 'ios' && artifact === 'apk') {
@@ -98,7 +104,11 @@ function parseArgs(argv) {
     fail('iOS 目前仅支持 ipa。用法：yarn build ios [ipa]');
   }
 
-  return { platform, artifact };
+  if (doUpload && platform !== 'android') {
+    fail('目前仅支持 yarn build android [apk] upload');
+  }
+
+  return { platform, artifact, doUpload };
 }
 
 function runAndroidBuild(artifact) {
@@ -156,10 +166,12 @@ function runAndroidBuild(artifact) {
     if (!built) {
       fail(`构建成功但未找到产物：${outputDir} (${ext})`);
     }
-    const copied = copyArtifactToBuildRoot(projectRoot, built);
+    const version = getPackageVersion(projectRoot);
+    const targetName = `FlopsMobile-${version}${ext}`;
+    const copied = copyArtifactToBuildRoot(projectRoot, built, targetName);
     console.log(`[build] artifact=${built}`);
     console.log(`[build] 已复制到: ${copied}`);
-    process.exit(0);
+    return copied;
   }
   process.exit(1);
 }
@@ -198,10 +210,21 @@ function findLatestFileByExt(dir, ext) {
   return files[0];
 }
 
-function copyArtifactToBuildRoot(projectRoot, sourcePath) {
+function getPackageVersion(projectRoot) {
+  const pkgPath = path.join(projectRoot, 'package.json');
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    return (pkg.version || '0.0.0').trim();
+  } catch (_) {
+    return '0.0.0';
+  }
+}
+
+function copyArtifactToBuildRoot(projectRoot, sourcePath, targetBasename) {
   const buildRoot = path.join(projectRoot, 'build');
   fs.mkdirSync(buildRoot, { recursive: true });
-  const targetPath = path.join(buildRoot, path.basename(sourcePath));
+  const name = targetBasename || path.basename(sourcePath);
+  const targetPath = path.join(buildRoot, name);
   fs.copyFileSync(sourcePath, targetPath);
   return targetPath;
 }
@@ -306,16 +329,28 @@ function runIosBuild(artifact) {
   if (!ipaPath) {
     fail('未找到导出的 IPA 文件。');
   }
-  const copied = copyArtifactToBuildRoot(projectRoot, ipaPath);
+  const version = getPackageVersion(projectRoot);
+  const copied = copyArtifactToBuildRoot(projectRoot, ipaPath, `FlopsMobile-${version}.ipa`);
   console.log(`[build] IPA: ${ipaPath}`);
   console.log(`[build] 已复制到: ${copied}`);
 }
 
-const { platform, artifact } = parseArgs(process.argv.slice(2));
+const { platform, artifact, doUpload } = parseArgs(process.argv.slice(2));
 
 if (platform === 'ios') {
   runIosBuild(artifact);
   process.exit(0);
 }
 
-runAndroidBuild(artifact);
+const builtPath = runAndroidBuild(artifact);
+if (doUpload && builtPath) {
+  require('./build-and-upload-android.js')
+    .run(builtPath)
+    .then(() => process.exit(0))
+    .catch((err) => {
+      if (err && err.message) console.error(err.message);
+      process.exit(1);
+    });
+} else {
+  process.exit(0);
+}
