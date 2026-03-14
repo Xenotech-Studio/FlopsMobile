@@ -10,7 +10,9 @@ import { NavigationContainer, createNavigationContainerRef } from '@react-naviga
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SessionProvider, useSession } from './src/context/SessionContext';
 import { TaskProvider } from './src/context/TaskContext';
+import { VersionWelcomeProvider } from './src/context/VersionWelcomeContext';
 import { LoginScreen } from './src/screens/LoginScreen';
+import { VersionWelcomeScreen } from './src/screens/VersionWelcomeScreen';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import type { RootStackParamList } from './src/navigation/types';
 
@@ -41,13 +43,16 @@ function AppContent() {
     <>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       {session ? (
-        <NavigationContainer ref={navigationRef} initialState={initialNavState}>
-          <BottomSheetModalProvider>
-            <TaskProvider>
-              <RootNavigator />
-            </TaskProvider>
-          </BottomSheetModalProvider>
-        </NavigationContainer>
+        <VersionWelcomeProvider>
+          <NavigationContainer ref={navigationRef} initialState={initialNavState}>
+            <BottomSheetModalProvider>
+              <TaskProvider>
+                <RootNavigator />
+              </TaskProvider>
+            </BottomSheetModalProvider>
+          </NavigationContainer>
+          <VersionWelcomeScreen />
+        </VersionWelcomeProvider>
       ) : (
         <LoginScreen />
       )}
