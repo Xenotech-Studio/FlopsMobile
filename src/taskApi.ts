@@ -187,11 +187,15 @@ export async function taskLogin(
   const base = baseUrl.replace(/\/$/, '');
   const url = `${base}/api/login`;
   const body = { id: userId, password, device_name: deviceName };
-  const res = await fetchWithDebugLog(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  const res = await fetchWithDebugLog(
+    url,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    { log4xxAsInfo: true }
+  );
   if (!res.ok) {
     const err = await res.json().catch(() => ({})) as { detail?: string };
     throw new Error(err.detail || `登录失败: ${res.status}`);

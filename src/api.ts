@@ -43,15 +43,19 @@ export async function login(
   deviceName: string = 'FlopsMobile'
 ): Promise<{ session: Session }> {
   const base = ensureSlash(serverBaseUrl);
-  const res = await fetchWithDebugLog(`${base}api/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      id: userId,
-      password,
-      device_name: deviceName,
-    }),
-  });
+  const res = await fetchWithDebugLog(
+    `${base}api/login`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: userId,
+        password,
+        device_name: deviceName,
+      }),
+    },
+    { log4xxAsInfo: true }
+  );
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail || `登录失败: ${res.status}`);
@@ -70,6 +74,38 @@ export async function login(
       access_token: token,
     },
   };
+}
+
+/**
+ * 修改密码：POST /api/change_user_password
+ * 需要当前密码验证，成功后仅服务端更新密码，本地 session 不变（下次登录用新密码）。
+ */
+export async function changePassword(
+  serverBaseUrl: string,
+  userId: string,
+  oldPassword: string,
+  newPassword: string
+): Promise<{ message: string }> {
+  const base = ensureSlash(serverBaseUrl);
+  const res = await fetchWithDebugLog(
+    `${base}api/change_user_password`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: userId,
+        old_password: oldPassword,
+        password: newPassword,
+      }),
+    },
+    { log4xxAsInfo: true }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `修改密码失败: ${res.status}`);
+  }
+  const data = (await res.json()) as { message?: string };
+  return { message: data.message ?? 'Password changed successfully' };
 }
 
 /** 当前用户信息（含头像、昵称），来自 GET /api/user/{user_id} */

@@ -1,5 +1,5 @@
 /**
- * 用户信息与设置页，从左侧滑入；含账户信息、关于/检查更新、退出登录。
+ * 用户信息与设置页，从左侧滑入；含账户信息、关于/检查更新；退出登录在「账户操作」子页。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -8,7 +8,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  Alert,
   PanResponder,
   useWindowDimensions,
   Modal,
@@ -42,7 +41,7 @@ type DownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';
 
 export function ProfileScreen() {
   const navigation = useNavigation();
-  const { session, logout, serverBaseUrl } = useSession();
+  const { session, serverBaseUrl } = useSession();
   const { width: screenWidth } = useWindowDimensions();
   const gestureStartX = useRef(0);
 
@@ -91,19 +90,6 @@ export function ProfileScreen() {
       },
     })
   ).current;
-
-  const handleLogout = useCallback(() => {
-    Alert.alert('退出登录', '确定要退出当前账号吗？', [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '退出',
-        style: 'destructive',
-        onPress: async () => {
-          await logout();
-        },
-      },
-    ]);
-  }, [logout]);
 
   const openUpdateModal = useCallback(() => {
     setUpdateModalVisible(true);
@@ -236,10 +222,10 @@ export function ProfileScreen() {
           <TouchableOpacity
             style={styles.row}
             activeOpacity={0.7}
-            onPress={() => {}}
+            onPress={() => navigation.navigate('AccountActions')}
           >
-            <Ionicons name="person-outline" size={22} color="#6b7280" />
-            <Text style={styles.rowLabel}>账户与安全</Text>
+            <Ionicons name="settings-outline" size={22} color="#6b7280" />
+            <Text style={styles.rowLabel}>账户操作</Text>
             <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
           </TouchableOpacity>
           <TouchableOpacity
@@ -252,14 +238,6 @@ export function ProfileScreen() {
             <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
           </TouchableOpacity>
         </View>
-
-        <TouchableOpacity
-          style={styles.logoutBtn}
-          onPress={handleLogout}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.logoutBtnText}>退出登录</Text>
-        </TouchableOpacity>
       </ScrollView>
 
       <Modal
@@ -478,15 +456,6 @@ const styles = StyleSheet.create({
   },
   rowBorder: { borderTopWidth: 1, borderTopColor: '#f3f4f6' },
   rowLabel: { flex: 1, fontSize: 16, color: '#111827' },
-  logoutBtn: {
-    backgroundColor: '#fff',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#fecaca',
-  },
-  logoutBtnText: { fontSize: 16, fontWeight: '600', color: '#dc2626' },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',

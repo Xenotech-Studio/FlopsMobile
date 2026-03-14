@@ -79,13 +79,17 @@ function logResponse(
   lines.forEach((l) => { logLine(level, l); pushInAppLog(l); });
 }
 
+/** 可选：将预期内的 4xx（如登录失败、密码错误）按普通 log 输出，不在 debugger 里当报错 */
+export type FetchDebugOptions = { log4xxAsInfo?: boolean };
+
 /**
  * 带完整调试日志的 fetch：打印请求 URL/方法/头/体，以及响应状态/头/体（流式响应仅标 [streaming]）。
- * 使用方式：用 fetchWithDebugLog 替代 fetch，返回值与 fetch 一致。
+ * options.log4xxAsInfo：为 true 时，4xx 响应按 log 输出而非 warn，避免预期内的错误（如密码错误）在调试器里显示为报错。
  */
 export async function fetchWithDebugLog(
   input: RequestInfo | URL,
-  init?: RequestInit
+  init?: RequestInit,
+  options?: FetchDebugOptions
 ): Promise<Response> {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   const method = (init?.method || 'GET').toUpperCase();
@@ -105,7 +109,8 @@ export async function fetchWithDebugLog(
     const res = await (fetch as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>)(input, init);
     const resHeaders = headersToObject(res.headers);
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
-    const responseLevel: 'log' | 'warn' = res.ok ? 'log' : 'warn';
+    const isExpected4xx = options?.log4xxAsInfo && res.status >= 400 && res.status < 500;
+    const responseLevel: 'log' | 'warn' = res.ok || isExpected4xx ? 'log' : 'warn';
 
     if (ENABLE_HTTP_DEBUG) {
       if (contentType.includes('event-stream') || contentType.includes('stream')) {
