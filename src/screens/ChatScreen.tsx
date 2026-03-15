@@ -46,6 +46,7 @@ type StreamBlock =
   | { type: 'text'; content: string }
   | {
       type: 'tool';
+      index?: number;
       tool_name: string;
       status: string;
       arguments?: string;
@@ -238,26 +239,80 @@ export function ChatScreen() {
       if ('type' in event) {
         if (event.type === 'thinking') setStreamStatus('thinking');
         if (event.type === 'checking_tools') setStreamStatus('checking_tools');
+        if (event.type === 'tool_call_start') {
+          const idx = event.index ?? 0;
+          const name = String(event.name || '');
+          const existing = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          if (existing >= 0) {
+            localBlocks[existing] = { ...localBlocks[existing], type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' } as StreamBlock;
+          } else {
+            localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' });
+          }
+          syncBlocks();
+        }
+        if (event.type === 'tool_call_delta') {
+          const idx = event.index ?? 0;
+          const delta = event.arguments_delta ?? '';
+          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          if (i >= 0 && localBlocks[i].type === 'tool') {
+            localBlocks[i] = { ...localBlocks[i], arguments: (localBlocks[i].arguments || '') + delta };
+            syncBlocks();
+          }
+        }
+        if (event.type === 'tool_call_ready') {
+          const idx = event.index ?? 0;
+          const name = String(event.name || '');
+          const args = event.arguments ?? '{}';
+          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          if (i >= 0 && localBlocks[i].type === 'tool') {
+            localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: args, status: 'waiting' };
+          } else {
+            localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'waiting', arguments: args, streaming_content: '' });
+          }
+          syncBlocks();
+        }
+        if (event.type === 'tool_call_executing') {
+          const idx = event.index ?? 0;
+          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          if (i >= 0 && localBlocks[i].type === 'tool') {
+            localBlocks[i] = { ...localBlocks[i], status: 'running' };
+            setStreamStatus('tool_running');
+            syncBlocks();
+          }
+        }
+        if (event.type === 'tool_call_done') {
+          const idx = event.index ?? 0;
+          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          if (i >= 0 && localBlocks[i].type === 'tool') {
+            localBlocks[i] = { ...localBlocks[i], status: 'completed' };
+            setStreamStatus('tool_result');
+            syncBlocks();
+          }
+        }
         if (event.type === 'tool_start') {
           setStreamStatus('tool_running');
           const name = String(event.tool_name || 'unknown');
-          let updated = false;
-          for (let i = 0; i < localBlocks.length; i++) {
-            const b = localBlocks[i];
-            if (b.type === 'tool' && b.tool_name === name && b.status !== 'completed') {
-              localBlocks[i] = { ...b, status: 'running', arguments: event.arguments, streaming_content: '' };
-              updated = true;
-              break;
+          const idx = (event as { index?: number }).index;
+          if (typeof idx === 'number') {
+            const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+            if (i >= 0 && localBlocks[i].type === 'tool') {
+              localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: event.arguments, status: 'running', streaming_content: '' };
+            } else {
+              localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'running', arguments: event.arguments, streaming_content: '' });
             }
-          }
-          if (!updated) {
-            localBlocks.push({
-              type: 'tool',
-              tool_name: name,
-              status: 'running',
-              arguments: event.arguments,
-              streaming_content: '',
-            });
+          } else {
+            let updated = false;
+            for (let i = 0; i < localBlocks.length; i++) {
+              const b = localBlocks[i];
+              if (b.type === 'tool' && b.tool_name === name && b.status !== 'completed') {
+                localBlocks[i] = { ...b, status: 'running', arguments: event.arguments, streaming_content: '' };
+                updated = true;
+                break;
+              }
+            }
+            if (!updated) {
+              localBlocks.push({ type: 'tool', tool_name: name, status: 'running', arguments: event.arguments, streaming_content: '' });
+            }
           }
           syncBlocks();
         }
@@ -279,11 +334,19 @@ export function ChatScreen() {
         if (event.type === 'tool_result') {
           setStreamStatus('tool_result');
           const name = event.tool_name;
-          for (let i = localBlocks.length - 1; i >= 0; i--) {
-            const b = localBlocks[i];
-            if (b.type === 'tool' && b.tool_name === name) {
-              localBlocks[i] = { ...b, status: 'completed', result: event.result };
-              break;
+          const idx = (event as { index?: number }).index;
+          if (typeof idx === 'number') {
+            const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+            if (i >= 0 && localBlocks[i].type === 'tool') {
+              localBlocks[i] = { ...localBlocks[i], status: 'completed', result: event.result };
+            }
+          } else {
+            for (let i = localBlocks.length - 1; i >= 0; i--) {
+              const b = localBlocks[i];
+              if (b.type === 'tool' && b.tool_name === name) {
+                localBlocks[i] = { ...b, status: 'completed', result: event.result };
+                break;
+              }
             }
           }
           syncBlocks();
@@ -437,26 +500,80 @@ export function ChatScreen() {
       if ('type' in event) {
         if (event.type === 'thinking') setStreamStatus('thinking');
         if (event.type === 'checking_tools') setStreamStatus('checking_tools');
+        if (event.type === 'tool_call_start') {
+          const idx = event.index ?? 0;
+          const name = String(event.name || '');
+          const existing = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          if (existing >= 0) {
+            localBlocks[existing] = { ...localBlocks[existing], type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' } as StreamBlock;
+          } else {
+            localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' });
+          }
+          syncBlocks();
+        }
+        if (event.type === 'tool_call_delta') {
+          const idx = event.index ?? 0;
+          const delta = event.arguments_delta ?? '';
+          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          if (i >= 0 && localBlocks[i].type === 'tool') {
+            localBlocks[i] = { ...localBlocks[i], arguments: (localBlocks[i].arguments || '') + delta };
+            syncBlocks();
+          }
+        }
+        if (event.type === 'tool_call_ready') {
+          const idx = event.index ?? 0;
+          const name = String(event.name || '');
+          const args = event.arguments ?? '{}';
+          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          if (i >= 0 && localBlocks[i].type === 'tool') {
+            localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: args, status: 'waiting' };
+          } else {
+            localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'waiting', arguments: args, streaming_content: '' });
+          }
+          syncBlocks();
+        }
+        if (event.type === 'tool_call_executing') {
+          const idx = event.index ?? 0;
+          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          if (i >= 0 && localBlocks[i].type === 'tool') {
+            localBlocks[i] = { ...localBlocks[i], status: 'running' };
+            setStreamStatus('tool_running');
+            syncBlocks();
+          }
+        }
+        if (event.type === 'tool_call_done') {
+          const idx = event.index ?? 0;
+          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          if (i >= 0 && localBlocks[i].type === 'tool') {
+            localBlocks[i] = { ...localBlocks[i], status: 'completed' };
+            setStreamStatus('tool_result');
+            syncBlocks();
+          }
+        }
         if (event.type === 'tool_start') {
           setStreamStatus('tool_running');
           const name = String(event.tool_name || 'unknown');
-          let updated = false;
-          for (let i = 0; i < localBlocks.length; i++) {
-            const b = localBlocks[i];
-            if (b.type === 'tool' && b.tool_name === name && b.status !== 'completed') {
-              localBlocks[i] = { ...b, status: 'running', arguments: event.arguments, streaming_content: '' };
-              updated = true;
-              break;
+          const idx = (event as { index?: number }).index;
+          if (typeof idx === 'number') {
+            const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+            if (i >= 0 && localBlocks[i].type === 'tool') {
+              localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: event.arguments, status: 'running', streaming_content: '' };
+            } else {
+              localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'running', arguments: event.arguments, streaming_content: '' });
             }
-          }
-          if (!updated) {
-            localBlocks.push({
-              type: 'tool',
-              tool_name: name,
-              status: 'running',
-              arguments: event.arguments,
-              streaming_content: '',
-            });
+          } else {
+            let updated = false;
+            for (let i = 0; i < localBlocks.length; i++) {
+              const b = localBlocks[i];
+              if (b.type === 'tool' && b.tool_name === name && b.status !== 'completed') {
+                localBlocks[i] = { ...b, status: 'running', arguments: event.arguments, streaming_content: '' };
+                updated = true;
+                break;
+              }
+            }
+            if (!updated) {
+              localBlocks.push({ type: 'tool', tool_name: name, status: 'running', arguments: event.arguments, streaming_content: '' });
+            }
           }
           syncBlocks();
         }
@@ -478,11 +595,19 @@ export function ChatScreen() {
         if (event.type === 'tool_result') {
           setStreamStatus('tool_result');
           const name = event.tool_name;
-          for (let i = localBlocks.length - 1; i >= 0; i--) {
-            const b = localBlocks[i];
-            if (b.type === 'tool' && b.tool_name === name) {
-              localBlocks[i] = { ...b, status: 'completed', result: event.result };
-              break;
+          const idx = (event as { index?: number }).index;
+          if (typeof idx === 'number') {
+            const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+            if (i >= 0 && localBlocks[i].type === 'tool') {
+              localBlocks[i] = { ...localBlocks[i], status: 'completed', result: event.result };
+            }
+          } else {
+            for (let i = localBlocks.length - 1; i >= 0; i--) {
+              const b = localBlocks[i];
+              if (b.type === 'tool' && b.tool_name === name) {
+                localBlocks[i] = { ...b, status: 'completed', result: event.result };
+                break;
+              }
             }
           }
           syncBlocks();
@@ -858,7 +983,7 @@ export function ChatScreen() {
               block.status === 'completed' ? styles.toolCardBadgeOk : undefined,
             ]}
           >
-            {block.status === 'completed' ? '成功' : block.status}
+            {block.status === 'completed' ? '成功' : block.status === 'pending' ? '参数生成中' : block.status === 'waiting' ? '等待执行' : block.status === 'running' ? '执行中' : block.status}
           </Text>
         </Pressable>
       );
@@ -882,7 +1007,7 @@ export function ChatScreen() {
           accessibilityLabel={isFull ? undefined : '点击收起'}
         >
           <Text style={styles.toolCardHeader}>
-            {block.tool_name} · {block.status}
+            {block.tool_name} · {block.status === 'completed' ? '成功' : block.status === 'pending' ? '参数生成中' : block.status === 'waiting' ? '等待执行' : block.status === 'running' ? '执行中' : block.status}
           </Text>
           {block.arguments ? (
             <Text style={styles.toolCardBody} numberOfLines={10}>

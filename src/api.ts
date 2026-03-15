@@ -13,9 +13,14 @@ export type Session = {
 export type ChatStreamEvent =
   | { type: 'thinking' }
   | { type: 'checking_tools' }
-  | { type: 'tool_start'; tool_name: string; arguments?: string }
+  | { type: 'tool_call_start'; index: number; name: string }
+  | { type: 'tool_call_delta'; index: number; arguments_delta: string }
+  | { type: 'tool_call_ready'; index: number; name: string; arguments: string }
+  | { type: 'tool_call_executing'; index: number }
+  | { type: 'tool_call_done'; index: number; success?: boolean }
+  | { type: 'tool_start'; tool_name: string; arguments?: string; index?: number }
   | { type: 'tool_stream'; tool_name: string; chunk: string }
-  | { type: 'tool_result'; tool_name: string; result: unknown }
+  | { type: 'tool_result'; tool_name: string; result: unknown; index?: number }
   | { type: 'safety_confirmation_required'; tool_name: string; review_id: string; command?: string; cwd?: string; arguments?: string; review?: Record<string, unknown>; conversation_id?: string }
   | { type: 'safety_review'; tool_name: string; review: Record<string, unknown> }
   | { type: 'step_complete' }
