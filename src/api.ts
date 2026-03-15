@@ -21,6 +21,7 @@ export type ChatStreamEvent =
   | { type: 'tool_start'; tool_name: string; arguments?: string; index?: number }
   | { type: 'tool_stream'; tool_name: string; chunk: string }
   | { type: 'tool_result'; tool_name: string; result: unknown; index?: number }
+  | { type: 'tool_result_chunk'; index: number; stdout_append?: string; set?: Record<string, unknown> }
   | { type: 'safety_confirmation_required'; tool_name: string; review_id: string; command?: string; cwd?: string; arguments?: string; review?: Record<string, unknown>; conversation_id?: string }
   | { type: 'safety_review'; tool_name: string; review: Record<string, unknown> }
   | { type: 'step_complete' }

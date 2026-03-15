@@ -227,6 +227,13 @@ export function ChatScreen() {
       setStreamingText(finalText);
     };
 
+    const findLastToolBlockByIndex = (index: number): number => {
+      for (let i = localBlocks.length - 1; i >= 0; i--) {
+        if (localBlocks[i].type === 'tool' && localBlocks[i].index === index) return i;
+      }
+      return -1;
+    };
+
     const onEvent = (event: ChatStreamEvent) => {
       if ('conversation_id' in event && event.conversation_id && !convId) {
         setConversationId(event.conversation_id);
@@ -242,9 +249,10 @@ export function ChatScreen() {
         if (event.type === 'tool_call_start') {
           const idx = event.index ?? 0;
           const name = String(event.name || '');
-          const existing = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
-          if (existing >= 0) {
-            localBlocks[existing] = { ...localBlocks[existing], type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' } as StreamBlock;
+          const i = findLastToolBlockByIndex(idx);
+          const existingCompleted = i >= 0 && localBlocks[i].type === 'tool' && localBlocks[i].status === 'completed';
+          if (i >= 0 && !existingCompleted) {
+            localBlocks[i] = { ...localBlocks[i], type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' } as StreamBlock;
           } else {
             localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' });
           }
@@ -253,7 +261,7 @@ export function ChatScreen() {
         if (event.type === 'tool_call_delta') {
           const idx = event.index ?? 0;
           const delta = event.arguments_delta ?? '';
-          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          const i = findLastToolBlockByIndex(idx);
           if (i >= 0 && localBlocks[i].type === 'tool') {
             localBlocks[i] = { ...localBlocks[i], arguments: (localBlocks[i].arguments || '') + delta };
             syncBlocks();
@@ -263,7 +271,7 @@ export function ChatScreen() {
           const idx = event.index ?? 0;
           const name = String(event.name || '');
           const args = event.arguments ?? '{}';
-          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          const i = findLastToolBlockByIndex(idx);
           if (i >= 0 && localBlocks[i].type === 'tool') {
             localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: args, status: 'waiting' };
           } else {
@@ -273,7 +281,7 @@ export function ChatScreen() {
         }
         if (event.type === 'tool_call_executing') {
           const idx = event.index ?? 0;
-          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          const i = findLastToolBlockByIndex(idx);
           if (i >= 0 && localBlocks[i].type === 'tool') {
             localBlocks[i] = { ...localBlocks[i], status: 'running' };
             setStreamStatus('tool_running');
@@ -282,7 +290,7 @@ export function ChatScreen() {
         }
         if (event.type === 'tool_call_done') {
           const idx = event.index ?? 0;
-          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          const i = findLastToolBlockByIndex(idx);
           if (i >= 0 && localBlocks[i].type === 'tool') {
             localBlocks[i] = { ...localBlocks[i], status: 'completed' };
             setStreamStatus('tool_result');
@@ -294,8 +302,9 @@ export function ChatScreen() {
           const name = String(event.tool_name || 'unknown');
           const idx = (event as { index?: number }).index;
           if (typeof idx === 'number') {
-            const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
-            if (i >= 0 && localBlocks[i].type === 'tool') {
+            const i = findLastToolBlockByIndex(idx);
+            const existingCompleted = i >= 0 && localBlocks[i].type === 'tool' && localBlocks[i].status === 'completed';
+            if (i >= 0 && !existingCompleted && localBlocks[i].type === 'tool') {
               localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: event.arguments, status: 'running', streaming_content: '' };
             } else {
               localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'running', arguments: event.arguments, streaming_content: '' });
@@ -331,12 +340,32 @@ export function ChatScreen() {
             syncBlocks();
           }
         }
+        if (event.type === 'tool_result_chunk') {
+          const idx = event.index ?? 0;
+          const stdoutAppend = event.stdout_append;
+          const setObj = event.set;
+          const i = findLastToolBlockByIndex(idx);
+          if (i >= 0 && localBlocks[i].type === 'tool') {
+            let result: Record<string, unknown> =
+              localBlocks[i].result != null && typeof localBlocks[i].result === 'object'
+                ? { ...(localBlocks[i].result as Record<string, unknown>) }
+                : {};
+            if (typeof stdoutAppend === 'string') {
+              result.stdout = String(result.stdout || '') + stdoutAppend;
+            }
+            if (setObj != null && typeof setObj === 'object') {
+              result = { ...result, ...setObj };
+            }
+            localBlocks[i] = { ...localBlocks[i], result };
+            syncBlocks();
+          }
+        }
         if (event.type === 'tool_result') {
           setStreamStatus('tool_result');
           const name = event.tool_name;
           const idx = (event as { index?: number }).index;
           if (typeof idx === 'number') {
-            const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+            const i = findLastToolBlockByIndex(idx);
             if (i >= 0 && localBlocks[i].type === 'tool') {
               localBlocks[i] = { ...localBlocks[i], status: 'completed', result: event.result };
             }
@@ -495,6 +524,13 @@ export function ChatScreen() {
       setStreamingText(finalText);
     };
 
+    const findLastToolBlockByIndex = (index: number): number => {
+      for (let i = localBlocks.length - 1; i >= 0; i--) {
+        if (localBlocks[i].type === 'tool' && localBlocks[i].index === index) return i;
+      }
+      return -1;
+    };
+
     const onEvent = (event: ChatStreamEvent) => {
       if ('error' in event && event.error) throw new Error(event.error);
       if ('type' in event) {
@@ -503,9 +539,10 @@ export function ChatScreen() {
         if (event.type === 'tool_call_start') {
           const idx = event.index ?? 0;
           const name = String(event.name || '');
-          const existing = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
-          if (existing >= 0) {
-            localBlocks[existing] = { ...localBlocks[existing], type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' } as StreamBlock;
+          const i = findLastToolBlockByIndex(idx);
+          const existingCompleted = i >= 0 && localBlocks[i].type === 'tool' && localBlocks[i].status === 'completed';
+          if (i >= 0 && !existingCompleted) {
+            localBlocks[i] = { ...localBlocks[i], type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' } as StreamBlock;
           } else {
             localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' });
           }
@@ -514,7 +551,7 @@ export function ChatScreen() {
         if (event.type === 'tool_call_delta') {
           const idx = event.index ?? 0;
           const delta = event.arguments_delta ?? '';
-          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          const i = findLastToolBlockByIndex(idx);
           if (i >= 0 && localBlocks[i].type === 'tool') {
             localBlocks[i] = { ...localBlocks[i], arguments: (localBlocks[i].arguments || '') + delta };
             syncBlocks();
@@ -524,7 +561,7 @@ export function ChatScreen() {
           const idx = event.index ?? 0;
           const name = String(event.name || '');
           const args = event.arguments ?? '{}';
-          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          const i = findLastToolBlockByIndex(idx);
           if (i >= 0 && localBlocks[i].type === 'tool') {
             localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: args, status: 'waiting' };
           } else {
@@ -534,7 +571,7 @@ export function ChatScreen() {
         }
         if (event.type === 'tool_call_executing') {
           const idx = event.index ?? 0;
-          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          const i = findLastToolBlockByIndex(idx);
           if (i >= 0 && localBlocks[i].type === 'tool') {
             localBlocks[i] = { ...localBlocks[i], status: 'running' };
             setStreamStatus('tool_running');
@@ -543,7 +580,7 @@ export function ChatScreen() {
         }
         if (event.type === 'tool_call_done') {
           const idx = event.index ?? 0;
-          const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+          const i = findLastToolBlockByIndex(idx);
           if (i >= 0 && localBlocks[i].type === 'tool') {
             localBlocks[i] = { ...localBlocks[i], status: 'completed' };
             setStreamStatus('tool_result');
@@ -555,8 +592,9 @@ export function ChatScreen() {
           const name = String(event.tool_name || 'unknown');
           const idx = (event as { index?: number }).index;
           if (typeof idx === 'number') {
-            const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
-            if (i >= 0 && localBlocks[i].type === 'tool') {
+            const i = findLastToolBlockByIndex(idx);
+            const existingCompleted = i >= 0 && localBlocks[i].type === 'tool' && localBlocks[i].status === 'completed';
+            if (i >= 0 && !existingCompleted && localBlocks[i].type === 'tool') {
               localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: event.arguments, status: 'running', streaming_content: '' };
             } else {
               localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'running', arguments: event.arguments, streaming_content: '' });
@@ -592,12 +630,32 @@ export function ChatScreen() {
             syncBlocks();
           }
         }
+        if (event.type === 'tool_result_chunk') {
+          const idx = event.index ?? 0;
+          const stdoutAppend = event.stdout_append;
+          const setObj = event.set;
+          const i = findLastToolBlockByIndex(idx);
+          if (i >= 0 && localBlocks[i].type === 'tool') {
+            let result: Record<string, unknown> =
+              localBlocks[i].result != null && typeof localBlocks[i].result === 'object'
+                ? { ...(localBlocks[i].result as Record<string, unknown>) }
+                : {};
+            if (typeof stdoutAppend === 'string') {
+              result.stdout = String(result.stdout || '') + stdoutAppend;
+            }
+            if (setObj != null && typeof setObj === 'object') {
+              result = { ...result, ...setObj };
+            }
+            localBlocks[i] = { ...localBlocks[i], result };
+            syncBlocks();
+          }
+        }
         if (event.type === 'tool_result') {
           setStreamStatus('tool_result');
           const name = event.tool_name;
           const idx = (event as { index?: number }).index;
           if (typeof idx === 'number') {
-            const i = localBlocks.findIndex((b) => b.type === 'tool' && b.index === idx);
+            const i = findLastToolBlockByIndex(idx);
             if (i >= 0 && localBlocks[i].type === 'tool') {
               localBlocks[i] = { ...localBlocks[i], status: 'completed', result: event.result };
             }
@@ -1143,11 +1201,21 @@ export function ChatScreen() {
   };
 
   const showEmpty = messages.length === 0 && !loading;
+  const streamStatusBracketLabel =
+    streamStatus === 'thinking'
+      ? 'thinking'
+      : streamStatus === 'checking_tools'
+        ? 'checking tools'
+        : streamStatus === 'tool_running' || streamStatus === 'tool_result'
+          ? 'calling tools'
+          : streamStatus === 'awaiting_safety_confirmation'
+            ? 'awaiting confirmation'
+            : 'talking';
   const streamStatusLabel =
-    streamStatus === 'checking_tools'
-      ? 'Checking tools...'
-      : streamStatus === 'tool_running'
-        ? 'Running tools...'
+    streamStatus === 'thinking'
+      ? 'Thinking...'
+      : streamStatus === 'checking_tools'
+        ? 'Checking tools...'
         : streamStatus === 'awaiting_safety_confirmation'
           ? '等待安全确认'
           : 'Thinking...';
@@ -1229,13 +1297,7 @@ export function ChatScreen() {
             {loading ? (
               <View style={[styles.bubbleWrap, styles.assistantBubbleWrap]}>
                 <View style={[styles.bubble, styles.assistantBubble]}>
-                  <Text style={styles.bubbleRole}>Flops (streaming)</Text>
-                  {streamStatus === 'checking_tools' ? (
-                    <Text style={styles.streamStatus}>Checking tools...</Text>
-                  ) : null}
-                  {streamStatus === 'tool_running' ? (
-                    <Text style={styles.streamStatus}>Running local tools...</Text>
-                  ) : null}
+                  <Text style={styles.bubbleRole}>Flops ({streamStatusBracketLabel})</Text>
                   {currentAssistantBlocks.length > 0 ? (
                     currentAssistantBlocks.map((block, bi) => {
                       const prevBlock = currentAssistantBlocks[bi - 1];
