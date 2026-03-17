@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -9,11 +9,15 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
+  Platform,
+  Vibration,
 } from 'react-native';
+import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withTiming,
+  runOnUI,
 } from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -31,6 +35,7 @@ import { shadowCircleButton, shadowFab, borderLight } from '../theme/shadows';
 import { HEADER_CIRCLE_BTN_SIZE, LIST_TOP_EXTRA, LIST_PADDING_BOTTOM_DEFAULT } from '../theme/layout';
 import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import { PullToRefreshRing } from '../components/PullToRefreshRing';
 import { MonthCalendarScroll } from '../components/MonthCalendar';
 import {
   filterTasksByStatusLevel,
@@ -40,6 +45,8 @@ import {
 
 const SHOW_TIME_KEY = 'showTimeLabels_projectDetail';
 const SHOW_PROJECT_KEY = 'showProjectName_projectDetail';
+const PULL_RING_THRESHOLD = 120;
+const MIN_REFRESH_DURATION_MS = 1000;
 
 /** 底部 Tab 胶囊内边距：胶囊左右留白、且 Tab 按钮 paddingVertical = 18 - 此值，改这里即可调整体松紧 */
 const TAB_CAPSULE_PADDING = 6;
@@ -244,6 +251,18 @@ export function ProjectDetailScreen() {
 
   const insets = useSafeAreaInsets();
   const [refreshing, setRefreshing] = useState(false);
+  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pullDistanceShared = useSharedValue(0);
+  const refreshingShared = useSharedValue(false);
+
+  useEffect(() => {
+    refreshingShared.value = refreshing;
+  }, [refreshing, refreshingShared]);
+
+  useEffect(() => () => {
+    if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+  }, []);
+
   const [filterVisible, setFilterVisible] = useState(false);
   const [showOnlyMine, setShowOnlyMine] = useState(false);
   const [statusLevel, setStatusLevel] = useState<StatusLevel>(1);
@@ -321,8 +340,26 @@ export function ProjectDetailScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadTasks(true), loadProjects(true)]);
-    setRefreshing(false);
+    if (Platform.OS === 'android') {
+      Vibration.vibrate(15);
+    } else {
+      ReactNativeHapticFeedback.trigger('impactHeavy', { enableVibrateFallback: true });
+    }
+    const startedAt = Date.now();
+    try {
+      await Promise.all([loadTasks(true), loadProjects(true)]);
+    } finally {
+      const elapsed = Date.now() - startedAt;
+      const remain = MIN_REFRESH_DURATION_MS - elapsed;
+      if (remain > 0) {
+        refreshTimeoutRef.current = setTimeout(() => {
+          refreshTimeoutRef.current = null;
+          setRefreshing(false);
+        }, remain);
+      } else {
+        setRefreshing(false);
+      }
+    }
   }, [loadTasks, loadProjects]);
 
   const onTaskPress = useCallback(
@@ -330,6 +367,21 @@ export function ProjectDetailScreen() {
       navigation.navigate('TaskDetail', { taskId });
     },
     [navigation]
+  );
+
+  const updatePullDistance = runOnUI((pull: number) => {
+    'worklet';
+    pullDistanceShared.value = pull;
+  });
+
+  const handleScroll = useCallback(
+    (e: { nativeEvent: { contentOffset: { y: number } } }) => {
+      if (Platform.OS !== 'ios') return;
+      const y = e.nativeEvent.contentOffset.y;
+      const pull = y <= 0 ? Math.min(-y, 120) : 0;
+      updatePullDistance(pull);
+    },
+    [updatePullDistance]
   );
 
   const onCreateTask = useCallback(() => {
@@ -344,12 +396,12 @@ export function ProjectDetailScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
         <BlurHeaderBackground style={StyleSheet.absoluteFill} topSolidHeight={insets.top + 8} />
         <TouchableOpacity style={styles.circleBtn} onPress={onBack} activeOpacity={0.7}>
           <Ionicons name="chevron-back" size={24} color="#374151" />
         </TouchableOpacity>
-        <View style={styles.topBarCenter}>
+        <View style={styles.topBarCenter} pointerEvents="none">
           <Text style={styles.topBarTitle} numberOfLines={1}>{title}</Text>
         </View>
         <TouchableOpacity
@@ -383,8 +435,16 @@ export function ProjectDetailScreen() {
                     onToggleCompletion={() => toggleTaskCompletion(item)}
                   />
                 )}
+                onScroll={Platform.OS === 'ios' ? handleScroll : undefined}
+                scrollEventThrottle={16}
                 refreshControl={
-                  <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+                  <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={onRefresh}
+                    colors={['#0f172a']}
+                    tintColor="#0f172a"
+                    progressViewOffset={Platform.OS === 'android' ? headerHeight + LIST_TOP_EXTRA : undefined}
+                  />
                 }
                 ListEmptyComponent={
                   <View style={styles.empty}>
@@ -421,6 +481,19 @@ export function ProjectDetailScreen() {
           </View>
         )}
       </View>
+
+      {Platform.OS === 'ios' && tab === 'list' ? (
+        <View style={[styles.refreshIndicatorFixed, { top: headerHeight }]} pointerEvents="none">
+          <PullToRefreshRing
+            pullDistance={pullDistanceShared}
+            refreshing={refreshingShared}
+            threshold={PULL_RING_THRESHOLD}
+            refreshingState={refreshing}
+            color="#0f172a"
+          />
+        </View>
+      ) : null}
+
       <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 12) + 4 }]}>
         <View style={styles.tabCapsule}>
           {([
@@ -495,6 +568,15 @@ const styles = StyleSheet.create({
     ...shadowCircleButton,
   },
   topBarCenter: { alignItems: 'center', flex: 1 },
+  refreshIndicatorFixed: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    zIndex: 9,
+  },
   topBarTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280' },

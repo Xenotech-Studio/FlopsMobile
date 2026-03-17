@@ -11,9 +11,12 @@ import {
   PanResponder,
   Modal,
   Pressable,
+  Platform,
+  Vibration,
   useWindowDimensions,
 } from 'react-native';
-import { Swipeable } from 'react-native-gesture-handler';
+import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
+import Animated, { useSharedValue, runOnUI } from 'react-native-reanimated';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -24,8 +27,10 @@ import { shadowFab, borderLight, shadowMenu, shadowCircleButton } from '../theme
 import { LIST_PADDING_BOTTOM_WITH_FOOTER, HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import { TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import { PullToRefreshRing } from '../components/PullToRefreshRing';
 
 const EDGE_WIDTH = 24;
+const PULL_RING_THRESHOLD = 125;
 const SWIPE_THRESHOLD = 60;
 
 function formatTime(isoString: string): string {
@@ -49,10 +54,29 @@ export function ConversationListScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
 
+  const pullDistanceShared = useSharedValue(0);
+  const refreshingShared = useSharedValue(false);
+
+  React.useEffect(() => {
+    refreshingShared.value = refreshing;
+  }, [refreshing, refreshingShared]);
+
+  const MIN_REFRESH_DURATION_MS = 1000;
+  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const loadList = useCallback(async (isRefresh = false) => {
     if (!session) return;
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
+    const startedAt = isRefresh ? Date.now() : 0;
+    if (isRefresh) {
+      setRefreshing(true);
+      if (Platform.OS === 'android') {
+        Vibration.vibrate(15);
+      } else {
+        ReactNativeHapticFeedback.trigger('impactHeavy', { enableVibrateFallback: true });
+      }
+    } else {
+      setLoading(true);
+    }
     try {
       const { conversations } = await listConversations(session);
       setList(conversations ?? []);
@@ -60,15 +84,45 @@ export function ConversationListScreen() {
       setList([]);
     } finally {
       setLoading(false);
-      setRefreshing(false);
+      if (isRefresh) {
+        const elapsed = Date.now() - startedAt;
+        const remain = MIN_REFRESH_DURATION_MS - elapsed;
+        if (remain > 0) {
+          refreshTimeoutRef.current = setTimeout(() => {
+            refreshTimeoutRef.current = null;
+            setRefreshing(false);
+          }, remain);
+        } else {
+          setRefreshing(false);
+        }
+      }
     }
   }, [session]);
+
+  React.useEffect(() => () => {
+    if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+  }, []);
 
   React.useEffect(() => {
     loadList();
   }, [loadList]);
 
   const onRefresh = useCallback(() => loadList(true), [loadList]);
+
+  const updatePullDistance = runOnUI((pull: number) => {
+    'worklet';
+    pullDistanceShared.value = pull;
+  });
+
+  const handleScroll = useCallback(
+    (e: { nativeEvent: { contentOffset: { y: number } } }) => {
+      if (Platform.OS !== 'ios') return;
+      const y = e.nativeEvent.contentOffset.y;
+      const pull = y <= 0 ? Math.min(-y, 120) : 0;
+      updatePullDistance(pull);
+    },
+    [updatePullDistance]
+  );
 
   const onPressItem = useCallback(
     (conv: ConversationListItem) => {
@@ -85,7 +139,6 @@ export function ConversationListScreen() {
     rootNav?.navigate('Chat', undefined);
   }, [rootNav]);
 
-  const swipeableRefs = useRef<Map<string, Swipeable | null>>(new Map());
   const gestureStartX = useRef(0);
   const leftEdgeOpenProfile = useRef(
     PanResponder.create({
@@ -106,7 +159,7 @@ export function ConversationListScreen() {
   ).current;
 
   const onDeleteConversation = useCallback(
-    async (conv: ConversationListItem) => {
+    (conv: ConversationListItem) => {
       if (!session) return;
       Alert.alert('删除对话', `确定要删除「${(conv.title && conv.title.trim()) || '新对话'}」吗？`, [
         { text: '取消', style: 'cancel' },
@@ -127,55 +180,26 @@ export function ConversationListScreen() {
     [session]
   );
 
-  const renderLeftActions = useCallback(() => (
-    <View style={styles.leftActions}>
-      <View style={styles.leftActionBtn}>
-        <Ionicons name="ellipsis-horizontal" size={20} color="#6b7280" />
-        <Text style={styles.leftActionText}>更多</Text>
-      </View>
-    </View>
-  ), []);
-
   if (!session) return null;
 
   const headerHeight = insets.top + 8 + 12 + HEADER_CIRCLE_BTN_SIZE;
 
   const renderItem = ({ item }: { item: ConversationListItem }) => (
-    <Swipeable
-      ref={(ref) => {
-        if (ref) swipeableRefs.current.set(item.id, ref);
-        else swipeableRefs.current.delete(item.id);
-      }}
-      renderLeftActions={renderLeftActions}
-      renderRightActions={() => (
-        <TouchableOpacity
-          style={styles.rightActions}
-          onPress={() => onDeleteConversation(item)}
-          activeOpacity={0.9}
-        >
-          <Ionicons name="trash-outline" size={22} color="#fff" />
-          <Text style={styles.rightActionText}>删除</Text>
-        </TouchableOpacity>
-      )}
-      friction={2}
-      rightThreshold={80}
-      leftThreshold={80}
+    <TouchableOpacity
+      style={styles.item}
+      onPress={() => onPressItem(item)}
+      onLongPress={() => onDeleteConversation(item)}
+      activeOpacity={0.7}
     >
-      <TouchableOpacity
-        style={styles.item}
-        onPress={() => onPressItem(item)}
-        activeOpacity={0.7}
-      >
-        <Text style={styles.itemTitle} numberOfLines={1}>
-          {(item.title && item.title.trim()) || '新对话'}
+      <Text style={styles.itemTitle} numberOfLines={1}>
+        {(item.title && item.title.trim()) || '新对话'}
+      </Text>
+      {item.updated_at ? (
+        <Text style={styles.itemMeta} numberOfLines={1}>
+          {formatTime(item.updated_at)}
         </Text>
-        {item.updated_at ? (
-          <Text style={styles.itemMeta} numberOfLines={1}>
-            {formatTime(item.updated_at)}
-          </Text>
-        ) : null}
-      </TouchableOpacity>
-    </Swipeable>
+      ) : null}
+    </TouchableOpacity>
   );
 
   return (
@@ -185,7 +209,7 @@ export function ConversationListScreen() {
         {...leftEdgeOpenProfile.panHandlers}
         pointerEvents="box-only"
       />
-      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
         <BlurHeaderBackground style={StyleSheet.absoluteFill} topSolidHeight={insets.top + 8} />
         <TouchableOpacity
           style={styles.circleBtn}
@@ -194,7 +218,7 @@ export function ConversationListScreen() {
         >
           <Ionicons name="person-outline" size={22} color="#374151" />
         </TouchableOpacity>
-        <View style={styles.topBarCenter}>
+        <View style={styles.topBarCenter} pointerEvents="none">
           <Text style={styles.topBarTitle}>对话</Text>
         </View>
         <TouchableOpacity
@@ -243,13 +267,17 @@ export function ConversationListScreen() {
         </View>
       ) : (
         <FlatList
+          style={styles.list}
           data={list}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
-          contentContainerStyle={[
-            list.length === 0 ? styles.emptyList : styles.listContent,
-            { paddingTop: headerHeight },
-          ]}
+          onScroll={Platform.OS === 'ios' ? handleScroll : undefined}
+          scrollEventThrottle={16}
+          contentContainerStyle={
+            list.length === 0
+              ? [styles.emptyList, { paddingTop: headerHeight, paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER }]
+              : [styles.listContent, { paddingTop: headerHeight }]
+          }
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
               <Ionicons name="chatbubbles-outline" size={64} color="#d1d5db" />
@@ -257,11 +285,33 @@ export function ConversationListScreen() {
               <Text style={styles.emptySubtitle}>点击下方「新对话」开始</Text>
             </View>
           }
+          ListFooterComponent={
+            list.length > 0 ? (
+              <Text style={styles.footerHint}>下拉刷新 · 长按删除</Text>
+            ) : null
+          }
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#0f172a']} />
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#0f172a']}
+              tintColor="#0f172a"
+              progressViewOffset={Platform.OS === 'android' ? headerHeight : undefined}
+            />
           }
         />
       )}
+      {Platform.OS === 'ios' ? (
+        <View style={[styles.refreshIndicatorFixed, { top: headerHeight }]} pointerEvents="none">
+          <PullToRefreshRing
+            pullDistance={pullDistanceShared}
+            refreshing={refreshingShared}
+            threshold={PULL_RING_THRESHOLD}
+            refreshingState={refreshing}
+            color="#0f172a"
+          />
+        </View>
+      ) : null}
       <TouchableOpacity style={styles.fab} onPress={onNewConversation} activeOpacity={0.85}>
         <Ionicons name="add" size={26} color="#111827" />
       </TouchableOpacity>
@@ -320,6 +370,7 @@ const styles = StyleSheet.create({
   menuItemText: { fontSize: 16, color: '#111827' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 12, fontSize: 15, color: '#6b7280' },
+  list: { flex: 1 },
   listContent: { paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
   emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
   emptyWrap: {
@@ -330,29 +381,6 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { fontSize: 18, fontWeight: '600', color: '#374151', marginTop: 16 },
   emptySubtitle: { fontSize: 14, color: '#9ca3af', marginTop: 8 },
-  leftActions: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    backgroundColor: '#f3f4f6',
-    justifyContent: 'flex-end',
-    minWidth: 88,
-  },
-  leftActionBtn: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    gap: 4,
-  },
-  leftActionText: { fontSize: 14, color: '#6b7280' },
-  rightActions: {
-    backgroundColor: '#dc2626',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    minWidth: 88,
-    gap: 4,
-  },
-  rightActionText: { fontSize: 14, color: '#fff', fontWeight: '600' },
   item: {
     paddingHorizontal: 20,
     paddingVertical: 14,
@@ -361,6 +389,16 @@ const styles = StyleSheet.create({
   },
   itemTitle: { fontSize: 16, fontWeight: '600', color: '#111827' },
   itemMeta: { fontSize: 13, color: '#6b7280', marginTop: 4 },
+  footerHint: { fontSize: 12, color: '#9ca3af', textAlign: 'center', paddingVertical: 16 },
+  refreshIndicatorFixed: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    zIndex: 9,
+  },
   fab: {
     position: 'absolute',
     right: 20,

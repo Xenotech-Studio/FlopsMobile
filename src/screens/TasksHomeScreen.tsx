@@ -8,7 +8,10 @@ import {
   ActivityIndicator,
   Platform,
   PanResponder,
+  Vibration,
 } from 'react-native';
+import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
+import Animated, { useSharedValue, runOnUI } from 'react-native-reanimated';
 import DraggableFlatList from 'react-native-draggable-flatlist';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -26,9 +29,12 @@ import { shadowCircleButton, shadowFab, shadowSoft, borderLight } from '../theme
 import { HEADER_CIRCLE_BTN_SIZE, LIST_TOP_EXTRA, LIST_PADDING_BOTTOM_WITH_FOOTER } from '../theme/layout';
 import { TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import { PullToRefreshRing } from '../components/PullToRefreshRing';
 import { filterTasksByStatusLevel } from '../utils/taskFilters';
 
 const EDGE_WIDTH = 24;
+const PULL_RING_THRESHOLD = 120;
+const MIN_REFRESH_DURATION_MS = 1000;
 const SWIPE_THRESHOLD = 60;
 const STATUS_KEY = 'statusLevel_todayTasks';
 const SHOW_TIME_KEY = 'showTimeLabels_todayTasks';
@@ -65,6 +71,18 @@ export function TasksHomeScreen() {
   } = useTask();
 
   const [refreshing, setRefreshing] = useState(false);
+  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pullDistanceShared = useSharedValue(0);
+  const refreshingShared = useSharedValue(false);
+
+  React.useEffect(() => {
+    refreshingShared.value = refreshing;
+  }, [refreshing, refreshingShared]);
+
+  React.useEffect(() => () => {
+    if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+  }, []);
+
   const [filterVisible, setFilterVisible] = useState(false);
   const [showProjectSelect, setShowProjectSelect] = useState(false);
   const [statusLevel, setStatusLevel] = useState<StatusLevel>(3);
@@ -113,9 +131,27 @@ export function TasksHomeScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    if (Platform.OS === 'android') {
+      Vibration.vibrate(15);
+    } else {
+      ReactNativeHapticFeedback.trigger('impactHeavy', { enableVibrateFallback: true });
+    }
     clearError();
-    await Promise.all([loadTasks(true), loadProjects(true)]);
-    setRefreshing(false);
+    const startedAt = Date.now();
+    try {
+      await Promise.all([loadTasks(true), loadProjects(true)]);
+    } finally {
+      const elapsed = Date.now() - startedAt;
+      const remain = MIN_REFRESH_DURATION_MS - elapsed;
+      if (remain > 0) {
+        refreshTimeoutRef.current = setTimeout(() => {
+          refreshTimeoutRef.current = null;
+          setRefreshing(false);
+        }, remain);
+      } else {
+        setRefreshing(false);
+      }
+    }
   }, [loadTasks, loadProjects, clearError]);
 
   useEffect(() => {
@@ -157,6 +193,21 @@ export function TasksHomeScreen() {
     navigation.navigate('TasksCalendar');
   }, [navigation]);
 
+  const updatePullDistance = runOnUI((pull: number) => {
+    'worklet';
+    pullDistanceShared.value = pull;
+  });
+
+  const handleScroll = useCallback(
+    (e: { nativeEvent: { contentOffset: { y: number } } }) => {
+      if (Platform.OS !== 'ios') return;
+      const y = e.nativeEvent.contentOffset.y;
+      const pull = y <= 0 ? Math.min(-y, 120) : 0;
+      updatePullDistance(pull);
+    },
+    [updatePullDistance]
+  );
+
   const gestureStartX = useRef(0);
   const leftEdgeOpenProjectList = useRef(
     PanResponder.create({
@@ -196,7 +247,7 @@ export function TasksHomeScreen() {
         pointerEvents="box-only"
       />
       {/* 顶部栏：毛玻璃 + 渐变，绝对定位；列表内容在其下滚动 */}
-      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
         <BlurHeaderBackground style={StyleSheet.absoluteFill} topSolidHeight={insets.top + 8} />
         <TouchableOpacity
           style={styles.circleBtn}
@@ -205,7 +256,7 @@ export function TasksHomeScreen() {
         >
           <Ionicons name="folder-outline" size={24} color="#374151" />
         </TouchableOpacity>
-        <View style={styles.topBarCenter}>
+        <View style={styles.topBarCenter} pointerEvents="none">
           <Text style={styles.todayTitle}>{formatTodayDate(todayDate)}</Text>
           <Text style={styles.todaySubtitle}>今日 {filteredTodayTasks.length} 个任务</Text>
         </View>
@@ -233,7 +284,9 @@ export function TasksHomeScreen() {
             </View>
           </View>
         ) : (
-          <DraggableFlatList<TaskItem>
+          <View style={styles.list}>
+            <DraggableFlatList<TaskItem>
+            containerStyle={styles.list}
             data={localTaskOrder}
             keyExtractor={(item) => item.id}
             onDragEnd={({ data }) => setLocalTaskOrder(data)}
@@ -248,8 +301,16 @@ export function TasksHomeScreen() {
                 drag={drag}
               />
             )}
+            onScroll={Platform.OS === 'ios' ? handleScroll : undefined}
+            scrollEventThrottle={16}
             refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                colors={['#0f172a']}
+                tintColor="#0f172a"
+                progressViewOffset={Platform.OS === 'android' ? headerHeight + LIST_TOP_EXTRA : undefined}
+              />
             }
             ListEmptyComponent={
               <View style={styles.empty}>
@@ -261,9 +322,22 @@ export function TasksHomeScreen() {
               localTaskOrder.length === 0 ? styles.emptyList : styles.listContent,
               { paddingTop: headerHeight + LIST_TOP_EXTRA },
             ]}
-          />
+            />
+          </View>
         )}
       </View>
+
+      {Platform.OS === 'ios' ? (
+        <View style={[styles.refreshIndicatorFixed, { top: headerHeight }]} pointerEvents="none">
+          <PullToRefreshRing
+            pullDistance={pullDistanceShared}
+            refreshing={refreshingShared}
+            threshold={PULL_RING_THRESHOLD}
+            refreshingState={refreshing}
+            color="#0f172a"
+          />
+        </View>
+      ) : null}
 
       <View style={[styles.footer, Platform.OS === 'ios' && { paddingBottom: 28 }]}>
         <TouchableOpacity style={styles.calendarBtn} onPress={onCalendarPress} activeOpacity={0.7}>
@@ -331,6 +405,7 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
   mainContent: { flex: 1 },
+  list: { flex: 1 },
   circleBtn: {
     width: HEADER_CIRCLE_BTN_SIZE,
     height: HEADER_CIRCLE_BTN_SIZE,
@@ -341,6 +416,15 @@ const styles = StyleSheet.create({
     ...shadowCircleButton,
   },
   topBarCenter: { alignItems: 'center', flex: 1 },
+  refreshIndicatorFixed: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    zIndex: 9,
+  },
   todayTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
   todaySubtitle: { fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280', marginTop: 4 },
   errorBar: { backgroundColor: '#fef2f2', padding: 12 },
