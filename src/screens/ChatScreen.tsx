@@ -34,6 +34,7 @@ import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import { TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { shadowCircleButton, shadowFab, shadowSoft, borderLight } from '../theme/shadows';
+import { mergeToolResultChunk } from '../utils/toolResultPatch';
 
 type Message =
   | { role: 'user'; content: string }
@@ -342,20 +343,13 @@ export function ChatScreen() {
         }
         if (event.type === 'tool_result_chunk') {
           const idx = event.index ?? 0;
-          const stdoutAppend = event.stdout_append;
-          const setObj = event.set;
           const i = findLastToolBlockByIndex(idx);
           if (i >= 0 && localBlocks[i].type === 'tool') {
-            let result: Record<string, unknown> =
-              localBlocks[i].result != null && typeof localBlocks[i].result === 'object'
-                ? { ...(localBlocks[i].result as Record<string, unknown>) }
-                : {};
-            if (typeof stdoutAppend === 'string') {
-              result.stdout = String(result.stdout || '') + stdoutAppend;
-            }
-            if (setObj != null && typeof setObj === 'object') {
-              result = { ...result, ...setObj };
-            }
+            const result = mergeToolResultChunk(localBlocks[i].result, {
+              patches: (event as { patches?: unknown }).patches,
+              stdout_append: (event as { stdout_append?: string }).stdout_append,
+              set: (event as { set?: Record<string, unknown> }).set,
+            });
             localBlocks[i] = { ...localBlocks[i], result };
             syncBlocks();
           }
@@ -632,20 +626,13 @@ export function ChatScreen() {
         }
         if (event.type === 'tool_result_chunk') {
           const idx = event.index ?? 0;
-          const stdoutAppend = event.stdout_append;
-          const setObj = event.set;
           const i = findLastToolBlockByIndex(idx);
           if (i >= 0 && localBlocks[i].type === 'tool') {
-            let result: Record<string, unknown> =
-              localBlocks[i].result != null && typeof localBlocks[i].result === 'object'
-                ? { ...(localBlocks[i].result as Record<string, unknown>) }
-                : {};
-            if (typeof stdoutAppend === 'string') {
-              result.stdout = String(result.stdout || '') + stdoutAppend;
-            }
-            if (setObj != null && typeof setObj === 'object') {
-              result = { ...result, ...setObj };
-            }
+            const result = mergeToolResultChunk(localBlocks[i].result, {
+              patches: (event as { patches?: unknown }).patches,
+              stdout_append: (event as { stdout_append?: string }).stdout_append,
+              set: (event as { set?: Record<string, unknown> }).set,
+            });
             localBlocks[i] = { ...localBlocks[i], result };
             syncBlocks();
           }
