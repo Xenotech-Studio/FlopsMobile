@@ -50,6 +50,7 @@ import {
   getReadPagesListSortBucket,
   tryParsePartialReadingStream,
 } from '../utils/toolCardParsers';
+import { parseSearchEngineBlockArgs } from '../utils/searchEngineParseArgs';
 import { ReadPagesDetailSheet } from '../components/ReadPagesDetailSheet';
 
 type Message =
@@ -79,6 +80,28 @@ type StreamBlock =
 const STREAM_TIMEOUT_MS = 300000;
 
 const TOOL_PACKAGE_NAV_NAMES = ['open_tool_packages', 'close_tool_packages'];
+
+const SEARCH_HEADER_QUERIES_MAX = 5;
+const SEARCH_COLLAPSED_QUERIES_MAX_LEN = 120;
+
+function formatSearchHeaderQueries(queries: string[]): string {
+  const n = queries.length;
+  if (n === 0) return 'Searching 0 queries';
+  if (n <= SEARCH_HEADER_QUERIES_MAX) {
+    return `Searching ${n} ${n === 1 ? 'query' : 'queries'}: ${queries.join(', ')}`;
+  }
+  const head = queries.slice(0, SEARCH_HEADER_QUERIES_MAX).join(', ');
+  return `Searching ${n} queries: ${head}, …`;
+}
+
+function formatSearchCollapsedTail(queries: string[]): string {
+  if (!queries.length) return '0 queries';
+  const joined = queries.join(', ');
+  if (joined.length <= SEARCH_COLLAPSED_QUERIES_MAX_LEN) {
+    return `${queries.length} queries: ${joined}`;
+  }
+  return `${queries.length} queries: ${joined.slice(0, SEARCH_COLLAPSED_QUERIES_MAX_LEN - 1)}…`;
+}
 
 function getToolPackageNavLabel(name: string, argsStr: string | undefined): string {
   let paths: string[] = [];
@@ -213,6 +236,8 @@ export function ChatScreen() {
   const [submittingReviewId, setSubmittingReviewId] = useState('');
   /** 工具卡片展示状态：key -> 'collapsed' | 'preview' | 'full' */
   const [toolCardViewMode, setToolCardViewMode] = useState<Record<string, 'collapsed' | 'preview' | 'full'>>({});
+  /** search_engine：已展开的 query 文案（与 Web expandedQueries Set 一致） */
+  const [searchEngineExpandedByCard, setSearchEngineExpandedByCard] = useState<Record<string, string[]>>({});
   /** local_exec_command 执行中时每秒 +1，用于刷新耗时显示 */
   const [runningExecTick, setRunningExecTick] = useState(0);
   /** read_pages 点击某条条目后打开的详情 Sheet（与 Task 页筛选同款 BottomSheetModal） */
@@ -1109,7 +1134,16 @@ export function ChatScreen() {
     setToolCardViewMode((prev) => ({ ...prev, [cardKey]: mode }));
   }, []);
 
-  /** 与 Web/Desktop 一致：read_pages、文件卡片、exec 默认半展开，其余折叠 */
+  const toggleSearchEngineQuery = useCallback((cardKey: string, q: string) => {
+    setSearchEngineExpandedByCard((prev) => {
+      const cur = prev[cardKey] ?? [];
+      const has = cur.includes(q);
+      const nextList = has ? cur.filter((x) => x !== q) : [...cur, q];
+      return { ...prev, [cardKey]: nextList };
+    });
+  }, []);
+
+  /** 与 Web/Desktop 一致：read_pages、文件卡片、exec 默认半展开；search_engine 等默认折叠 */
   function getDefaultToolCardViewMode(toolName: string): 'collapsed' | 'preview' {
     if (
       toolName === 'read_pages' ||
@@ -1118,6 +1152,7 @@ export function ChatScreen() {
       toolName === 'local_exec_command'
     )
       return 'preview';
+    /* search_engine 等与 Desktop getDefaultToolCardViewMode 一致，默认 collapsed */
     return 'collapsed';
   }
 
@@ -1941,6 +1976,231 @@ export function ChatScreen() {
     );
   }
 
+  /** 与 FlopsDesktop SearchEngineCard.jsx 1:1（无「完全展开」行，默认折叠） */
+  function renderSearchEngineToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
+    const parsed = parseSearchEngineBlockArgs(block);
+    const queries = parsed.queries || [];
+    const searchGoal = parsed.search_goal || '';
+    const result =
+      block.result && typeof block.result === 'object' && !Array.isArray(block.result)
+        ? (block.result as Record<string, unknown>)
+        : null;
+    const mergedResults = Array.isArray(result?.results) ? (result.results as Record<string, unknown>[]) : [];
+    const resultsByQuery =
+      result?.results_by_query && typeof result.results_by_query === 'object' && !Array.isArray(result.results_by_query)
+        ? (result.results_by_query as Record<string, unknown[]>)
+        : null;
+    const isRunning = block.status === 'running' || block.status === 'pending';
+    const errStr = result && typeof result.error === 'string' ? result.error : '';
+    /** 与 Web：`result && !result.success && result.error`（success 未定义时仍视为失败提示） */
+    const hasError = Boolean(result && errStr && result.success !== true);
+
+    const headerMain = (() => {
+      const n = queries.length;
+      if (n === 0 && block.status === 'pending') return 'Searching: …';
+      if (n === 0) return 'Searching 0 queries';
+      return formatSearchHeaderQueries(queries);
+    })();
+
+    const collapsedTail =
+      queries.length > 0 ? formatSearchCollapsedTail(queries) : result?.success === false ? '失败' : '…';
+
+    const expandedQueries = searchEngineExpandedByCard[key] ?? [];
+
+    const pickSearchItemFields = (item: Record<string, unknown>) => {
+      const title = String(item?.title ?? item?.name ?? '')
+        .trim()
+        .replace(/\s+/g, ' ') || '（无标题）';
+      const url = String(item?.url ?? item?.link ?? '').trim();
+      const desc = String(item?.desc ?? item?.description ?? '').trim();
+      return { title, url, desc };
+    };
+
+    const renderHeroResult = (item: Record<string, unknown>, index: number) => {
+      const { title, url, desc } = pickSearchItemFields(item);
+      return (
+        <View key={index} style={styles.searchEngineHeroItem}>
+          {url ? (
+            <Pressable onPress={() => Linking.openURL(url)}>
+              <Text style={styles.searchEngineHeroLink} numberOfLines={2}>
+                {title}
+              </Text>
+            </Pressable>
+          ) : (
+            <Text style={styles.searchEngineHeroTitle} numberOfLines={2}>
+              {title}
+            </Text>
+          )}
+          {desc ? (
+            <Text style={styles.searchEngineHeroDesc} numberOfLines={2}>
+              {desc}
+            </Text>
+          ) : null}
+        </View>
+      );
+    };
+
+    const renderPerQueryResult = (item: Record<string, unknown>, index: number) => {
+      const { title, url, desc } = pickSearchItemFields(item);
+      return (
+        <View key={index} style={styles.searchEnginePerQueryItem}>
+          <Text style={styles.searchEnginePerQueryIndex}>{index + 1}.</Text>
+          <View style={styles.searchEnginePerQueryMain}>
+            {url ? (
+              <Pressable onPress={() => Linking.openURL(url)}>
+                <Text style={styles.searchEnginePerQueryLink}>{title}</Text>
+              </Pressable>
+            ) : (
+              <Text style={styles.searchEnginePerQueryTitle}>{title}</Text>
+            )}
+            {desc ? <Text style={styles.searchEnginePerQueryDesc}>{desc}</Text> : null}
+          </View>
+        </View>
+      );
+    };
+
+    const isAwaiting = block.status === 'awaiting_confirmation' && Boolean(block.review_id);
+    const isSubmitting = submittingReviewId && submittingReviewId === block.review_id;
+
+    if (viewMode === 'collapsed') {
+      return (
+        <Pressable
+          key={key}
+          style={({ pressed }) => [styles.toolCard, styles.toolCardCollapsed, pressed && styles.toolCardCollapsedPressed]}
+          onPress={() => setToolCardMode(key, 'preview')}
+          accessibilityLabel="点击展开"
+        >
+          <Text style={styles.toolCardCollapsedName} numberOfLines={1}>
+            Searching
+          </Text>
+          <Text style={[styles.toolCardCollapsedTail, { flex: 1 }]} numberOfLines={1} ellipsizeMode="tail">
+            {collapsedTail}
+          </Text>
+          <View style={styles.toolCardBadgeWrap}>
+            <Text style={[styles.toolCardBadge, block.status === 'completed' ? styles.toolCardBadgeSuccess : undefined]}>
+              {getToolStatusLabel(block.status)}
+            </Text>
+          </View>
+        </Pressable>
+      );
+    }
+
+    return (
+      <View key={key} style={styles.toolCard}>
+        <Pressable
+          onPress={() => setToolCardMode(key, 'collapsed')}
+          style={({ pressed }) => (pressed ? styles.toolCardContentPressed : undefined)}
+          accessibilityLabel="点击收起"
+        >
+          <View style={styles.toolCardHeaderRow}>
+            <View style={styles.toolCardHeaderMain}>
+              <Text style={styles.searchEngineHeaderMain} selectable>
+                {headerMain}
+              </Text>
+            </View>
+            <View style={styles.toolCardBadgeWrap}>
+              <Text style={[styles.toolCardBadge, block.status === 'completed' ? styles.toolCardBadgeSuccess : undefined]}>
+                {getToolStatusLabel(block.status)}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.searchEngineWrap}>
+            {queries.length > 0 ? (
+              <View style={styles.searchEngineQueriesSection}>
+                <View style={styles.searchEngineQueriesLine}>
+                  <Text style={styles.searchEngineQueriesPrefix}>搜索了</Text>
+                  {queries.map((q, qi) => {
+                    const open = expandedQueries.includes(q);
+                    return (
+                      <Pressable
+                        key={`${qi}-${q}`}
+                        accessibilityRole="button"
+                        accessibilityState={{ expanded: open }}
+                        onPress={() => toggleSearchEngineQuery(key, q)}
+                      >
+                        <Text
+                          style={[styles.searchEngineQueryChip, open && styles.searchEngineQueryChipOpen]}
+                          suppressHighlighting
+                        >
+                          {q}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                {queries.map((q, qi) => {
+                  if (!expandedQueries.includes(q)) return null;
+                  const raw = resultsByQuery && Array.isArray(resultsByQuery[q]) ? resultsByQuery[q] : [];
+                  const results = raw.filter((x): x is Record<string, unknown> => x != null && typeof x === 'object');
+                  if (results.length === 0) return null;
+                  return (
+                    <View key={`ex-${qi}-${q}`} style={styles.searchEngineQueryExpanded}>
+                      <View style={styles.searchEnginePerQueryList}>
+                        {results.map((item, i) => renderPerQueryResult(item, i))}
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
+
+            <View style={styles.searchEngineHero}>
+              {hasError ? (
+                <Text style={styles.searchEngineError}>{errStr}</Text>
+              ) : mergedResults.length > 0 ? (
+                <>
+                  <View style={styles.searchEngineHeroHead}>
+                    {searchGoal ? (
+                      <Text style={styles.searchEngineGoalInline} numberOfLines={1}>
+                        精选目标：{searchGoal}
+                      </Text>
+                    ) : null}
+                    {searchGoal ? <Text style={styles.searchEngineHeroSep}>·</Text> : null}
+                    <Text style={styles.searchEngineHeroLabelInline}>AI 精选 {mergedResults.length} 条</Text>
+                  </View>
+                  <View style={styles.searchEngineHeroGrid}>
+                    {mergedResults.map((item, i) => renderHeroResult(item, i))}
+                  </View>
+                </>
+              ) : isRunning ? (
+                <Text style={styles.searchEngineMuted}>搜索中…</Text>
+              ) : (
+                <Text style={styles.searchEngineMuted}>暂无精选结果</Text>
+              )}
+            </View>
+          </View>
+
+          {isAwaiting && block.review_id ? (
+            <View style={styles.safetyActions}>
+              <TouchableOpacity
+                style={styles.safetyBtn}
+                onPress={() => handleSafetyDecision(block.review_id!, 'reject')}
+                disabled={!!isSubmitting}
+              >
+                <Text style={styles.safetyBtnText}>拒绝</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.safetyBtn, styles.safetyBtnPrimary]}
+                onPress={() => handleSafetyDecision(block.review_id!, 'approve')}
+                disabled={!!isSubmitting}
+              >
+                <Text style={styles.safetyBtnPrimaryText}>{isSubmitting ? '提交中...' : '确认执行'}</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {block.streaming_content ? (
+            <Text style={[styles.toolCardBody, styles.toolCardCodeText]} numberOfLines={15} selectable>
+              {block.streaming_content}
+            </Text>
+          ) : null}
+        </Pressable>
+      </View>
+    );
+  }
+
   const canGoBack = navigation.canGoBack();
   const leftEdgePan = useRef(
     PanResponder.create({
@@ -1979,6 +2239,9 @@ export function ChatScreen() {
     }
     if (block.tool_name === 'local_exec_command') {
       return renderExecCommandToolCard(block, key);
+    }
+    if (block.tool_name === 'search_engine') {
+      return renderSearchEngineToolCard(block, key);
     }
 
     const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
@@ -2538,6 +2801,161 @@ const styles = StyleSheet.create({
   toolCardHeaderFilenamePlaceholder: { fontSize: 13, fontWeight: '600', color: '#737373' },
   toolCardHeaderEditSummary: { fontSize: 11, fontWeight: '500', color: '#525252', marginTop: 2 },
   toolCardBodyMuted: { fontSize: 12, color: '#737373', fontStyle: 'italic', marginTop: 6 },
+  /** search_engine：与 FlopsDesktop search-engine-card.css 对齐 */
+  searchEngineHeaderMain: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1f2937',
+    lineHeight: 20,
+  },
+  searchEngineWrap: {
+    flexDirection: 'column',
+    gap: 10,
+  },
+  searchEngineQueriesSection: {},
+  searchEngineQueriesLine: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'baseline',
+    gap: 6,
+    rowGap: 6,
+  },
+  searchEngineQueriesPrefix: {
+    fontSize: 12,
+    color: '#a3a3a3',
+    marginRight: 4,
+  },
+  searchEngineQueryChip: {
+    fontSize: 12,
+    color: '#737373',
+    textDecorationLine: 'underline',
+  },
+  searchEngineQueryChipOpen: {
+    color: '#404040',
+  },
+  searchEngineQueryExpanded: {
+    marginTop: 8,
+    paddingLeft: 12,
+    borderLeftWidth: 2,
+    borderLeftColor: '#eee',
+  },
+  searchEnginePerQueryList: {
+    marginTop: 6,
+    paddingTop: 6,
+    paddingLeft: 12,
+    paddingRight: 8,
+    paddingBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+  },
+  searchEnginePerQueryItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    paddingVertical: 4,
+  },
+  searchEnginePerQueryIndex: {
+    fontSize: 11,
+    color: '#a3a3a3',
+    lineHeight: 18,
+    minWidth: 18,
+  },
+  searchEnginePerQueryMain: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  searchEnginePerQueryLink: {
+    fontSize: 12,
+    fontWeight: '400',
+    color: '#171717',
+    flexWrap: 'wrap',
+  },
+  searchEnginePerQueryTitle: {
+    fontSize: 12,
+    fontWeight: '400',
+    color: '#171717',
+  },
+  searchEnginePerQueryDesc: {
+    fontSize: 12,
+    color: '#737373',
+    lineHeight: 17,
+    marginTop: 2,
+  },
+  searchEngineHero: {
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+  },
+  searchEngineHeroHead: {
+    flexDirection: 'row',
+    flexWrap: 'nowrap',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+    minWidth: 0,
+    overflow: 'hidden',
+  },
+  searchEngineGoalInline: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 12,
+    lineHeight: 17,
+    color: '#737373',
+  },
+  searchEngineHeroSep: {
+    flexShrink: 0,
+    fontSize: 12,
+    color: '#d4d4d4',
+  },
+  searchEngineHeroLabelInline: {
+    flexShrink: 0,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#525252',
+    letterSpacing: 0.3,
+  },
+  searchEngineHeroGrid: {
+    gap: 10,
+  },
+  searchEngineHeroItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#eaeaea',
+    minWidth: 0,
+    gap: 2,
+  },
+  searchEngineHeroLink: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#171717',
+    lineHeight: 19,
+  },
+  searchEngineHeroTitle: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#171717',
+    lineHeight: 19,
+  },
+  searchEngineHeroDesc: {
+    fontSize: 12,
+    color: '#737373',
+    lineHeight: 17,
+    marginTop: 2,
+  },
+  searchEngineMuted: {
+    fontSize: 13,
+    color: '#737373',
+    margin: 0,
+  },
+  searchEngineError: {
+    fontSize: 13,
+    color: '#b91c1c',
+    margin: 0,
+  },
   /** 与 Web `.tool-card-write-preview` 半折叠区域一致 */
   fileToolPreviewFullWrap: { marginTop: 8 },
   fileToolPreviewClip: {
