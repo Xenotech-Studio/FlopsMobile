@@ -21,7 +21,7 @@ export type ChatStreamEvent =
   | { type: 'tool_start'; tool_name: string; arguments?: string; index?: number }
   | { type: 'tool_stream'; tool_name: string; chunk: string }
   | { type: 'tool_result'; tool_name: string; result: unknown; index?: number }
-  | { type: 'tool_result_chunk'; index: number; stdout_append?: string; set?: Record<string, unknown> }
+  | { type: 'tool_result_chunk'; index: number; stdout_append?: string; set?: Record<string, unknown>; patches?: unknown; readings_by_url?: Record<string, unknown> }
   | { type: 'safety_confirmation_required'; tool_name: string; review_id: string; command?: string; cwd?: string; arguments?: string; review?: Record<string, unknown>; conversation_id?: string }
   | { type: 'safety_review'; tool_name: string; review: Record<string, unknown> }
   | { type: 'step_complete' }
@@ -312,6 +312,16 @@ export async function streamChat(
             onEvent(parsed);
             if ('done' in parsed && parsed.done === true) return;
             if ('type' in parsed && parsed.type === 'cancelled') return;
+            // 让每个 tool_result_chunk 单独一帧渲染，等下一帧再处理下一条，便于 UI 逐段绘制
+            if (parsed.type === 'tool_result_chunk') {
+              await new Promise<void>((r) => {
+                if (typeof requestAnimationFrame !== 'undefined') {
+                  requestAnimationFrame(() => setTimeout(r, 0));
+                } else {
+                  setTimeout(r, 0);
+                }
+              });
+            }
           } catch {
             // 忽略单帧解析错误
           }

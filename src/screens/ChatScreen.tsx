@@ -7,11 +7,13 @@ import {
   Pressable,
   StyleSheet,
   ScrollView,
-  Keyboard,
   KeyboardAvoidingView,
   Platform,
-  ActivityIndicator,
   PanResponder,
+  Linking,
+  ActivityIndicator,
+  Image,
+  Animated,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -33,15 +35,29 @@ import { MarkdownContent } from '../components/MarkdownContent';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import { TASK_FONT_SIZE_TITLE } from '../theme/typography';
-import { shadowCircleButton, shadowFab, shadowSoft, borderLight } from '../theme/shadows';
+import { shadowCircleButton, shadowFab, shadowSoft } from '../theme/shadows';
 import { mergeToolResultChunk } from '../utils/toolResultPatch';
+import { ansiToSegments, stripAnsi } from '../utils/ansiToSegments';
+import {
+  parseExecCommandArgs,
+  parseFileToolArgs,
+  parseReadPagesBlockArgs,
+  readPagesResultEntryCount,
+  readPagesFinishedCount,
+  readPagesSuccessStats,
+  readPagesReadingEntries,
+  decodeUrlPctForDisplay,
+  getReadPagesListSortBucket,
+  tryParsePartialReadingStream,
+} from '../utils/toolCardParsers';
+import { ReadPagesDetailSheet } from '../components/ReadPagesDetailSheet';
 
 type Message =
   | { role: 'user'; content: string }
   | { role: 'assistant'; content: string; blocks?: StreamBlock[] }
   | { role: 'error'; content: string };
 
-type ToolResult = { stdout?: string; error?: string; success?: boolean };
+type ToolResult = { stdout?: string; stderr?: string; error?: string; success?: boolean; exit_code?: number };
 
 type StreamBlock =
   | { type: 'text'; content: string }
@@ -149,6 +165,27 @@ function coalesceAssistantTurn(messages: ConversationMessage[]): Message | null 
 
 type ChatRouteParams = RootStackParamList['Chat'];
 
+/** Header 底部的 loading 条（与 Web flops-read-pages-card-header-loadbar 一致） */
+function ReadPagesHeaderLoadBar() {
+  const translateX = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(translateX, { toValue: 1, duration: 1150, useNativeDriver: true }),
+        Animated.timing(translateX, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [translateX]);
+  const slide = translateX.interpolate({ inputRange: [0, 1], outputRange: [-60, 160] });
+  return (
+    <View style={styles.readPagesHeaderLoadBarTrack}>
+      <Animated.View style={[styles.readPagesHeaderLoadBarBar, { transform: [{ translateX: slide }] }]} />
+    </View>
+  );
+}
+
 export function ChatScreen() {
   const { session } = useSession();
   const insets = useSafeAreaInsets();
@@ -176,8 +213,19 @@ export function ChatScreen() {
   const [submittingReviewId, setSubmittingReviewId] = useState('');
   /** 工具卡片展示状态：key -> 'collapsed' | 'preview' | 'full' */
   const [toolCardViewMode, setToolCardViewMode] = useState<Record<string, 'collapsed' | 'preview' | 'full'>>({});
-  const [layoutResetKey, setLayoutResetKey] = useState(0);
+  /** local_exec_command 执行中时每秒 +1，用于刷新耗时显示 */
+  const [runningExecTick, setRunningExecTick] = useState(0);
+  /** read_pages 点击某条条目后打开的详情 Sheet（与 Task 页筛选同款 BottomSheetModal） */
+  const [readPagesModalEntry, setReadPagesModalEntry] = useState<{
+    cardKey: string;
+    entryKey: string;
+    entry: Record<string, unknown>;
+  } | null>(null);
   const scrollRef = useRef<ScrollView>(null);
+  /** 流式文件卡片(半折叠)内部 ScrollView 引用，保持视图跟随最后几行 */
+  const fileToolPreviewScrollRefs = useRef<Record<string, ScrollView | null>>({});
+  /** key -> { startMs, completedSec }，用于 exec 卡片耗时与自动折叠 */
+  const execCardTimeRef = useRef<Record<string, { startMs: number; completedSec?: number }>>({});
   const abortRef = useRef<AbortController | null>(null);
   const manualStopRef = useRef(false);
   /** 仅在有新消息/回复完成时滚到底部，避免展开折叠工具卡片时误滚 */
@@ -346,9 +394,10 @@ export function ChatScreen() {
           const i = findLastToolBlockByIndex(idx);
           if (i >= 0 && localBlocks[i].type === 'tool') {
             const result = mergeToolResultChunk(localBlocks[i].result, {
-              patches: (event as { patches?: unknown }).patches,
-              stdout_append: (event as { stdout_append?: string }).stdout_append,
-              set: (event as { set?: Record<string, unknown> }).set,
+              patches: event.patches,
+              stdout_append: event.stdout_append,
+              set: event.set,
+              readings_by_url: event.readings_by_url,
             });
             localBlocks[i] = { ...localBlocks[i], result };
             syncBlocks();
@@ -629,9 +678,10 @@ export function ChatScreen() {
           const i = findLastToolBlockByIndex(idx);
           if (i >= 0 && localBlocks[i].type === 'tool') {
             const result = mergeToolResultChunk(localBlocks[i].result, {
-              patches: (event as { patches?: unknown }).patches,
-              stdout_append: (event as { stdout_append?: string }).stdout_append,
-              set: (event as { set?: Record<string, unknown> }).set,
+              patches: event.patches,
+              stdout_append: event.stdout_append,
+              set: event.set,
+              readings_by_url: event.readings_by_url,
             });
             localBlocks[i] = { ...localBlocks[i], result };
             syncBlocks();
@@ -837,13 +887,91 @@ export function ChatScreen() {
     return out;
   }, []);
 
-  // 仅当键盘收起时 remount KeyboardAvoidingView 以恢复布局；不在键盘打开时改 key，否则会 remount 导致输入框失焦、键盘瞬间收回
+  // local_exec_command：运行中自动半展开(preview)、成功结束自动折叠；记录开始/结束时间供耗时显示
   useEffect(() => {
-    const hide = Keyboard.addListener('keyboardDidHide', () => {
-      setLayoutResetKey((k) => k + 1);
+    const now = Date.now();
+    const ref = execCardTimeRef.current;
+    const keysToPreview: string[] = [];
+    const keysToCollapse: string[] = [];
+
+    messages.forEach((msg, idx) => {
+      const blocks = (msg as AssistantMessage).blocks;
+      if (!blocks?.length) return;
+      blocks.forEach((block, bi) => {
+        if (block.type !== 'tool' || (block as ToolBlock).tool_name !== 'local_exec_command') return;
+        const key = `msg-tool-${idx}-${bi}`;
+        const status = (block as ToolBlock).status;
+        const result = (block as ToolBlock).result as ToolResult | undefined;
+        const exitCode = result?.exit_code ?? undefined;
+
+        if (status === 'running' || status === 'pending') {
+          if (!ref[key]) ref[key] = { startMs: now };
+          keysToPreview.push(key);
+        } else if (status === 'completed') {
+          if (ref[key] && ref[key].completedSec === undefined)
+            ref[key] = { ...ref[key], completedSec: Math.floor((now - ref[key].startMs) / 1000) };
+          if (exitCode === 0) keysToCollapse.push(key);
+        }
+      });
     });
-    return () => hide.remove();
-  }, []);
+    (currentAssistantBlocks || []).forEach((block, bi) => {
+      if (block.type !== 'tool' || (block as ToolBlock).tool_name !== 'local_exec_command') return;
+      const key = `stream-tool-${bi}`;
+      const status = (block as ToolBlock).status;
+      const result = (block as ToolBlock).result as ToolResult | undefined;
+      const exitCode = result?.exit_code ?? undefined;
+
+      if (status === 'running' || status === 'pending') {
+        if (!ref[key]) ref[key] = { startMs: now };
+        keysToPreview.push(key);
+      } else if (status === 'completed') {
+        if (ref[key] && ref[key].completedSec === undefined)
+          ref[key] = { ...ref[key], completedSec: Math.floor((now - ref[key].startMs) / 1000) };
+        if (exitCode === 0) keysToCollapse.push(key);
+      }
+    });
+
+    setToolCardViewMode((prev) => {
+      let next: Record<string, 'collapsed' | 'preview' | 'full'> | null = null;
+      const setMode = (k: string, mode: 'collapsed' | 'preview') => {
+        const cur = prev[k];
+        if (cur === mode) return;
+        if (!next) next = { ...prev };
+        next[k] = mode;
+      };
+      keysToPreview.forEach((k) => setMode(k, 'preview'));
+      keysToCollapse.forEach((k) => setMode(k, 'collapsed'));
+      return next ?? prev;
+    });
+  }, [messages, currentAssistantBlocks]);
+
+  // 与 Web 保持一致：流式文件工具（write/edit）在半折叠时总是滚到末尾，展示最新几行
+  useEffect(() => {
+    (currentAssistantBlocks || []).forEach((block, bi) => {
+      if (block.type !== 'tool') return;
+      if (block.tool_name !== 'local_write_file' && block.tool_name !== 'local_edit_file') return;
+      if (block.status !== 'pending' && block.status !== 'running') return;
+      const key = `stream-tool-${bi}`;
+      const mode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
+      if (mode !== 'preview') return;
+      fileToolPreviewScrollRefs.current[key]?.scrollToEnd({ animated: false });
+    });
+  }, [currentAssistantBlocks, toolCardViewMode]);
+
+  // 有执行中的 exec 卡片时每秒刷新一次，用于显示“执行中（0:05）”
+  const hasRunningExec = (() => {
+    const check = (blocks: MessageBlock[] | undefined) =>
+      (blocks || []).some(
+        (b) => b.type === 'tool' && (b as ToolBlock).tool_name === 'local_exec_command' && ((b as ToolBlock).status === 'running' || (b as ToolBlock).status === 'pending')
+      );
+    if (messages.some((m) => check((m as AssistantMessage).blocks))) return true;
+    return check(currentAssistantBlocks);
+  })();
+  useEffect(() => {
+    if (!hasRunningExec) return;
+    const id = setInterval(() => setRunningExecTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [hasRunningExec]);
 
   // 从历史对话列表进入时，根据路由参数加载对话
   useEffect(() => {
@@ -981,6 +1109,838 @@ export function ChatScreen() {
     setToolCardViewMode((prev) => ({ ...prev, [cardKey]: mode }));
   }, []);
 
+  /** 与 Web/Desktop 一致：read_pages、文件卡片、exec 默认半展开，其余折叠 */
+  function getDefaultToolCardViewMode(toolName: string): 'collapsed' | 'preview' {
+    if (
+      toolName === 'read_pages' ||
+      toolName === 'local_write_file' ||
+      toolName === 'local_edit_file' ||
+      toolName === 'local_exec_command'
+    )
+      return 'preview';
+    return 'collapsed';
+  }
+
+  /**
+   * 与 Web `.tool-card-write-preview` / `.tool-card-diff` 一致：半折叠(preview)时 max-height 120px；
+   * 流式(pending/running)时内部可滚动；非流式时底部渐变 + 「…」。
+   */
+  function wrapFileToolPreviewBody(
+    isFull: boolean,
+    isStreaming: boolean,
+    cardKey: string,
+    children: React.ReactNode
+  ): React.ReactNode {
+    if (isFull) {
+      return <View style={styles.fileToolPreviewFullWrap}>{children}</View>;
+    }
+    if (isStreaming) {
+      return (
+        <ScrollView
+          style={styles.fileToolPreviewScroll}
+          contentContainerStyle={styles.fileToolPreviewScrollContent}
+          nestedScrollEnabled
+          showsVerticalScrollIndicator
+          ref={(el) => {
+            fileToolPreviewScrollRefs.current[cardKey] = el;
+          }}
+          onContentSizeChange={() => {
+            fileToolPreviewScrollRefs.current[cardKey]?.scrollToEnd({ animated: false });
+          }}
+          onLayout={() => {
+            fileToolPreviewScrollRefs.current[cardKey]?.scrollToEnd({ animated: false });
+          }}
+        >
+          {children}
+        </ScrollView>
+      );
+    }
+    return (
+      <View style={styles.fileToolPreviewClip}>
+        {children}
+        <LinearGradient
+          colors={['rgba(245,245,245,0)', '#f5f5f5']}
+          style={styles.fileToolPreviewFade}
+          pointerEvents="none"
+        />
+        <Text style={styles.fileToolPreviewEllipsis} pointerEvents="none">
+          …
+        </Text>
+      </View>
+    );
+  }
+
+  function getToolStatusLabel(status: string): string {
+    return status === 'completed'
+      ? '成功'
+      : status === 'pending'
+        ? '参数生成中'
+        : status === 'waiting'
+          ? '等待执行'
+          : status === 'running'
+            ? '执行中'
+            : status;
+  }
+
+  function formatSec(sec: number): string {
+    if (!Number.isFinite(sec) || sec < 0) return '0:00';
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }
+
+  function renderCollapsedToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    return (
+      <Pressable
+        key={key}
+        style={({ pressed }) => [styles.toolCard, styles.toolCardCollapsed, pressed && styles.toolCardCollapsedPressed]}
+        onPress={() => setToolCardMode(key, 'preview')}
+        accessibilityLabel="点击展开"
+      >
+        <Text style={styles.toolCardCollapsedName} numberOfLines={1}>
+          {block.tool_name}
+        </Text>
+        <Text
+          style={[
+            styles.toolCardBadge,
+            block.status === 'completed' ? styles.toolCardBadgeOk : undefined,
+          ]}
+        >
+          {getToolStatusLabel(block.status)}
+        </Text>
+      </Pressable>
+    );
+  }
+
+  function renderAnsiText(text: string, maxLen: number) {
+    const raw = String(text ?? '');
+    const sliced = raw.length > maxLen ? raw.slice(raw.length - maxLen) : raw;
+    const segments = ansiToSegments(sliced);
+    return (
+      <Text selectable style={styles.toolCardCodeText}>
+        {segments.map((seg, i) => (
+          <Text key={i} style={seg.style}>
+            {seg.text}
+          </Text>
+        ))}
+      </Text>
+    );
+  }
+
+  function readPagesPageCount(block: Extract<StreamBlock, { type: 'tool' }>, parsed: { urls: string[] }): number {
+    const fromResult = readPagesResultEntryCount(block.result);
+    const fromArgs = parsed.urls.length;
+    return Math.max(fromArgs, fromResult) || fromArgs || fromResult || 0;
+  }
+
+  function readPagesTitleLine(block: Extract<StreamBlock, { type: 'tool' }>, parsed: { goal: string; urls: string[] }): string {
+    const isPreparingArgs = block.status === 'pending';
+    if (isPreparingArgs) {
+      const q = parsed.goal.trim() || '…';
+      return q !== '…'
+        ? `Reading preparing: ${q}`
+        : parsed.urls.length > 0
+          ? `Reading preparing…（${parsed.urls.length} 个链接见下方）`
+          : 'Reading preparing…';
+    }
+    const n = readPagesPageCount(block, parsed);
+    const goal = parsed.goal.trim() || '—';
+    const isCompleted = block.status === 'completed';
+    if (isCompleted) {
+      let { total, success } = readPagesSuccessStats(block.result);
+      if (total === 0 && parsed.urls.length > 0) {
+        total = parsed.urls.length;
+        success = 0;
+      }
+      if (total > 0) {
+        const pageWord = total === 1 ? 'page' : 'pages';
+        const statusPart = success === total ? '(all success)' : `(${success} success)`;
+        return `Read ${total} ${pageWord} ${statusPart}: ${goal}`;
+      }
+    }
+    const total = n;
+    const done = readPagesFinishedCount(block.result);
+    const pageWord = total === 1 ? 'page' : 'pages';
+    const prefix = total > 0 ? `Reading ${done}/${total} ${pageWord}:` : `Reading ${n} ${n === 1 ? 'page' : 'pages'}:`;
+    return `${prefix} ${goal}`;
+  }
+
+  function readPagesCollapsedTail(block: Extract<StreamBlock, { type: 'tool' }>, parsed: { goal: string; urls: string[] }): string {
+    const isPreparingArgs = block.status === 'pending';
+    if (isPreparingArgs) {
+      const g = parsed.goal.trim();
+      const t = g ? (g.slice(0, 48) + (g.length > 48 ? '…' : '')) : (parsed.urls.length > 0 ? `${parsed.urls.length} links` : '…');
+      return `prep · ${t}`;
+    }
+    const g = parsed.goal.slice(0, 36);
+    if (block.status === 'completed') {
+      let { total, success } = readPagesSuccessStats(block.result);
+      if (total === 0 && parsed.urls.length > 0) {
+        total = parsed.urls.length;
+        success = 0;
+      }
+      if (total > 0) {
+        const head = success === total ? `${total}p all` : `${success}/${total}p`;
+        return `${head}${g ? ` · ${g}` : ''}${parsed.goal.length > 36 ? '…' : ''}`;
+      }
+    }
+    const n = readPagesPageCount(block, parsed);
+    const total = n;
+    const done = readPagesFinishedCount(block.result);
+    const head = total > 0 ? `${done}/${total}p` : `${n}p`;
+    return `${head}${g ? ` · ${g}` : ''}${parsed.goal.length > 36 ? '…' : ''}`;
+  }
+
+  function renderReadPagesToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
+    const parsed = parseReadPagesBlockArgs(block);
+    const isPreparingArgs = block.status === 'pending';
+    const hasReadings = readPagesResultEntryCount(block.result) > 0;
+    const entries = readPagesReadingEntries(block.result).map(([urlKey, r]) => ({ key: urlKey, r }));
+
+    if (viewMode === 'collapsed') {
+      const collapsedTail = readPagesCollapsedTail(block, parsed);
+      return (
+        <Pressable
+          key={key}
+          style={({ pressed }) => [styles.toolCard, styles.toolCardCollapsed, pressed && styles.toolCardCollapsedPressed]}
+          onPress={() => setToolCardMode(key, 'preview')}
+          accessibilityLabel="点击展开"
+        >
+          <Text style={styles.toolCardCollapsedName} numberOfLines={1}>
+            Reading
+          </Text>
+          <Text style={[styles.toolCardCollapsedTail, { flex: 1 }]} numberOfLines={1}>
+            {collapsedTail}
+          </Text>
+          <View style={styles.toolCardBadgeWrap}>
+            <Text style={styles.toolCardBadge}>{getToolStatusLabel(block.status)}</Text>
+          </View>
+        </Pressable>
+      );
+    }
+
+    const isAwaiting = block.status === 'awaiting_confirmation' && Boolean(block.review_id);
+    const isSubmitting = submittingReviewId && submittingReviewId === block.review_id;
+    const titleLine = readPagesTitleLine(block, parsed);
+    /** 与 Web 一致：按 加载中(0) → 成功(1) → 失败(2) 排序；同档内按目标 URL 顺序稳定排列，避免执行结束后因后端返回顺序变化而乱序 */
+    const urlOrderOf = (key: string) => {
+      const i = parsed.urls.indexOf(key);
+      return i >= 0 ? i : 999999;
+    };
+    const sortedEntries = entries
+      .map((e, index) => ({ ...e, index, urlOrder: urlOrderOf(e.key) }))
+      .sort((a, b) => {
+        const ba = getReadPagesListSortBucket(a.r);
+        const bb = getReadPagesListSortBucket(b.r);
+        if (ba !== bb) return ba - bb;
+        return a.urlOrder !== b.urlOrder ? a.urlOrder - b.urlOrder : a.index - b.index;
+      });
+
+    return (
+      <View key={key} style={styles.toolCard}>
+        <Pressable
+          onPress={() => setToolCardMode(key, 'collapsed')}
+          style={({ pressed }) => (pressed ? styles.toolCardContentPressed : undefined)}
+          accessibilityLabel="点击收起"
+        >
+          <Text style={styles.toolCardHeader} numberOfLines={1} ellipsizeMode="tail">
+            {titleLine}
+          </Text>
+
+          {isPreparingArgs ? (
+            <View style={styles.readPagesUrlListWrap}>
+              {parsed.urls.length === 0 ? (
+                <Text style={styles.toolCardSafetyMeta}>（尚未解析到 URL，参数生成完成后将列出）</Text>
+              ) : (
+                parsed.urls.map((u) => (
+                  <Pressable key={u} onPress={() => Linking.openURL(u)} style={styles.readPagesUrlItem}>
+                    <Text style={styles.readPagesUrlLink} numberOfLines={1}>{u}</Text>
+                    <Ionicons name="open-outline" size={14} color="#64748b" />
+                  </Pressable>
+                ))
+              )}
+            </View>
+          ) : hasReadings ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.readPagesCardsScroll}
+              style={styles.readPagesCardsScrollView}
+            >
+              {sortedEntries.map(({ key: ek, r }, i) => {
+                const title = decodeUrlPctForDisplay(String(r.title || r.url || ek || `页面 ${i + 1}`));
+                const loading = r.loading === true;
+                const previewOk = typeof r.page_preview_data_url === 'string' && r.page_preview_data_url.startsWith('data:image/');
+                const llmStarted = typeof r.llm_raw === 'string' && (r.llm_raw as string).trim().length > 0;
+                const phase = typeof r.phase === 'string' ? r.phase : '';
+                const showThumb = Boolean(loading && previewOk && !llmStarted);
+                // 与 Web 一致：仅 opening 或等首图时显示 loading，有图/有内容后不再回退到 spinner
+                const showSpinner =
+                  loading &&
+                  !showThumb &&
+                  (phase === 'opening' || (phase === 'page_preview' && !previewOk));
+                const error = typeof r.error === 'string' ? r.error : '';
+                const partial = typeof r.llm_raw === 'string' && (r.llm_raw as string).trim() ? tryParsePartialReadingStream(r.llm_raw as string) : null;
+                const summary = r.summary && typeof r.summary === 'object' ? (r.summary as Record<string, unknown>) : null;
+                const brief = (summary && typeof summary.brief === 'string' ? summary.brief : '') || (partial?.summary?.brief ?? '');
+                const takeover = r.takeaway && typeof r.takeaway === 'object' ? (r.takeaway as Record<string, unknown>) : null;
+                const answersFin = takeover && Array.isArray(takeover.answers) ? (takeover.answers as string[]).filter((x) => x != null && String(x).trim()).slice(0, 4) : [];
+                const quotesFin = takeover && Array.isArray(takeover.quotes) ? (takeover.quotes as string[]).filter((x) => x != null && String(x).trim()).slice(0, 4) : [];
+                const answers = answersFin.length ? answersFin : (partial?.takeaway?.answers ?? []).slice(0, 4);
+                const quotes = quotesFin.length ? quotesFin : (partial?.takeaway?.quotes ?? []).slice(0, 4);
+                const links = Array.isArray(r.links) ? r.links : [];
+                const urlStr = typeof r.url === 'string' ? r.url : '';
+                const hasPartialLayout = Boolean(brief || answers.length || quotes.length);
+                const loadBarThumbWait = Boolean(loading && previewOk && !llmStarted);
+                const showCardHeaderLoadBar = hasPartialLayout || loadBarThumbWait;
+
+                return (
+                  <Pressable
+                    key={ek}
+                    style={styles.readPagesSmallCard}
+                    onPress={() => setReadPagesModalEntry({ cardKey: key, entryKey: ek, entry: r })}
+                  >
+                    <View style={[styles.readPagesSmallCardHeader, loading && showCardHeaderLoadBar && styles.readPagesSmallCardHeaderStreaming]}>
+                      <Text style={styles.readPagesSmallCardTitle} numberOfLines={1} ellipsizeMode="tail">{title}</Text>
+                      {urlStr ? (
+                        <Pressable onPress={(e) => { e.stopPropagation(); Linking.openURL(urlStr); }} hitSlop={8}>
+                          <Ionicons name="open-outline" size={14} color="#64748b" />
+                        </Pressable>
+                      ) : null}
+                      {loading && showCardHeaderLoadBar ? <ReadPagesHeaderLoadBar /> : null}
+                    </View>
+                    <View style={styles.readPagesSmallCardBodyWrap}>
+                      {showThumb && r.page_preview_data_url ? (
+                        <View style={styles.readPagesCardSquare}>
+                          <Image source={{ uri: r.page_preview_data_url as string }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+                        </View>
+                      ) : showSpinner ? (
+                        <View style={[styles.readPagesCardSquare, styles.readPagesCardSquareCenter]}>
+                          <ActivityIndicator size="small" color="#64748b" />
+                        </View>
+                      ) : (
+                        <ScrollView
+                          style={[styles.readPagesCardSquare, styles.readPagesCardSquareBody]}
+                          contentContainerStyle={styles.readPagesCardBodyScroll}
+                          showsVerticalScrollIndicator={true}
+                        >
+                          {error ? (
+                            <Text style={styles.readPagesErrorText} numberOfLines={5}>{error}</Text>
+                          ) : brief || answers.length || quotes.length ? (
+                            <>
+                              {brief ? <Text style={styles.readPagesTextBlock}>{brief}</Text> : null}
+                              {answers.length ? <Text style={styles.readPagesTextBlock}>要点: {answers.join('；')}</Text> : null}
+                              {quotes.length ? <Text style={styles.readPagesTextBlock}>引用: {quotes.join('；')}</Text> : null}
+                            </>
+                          ) : loading ? (
+                            <Text style={styles.toolCardSafetyMeta}>模型输出中…</Text>
+                          ) : (
+                            <Text style={styles.toolCardSafetyMeta}>无正文或结构化摘要。</Text>
+                          )}
+                        </ScrollView>
+                      )}
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          ) : parsed.urls.length > 0 ? (
+            <View>
+              <View style={styles.readPagesUrlListWrap}>
+                {parsed.urls.map((u) => (
+                  <Pressable key={u} onPress={() => Linking.openURL(u)} style={styles.readPagesUrlItem}>
+                    <Text style={styles.readPagesUrlLink} numberOfLines={1}>{u}</Text>
+                    <Ionicons name="open-outline" size={14} color="#64748b" />
+                  </Pressable>
+                ))}
+              </View>
+              <Text style={styles.toolCardSafetyMeta}>
+                {block.status === 'waiting' ? '等待执行…' : '阅读中，摘要将随后显示…'}
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.toolCardSafetyMeta}>
+              {block.result == null ? '暂无结果' : '结果结构未知（请检查 JSON）'}
+            </Text>
+          )}
+
+          {isAwaiting && block.review_id ? (
+            <View style={styles.safetyActions}>
+              <TouchableOpacity style={styles.safetyBtn} onPress={() => handleSafetyDecision(block.review_id!, 'reject')} disabled={!!isSubmitting}>
+                <Text style={styles.safetyBtnText}>拒绝</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.safetyBtn, styles.safetyBtnPrimary]} onPress={() => handleSafetyDecision(block.review_id!, 'approve')} disabled={!!isSubmitting}>
+                <Text style={styles.safetyBtnPrimaryText}>{isSubmitting ? '提交中...' : '确认执行'}</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </Pressable>
+      </View>
+    );
+  }
+
+  function renderFileWriteToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    const fileArgs = parseFileToolArgs(block);
+    const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
+    const collapsedLabel = fileArgs.pathDisplay || '等待参数…';
+    if (viewMode === 'collapsed') {
+      return (
+        <Pressable
+          key={key}
+          style={({ pressed }) => [styles.toolCard, styles.toolCardCollapsed, pressed && styles.toolCardCollapsedPressed]}
+          onPress={() => setToolCardMode(key, 'preview')}
+          accessibilityLabel="点击展开"
+        >
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.toolCardCollapsedName} numberOfLines={1} ellipsizeMode="tail">
+              {collapsedLabel}
+            </Text>
+          </View>
+          <View style={styles.toolCardBadgeWrap}>
+            <Text style={[styles.toolCardBadge, block.status === 'completed' ? styles.toolCardBadgeSuccess : undefined]}>
+              {getToolStatusLabel(block.status)}
+            </Text>
+          </View>
+        </Pressable>
+      );
+    }
+
+    const isFull = viewMode === 'full';
+    const isAwaiting = block.status === 'awaiting_confirmation' && Boolean(block.review_id);
+    const isSubmitting = submittingReviewId && submittingReviewId === block.review_id;
+    const isStreaming = block.status === 'pending' || block.status === 'running';
+
+    const content = fileArgs.content ?? '';
+    const contentDisplay =
+      isFull && content.length > 2000
+        ? `${content.slice(0, 2000)}\n… (共 ${content.length} 字符)`
+        : content.length > 50000
+          ? `${content.slice(0, 50000)}\n…`
+          : content;
+
+    const hasPath = Boolean(fileArgs.pathDisplay);
+    const waitingPathOrArgs =
+      !hasPath && (block.arguments || block.status === 'pending' || block.status === 'waiting')
+        ? fileArgs.pathDisplay
+          ? '参数解析中…'
+          : '等待参数…'
+        : null;
+    const noContentHint =
+      hasPath && !content
+        ? isStreaming
+          ? '内容生成中…'
+          : '无内容预览'
+        : null;
+
+    return (
+      <View key={key} style={styles.toolCard}>
+        <Pressable
+          onPress={() => {
+            if (!isFull) setToolCardMode(key, 'collapsed');
+          }}
+          style={({ pressed }) => (pressed && !isFull ? styles.toolCardContentPressed : undefined)}
+          accessibilityLabel={isFull ? undefined : '点击收起'}
+        >
+          <View style={styles.toolCardHeaderRow}>
+            <View style={styles.toolCardHeaderMain}>
+              <Text
+                style={fileArgs.pathDisplay ? styles.toolCardHeaderFilename : styles.toolCardHeaderFilenamePlaceholder}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {fileArgs.pathDisplay || '等待路径…'}
+              </Text>
+            </View>
+            <View style={styles.toolCardBadgeWrap}>
+              <Text style={[styles.toolCardBadge, block.status === 'completed' ? styles.toolCardBadgeSuccess : undefined]}>
+                {getToolStatusLabel(block.status)}
+              </Text>
+            </View>
+          </View>
+
+          {waitingPathOrArgs ? <Text style={styles.toolCardBodyMuted}>{waitingPathOrArgs}</Text> : null}
+          {noContentHint ? <Text style={styles.toolCardBodyMuted}>{noContentHint}</Text> : null}
+          {hasPath && content
+            ? wrapFileToolPreviewBody(
+                isFull,
+                isStreaming,
+                key,
+                <View style={styles.toolCardWritePreview}>
+                  <Text
+                    style={[styles.toolCardBody, styles.toolCardDiffPre, styles.toolCardWritePreviewText]}
+                    selectable
+                  >
+                    {contentDisplay}
+                  </Text>
+                </View>
+              )
+            : null}
+
+          {isAwaiting && block.review_id ? (
+            <View style={styles.safetyActions}>
+              <TouchableOpacity
+                style={styles.safetyBtn}
+                onPress={() => handleSafetyDecision(block.review_id!, 'reject')}
+                disabled={!!isSubmitting}
+              >
+                <Text style={styles.safetyBtnText}>拒绝</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.safetyBtn, styles.safetyBtnPrimary]}
+                onPress={() => handleSafetyDecision(block.review_id!, 'approve')}
+                disabled={!!isSubmitting}
+              >
+                <Text style={styles.safetyBtnPrimaryText}>
+                  {isSubmitting ? '提交中...' : '确认执行'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </Pressable>
+
+        <Pressable
+          style={({ pressed }) => [
+            styles.toolCardExpandRow,
+            pressed && styles.toolCardExpandRowPressed,
+          ]}
+          onPress={() => setToolCardMode(key, isFull ? 'preview' : 'full')}
+          accessibilityLabel={isFull ? '收起' : '完全展开'}
+        >
+          <Ionicons
+            name={isFull ? 'chevron-up' : 'chevron-down'}
+            size={16}
+            color="#64748b"
+          />
+        </Pressable>
+      </View>
+    );
+  }
+
+  function renderFileEditToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    const fileArgs = parseFileToolArgs(block);
+    const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
+    const collapsedLabel = fileArgs.pathDisplay || '等待参数…';
+    if (viewMode === 'collapsed') {
+      return (
+        <Pressable
+          key={key}
+          style={({ pressed }) => [styles.toolCard, styles.toolCardCollapsed, pressed && styles.toolCardCollapsedPressed]}
+          onPress={() => setToolCardMode(key, 'preview')}
+          accessibilityLabel="点击展开"
+        >
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.toolCardCollapsedName} numberOfLines={1} ellipsizeMode="tail">
+              {collapsedLabel}
+            </Text>
+          </View>
+          <View style={styles.toolCardBadgeWrap}>
+            <Text style={[styles.toolCardBadge, block.status === 'completed' ? styles.toolCardBadgeSuccess : undefined]}>
+              {getToolStatusLabel(block.status)}
+            </Text>
+          </View>
+        </Pressable>
+      );
+    }
+
+    const isFull = viewMode === 'full';
+    const isAwaiting = block.status === 'awaiting_confirmation' && Boolean(block.review_id);
+    const isSubmitting = submittingReviewId && submittingReviewId === block.review_id;
+    const isStreaming = block.status === 'pending' || block.status === 'running';
+
+    const oldStr = fileArgs.oldString || '';
+    const newStr = fileArgs.newString || '';
+    const hasOldNew = Boolean(oldStr || newStr);
+    const capPreview = (s: string) => (s.length > 50000 ? `${s.slice(0, 50000)}\n…` : s);
+    const oldTrim = isFull
+      ? oldStr.length > 8000
+        ? `${oldStr.slice(0, 8000)}\n…`
+        : oldStr
+      : capPreview(oldStr);
+    const newTrim = isFull
+      ? newStr.length > 8000
+        ? `${newStr.slice(0, 8000)}\n…`
+        : newStr
+      : capPreview(newStr);
+
+    const editSummary =
+      hasOldNew && oldStr
+        ? oldStr.includes('\n')
+          ? `${oldStr.split('\n')[0].slice(0, 40)}…`
+          : oldStr.length > 40
+            ? `${oldStr.slice(0, 40)}…`
+            : oldStr
+        : hasOldNew
+          ? '(空)'
+          : null;
+
+    return (
+      <View key={key} style={styles.toolCard}>
+        <Pressable
+          onPress={() => {
+            if (!isFull) setToolCardMode(key, 'collapsed');
+          }}
+          style={({ pressed }) => (pressed && !isFull ? styles.toolCardContentPressed : undefined)}
+          accessibilityLabel={isFull ? undefined : '点击收起'}
+        >
+          <View style={styles.toolCardHeaderRow}>
+            <View style={styles.toolCardHeaderMain}>
+              <Text
+                style={fileArgs.pathDisplay ? styles.toolCardHeaderFilename : styles.toolCardHeaderFilenamePlaceholder}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {fileArgs.pathDisplay || '等待路径…'}
+              </Text>
+              {editSummary !== null ? (
+                <Text style={styles.toolCardHeaderEditSummary} numberOfLines={1} ellipsizeMode="tail">
+                  被替换: {editSummary}
+                </Text>
+              ) : null}
+            </View>
+            <View style={styles.toolCardBadgeWrap}>
+              <Text style={[styles.toolCardBadge, block.status === 'completed' ? styles.toolCardBadgeSuccess : undefined]}>
+                {getToolStatusLabel(block.status)}
+              </Text>
+            </View>
+          </View>
+
+          {hasOldNew ? (
+            wrapFileToolPreviewBody(
+              isFull,
+              isStreaming,
+              key,
+              <View style={[styles.toolCardDiff, styles.toolCardDiffPreview]}>
+                <View style={[styles.toolCardDiffSide, styles.toolCardDiffOld]}>
+                  <Text style={styles.toolCardDiffLabel}>替换前</Text>
+                  <Text style={styles.toolCardDiffPre} selectable>
+                    {oldTrim || '(无)'}
+                  </Text>
+                </View>
+                <View style={styles.toolCardDiffSide}>
+                  <Text style={styles.toolCardDiffLabel}>替换后</Text>
+                  <Text style={styles.toolCardDiffPre} selectable>
+                    {newTrim || '(空)'}
+                  </Text>
+                </View>
+              </View>
+            )
+          ) : (block.arguments || block.status === 'pending' || block.status === 'waiting') ? (
+            <Text style={styles.toolCardBodyMuted}>
+              {fileArgs.pathDisplay ? '参数解析中…' : '等待参数…'}
+            </Text>
+          ) : null}
+
+          {isAwaiting && block.review_id ? (
+            <View style={styles.safetyActions}>
+              <TouchableOpacity
+                style={styles.safetyBtn}
+                onPress={() => handleSafetyDecision(block.review_id!, 'reject')}
+                disabled={!!isSubmitting}
+              >
+                <Text style={styles.safetyBtnText}>拒绝</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.safetyBtn, styles.safetyBtnPrimary]}
+                onPress={() => handleSafetyDecision(block.review_id!, 'approve')}
+                disabled={!!isSubmitting}
+              >
+                <Text style={styles.safetyBtnPrimaryText}>
+                  {isSubmitting ? '提交中...' : '确认执行'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </Pressable>
+
+        <Pressable
+          style={({ pressed }) => [
+            styles.toolCardExpandRow,
+            pressed && styles.toolCardExpandRowPressed,
+          ]}
+          onPress={() => setToolCardMode(key, isFull ? 'preview' : 'full')}
+          accessibilityLabel={isFull ? '收起' : '完全展开'}
+        >
+          <Ionicons
+            name={isFull ? 'chevron-up' : 'chevron-down'}
+            size={16}
+            color="#64748b"
+          />
+        </Pressable>
+      </View>
+    );
+  }
+
+  function renderExecCommandToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
+    const execArgs = parseExecCommandArgs(block);
+    const resultObj = block.result && typeof block.result === 'object' ? (block.result as Record<string, unknown>) : null;
+    const stdout = resultObj && typeof resultObj.stdout === 'string' ? resultObj.stdout : '';
+    const exitCode = resultObj && typeof resultObj.exit_code === 'number' ? resultObj.exit_code : null;
+    const timeInfo = execCardTimeRef.current[key];
+    const isRunning = block.status === 'running' || block.status === 'pending';
+    const elapsedSec = timeInfo && isRunning ? Math.floor((Date.now() - timeInfo.startMs) / 1000) : 0;
+    const completedSec = timeInfo?.completedSec;
+
+    if (viewMode === 'collapsed') {
+      const headerLabel = execArgs.description || '终端命令';
+      const programTail = execArgs.programName ? ` (${execArgs.programName})` : '';
+      const lastLine = stripAnsi(stdout).trim().split(/\n/).filter(Boolean).pop() ?? '';
+      const tailText = lastLine.length > 60 ? '…' + lastLine.slice(-60) : lastLine;
+      const timeStr = completedSec != null ? ` (执行完成 ${formatSec(completedSec)})` : isRunning ? ` (${formatSec(elapsedSec)})` : '';
+      const collapsedTail = (tailText ? tailText + timeStr : timeStr) || ' ';
+      return (
+        <Pressable
+          key={key}
+          style={({ pressed }) => [styles.toolCard, styles.toolCardCollapsed, pressed && styles.toolCardCollapsedPressed]}
+          onPress={() => setToolCardMode(key, 'preview')}
+          accessibilityLabel="点击展开"
+        >
+          <Text style={styles.toolCardCollapsedName} numberOfLines={1}>
+            {headerLabel}
+            {programTail}
+          </Text>
+          <Text style={[styles.toolCardCollapsedTail, { flex: 1 }]} numberOfLines={1}>
+            {collapsedTail}
+          </Text>
+          <View style={styles.toolCardBadgeWrap}>
+            <Text style={[styles.toolCardBadge, exitCode === 0 ? styles.toolCardBadgeSuccess : undefined]}>
+              {getToolStatusLabel(block.status)}
+            </Text>
+          </View>
+        </Pressable>
+      );
+    }
+
+    const isFull = viewMode === 'full';
+    const isAwaiting = block.status === 'awaiting_confirmation' && Boolean(block.review_id);
+    const isSubmitting = submittingReviewId && submittingReviewId === block.review_id;
+    const stderr = resultObj && typeof resultObj.stderr === 'string' ? resultObj.stderr : '';
+    const errorMsg = resultObj && typeof resultObj.error === 'string' ? resultObj.error : null;
+
+    const streamingFallback = typeof block.streaming_content === 'string' ? block.streaming_content : '';
+    const stdoutForDisplay = stdout || streamingFallback;
+    const stderrForDisplay = stderr;
+    const headerLabel = execArgs.description || '终端命令';
+    const programTail = execArgs.programName ? ` (${execArgs.programName})` : '';
+
+    const maxOutLen = isFull ? 12000 : 3500;
+    const plainTail = stripAnsi(stdoutForDisplay).trim();
+    const previewTail = plainTail.length ? (plainTail.length > 220 ? plainTail.slice(plainTail.length - 220) : plainTail) : '';
+
+    return (
+      <View key={key} style={styles.toolCard}>
+        <Pressable
+          onPress={() => {
+            if (!isFull) setToolCardMode(key, 'collapsed');
+          }}
+          style={({ pressed }) => (pressed && !isFull ? styles.toolCardContentPressed : undefined)}
+          accessibilityLabel={isFull ? undefined : '点击收起'}
+        >
+          <Text style={styles.toolCardHeader}>
+            {headerLabel}
+            {programTail}
+            {' · '}
+            {getToolStatusLabel(block.status)}
+          </Text>
+
+          {execArgs.command || execArgs.cwd ? (
+            <Text style={styles.toolCardSafetyMeta} numberOfLines={2}>
+              $ {execArgs.command || '(无命令)'}
+              {execArgs.cwd ? `  (cwd: ${execArgs.cwd})` : ''}
+            </Text>
+          ) : null}
+
+          {errorMsg ? (
+            <Text style={styles.readPagesErrorText} numberOfLines={6}>
+              {errorMsg}
+            </Text>
+          ) : null}
+
+          {viewMode !== 'full' && !stdoutForDisplay && block.status !== 'completed' ? (
+            <Text style={styles.toolCardSafetyMeta}>输出生成中...</Text>
+          ) : null}
+
+          {stdoutForDisplay ? (
+            isFull ? (
+              renderAnsiText(stdoutForDisplay, maxOutLen)
+            ) : (
+              previewTail ? (
+                <Text style={[styles.toolCardBody, styles.toolCardCodeText]} numberOfLines={6} selectable>
+                  {previewTail}
+                </Text>
+              ) : (
+                <Text style={styles.toolCardSafetyMeta}>无输出</Text>
+              )
+            )
+          ) : null}
+
+          {stderrForDisplay ? (
+            isFull ? (
+              <View style={{ marginTop: 8 }}>
+                {renderAnsiText(stderrForDisplay, Math.floor(maxOutLen / 2))}
+              </View>
+            ) : null
+          ) : null}
+
+          {isFull && block.status === 'completed' && exitCode != null ? (
+            <Text style={styles.toolCardSafetyMeta} numberOfLines={1}>
+              exit_code: {exitCode}
+            </Text>
+          ) : null}
+
+          {(isRunning && elapsedSec >= 0) || completedSec != null ? (
+            <Text style={styles.toolCardSafetyMeta} numberOfLines={1}>
+              {block.status === 'completed' ? `执行完成（${formatSec(completedSec ?? 0)}）` : `执行中（${formatSec(elapsedSec)}）`}
+            </Text>
+          ) : null}
+
+          {block.streaming_content && viewMode !== 'full' && !stdout ? (
+            <Text style={[styles.toolCardBody, styles.toolCardCodeText]} numberOfLines={5} selectable>
+              {block.streaming_content.length > 1000 ? block.streaming_content.slice(0, 1000) + '\n...' : block.streaming_content}
+            </Text>
+          ) : null}
+
+          {isAwaiting && block.review_id ? (
+            <View style={styles.safetyActions}>
+              <TouchableOpacity
+                style={styles.safetyBtn}
+                onPress={() => handleSafetyDecision(block.review_id!, 'reject')}
+                disabled={!!isSubmitting}
+              >
+                <Text style={styles.safetyBtnText}>拒绝</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.safetyBtn, styles.safetyBtnPrimary]}
+                onPress={() => handleSafetyDecision(block.review_id!, 'approve')}
+                disabled={!!isSubmitting}
+              >
+                <Text style={styles.safetyBtnPrimaryText}>
+                  {isSubmitting ? '提交中...' : '确认执行'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </Pressable>
+
+        <Pressable
+          style={({ pressed }) => [
+            styles.toolCardExpandRow,
+            pressed && styles.toolCardExpandRowPressed,
+          ]}
+          onPress={() => setToolCardMode(key, isFull ? 'preview' : 'full')}
+          accessibilityLabel={isFull ? '收起' : '完全展开'}
+        >
+          <Ionicons
+            name={isFull ? 'chevron-up' : 'chevron-down'}
+            size={16}
+            color="#64748b"
+          />
+        </Pressable>
+      </View>
+    );
+  }
+
   const canGoBack = navigation.canGoBack();
   const leftEdgePan = useRef(
     PanResponder.create({
@@ -1007,7 +1967,21 @@ export function ChatScreen() {
         </View>
       );
     }
-    const viewMode = toolCardViewMode[key] ?? 'collapsed';
+
+    if (block.tool_name === 'read_pages') {
+      return renderReadPagesToolCard(block, key);
+    }
+    if (block.tool_name === 'local_write_file') {
+      return renderFileWriteToolCard(block, key);
+    }
+    if (block.tool_name === 'local_edit_file') {
+      return renderFileEditToolCard(block, key);
+    }
+    if (block.tool_name === 'local_exec_command') {
+      return renderExecCommandToolCard(block, key);
+    }
+
+    const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
     const isAwaiting = block.status === 'awaiting_confirmation' && Boolean(block.review_id);
     const isSubmitting = submittingReviewId && submittingReviewId === block.review_id;
 
@@ -1246,7 +2220,6 @@ export function ChatScreen() {
       </View>
 
       <KeyboardAvoidingView
-        key={`kav-${layoutResetKey}`}
         style={styles.keyboardView}
         behavior={Platform.select({ ios: 'padding', android: 'height' })}
         keyboardVerticalOffset={0}
@@ -1357,6 +2330,23 @@ export function ChatScreen() {
         </View>
       </KeyboardAvoidingView>
     </View>
+
+    <ReadPagesDetailSheet
+      visible={readPagesModalEntry != null}
+      onClose={() => setReadPagesModalEntry(null)}
+      title={
+        readPagesModalEntry
+          ? decodeUrlPctForDisplay(
+              String(
+                readPagesModalEntry.entry.title ||
+                  readPagesModalEntry.entry.url ||
+                  readPagesModalEntry.entryKey
+              )
+            )
+          : ''
+      }
+      entry={readPagesModalEntry?.entry ?? null}
+    />
     </SafeAreaView>
   );
 }
@@ -1495,9 +2485,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#1f2937',
-    flex: 1,
     marginRight: 8,
   },
+  toolCardCollapsedTail: {
+    fontSize: 11,
+    color: '#64748b',
+    marginRight: 8,
+  },
+  toolCardBadgeWrap: { marginLeft: 4 },
   toolCardBadge: {
     fontSize: 11,
     paddingHorizontal: 8,
@@ -1513,6 +2508,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#e5e5e5',
     borderColor: '#d4d4d4',
   },
+  toolCardBadgeSuccess: {
+    color: '#166534',
+    backgroundColor: '#dcfce7',
+    borderColor: '#86efac',
+  },
   toolCardContentPressed: { opacity: 0.95 },
   toolCardExpandRow: {
     marginTop: 8,
@@ -1525,10 +2525,153 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   toolCardExpandRowPressed: { backgroundColor: '#e5e5e5' },
-  toolCardHeader: { fontSize: 13, fontWeight: '600', color: '#1f2937', marginBottom: 8 },
+  toolCardHeader: { fontSize: 13, fontWeight: '600', color: '#1f2937', marginBottom: 8, minWidth: 0 },
+  toolCardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 8,
+  },
+  toolCardHeaderMain: { flex: 1, minWidth: 0 },
+  toolCardHeaderFilename: { fontSize: 13, fontWeight: '600', color: '#262626' },
+  toolCardHeaderFilenamePlaceholder: { fontSize: 13, fontWeight: '600', color: '#737373' },
+  toolCardHeaderEditSummary: { fontSize: 11, fontWeight: '500', color: '#525252', marginTop: 2 },
+  toolCardBodyMuted: { fontSize: 12, color: '#737373', fontStyle: 'italic', marginTop: 6 },
+  /** 与 Web `.tool-card-write-preview` 半折叠区域一致 */
+  fileToolPreviewFullWrap: { marginTop: 8 },
+  fileToolPreviewClip: {
+    maxHeight: 120,
+    marginTop: 8,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  fileToolPreviewScroll: { maxHeight: 120, marginTop: 8 },
+  fileToolPreviewScrollContent: { paddingBottom: 4 },
+  fileToolPreviewFade: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 36,
+  },
+  fileToolPreviewEllipsis: {
+    position: 'absolute',
+    bottom: 2,
+    left: 0,
+    right: 0,
+    textAlign: 'center',
+    fontSize: 12,
+    color: '#737373',
+  },
+  toolCardWritePreview: {},
+  toolCardWritePreviewText: { marginTop: 0 },
+  toolCardDiff: { flexDirection: 'row', gap: 12, marginTop: 8 },
+  toolCardDiffPreview: { marginTop: 0 },
+  toolCardDiffSide: { flex: 1, minWidth: 0 },
+  toolCardDiffOld: { borderRightWidth: 1, borderRightColor: '#e5e5e5', paddingRight: 12 },
+  toolCardDiffLabel: { fontSize: 11, fontWeight: '600', color: '#737373', marginBottom: 2 },
+  toolCardDiffPre: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#262626',
+    margin: 0,
+  },
   toolCardBody: { fontSize: 13, color: '#1e293b', marginTop: 6, lineHeight: 20 },
+  toolCardCodeText: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 12,
+    color: '#0f172a',
+    lineHeight: 18,
+    marginTop: 6,
+  },
   toolCardSafetyMeta: { fontSize: 11, color: '#64748b', marginTop: 6 },
   toolCardSafetyReason: { fontSize: 12, color: '#334155', marginTop: 6 },
+  readPagesEntryBox: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e5e5',
+  },
+  readPagesEntryTitle: { fontSize: 12, fontWeight: '600', color: '#111827' },
+  readPagesTextBlock: { fontSize: 13, color: '#1e293b', lineHeight: 20, marginTop: 6 },
+  readPagesErrorText: { fontSize: 12, color: '#991b1b', marginTop: 6 },
+  readPagesLinksText: { fontSize: 12, color: '#334155', marginTop: 6 },
+  readPagesUrlListWrap: { marginTop: 8, gap: 6 },
+  readPagesUrlItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  readPagesUrlLink: { flex: 1, fontSize: 12, color: '#2563eb' },
+  readPagesCardsScrollView: { marginTop: 8 },
+  readPagesCardsScroll: { paddingVertical: 4, gap: 4 },
+  readPagesSmallCard: {
+    width: 160,
+    backgroundColor: '#f5f5f5',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#d8d8d8',
+    overflow: 'hidden',
+    marginRight: 6,
+  },
+  readPagesSmallCardHeader: {
+    position: 'relative',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    backgroundColor: '#ebebeb',
+    borderBottomWidth: 1,
+    borderBottomColor: '#d5d5d5',
+  },
+  readPagesSmallCardHeaderStreaming: {
+    borderBottomWidth: 0,
+    paddingBottom: 9,
+  },
+  readPagesHeaderLoadBarTrack: {
+    position: 'absolute',
+    left: 8,
+    right: 8,
+    bottom: 0,
+    height: 2,
+    backgroundColor: '#c8c8c8',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  readPagesHeaderLoadBarBar: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: 56,
+    height: 2,
+    backgroundColor: '#667eea',
+    borderRadius: 2,
+  },
+  readPagesSmallCardTitle: { flex: 1, fontSize: 11, fontWeight: '600', color: '#262626', minWidth: 0 },
+  readPagesSmallCardBodyWrap: {
+    width: '100%',
+    aspectRatio: 1,
+    minHeight: 0,
+    overflow: 'hidden',
+  },
+  readPagesCardSquare: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#ececec',
+  },
+  readPagesCardSquareBody: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#f5f5f5',
+  },
+  readPagesCardSquareCenter: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  readPagesCardBodyScroll: {
+    padding: 8,
+    paddingBottom: 12,
+  },
+  readPagesCardThumb: { width: '100%', aspectRatio: 1, backgroundColor: '#f0f0f0' },
+  readPagesCardSpinner: { marginVertical: 20 },
   toolCardSafetyAdvice: {
     fontSize: 12,
     marginTop: 10,

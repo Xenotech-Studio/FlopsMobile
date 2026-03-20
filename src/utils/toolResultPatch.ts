@@ -96,11 +96,20 @@ export function mergeToolResultChunk(
   }
   if (chunk.readings_by_url != null && typeof chunk.readings_by_url === 'object') {
     const prevR = result.readings;
-    const base =
+    const base: Record<string, unknown> =
       prevR != null && typeof prevR === 'object' && !Array.isArray(prevR)
         ? { ...(prevR as Record<string, unknown>) }
         : {};
-    result = { ...result, readings: { ...base, ...chunk.readings_by_url } };
+    const merged: Record<string, unknown> = { ...base };
+    for (const [k, v] of Object.entries(chunk.readings_by_url)) {
+      const prevEntry = base[k];
+      const prevObj =
+        prevEntry != null && typeof prevEntry === 'object' && !Array.isArray(prevEntry)
+          ? (prevEntry as Record<string, unknown>)
+          : {};
+      merged[k] = { ...prevObj, ...(v != null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}) };
+    }
+    result = { ...result, readings: merged };
   }
   return result;
 }
