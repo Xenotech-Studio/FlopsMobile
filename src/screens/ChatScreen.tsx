@@ -239,6 +239,8 @@ export function ChatScreen() {
   const manualStopRef = useRef(false);
   /** 仅在有新消息/回复完成时滚到底部，避免展开折叠工具卡片时误滚 */
   const shouldScrollToEndRef = useRef(false);
+  /** 与 shouldScrollToEndRef 配套：历史对话首次定位到底部用无动画，其余保持 true */
+  const scrollToEndAnimatedRef = useRef(true);
 
   const canSend = Boolean(session && messageInput.trim() && !loading);
 
@@ -996,6 +998,8 @@ export function ChatScreen() {
       .then(({ conversation }) => {
         if (cancelled) return;
         const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
+        shouldScrollToEndRef.current = true;
+        scrollToEndAnimatedRef.current = false;
         setMessages(rawMessagesToLocal(raw));
         setConversationId(id);
         setConversationTitle(conversation?.title?.trim() || '新对话');
@@ -1471,7 +1475,9 @@ export function ChatScreen() {
             onContentSizeChange={() => {
               if (shouldScrollToEndRef.current) {
                 shouldScrollToEndRef.current = false;
-                scrollRef.current?.scrollToEnd({ animated: true });
+                const animated = scrollToEndAnimatedRef.current;
+                scrollToEndAnimatedRef.current = true;
+                scrollRef.current?.scrollToEnd({ animated });
               }
             }}
             keyboardShouldPersistTaps="handled"
