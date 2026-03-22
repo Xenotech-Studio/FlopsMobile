@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -15,10 +15,11 @@ import {
   Image,
   Animated,
   AppState,
+  Alert,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRoute, useNavigation } from '@react-navigation/native';
+import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { convProfileLog } from '../debug/conversationLoadProfile';
 import { useSession } from '../context/SessionContext';
@@ -29,10 +30,31 @@ import {
   cancelConversation,
   submitSafetyDecision,
   getConversation,
+  getLayoutPreferences,
+  getModelsConfig,
+  selectModel,
+  type ModelsConfigResponse,
   type ChatStreamEvent,
   type ChatV2StreamStart,
   type ConversationMessage,
+  type Conversation,
+  type UsageStats,
+  type UsageRun,
 } from '../api';
+import {
+  rawMessagesToLocal,
+  rawMessagesToLocalWithUsageMap,
+  resolveLocalAssistantIndexFromRawUsageIndex,
+  type StreamBlock,
+  type ChatMessage,
+  type ToolResult,
+} from '../utils/chatLocalMessages';
+import {
+  formatUsageTiny,
+  formatUsageHoverDetail,
+  formatConversationUsageHeaderLine,
+} from '../utils/formatUsage';
+import { normalizeUsageCurrencyMode, type UsageCurrencyMode } from '../constants/pricingDisplay';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
@@ -53,6 +75,8 @@ import {
   tryParsePartialReadingStream,
 } from '../utils/toolCardParsers';
 import { ReadPagesDetailSheet } from '../components/ReadPagesDetailSheet';
+import { ModelSelectSheet } from '../components/ModelSelectSheet';
+import { UsageDetailModal } from '../components/UsageDetailModal';
 import { SearchEngineCard } from './chat-cards/SearchEngineCard';
 import { FileWriteCard } from './chat-cards/FileWriteCard';
 import { FileEditCard } from './chat-cards/FileEditCard';
@@ -60,30 +84,6 @@ import { ExecCommandCard } from './chat-cards/ExecCommandCard';
 import { DefaultToolCard } from './chat-cards/DefaultToolCard';
 import { CursorAgentCard } from './chat-cards/CursorAgentCard';
 import { ReadPagesCard } from './chat-cards/ReadPagesCard';
-
-type Message =
-  | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; blocks?: StreamBlock[] }
-  | { role: 'error'; content: string };
-
-type ToolResult = { stdout?: string; stderr?: string; error?: string; success?: boolean; exit_code?: number };
-
-type StreamBlock =
-  | { type: 'text'; content: string }
-  | {
-      type: 'tool';
-      index?: number;
-      tool_name: string;
-      status: string;
-      arguments?: string;
-      streaming_content?: string;
-      result?: ToolResult | unknown;
-      review_id?: string;
-      conversation_id?: string;
-      review?: Record<string, unknown>;
-      command?: string;
-      cwd?: string;
-    };
 
 type ToolBlock = Extract<StreamBlock, { type: 'tool' }>;
 
@@ -111,72 +111,27 @@ function isToolPackageNavBlock(b: { type: string; tool_name?: string }): boolean
   return b.type === 'tool' && b.tool_name != null && TOOL_PACKAGE_NAV_NAMES.includes(b.tool_name);
 }
 
-/** 解析 tool 消息的 content 为 result 对象 */
-function parseToolResult(msg: ConversationMessage): unknown {
-  if (!msg || msg.role !== 'tool') return null;
-  const raw = typeof msg.content === 'string' ? msg.content : '';
-  if (!raw.trim()) return null;
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return raw;
-  }
-}
-
-/** 将服务端一轮 assistant + tool 消息合并为一条本地 assistant（含 blocks） */
-function coalesceAssistantTurn(messages: ConversationMessage[]): Message | null {
-  if (!messages || messages.length === 0) return null;
-  const blocks: StreamBlock[] = [];
-  let fullContent = '';
-  let i = 0;
-  while (i < messages.length) {
-    const msg = messages[i];
-    if (msg.role === 'assistant') {
-      const text = (msg.content != null ? String(msg.content) : '').trim();
-      if (text) {
-        blocks.push({ type: 'text', content: text });
-        fullContent += (fullContent ? '\n\n' : '') + text;
-      }
-      const toolCalls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
-      if (toolCalls.length > 0) {
-        for (let j = 0; j < toolCalls.length; j++) {
-          const tc = toolCalls[j];
-          const fn = typeof tc === 'object' && tc && tc.function ? tc.function : {};
-          const name = (fn.name != null && fn.name !== '') ? fn.name : 'unknown';
-          const args =
-            typeof fn.arguments === 'string'
-              ? fn.arguments
-              : JSON.stringify(fn.arguments != null ? fn.arguments : {});
-          const toolMsg = messages[i + 1 + j];
-          const result = toolMsg && toolMsg.role === 'tool' ? parseToolResult(toolMsg) : null;
-          blocks.push({
-            type: 'tool',
-            tool_name: name,
-            status: 'completed',
-            arguments: args,
-            result,
-          });
-        }
-        i += 1 + toolCalls.length;
-        continue;
-      }
-      i++;
-    } else if (msg.role === 'tool') {
-      i++;
-    } else {
-      i++;
+/** 与 FlopsWeb ModelPicker 下拉价展示一致（开启「对话内用量」时显示） */
+function modelDropdownPriceLine(
+  modelPriceReference: Record<string, unknown>,
+  modelId: string,
+  show: boolean
+): string | null {
+  if (!show) return null;
+  const priceRef = modelPriceReference[modelId];
+  if (priceRef === undefined) return null;
+  if (priceRef === 0) return '免费';
+  if (typeof priceRef === 'object' && priceRef != null) {
+    const o = priceRef as { input?: unknown; output?: unknown };
+    if (typeof o.input === 'number' && typeof o.output === 'number') {
+      return `入 $${o.input} · 出 $${o.output} /M`;
     }
   }
-  if (blocks.length === 0) return null;
-  return {
-    role: 'assistant',
-    content: fullContent || '(empty)',
-    blocks,
-  };
+  return null;
 }
 
 /** 与 FlopsWeb Chat.jsx 一致：存在进行中的 chat_v2 run 时去掉最后一条 user 之后的回复，避免与 subscribe 回放叠两套 */
-function truncateMessagesAfterLastUser(messages: Message[]): Message[] {
+function truncateMessagesAfterLastUser(messages: ChatMessage[]): ChatMessage[] {
   let lastUserIdx = -1;
   for (let i = 0; i < messages.length; i++) {
     if (messages[i].role === 'user') lastUserIdx = i;
@@ -225,7 +180,20 @@ export function ChatScreen() {
   const params = (route.params ?? undefined) as ChatRouteParams | undefined;
   const [conversationId, setConversationId] = useState(params?.conversationId ?? '');
   const [conversationTitle, setConversationTitle] = useState(params?.conversationTitle ?? '');
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [serverRawMessages, setServerRawMessages] = useState<ConversationMessage[]>([]);
+  const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
+  const [usageRuns, setUsageRuns] = useState<UsageRun[]>([]);
+  const [showTokenUsageInChat, setShowTokenUsageInChat] = useState(true);
+  const [usageCurrencyDisplay, setUsageCurrencyDisplay] = useState<UsageCurrencyMode>(() =>
+    normalizeUsageCurrencyMode(undefined)
+  );
+  const [modelPriceReference, setModelPriceReference] = useState<Record<string, unknown>>({});
+  const [selectedModelId, setSelectedModelId] = useState('');
+  const [availableModels, setAvailableModels] = useState<Record<string, string>>({});
+  const [modelConfigLabel, setModelConfigLabel] = useState('');
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [usageDetailModalBody, setUsageDetailModalBody] = useState<string | null>(null);
   const [messageInput, setMessageInput] = useState('');
   const [loading, setLoading] = useState(false);
   /** 仅从路由拉取对话历史（GET conversation）期间，与流式 loading 分离 */
@@ -274,6 +242,150 @@ export function ChatScreen() {
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
+
+  const applyConversationUsageState = useCallback((conversation: Conversation) => {
+    const raw =
+      conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
+    setServerRawMessages(raw);
+    setUsageStats(conversation.usage_stats ?? null);
+    setUsageRuns(Array.isArray(conversation.usage_runs) ? conversation.usage_runs : []);
+  }, []);
+
+  const rawToLocalAssistantIndex = useMemo(
+    () => rawMessagesToLocalWithUsageMap(serverRawMessages).rawToLocalAssistantIndex,
+    [serverRawMessages]
+  );
+
+  const usageByAssistantIdx = useMemo(() => {
+    const m: Record<number, UsageStats> = {};
+    for (const r of usageRuns) {
+      const rawIdx = r.last_message_index;
+      if (typeof rawIdx !== 'number' || rawIdx < 0 || !r.usage) continue;
+      let localIdx = -1;
+      if (rawToLocalAssistantIndex.size > 0) {
+        localIdx = resolveLocalAssistantIndexFromRawUsageIndex(rawToLocalAssistantIndex, rawIdx);
+      }
+      if (localIdx < 0) localIdx = rawIdx;
+      m[localIdx] = r.usage;
+    }
+    return m;
+  }, [usageRuns, rawToLocalAssistantIndex]);
+
+  const applyModelsConfig = useCallback((cfg: ModelsConfigResponse) => {
+    const ref = cfg.model_price_reference;
+    setModelPriceReference(ref && typeof ref === 'object' ? ref : {});
+    setSelectedModelId(typeof cfg.selected_model === 'string' ? cfg.selected_model : '');
+    const am = cfg.available_models;
+    setAvailableModels(
+      am && typeof am === 'object' && !Array.isArray(am) ? (am as Record<string, string>) : {}
+    );
+    const lab =
+      typeof cfg.selected_model_label === 'string'
+        ? cfg.selected_model_label
+        : typeof cfg.selected_model === 'string'
+          ? cfg.selected_model
+          : '';
+    setModelConfigLabel(lab);
+  }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    getModelsConfig(session).then(applyModelsConfig).catch(() => {});
+  }, [session, applyModelsConfig]);
+
+  const modelOptions = useMemo(() => {
+    const am = availableModels;
+    const entries = Object.entries(am);
+    if (entries.length > 0) {
+      return entries
+        .filter(([, v]) => typeof v === 'string' && v.trim())
+        .map(([label, modelId]) => ({ label: label || modelId, value: modelId.trim() }))
+        .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
+    }
+    const sel = selectedModelId;
+    if (typeof sel === 'string' && sel.trim()) {
+      return [{ label: modelConfigLabel || sel.trim(), value: sel.trim() }];
+    }
+    return [];
+  }, [availableModels, selectedModelId, modelConfigLabel]);
+
+  const composerModelTriggerLabel = useMemo(() => {
+    const sel = selectedModelId;
+    if (!sel) return '模型';
+    const found = modelOptions.find((o) => o.value === sel);
+    if (found) return found.label;
+    return modelConfigLabel || sel;
+  }, [selectedModelId, modelOptions, modelConfigLabel]);
+
+  const handleSelectModel = useCallback(
+    async (modelId: string) => {
+      const model = String(modelId || '').trim();
+      if (!session || !model) return;
+      setModelPickerOpen(false);
+      if (model === selectedModelId) return;
+      const prevId = selectedModelId;
+      const prevLabel = modelConfigLabel;
+      const prevRef = modelPriceReference;
+      const opt = modelOptions.find((o) => o.value === model);
+      setSelectedModelId(model);
+      setModelConfigLabel(opt?.label ?? prevLabel);
+      try {
+        const data = await selectModel(session, model);
+        applyModelsConfig(data);
+      } catch (e) {
+        setSelectedModelId(prevId);
+        setModelConfigLabel(prevLabel);
+        setModelPriceReference(prevRef);
+        const msg = e instanceof Error ? e.message : String(e);
+        Alert.alert('切换模型失败', msg);
+      }
+    },
+    [
+      session,
+      selectedModelId,
+      modelConfigLabel,
+      modelPriceReference,
+      modelOptions,
+      applyModelsConfig,
+    ]
+  );
+
+  const modelSheetOptions = useMemo(
+    () =>
+      modelOptions.map((o) => ({
+        label: o.label,
+        value: o.value,
+        subtitle: modelDropdownPriceLine(
+          modelPriceReference,
+          o.value,
+          showTokenUsageInChat
+        ),
+      })),
+    [modelOptions, modelPriceReference, showTokenUsageInChat]
+  );
+
+  const reloadLayoutPrefs = useCallback(() => {
+    if (!session) return;
+    getLayoutPreferences(session)
+      .then((prefs) => {
+        if (typeof prefs.show_token_usage_in_chat === 'boolean') {
+          setShowTokenUsageInChat(prefs.show_token_usage_in_chat);
+        }
+        if (prefs.usage_currency_display != null) {
+          setUsageCurrencyDisplay(normalizeUsageCurrencyMode(prefs.usage_currency_display));
+        }
+      })
+      .catch(() => {});
+  }, [session]);
+
+  useFocusEffect(
+    useCallback(() => {
+      reloadLayoutPrefs();
+      if (session) {
+        getModelsConfig(session).then(applyModelsConfig).catch(() => {});
+      }
+    }, [reloadLayoutPrefs, session, applyModelsConfig])
+  );
 
   const canSend = Boolean(
     session && messageInput.trim() && !loading && !conversationHistoryLoading
@@ -324,6 +436,20 @@ export function ChatScreen() {
         const e = event as unknown as { type?: string; title?: string };
         if (e.type === 'conversation_title' && typeof e.title === 'string') {
           setConversationTitle(e.title);
+        }
+        if (e.type === 'usage') {
+          const ev = event as { usage_stats?: UsageStats; usage_run?: UsageRun };
+          if (ev.usage_stats) setUsageStats(ev.usage_stats);
+          if (ev.usage_run) {
+            const run = ev.usage_run;
+            setUsageRuns((prev) => {
+              const ur = [...prev];
+              const ix = ur.findIndex((x) => x.run_id === run.run_id);
+              if (ix >= 0) ur[ix] = run;
+              else ur.push(run);
+              return ur;
+            });
+          }
         }
         if ('error' in event && event.error) throw new Error(String(event.error));
         if ('type' in event) {
@@ -562,22 +688,43 @@ export function ChatScreen() {
     let silentBackgroundAbort = false;
 
     try {
-      const { streamDone, finalText, localBlocks } = await runV2WithHandlers({
+      const { streamDone, finalText, localBlocks, lastConvId } = await runV2WithHandlers({
         convId,
         start: { tag: 'new_message', message: nextMessage },
         signal: controller.signal,
       });
       clearTimeout(timeout);
-      if (streamDone || finalText.trim()) {
-        shouldScrollToEndRef.current = true;
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: finalText.trim() || '(empty response)',
-            blocks: localBlocks.length ? localBlocks : undefined,
-          },
-        ]);
+      const syncId = lastConvId;
+      try {
+        if (session) {
+          const { conversation } = await getConversation(session, syncId);
+          applyConversationUsageState(conversation);
+          const raw =
+            conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
+          let synced = rawMessagesToLocal(raw);
+          const stillRunning =
+            typeof conversation?.active_chat_v2_run_id === 'string' &&
+            conversation.active_chat_v2_run_id.trim();
+          if (stillRunning) synced = truncateMessagesAfterLastUser(synced);
+          if (streamDone || finalText.trim() || synced.length > 0) {
+            shouldScrollToEndRef.current = true;
+            setMessages(synced);
+          }
+          const t = conversation?.title?.trim();
+          if (t) setConversationTitle(t);
+        }
+      } catch {
+        if (streamDone || finalText.trim()) {
+          shouldScrollToEndRef.current = true;
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'assistant',
+              content: finalText.trim() || '(empty response)',
+              blocks: localBlocks.length ? localBlocks : undefined,
+            },
+          ]);
+        }
       }
     } catch (e) {
       clearTimeout(timeout);
@@ -618,7 +765,15 @@ export function ChatScreen() {
       setCurrentAssistantBlocks([]);
       setStreamStatus('');
     }
-  }, [session, conversationId, messageInput, loading, conversationHistoryLoading, runV2WithHandlers]);
+  }, [
+    session,
+    conversationId,
+    messageInput,
+    loading,
+    conversationHistoryLoading,
+    runV2WithHandlers,
+    applyConversationUsageState,
+  ]);
 
   /** 回退到第 (afterUserIndex+1) 条 user 消息处并重新生成该条 AI 回复 */
   const handleRegenerate = useCallback(
@@ -656,22 +811,43 @@ export function ChatScreen() {
     let silentBackgroundAbort = false;
 
     try {
-      const { streamDone, finalText, localBlocks } = await runV2WithHandlers({
+      const { streamDone, finalText, localBlocks, lastConvId } = await runV2WithHandlers({
         convId: conversationId,
         start: { tag: 'regenerate', after_user_index: afterUserIndex },
         signal: controller.signal,
       });
       clearTimeout(timeout);
-      if (streamDone || finalText.trim()) {
-        shouldScrollToEndRef.current = true;
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: finalText.trim() || '(empty response)',
-            blocks: localBlocks.length ? localBlocks : undefined,
-          },
-        ]);
+      const syncId = lastConvId;
+      try {
+        if (session) {
+          const { conversation } = await getConversation(session, syncId);
+          applyConversationUsageState(conversation);
+          const raw =
+            conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
+          let synced = rawMessagesToLocal(raw);
+          const stillRunning =
+            typeof conversation?.active_chat_v2_run_id === 'string' &&
+            conversation.active_chat_v2_run_id.trim();
+          if (stillRunning) synced = truncateMessagesAfterLastUser(synced);
+          if (streamDone || finalText.trim() || synced.length > 0) {
+            shouldScrollToEndRef.current = true;
+            setMessages(synced);
+          }
+          const t = conversation?.title?.trim();
+          if (t) setConversationTitle(t);
+        }
+      } catch {
+        if (streamDone || finalText.trim()) {
+          shouldScrollToEndRef.current = true;
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'assistant',
+              content: finalText.trim() || '(empty response)',
+              blocks: localBlocks.length ? localBlocks : undefined,
+            },
+          ]);
+        }
       }
     } catch (e) {
       clearTimeout(timeout);
@@ -713,7 +889,7 @@ export function ChatScreen() {
       setStreamStatus('');
     }
   },
-    [session, conversationId, loading, conversationHistoryLoading, runV2WithHandlers]
+    [session, conversationId, loading, conversationHistoryLoading, runV2WithHandlers, applyConversationUsageState]
   );
 
   const handleStop = useCallback(async () => {
@@ -754,6 +930,9 @@ export function ChatScreen() {
     setConversationId('');
     setConversationTitle('');
     setMessages([]);
+    setServerRawMessages([]);
+    setUsageStats(null);
+    setUsageRuns([]);
     try {
       if (session) {
         const { id } = await createConversation(session);
@@ -764,33 +943,6 @@ export function ChatScreen() {
       setError(e instanceof Error ? e.message : '创建会话失败');
     }
   }, [session, loading]);
-
-  /** 将服务端消息列表转为本地 Message[]：过滤 system，合并 assistant+tool 为带 blocks 的 assistant */
-  const rawMessagesToLocal = useCallback((raw: ConversationMessage[]): Message[] => {
-    const out: Message[] = [];
-    let assistantGroup: ConversationMessage[] = [];
-    const flushAssistant = () => {
-      const one = coalesceAssistantTurn(assistantGroup);
-      if (one) out.push(one);
-      assistantGroup = [];
-    };
-    for (const msg of raw ?? []) {
-      if (!msg || typeof msg.role !== 'string') continue;
-      if (msg.role === 'system') continue;
-      if (msg.role === 'user') {
-        flushAssistant();
-        const content = typeof msg.content === 'string' ? msg.content : '';
-        out.push({ role: 'user', content });
-        continue;
-      }
-      if (msg.role === 'assistant' || msg.role === 'tool') {
-        assistantGroup.push(msg);
-        continue;
-      }
-    }
-    flushAssistant();
-    return out;
-  }, []);
 
   /** 从服务端 active_chat_v2_run_id 恢复流（打开会话 / 回到前台） */
   const resumeV2Stream = useCallback(
@@ -818,6 +970,7 @@ export function ChatScreen() {
         clearTimeout(timeout);
         try {
           const { conversation } = await getConversation(session, lastConvId);
+          applyConversationUsageState(conversation);
           const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
           let synced = rawMessagesToLocal(raw);
           const stillRunning = typeof conversation?.active_chat_v2_run_id === 'string' && conversation.active_chat_v2_run_id.trim();
@@ -849,6 +1002,7 @@ export function ChatScreen() {
         }
         try {
           const { conversation } = await getConversation(session, cid);
+          applyConversationUsageState(conversation);
           const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
           let synced = rawMessagesToLocal(raw);
           const stillRunning = typeof conversation?.active_chat_v2_run_id === 'string' && conversation.active_chat_v2_run_id.trim();
@@ -871,7 +1025,7 @@ export function ChatScreen() {
         setStreamStatus('');
       }
     },
-    [session, runV2WithHandlers, rawMessagesToLocal]
+    [session, runV2WithHandlers, applyConversationUsageState]
   );
 
   useEffect(() => {
@@ -894,6 +1048,7 @@ export function ChatScreen() {
           const rid = conversation?.active_chat_v2_run_id;
           const s = typeof rid === 'string' ? rid.trim() : '';
           if (!s) return;
+          applyConversationUsageState(conversation);
           const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
           setMessages(truncateMessagesAfterLastUser(rawMessagesToLocal(raw)));
           resumeV2Stream(s, cid);
@@ -903,7 +1058,7 @@ export function ChatScreen() {
         });
     });
     return () => sub.remove();
-  }, [resumeV2Stream, rawMessagesToLocal]);
+  }, [resumeV2Stream, applyConversationUsageState]);
 
   // local_exec_command：运行中自动半展开(preview)、成功结束自动折叠；记录开始/结束时间供耗时显示
   useEffect(() => {
@@ -1013,6 +1168,7 @@ export function ChatScreen() {
         const rid = conversation?.active_chat_v2_run_id;
         const runId = typeof rid === 'string' ? rid.trim() : '';
         const tMap0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        applyConversationUsageState(conversation);
         let localMsgs = rawMessagesToLocal(raw);
         if (runId) {
           localMsgs = truncateMessagesAfterLastUser(localMsgs);
@@ -1054,7 +1210,7 @@ export function ChatScreen() {
       cancelled = true;
       setConversationHistoryLoading(false);
     };
-  }, [params?.conversationId, session, rawMessagesToLocal, resumeV2Stream]);
+  }, [params?.conversationId, session, resumeV2Stream, applyConversationUsageState]);
 
   const handleSafetyDecision = useCallback(
     async (reviewId: string, decision: 'approve' | 'reject') => {
@@ -1370,7 +1526,7 @@ export function ChatScreen() {
     return last;
   })();
 
-  const renderMessage = (msg: Message, idx: number) => {
+  const renderMessage = (msg: ChatMessage, idx: number) => {
     if (msg.role === 'error') {
       return (
         <View key={`err-${idx}`} style={styles.errorWrap}>
@@ -1390,6 +1546,19 @@ export function ChatScreen() {
         if (b.type === 'text') lastTextBlockIdx = i;
       });
     }
+    const segmentUsage =
+      showTokenUsageInChat && usageByAssistantIdx[idx]
+        ? formatUsageTiny(usageByAssistantIdx[idx], { currencyMode: usageCurrencyDisplay })
+        : undefined;
+    const segmentDetail =
+      showTokenUsageInChat && usageByAssistantIdx[idx]
+        ? formatUsageHoverDetail(usageByAssistantIdx[idx], {
+            currencyMode: usageCurrencyDisplay,
+            modelPriceReference,
+            selectedModelId,
+            scope: 'segment',
+          })
+        : undefined;
     return (
       <View
         key={`${msg.role}-${idx}`}
@@ -1413,6 +1582,8 @@ export function ChatScreen() {
                     showRegenerateButton={bi === lastTextBlockIdx}
                     onRegenerate={afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined}
                     regenerateDisabled={!conversationId || loading || conversationHistoryLoading}
+                    usageHint={bi === lastTextBlockIdx ? segmentUsage : undefined}
+                    usageDetail={bi === lastTextBlockIdx ? segmentDetail : undefined}
                   />
                 </View>
               ) : (
@@ -1431,6 +1602,8 @@ export function ChatScreen() {
                 showRegenerateButton
                 onRegenerate={afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined}
                 regenerateDisabled={!conversationId || loading || conversationHistoryLoading}
+                usageHint={segmentUsage}
+                usageDetail={segmentDetail}
               />
             )
           )}
@@ -1469,6 +1642,7 @@ export function ChatScreen() {
     : streamStatusLabel;
 
   return (
+    <>
     <SafeAreaView style={styles.container} edges={['bottom']}>
     <View style={styles.containerInner}>
       {canGoBack ? (
@@ -1623,6 +1797,55 @@ export function ChatScreen() {
                   <Ionicons name="send" size={22} color="#fff" />
                 )}
               </Pressable>
+              {session ? (
+                <TouchableOpacity
+                  style={styles.composerModelInComposer}
+                  onPress={() => setModelPickerOpen(true)}
+                  activeOpacity={0.7}
+                  accessibilityLabel="选择模型"
+                  hitSlop={{ top: 4, bottom: 4, left: 8, right: 8 }}
+                >
+                  <Text
+                    style={styles.composerModelTriggerText}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {composerModelTriggerLabel}
+                  </Text>
+                  <Ionicons name="chevron-down" size={14} color="#6b7280" />
+                </TouchableOpacity>
+              ) : null}
+              {showTokenUsageInChat &&
+              usageStats &&
+              conversationId &&
+              !conversationHistoryLoading ? (
+                <TouchableOpacity
+                  style={styles.composerUsageInComposer}
+                  onPress={() =>
+                    setUsageDetailModalBody(
+                      formatUsageHoverDetail(usageStats, {
+                        currencyMode: usageCurrencyDisplay,
+                        modelPriceReference,
+                        selectedModelId,
+                        scope: 'conversation',
+                      })
+                    )
+                  }
+                  activeOpacity={0.7}
+                  accessibilityLabel="本对话用量详情"
+                  hitSlop={{ top: 4, bottom: 4, left: 8, right: 8 }}
+                >
+                  <Text
+                    style={styles.composerUsageText}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {formatConversationUsageHeaderLine(usageStats, {
+                      currencyMode: usageCurrencyDisplay,
+                    })}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
           </View>
         </View>
@@ -1646,6 +1869,19 @@ export function ChatScreen() {
       entry={readPagesModalEntry?.entry ?? null}
     />
     </SafeAreaView>
+
+    <ModelSelectSheet
+      visible={modelPickerOpen}
+      onClose={() => setModelPickerOpen(false)}
+      options={modelSheetOptions}
+      onSelectModel={(id) => void handleSelectModel(id)}
+    />
+    <UsageDetailModal
+      visible={usageDetailModalBody != null}
+      onClose={() => setUsageDetailModalBody(null)}
+      body={usageDetailModalBody ?? ''}
+    />
+    </>
   );
 }
 
@@ -1679,6 +1915,8 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 28,
     gap: 12,
+    /** 供底部用量条 absolute 定位，不改动输入行 flex */
+    overflow: 'visible',
   },
   topBar: {
     position: 'absolute',
@@ -1719,6 +1957,38 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   headerTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
+  /** 与 composerUsageInComposer 同一底缘：左侧 Web/Desktop 同款模型切换入口 */
+  composerModelInComposer: {
+    position: 'absolute',
+    left: 32,
+    bottom: 6,
+    maxWidth: '40%',
+    zIndex: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  /** 与 composerUsageText 同档：小号、灰色、常规字重 */
+  composerModelTriggerText: {
+    flexShrink: 1,
+    fontSize: 11,
+    color: '#6b7280',
+  },
+  /** 贴在输入行容器底缘内侧（落在 paddingBottom 区域），相对输入框在右下 */
+  composerUsageInComposer: {
+    position: 'absolute',
+    right: 45,
+    bottom: 6,
+    maxWidth: '78%',
+    zIndex: 12,
+    alignItems: 'flex-end',
+  },
+  composerUsageText: {
+    fontSize: 11,
+    color: '#6b7280',
+    textAlign: 'right',
+    maxWidth: '100%',
+  },
   globalError: { color: '#dc2626', fontSize: 13, paddingHorizontal: 28, paddingVertical: 8 },
   scroll: { flex: 1 },
   scrollContent: {

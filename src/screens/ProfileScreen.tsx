@@ -1,5 +1,5 @@
 /**
- * 用户信息与设置页，从左侧滑入；含账户信息、关于/检查更新；退出登录在「账户操作」子页。
+ * 用户信息与设置页，从左侧滑入；含账户信息、用量与显示、关于/检查更新；退出登录在「账户操作」子页。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -18,6 +18,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../navigation/types';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
 import { shadowSoftSubtle } from '../theme/shadows';
@@ -40,7 +42,7 @@ type UpdateStatus = 'idle' | 'checking' | 'up-to-date' | 'available' | 'error';
 type DownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';
 
 export function ProfileScreen() {
-  const navigation = useNavigation();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { session, serverBaseUrl } = useSession();
   const { width: screenWidth } = useWindowDimensions();
   const gestureStartX = useRef(0);
@@ -226,6 +228,15 @@ export function ProfileScreen() {
           >
             <Ionicons name="settings-outline" size={22} color="#6b7280" />
             <Text style={styles.rowLabel}>账户操作</Text>
+            <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.row, styles.rowBorder]}
+            activeOpacity={0.7}
+            onPress={() => navigation.navigate('UsageSettings')}
+          >
+            <Ionicons name="stats-chart-outline" size={22} color="#6b7280" />
+            <Text style={styles.rowLabel}>用量与显示</Text>
             <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
           </TouchableOpacity>
           <TouchableOpacity

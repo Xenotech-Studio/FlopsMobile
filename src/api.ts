@@ -11,6 +11,28 @@ export type Session = {
   access_token: string;
 };
 
+/** 用量快照（与 server merge_usage_stats 结构一致） */
+export type UsageByModelRow = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  estimated_cost_usd?: number;
+};
+
+export type UsageStats = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  estimated_cost_usd?: number;
+  by_model?: Record<string, UsageByModelRow>;
+};
+
+export type UsageRun = {
+  run_id?: string;
+  last_message_index?: number;
+  usage?: UsageStats;
+};
+
 export type ChatStreamEvent =
   | { type: 'v2_run'; run_id?: string }
   | { type: 'thinking' }
@@ -28,6 +50,12 @@ export type ChatStreamEvent =
   | { type: 'safety_review'; tool_name: string; review: Record<string, unknown> }
   | { type: 'step_complete' }
   | { type: 'cancelled'; done?: boolean }
+  | {
+      type: 'usage';
+      usage_stats?: UsageStats;
+      usage_run?: UsageRun;
+      conversation_id?: string;
+    }
   | { content?: string; error?: string; done?: boolean; conversation_id?: string };
 
 function ensureSlash(url: string): string {
@@ -171,6 +199,8 @@ export type Conversation = {
   messages?: ConversationMessage[];
   /** 服务端仍有进行中的 chat_v2 run 时存在，用于 subscribe_only 恢复 */
   active_chat_v2_run_id?: string;
+  usage_stats?: UsageStats;
+  usage_runs?: UsageRun[];
 };
 
 /**
@@ -613,4 +643,116 @@ export async function submitSafetyDecision(
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail || `提交确认失败: ${res.status}`);
   }
+}
+
+/** GET /api/user/layout-preferences — 返回扁平偏好对象（与 Web 一致） */
+export async function getLayoutPreferences(session: Session): Promise<Record<string, unknown>> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/user/layout-preferences`, {
+    method: 'GET',
+    headers: authHeaders(session.access_token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `加载偏好失败: ${res.status}`);
+  }
+  const data = (await res.json()) as unknown;
+  return data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+}
+
+/** POST /api/user/layout-preferences — 合并写入 */
+export async function setLayoutPreferences(
+  session: Session,
+  prefs: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/user/layout-preferences`, {
+    method: 'POST',
+    headers: authHeaders(session.access_token),
+    body: JSON.stringify(prefs),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `保存偏好失败: ${res.status}`);
+  }
+  const data = (await res.json()) as { preferences?: Record<string, unknown> };
+  return data?.preferences && typeof data.preferences === 'object' ? data.preferences : {};
+}
+
+export type UsageSummaryMonthly = {
+  month?: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  estimated_cost_usd?: number;
+};
+
+export type UsageSummaryDaily = {
+  date?: string;
+  has_data?: boolean;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  estimated_cost_usd?: number;
+};
+
+export type UsageSummaryResponse = {
+  ok?: boolean;
+  error?: string;
+  monthly_totals?: UsageSummaryMonthly[];
+  daily?: UsageSummaryDaily[];
+};
+
+/** GET /api/user/usage-summary */
+export async function getUsageSummary(session: Session, days: number = 90): Promise<UsageSummaryResponse> {
+  const base = session.server_base_url;
+  const q = new URLSearchParams({ days: String(days) });
+  const res = await fetchWithDebugLog(`${base}api/user/usage-summary?${q.toString()}`, {
+    method: 'GET',
+    headers: authHeaders(session.access_token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `加载用量统计失败: ${res.status}`);
+  }
+  return (await res.json()) as UsageSummaryResponse;
+}
+
+export type ModelsConfigResponse = {
+  selected_model?: string;
+  selected_model_label?: string;
+  /** label -> model id，与 Web/Desktop 一致 */
+  available_models?: Record<string, string>;
+  model_price_reference?: Record<string, unknown>;
+  all_models?: Record<string, unknown>;
+  allowlist_ids?: string[];
+  default_model?: string;
+};
+
+/** GET /api/models/config */
+export async function getModelsConfig(session: Session): Promise<ModelsConfigResponse> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/models/config`, {
+    method: 'GET',
+    headers: authHeaders(session.access_token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `加载模型配置失败: ${res.status}`);
+  }
+  return (await res.json()) as ModelsConfigResponse;
+}
+
+/** POST /api/models/select — body `{ model }`，返回完整模型配置 payload */
+export async function selectModel(session: Session, model: string): Promise<ModelsConfigResponse> {
+  const base = session.server_base_url;
+  const m = String(model || '').trim();
+  const res = await fetchWithDebugLog(`${base}api/models/select`, {
+    method: 'POST',
+    headers: { ...authHeaders(session.access_token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: m }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `切换模型失败: ${res.status}`);
+  }
+  return (await res.json()) as ModelsConfigResponse;
 }

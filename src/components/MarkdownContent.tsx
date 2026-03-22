@@ -6,6 +6,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import Clipboard from '@react-native-clipboard/clipboard';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import { UsageDetailModal } from './UsageDetailModal';
 
 const markdownStyles = {
   body: { color: '#111827', fontSize: 16, lineHeight: 26 },
@@ -48,6 +49,10 @@ type Props = {
   showRegenerateButton?: boolean;
   onRegenerate?: () => void;
   regenerateDisabled?: boolean;
+  /** 本段用量小字，与 Web/Desktop flops-chat-ui 对齐；点击查看详情 */
+  usageHint?: string;
+  /** 弹窗多行详情；不传则仅展示 usageHint */
+  usageDetail?: string;
 };
 
 export function MarkdownContent({
@@ -56,9 +61,24 @@ export function MarkdownContent({
   showRegenerateButton = false,
   onRegenerate,
   regenerateDisabled = false,
+  usageHint,
+  usageDetail,
 }: Props) {
   const [copied, setCopied] = useState(false);
+  const [usageDetailOpen, setUsageDetailOpen] = useState(false);
   const source = String(text ?? '').trim();
+  const hasUsage = typeof usageHint === 'string' && usageHint.trim().length > 0;
+  const detailText =
+    typeof usageDetail === 'string' && usageDetail.trim().length > 0
+      ? usageDetail.trim()
+      : hasUsage
+        ? usageHint!.trim()
+        : '';
+
+  const showUsagePress = () => {
+    if (!detailText) return;
+    setUsageDetailOpen(true);
+  };
 
   const handleCopy = () => {
     if (!source) return;
@@ -67,40 +87,67 @@ export function MarkdownContent({
     setTimeout(() => setCopied(false), 1200);
   };
 
-  const showToolbar = showCopyButton || (showRegenerateButton && typeof onRegenerate === 'function');
+  const showToolbar =
+    showCopyButton ||
+    (showRegenerateButton && typeof onRegenerate === 'function') ||
+    hasUsage;
 
   return (
     <View style={styles.wrap}>
       <View style={styles.content}>
         {source ? (
           <Markdown style={markdownStyles}>{source}</Markdown>
-        ) : (
+        ) : hasUsage ? null : (
           <Text style={styles.placeholder}>（无内容）</Text>
         )}
       </View>
       {showToolbar ? (
-        <View style={styles.toolbar}>
-          {showRegenerateButton && typeof onRegenerate === 'function' ? (
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.actionBtnIconOnly, regenerateDisabled && styles.actionBtnDisabled]}
-              onPress={onRegenerate}
-              disabled={regenerateDisabled}
-              accessibilityLabel="重新回答"
-            >
-              <Ionicons name="refresh" size={20} color={regenerateDisabled ? '#9ca3af' : '#4b5563'} />
-            </TouchableOpacity>
-          ) : null}
-          {showCopyButton ? (
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.actionBtnIconOnly]}
-              onPress={handleCopy}
-              accessibilityLabel={copied ? '已复制' : '复制'}
-            >
-              <Ionicons name={copied ? 'checkmark' : 'copy-outline'} size={20} color="#4b5563" />
-            </TouchableOpacity>
+        <View style={[styles.toolbarRow, hasUsage && styles.toolbarRowFull]}>
+          <View style={styles.toolbarLeft}>
+            {showRegenerateButton && typeof onRegenerate === 'function' ? (
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.actionBtnIconOnly, regenerateDisabled && styles.actionBtnDisabled]}
+                onPress={onRegenerate}
+                disabled={regenerateDisabled}
+                accessibilityLabel="重新回答"
+              >
+                <Ionicons name="refresh" size={20} color={regenerateDisabled ? '#9ca3af' : '#4b5563'} />
+              </TouchableOpacity>
+            ) : null}
+            {showCopyButton ? (
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.actionBtnIconOnly]}
+                onPress={handleCopy}
+                accessibilityLabel={copied ? '已复制' : '复制'}
+              >
+                <Ionicons name={copied ? 'checkmark' : 'copy-outline'} size={20} color="#4b5563" />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          {hasUsage ? (
+            <>
+              <View style={styles.toolbarSpacer} />
+              <TouchableOpacity
+                style={styles.usageChip}
+                onPress={showUsagePress}
+                disabled={!detailText}
+                accessibilityLabel="用量详情"
+                accessibilityRole="button"
+                hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+              >
+                <Text style={styles.usageChipText} numberOfLines={1}>
+                  {usageHint!.trim()}
+                </Text>
+              </TouchableOpacity>
+            </>
           ) : null}
         </View>
       ) : null}
+      <UsageDetailModal
+        visible={usageDetailOpen}
+        onClose={() => setUsageDetailOpen(false)}
+        body={detailText}
+      />
     </View>
   );
 }
@@ -109,6 +156,8 @@ const styles = StyleSheet.create({
   wrap: {
     flexDirection: 'column',
     gap: 10,
+    width: '100%',
+    alignSelf: 'stretch',
   },
   content: {
     flexDirection: 'column',
@@ -117,11 +166,34 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#9ca3af',
   },
-  toolbar: {
+  toolbarRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     alignSelf: 'flex-start',
+  },
+  toolbarRowFull: {
+    alignSelf: 'stretch',
+    width: '100%',
+  },
+  toolbarLeft: {
+    flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  toolbarSpacer: {
+    flex: 1,
+    minWidth: 8,
+  },
+  usageChip: {
+    flexShrink: 1,
+    maxWidth: '72%',
+    paddingVertical: 4,
+    paddingHorizontal: 0,
+    backgroundColor: 'transparent',
+  },
+  usageChipText: {
+    fontSize: 12,
+    color: '#6b7280',
   },
   actionBtn: {
     flexDirection: 'row',

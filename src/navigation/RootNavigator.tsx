@@ -3,6 +3,7 @@ import { createStackNavigator } from '@react-navigation/stack';
 import { MainScreen } from '../screens/MainScreen';
 import { ChatScreen } from '../screens/ChatScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
+import { UsageSettingsScreen } from '../screens/UsageSettingsScreen';
 import { AccountActionsScreen } from '../screens/AccountActionsScreen';
 import { ChangePasswordScreen } from '../screens/ChangePasswordScreen';
 import type { RootStackParamList } from './types';
@@ -43,6 +44,15 @@ export function RootNavigator() {
       <Stack.Screen
         name="Profile"
         component={ProfileScreen}
+        options={{
+          headerShown: false,
+          gestureEnabled: true,
+          cardStyleInterpolator: profileCardStyleInterpolator,
+        }}
+      />
+      <Stack.Screen
+        name="UsageSettings"
+        component={UsageSettingsScreen}
         options={{
           headerShown: false,
           gestureEnabled: true,
