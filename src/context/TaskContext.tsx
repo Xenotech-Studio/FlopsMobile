@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { TaskItem, Project, NewTaskPayload } from '../taskApi';
 import * as taskApi from '../taskApi';
 import { useSession } from './SessionContext';
+import { getDoneQualityWhenToggling, projectHasAcceptancePhase } from '../utils/taskAcceptance';
 
 const ENDED_TODAY_KEY = '@FlopsMobile/endedTodayDate';
 const CACHED_TASKS_KEY = '@FlopsMobile/cachedTasks';
@@ -275,10 +276,22 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   const toggleTaskCompletion = useCallback(
     async (task: TaskItem) => {
       if (!auth) return;
+      const proj = projects.find((p) => p.id === task.project_id) ?? null;
+      const hasAcceptancePhase = projectHasAcceptancePhase(proj);
+      const nextDone = !task.done;
+      const done_quality = getDoneQualityWhenToggling({
+        hasAcceptancePhase,
+        checked: nextDone,
+        ctrlPressed: false,
+        currentDoneQuality: task.done_quality ?? 'reviewing',
+        taskType: task.type ?? 'task',
+      });
       const next: TaskItem = {
         ...task,
-        done: !task.done,
-        completed_time: !task.done
+        done: nextDone,
+        done_quality,
+        doing: nextDone ? false : (task.doing ?? false),
+        completed_time: nextDone
           ? new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
           : undefined,
       };
@@ -292,7 +305,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
         setErrorMessage(e instanceof Error ? e.message : '更新失败');
       }
     },
-    [auth]
+    [auth, projects]
   );
 
   const updateTaskPriority = useCallback(

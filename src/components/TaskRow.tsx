@@ -163,6 +163,14 @@ export function TaskRow({
 
   const handleToggle = () => {
     if (!task.done) {
+      if (Platform.OS === 'android') {
+        Vibration.vibrate([0, 18, 55, 22]);
+      } else {
+        ReactNativeHapticFeedback.trigger('impactLight', { enableVibrateFallback: true });
+        setTimeout(() => {
+          ReactNativeHapticFeedback.trigger('impactMedium', { enableVibrateFallback: true });
+        }, 55);
+      }
       setVisualDone(true);
       setTimeout(() => onToggleCompletion(), 400);
     } else {

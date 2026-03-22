@@ -44,6 +44,10 @@ export interface Project {
   users?: string[] | null;
   createddatetime?: string | null;
   lastediteddatetime?: string | null;
+  /** true = 跳过验收环节（完成即 done_quality=done，与 Web / flowtaskserver 一致） */
+  skip_acceptance_phase?: boolean | null;
+  /** 兼容旧字段；优先使用 skip_acceptance_phase */
+  has_acceptance_phase?: boolean | null;
 }
 
 export interface NewTaskPayload {

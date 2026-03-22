@@ -4,7 +4,7 @@
  * - 完整模式：状态 Toggle、优先级/完成程度、类型、时间、备注
  * - 自动保存（编辑模式防抖 1 秒）
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -28,7 +28,12 @@ import type { RouteProp } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useTask } from '../context/TaskContext';
 import type { TasksStackParamList } from '../navigation/types';
-import type { TaskItem, Project, NewTaskPayload } from '../taskApi';
+import type { TaskItem, NewTaskPayload } from '../taskApi';
+import {
+  getDoneQualityWhenToggling,
+  projectHasAcceptancePhase,
+  shouldShowDoneQualitySelect,
+} from '../utils/taskAcceptance';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { IOSStyleSwitch } from '../components/IOSStyleSwitch';
 import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
@@ -114,8 +119,8 @@ const PRIORITY_OPTIONS = [
 ];
 
 const DONE_QUALITY_OPTIONS = [
-  { value: 'reviewing', label: '有待测试' },
-  { value: 'done', label: '完成' },
+  { value: 'reviewing', label: '待验收' },
+  { value: 'done', label: '完全完成' },
   { value: 'wasted', label: '浪费' },
 ];
 
@@ -137,6 +142,7 @@ export function TaskDetailScreen() {
 
   const task = tasks.find((t) => t.id === taskId) ?? null;
   const project = projects.find((p) => p.id === (isCreate ? projectId : task?.project_id));
+  const hasAcceptancePhase = projectHasAcceptancePhase(project ?? null);
 
   const [editedTitle, setEditedTitle] = useState('');
   const [editedNote, setEditedNote] = useState('');
@@ -158,6 +164,18 @@ export function TaskDetailScreen() {
     mode: 'date' | 'time';
     layout?: { x: number; y: number; width: number; height: number };
   } | null>(null);
+
+  const showDoneQualityPicker = useMemo(
+    () =>
+      editedType === 'task' &&
+      editedDone &&
+      shouldShowDoneQualitySelect(hasAcceptancePhase, editedType, editedDone),
+    [editedType, editedDone, hasAcceptancePhase]
+  );
+  const showPriorityOrQualityRow = useMemo(
+    () => editedType === 'task' && (!editedDone || showDoneQualityPicker),
+    [editedType, editedDone, showDoneQualityPicker]
+  );
 
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const titleMarginTopAnim = useRef(new Animated.Value(-2)).current;
@@ -564,44 +582,64 @@ export function TaskDetailScreen() {
                     />
                   </View>
                 )}
-                <View style={[styles.row, editedDone && styles.rowFirst, editedType !== 'task' && styles.rowLast]}>
-                  <Text style={[styles.rowLabel, { color: taskColor }]}>已完成</Text>
+                <View
+                  style={[
+                    styles.row,
+                    editedDone && styles.rowFirst,
+                    editedType !== 'task' || !showPriorityOrQualityRow ? styles.rowLast : undefined,
+                  ]}
+                >
+                  <Text style={[styles.rowLabel, { color: taskColor }]}>
+                    {hasAcceptancePhase ? '已完成' : '完成'}
+                  </Text>
                   <IOSStyleSwitch
                     value={editedDone}
                     onValueChange={(v) => {
-                      setEditedDone(v);
+                      const done_quality = getDoneQualityWhenToggling({
+                        hasAcceptancePhase,
+                        checked: v,
+                        ctrlPressed: false,
+                        currentDoneQuality: editedDoneQuality,
+                        taskType: editedType,
+                      });
+                      setEditedDoneQuality(done_quality);
                       if (v) setEditedDoing(false);
+                      setEditedDone(v);
                     }}
                     trackColorOff="#e5e7eb"
                     trackColorOn={taskColor}
                   />
                 </View>
-                {editedType === 'task' && (
+                {showPriorityOrQualityRow && (
                   <View style={[styles.row, styles.rowLast]}>
                     <Text style={styles.rowLabel}>
-                      {editedDone ? '完成程度' : '优先级'}
+                      {editedDone && showDoneQualityPicker ? '完成程度' : '优先级'}
                     </Text>
                     <TouchableOpacity
                       style={styles.pickerRow}
                       onPress={() => {
-                        const opts = editedDone ? DONE_QUALITY_OPTIONS : PRIORITY_OPTIONS;
-                        const current = editedDone ? editedDoneQuality : editedPriority;
+                        const useQuality = editedDone && showDoneQualityPicker;
+                        const opts = useQuality ? DONE_QUALITY_OPTIONS : PRIORITY_OPTIONS;
                         Alert.alert(
-                          editedDone ? '完成程度' : '优先级',
+                          useQuality ? '完成程度' : '优先级',
                           undefined,
-                          opts.map((o) => ({
-                            text: o.label,
-                            onPress: () =>
-                              editedDone ? setEditedDoneQuality(o.value) : setEditedPriority(o.value),
-                          })).concat([{ text: '取消', style: 'cancel' as const }]),
+                          opts
+                            .map((o) => ({
+                              text: o.label,
+                              onPress: () =>
+                                useQuality ? setEditedDoneQuality(o.value) : setEditedPriority(o.value),
+                            }))
+                            .concat([{ text: '取消', style: 'cancel' as const }]),
                           { cancelable: true }
                         );
                       }}
                     >
                       <Text style={styles.pickerRowText}>
-                        {(editedDone ? DONE_QUALITY_OPTIONS : PRIORITY_OPTIONS).find(
-                          (o) => o.value === (editedDone ? editedDoneQuality : editedPriority)
-                        )?.label ?? ''}
+                        {(editedDone && showDoneQualityPicker
+                          ? DONE_QUALITY_OPTIONS
+                          : PRIORITY_OPTIONS
+                        ).find((o) => o.value === (editedDone && showDoneQualityPicker ? editedDoneQuality : editedPriority))
+                          ?.label ?? ''}
                       </Text>
                       <Ionicons name="chevron-forward" size={16} color="#9ca3af" />
                     </TouchableOpacity>
