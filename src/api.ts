@@ -2,6 +2,7 @@
  * Flops 服务端 API 客户端（仅 chat 相关）
  * 与 FlopsDesktop 行为对齐：登录、会话、流式聊天、取消、安全确认。
  */
+import { convProfileLog } from './debug/conversationLoadProfile';
 import { fetchWithDebugLog } from './utils/httpDebugLog';
 
 export type Session = {
@@ -11,6 +12,7 @@ export type Session = {
 };
 
 export type ChatStreamEvent =
+  | { type: 'v2_run'; run_id?: string }
   | { type: 'thinking' }
   | { type: 'checking_tools' }
   | { type: 'tool_call_start'; index: number; name: string }
@@ -148,6 +150,10 @@ export type ConversationListItem = {
   created_at?: string;
   updated_at?: string;
   message_count?: number;
+  /** 与 Web 列表一致：chat_v2 是否有进行中的 run */
+  chat_v2_running?: boolean;
+  /** 与 Web 列表一致：本轮结束后未在会话内读过 */
+  chat_v2_unread?: boolean;
 };
 
 export type ConversationMessage = {
@@ -163,6 +169,8 @@ export type Conversation = {
   created_at?: string;
   updated_at?: string;
   messages?: ConversationMessage[];
+  /** 服务端仍有进行中的 chat_v2 run 时存在，用于 subscribe_only 恢复 */
+  active_chat_v2_run_id?: string;
 };
 
 /**
@@ -185,6 +193,64 @@ export async function listConversations(
   return { conversations: list };
 }
 
+type ResponseBodyReader = { read(): Promise<{ value?: Uint8Array; done: boolean }> };
+
+/**
+ * 对话列表「进行中 / 未读」实时状态：GET /api/conversations/inbox/stream（SSE），与 FlopsWeb ConversationList 对齐。
+ * 需在 RN 开启流式 response.body（与 streamChat 相同）。
+ */
+export async function runInboxStream(
+  session: Session,
+  signal: AbortSignal,
+  onData: (msg: Record<string, unknown>) => void
+): Promise<void> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/conversations/inbox/stream`, {
+    method: 'GET',
+    headers: authHeaders(session.access_token),
+    signal,
+    reactNative: { textStreaming: true },
+  } as RequestInit);
+  if (!res.ok) return;
+  const resAny = res as { body?: { getReader(): ResponseBodyReader } };
+  const reader = resAny.body?.getReader();
+  if (!reader) return;
+
+  const g = (typeof globalThis !== 'undefined' ? globalThis : {}) as Record<string, unknown>;
+  const TD = g.TextDecoder as new (label?: string) => { decode(d: Uint8Array): string } | undefined;
+  const decodeChunk = (b: Uint8Array | undefined): string => {
+    if (!b) return '';
+    if (!TD) return Array.from(b).map((c) => String.fromCharCode(c)).join('');
+    return new TD('utf-8').decode(b);
+  };
+  let buffer = '';
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decodeChunk(value);
+    let sep: number;
+    while ((sep = buffer.indexOf('\n\n')) !== -1) {
+      const frame = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      const dataLine = frame
+        .split('\n')
+        .map((l) => l.trim())
+        .find((l) => l.startsWith('data:'));
+      if (!dataLine) continue;
+      const raw = dataLine.slice(5).trim();
+      if (!raw) continue;
+      try {
+        const msg = JSON.parse(raw) as Record<string, unknown>;
+        onData(msg);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 /**
  * 获取单个对话详情（含消息）：GET /api/conversations/:id
  */
@@ -193,15 +259,32 @@ export async function getConversation(
   conversationId: string
 ): Promise<{ conversation: Conversation }> {
   const base = session.server_base_url;
+  const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const res = await fetchWithDebugLog(`${base}api/conversations/${conversationId}`, {
     method: 'GET',
     headers: authHeaders(session.access_token),
   });
+  const t1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail || `获取对话失败: ${res.status}`);
   }
   const conversation = (await res.json()) as Conversation;
+  const t2 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const msgs = conversation?.messages;
+  const messageCount = Array.isArray(msgs) ? msgs.length : 0;
+  const rid = conversation?.active_chat_v2_run_id;
+  const hasActiveRun = typeof rid === 'string' && rid.trim().length > 0;
+  convProfileLog('getConversation', {
+    conversationId,
+    /** fetch Promise resolve（RN 上通常接近首包+下载完成，不等同于纯 TTFB） */
+    fetchAwaitMs: Math.round(t1 - t0),
+    resJsonParseMs: Math.round(t2 - t1),
+    fetchPlusJsonMs: Math.round(t2 - t0),
+    status: res.status,
+    messageCount,
+    hasActiveRun,
+  });
   return { conversation };
 }
 
@@ -313,7 +396,7 @@ export async function streamChat(
             if ('done' in parsed && parsed.done === true) return;
             if ('type' in parsed && parsed.type === 'cancelled') return;
             // 让每个 tool_result_chunk 单独一帧渲染，等下一帧再处理下一条，便于 UI 逐段绘制
-            if (parsed.type === 'tool_result_chunk') {
+            if ('type' in parsed && parsed.type === 'tool_result_chunk') {
               await new Promise<void>((r) => {
                 if (typeof requestAnimationFrame !== 'undefined') {
                   requestAnimationFrame(() => setTimeout(r, 0));
@@ -329,6 +412,163 @@ export async function streamChat(
       }
       boundary = buffer.indexOf('\n\n');
     }
+  }
+}
+
+const CHAT_V2_RECONNECT_MAX = 8;
+const CHAT_V2_RECONNECT_DELAY_MS = 300;
+
+export type ChatV2StreamStart =
+  | { tag: 'new_message'; message: string }
+  | { tag: 'regenerate'; after_user_index: number }
+  | { tag: 'resume'; run_id: string };
+
+export type StreamChatV2LoopOptions = {
+  /** 返回 false 时停止循环（例如已切换对话） */
+  isAlive?: () => boolean;
+};
+
+function getTextDecoder(): { decode(chunk: Uint8Array, options?: { stream?: boolean }): string } {
+  const g = (typeof globalThis !== 'undefined' ? globalThis : {}) as Record<string, unknown>;
+  const TD = g.TextDecoder as
+    | (new (label?: string) => { decode(chunk: Uint8Array, options?: { stream?: boolean }): string })
+    | undefined;
+  if (TD) return new TD('utf-8');
+  return {
+    decode(chunk: Uint8Array) {
+      return Array.from(chunk)
+        .map((c) => String.fromCharCode(c))
+        .join('');
+    },
+  };
+}
+
+async function yieldToolResultChunkFrame(): Promise<void> {
+  await new Promise<void>((r) => {
+    if (typeof requestAnimationFrame !== 'undefined') {
+      requestAnimationFrame(() => setTimeout(r, 0));
+    } else {
+      setTimeout(r, 0);
+    }
+  });
+}
+
+/**
+ * chat_v2：首包发消息或 regenerate，断线后 subscribe_only + replay_from 重连（与 FlopsWeb 一致）。
+ */
+export async function streamChatV2Loop(
+  session: Session,
+  conversationId: string,
+  start: ChatV2StreamStart,
+  onEvent: (event: ChatStreamEvent) => void,
+  signal?: AbortSignal,
+  options?: StreamChatV2LoopOptions
+): Promise<void> {
+  const base = session.server_base_url;
+  const alive = options?.isAlive ?? (() => true);
+  let v2RunId = start.tag === 'resume' ? String(start.run_id || '').trim() : '';
+  let replayFrom = 0;
+  let reconnectAttempt = 0;
+  let streamCompleted = false;
+  const decoder = getTextDecoder();
+
+  const consumeReader = async (
+    reader: { read(): Promise<{ value?: Uint8Array; done: boolean }> }
+  ): Promise<void> => {
+    let buffer = '';
+    while (alive() && !signal?.aborted) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      buffer += decoder.decode(value, { stream: true });
+      let newlineIndex: number;
+      while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        if (line.trim() === '') continue;
+        if (!line.startsWith('data:')) continue;
+        const jsonStr = line.slice(5).trim();
+        if (!jsonStr) continue;
+        replayFrom += 1;
+        let data: ChatStreamEvent & { done?: boolean; type?: string };
+        try {
+          data = JSON.parse(jsonStr) as ChatStreamEvent & { done?: boolean; type?: string };
+        } catch {
+          continue;
+        }
+        if (data.type === 'v2_run' && typeof (data as { run_id?: string }).run_id === 'string') {
+          const rid = (data as { run_id: string }).run_id;
+          if (rid) v2RunId = rid;
+        }
+        if ('error' in data && data.error) {
+          throw new Error(String(data.error));
+        }
+        onEvent(data as ChatStreamEvent);
+        if ('done' in data && data.done === true) {
+          streamCompleted = true;
+          return;
+        }
+        if ('type' in data && data.type === 'cancelled') {
+          streamCompleted = true;
+          return;
+        }
+        if ('type' in data && data.type === 'tool_result_chunk') {
+          await yieldToolResultChunkFrame();
+        }
+      }
+    }
+  };
+
+  while (!streamCompleted && alive() && !signal?.aborted) {
+    const isReconnect = reconnectAttempt > 0;
+    let body: Record<string, unknown>;
+    if (isReconnect) {
+      body = { subscribe_only: true, run_id: v2RunId, replay_from: replayFrom };
+    } else if (start.tag === 'new_message') {
+      body = { message: start.message };
+    } else if (start.tag === 'regenerate') {
+      body = { regenerate: true, after_user_index: start.after_user_index };
+    } else {
+      body = { subscribe_only: true, run_id: v2RunId, replay_from: 0 };
+    }
+
+    const res = await fetchWithDebugLog(`${base}api/conversations/${conversationId}/chat_v2`, {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify(body),
+      signal,
+      reactNative: { textStreaming: true },
+    } as RequestInit);
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const detail = (err as { detail?: string }).detail || `请求失败: ${res.status}`;
+      if (res.status === 409 && !isReconnect) {
+        throw new Error('该对话已有进行中的回复，请等待结束或稍后重试');
+      }
+      if (isReconnect) {
+        throw new Error(`流重连失败(${res.status}): ${detail}`);
+      }
+      throw new Error(detail);
+    }
+
+    const resAny = res as {
+      body?: { getReader(): { read(): Promise<{ value?: Uint8Array; done: boolean }> } };
+    };
+    const reader = resAny.body?.getReader();
+    if (!reader) throw new Error('响应无 body');
+
+    await consumeReader(reader);
+
+    if (streamCompleted || signal?.aborted || !alive()) return;
+    if (!v2RunId) throw new Error('流中断且缺少 run_id，无法恢复');
+    reconnectAttempt += 1;
+    if (reconnectAttempt > CHAT_V2_RECONNECT_MAX) {
+      throw new Error('流式连接中断，重连次数已达上限');
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, CHAT_V2_RECONNECT_DELAY_MS);
+    });
   }
 }
 

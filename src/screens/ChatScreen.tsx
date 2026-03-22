@@ -14,20 +14,23 @@ import {
   ActivityIndicator,
   Image,
   Animated,
+  AppState,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { convProfileLog } from '../debug/conversationLoadProfile';
 import { useSession } from '../context/SessionContext';
 import type { RootStackParamList } from '../navigation/types';
 import {
   createConversation,
-  streamChat,
+  streamChatV2Loop,
   cancelConversation,
   submitSafetyDecision,
   getConversation,
   type ChatStreamEvent,
+  type ChatV2StreamStart,
   type ConversationMessage,
 } from '../api';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -172,6 +175,16 @@ function coalesceAssistantTurn(messages: ConversationMessage[]): Message | null 
   };
 }
 
+/** 与 FlopsWeb Chat.jsx 一致：存在进行中的 chat_v2 run 时去掉最后一条 user 之后的回复，避免与 subscribe 回放叠两套 */
+function truncateMessagesAfterLastUser(messages: Message[]): Message[] {
+  let lastUserIdx = -1;
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role === 'user') lastUserIdx = i;
+  }
+  if (lastUserIdx < 0) return messages;
+  return messages.slice(0, lastUserIdx + 1);
+}
+
 type ChatRouteParams = RootStackParamList['Chat'];
 
 /** Header 底部的 loading 条（与 Web flops-read-pages-card-header-loadbar 一致） */
@@ -215,6 +228,10 @@ export function ChatScreen() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messageInput, setMessageInput] = useState('');
   const [loading, setLoading] = useState(false);
+  /** 仅从路由拉取对话历史（GET conversation）期间，与流式 loading 分离 */
+  const [conversationHistoryLoading, setConversationHistoryLoading] = useState(false);
+  /** 正在执行 resumeV2Stream（含 AppState 恢复），用于空占位文案显示 Resuming... */
+  const [v2ResumeUiActive, setV2ResumeUiActive] = useState(false);
   const [streamingText, setStreamingText] = useState('');
   const [streamStatus, setStreamStatus] = useState('');
   const [currentAssistantBlocks, setCurrentAssistantBlocks] = useState<StreamBlock[]>([]);
@@ -241,11 +258,273 @@ export function ChatScreen() {
   const shouldScrollToEndRef = useRef(false);
   /** 与 shouldScrollToEndRef 配套：历史对话首次定位到底部用无动画，其余保持 true */
   const scrollToEndAnimatedRef = useRef(true);
+  const conversationIdRef = useRef(conversationId);
+  const sessionRef = useRef(session);
+  const pausedByBackgroundRef = useRef(false);
+  const hadBackgroundPauseRef = useRef(false);
+  const streamInFlightRef = useRef(false);
+  /** 供 Abort 后 catch 中读取本轮已流式片段（避免闭包陈旧） */
+  const streamCaptureRef = useRef<{ text: string; blocks: StreamBlock[] }>({ text: '', blocks: [] });
+  /** 路由进入会话时的 GET 请求代数，避免快速切换会话时旧响应误关 loading */
+  const conversationRouteFetchGenRef = useRef(0);
 
-  const canSend = Boolean(session && messageInput.trim() && !loading);
+  useEffect(() => {
+    conversationIdRef.current = conversationId;
+  }, [conversationId]);
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  const canSend = Boolean(
+    session && messageInput.trim() && !loading && !conversationHistoryLoading
+  );
+
+  const runV2WithHandlers = useCallback(
+    async (opts: {
+      convId: string;
+      start: ChatV2StreamStart;
+      signal: AbortSignal;
+    }): Promise<{
+      streamDone: boolean;
+      finalText: string;
+      localBlocks: StreamBlock[];
+      lastConvId: string;
+    }> => {
+      if (!session) throw new Error('未登录');
+      const streamTargetRef = { current: opts.convId };
+      const localBlocks: StreamBlock[] = [];
+      let finalText = '';
+      let streamDone = false;
+      streamCaptureRef.current = { text: '', blocks: [] };
+
+      const syncBlocks = () => {
+        setCurrentAssistantBlocks([...localBlocks]);
+        finalText = localBlocks
+          .filter((b): b is { type: 'text'; content: string } => b.type === 'text')
+          .map((b) => b.content)
+          .join('');
+        setStreamingText(finalText);
+        streamCaptureRef.current = { text: finalText, blocks: [...localBlocks] };
+      };
+
+      const findLastToolBlockByIndex = (index: number): number => {
+        for (let i = localBlocks.length - 1; i >= 0; i--) {
+          const b = localBlocks[i];
+          if (b.type === 'tool' && b.index === index) return i;
+        }
+        return -1;
+      };
+
+      const onEvent = (event: ChatStreamEvent) => {
+        if ('type' in event && event.type === 'v2_run') return;
+        if ('conversation_id' in event && event.conversation_id) {
+          streamTargetRef.current = event.conversation_id;
+          setConversationId(event.conversation_id);
+        }
+        const e = event as unknown as { type?: string; title?: string };
+        if (e.type === 'conversation_title' && typeof e.title === 'string') {
+          setConversationTitle(e.title);
+        }
+        if ('error' in event && event.error) throw new Error(String(event.error));
+        if ('type' in event) {
+          if (event.type === 'thinking') setStreamStatus('thinking');
+          if (event.type === 'checking_tools') setStreamStatus('checking_tools');
+          if (event.type === 'tool_call_start') {
+            const idx = event.index ?? 0;
+            const name = String(event.name || '');
+            const i = findLastToolBlockByIndex(idx);
+            const existingCompleted = i >= 0 && localBlocks[i].type === 'tool' && localBlocks[i].status === 'completed';
+            if (i >= 0 && !existingCompleted) {
+              localBlocks[i] = {
+                ...localBlocks[i],
+                type: 'tool',
+                index: idx,
+                tool_name: name,
+                status: 'pending',
+                arguments: '',
+                streaming_content: '',
+              } as StreamBlock;
+            } else {
+              localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' });
+            }
+            syncBlocks();
+          }
+          if (event.type === 'tool_call_delta') {
+            const idx = event.index ?? 0;
+            const delta = event.arguments_delta ?? '';
+            const i = findLastToolBlockByIndex(idx);
+            if (i >= 0 && localBlocks[i].type === 'tool') {
+              localBlocks[i] = { ...localBlocks[i], arguments: (localBlocks[i].arguments || '') + delta };
+              syncBlocks();
+            }
+          }
+          if (event.type === 'tool_call_ready') {
+            const idx = event.index ?? 0;
+            const name = String(event.name || '');
+            const args = event.arguments ?? '{}';
+            const i = findLastToolBlockByIndex(idx);
+            if (i >= 0 && localBlocks[i].type === 'tool') {
+              localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: args, status: 'waiting' };
+            } else {
+              localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'waiting', arguments: args, streaming_content: '' });
+            }
+            syncBlocks();
+          }
+          if (event.type === 'tool_call_executing') {
+            const idx = event.index ?? 0;
+            const i = findLastToolBlockByIndex(idx);
+            if (i >= 0 && localBlocks[i].type === 'tool') {
+              localBlocks[i] = { ...localBlocks[i], status: 'running' };
+              setStreamStatus('tool_running');
+              syncBlocks();
+            }
+          }
+          if (event.type === 'tool_call_done') {
+            const idx = event.index ?? 0;
+            const i = findLastToolBlockByIndex(idx);
+            if (i >= 0 && localBlocks[i].type === 'tool') {
+              localBlocks[i] = { ...localBlocks[i], status: 'completed' };
+              setStreamStatus('tool_result');
+              syncBlocks();
+            }
+          }
+          if (event.type === 'tool_start') {
+            setStreamStatus('tool_running');
+            const name = String(event.tool_name || 'unknown');
+            const idx = (event as { index?: number }).index;
+            if (typeof idx === 'number') {
+              const i = findLastToolBlockByIndex(idx);
+              const existingCompleted = i >= 0 && localBlocks[i].type === 'tool' && localBlocks[i].status === 'completed';
+              if (i >= 0 && !existingCompleted && localBlocks[i].type === 'tool') {
+                localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: event.arguments, status: 'running', streaming_content: '' };
+              } else {
+                localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'running', arguments: event.arguments, streaming_content: '' });
+              }
+            } else {
+              let updated = false;
+              for (let i = 0; i < localBlocks.length; i++) {
+                const b = localBlocks[i];
+                if (b.type === 'tool' && b.tool_name === name && b.status !== 'completed') {
+                  localBlocks[i] = { ...b, status: 'running', arguments: event.arguments, streaming_content: '' };
+                  updated = true;
+                  break;
+                }
+              }
+              if (!updated) {
+                localBlocks.push({ type: 'tool', tool_name: name, status: 'running', arguments: event.arguments, streaming_content: '' });
+              }
+            }
+            syncBlocks();
+          }
+          if (event.type === 'tool_stream') {
+            const name = String(event.tool_name || 'local_cursor_agent');
+            const chunk = typeof (event as { chunk?: string }).chunk === 'string' ? (event as { chunk: string }).chunk : '';
+            if (chunk) {
+              for (let i = localBlocks.length - 1; i >= 0; i--) {
+                const b = localBlocks[i];
+                if (b.type === 'tool' && b.tool_name === name && b.status === 'running') {
+                  const cur = b.streaming_content ?? '';
+                  localBlocks[i] = { ...b, streaming_content: cur + chunk };
+                  break;
+                }
+              }
+              syncBlocks();
+            }
+          }
+          if (event.type === 'tool_result_chunk') {
+            const idx = event.index ?? 0;
+            const i = findLastToolBlockByIndex(idx);
+            if (i >= 0 && localBlocks[i].type === 'tool') {
+              const result = mergeToolResultChunk(localBlocks[i].result, {
+                patches: event.patches,
+                stdout_append: event.stdout_append,
+                set: event.set,
+                readings_by_url: event.readings_by_url,
+              });
+              localBlocks[i] = { ...localBlocks[i], result };
+              syncBlocks();
+            }
+          }
+          if (event.type === 'tool_result') {
+            setStreamStatus('tool_result');
+            const name = event.tool_name;
+            const idx = (event as { index?: number }).index;
+            if (typeof idx === 'number') {
+              const i = findLastToolBlockByIndex(idx);
+              if (i >= 0 && localBlocks[i].type === 'tool') {
+                localBlocks[i] = { ...localBlocks[i], status: 'completed', result: event.result };
+              }
+            } else {
+              for (let i = localBlocks.length - 1; i >= 0; i--) {
+                const b = localBlocks[i];
+                if (b.type === 'tool' && b.tool_name === name) {
+                  localBlocks[i] = { ...b, status: 'completed', result: event.result };
+                  break;
+                }
+              }
+            }
+            syncBlocks();
+          }
+          if (event.type === 'safety_confirmation_required') {
+            setStreamStatus('awaiting_safety_confirmation');
+            const name = event.tool_name;
+            let updated = false;
+            for (let i = localBlocks.length - 1; i >= 0; i--) {
+              const b = localBlocks[i];
+              if (b.type === 'tool' && b.tool_name === name) {
+                localBlocks[i] = {
+                  ...b,
+                  status: 'awaiting_confirmation',
+                  arguments: event.command ?? (event as { arguments?: string }).arguments,
+                  review_id: event.review_id,
+                  conversation_id: event.conversation_id || streamTargetRef.current,
+                  review: event.review,
+                  command: event.command,
+                  cwd: event.cwd,
+                };
+                updated = true;
+                break;
+              }
+            }
+            if (!updated) {
+              localBlocks.push({
+                type: 'tool',
+                tool_name: name,
+                status: 'awaiting_confirmation',
+                review_id: event.review_id,
+                conversation_id: event.conversation_id || streamTargetRef.current,
+                review: event.review,
+                command: event.command,
+                cwd: event.cwd,
+              });
+            }
+            syncBlocks();
+          }
+        }
+        if ('content' in event && typeof event.content === 'string' && event.content.length > 0) {
+          setStreamStatus('streaming_text');
+          const last = localBlocks[localBlocks.length - 1];
+          if (last && last.type === 'text') {
+            last.content += event.content;
+          } else {
+            localBlocks.push({ type: 'text', content: event.content });
+          }
+          syncBlocks();
+        }
+        if ('done' in event && event.done === true) streamDone = true;
+      };
+
+      await streamChatV2Loop(session, streamTargetRef.current, opts.start, onEvent, opts.signal, {
+        isAlive: () => conversationIdRef.current === streamTargetRef.current,
+      });
+
+      return { streamDone, finalText, localBlocks, lastConvId: streamTargetRef.current };
+    },
+    [session]
+  );
 
   const handleSendMessage = useCallback(async () => {
-    if (!session || !messageInput.trim() || loading) return;
+    if (!session || !messageInput.trim() || loading || conversationHistoryLoading) return;
     const nextMessage = messageInput.trim();
     setMessageInput('');
     setError('');
@@ -274,223 +553,20 @@ export function ChatScreen() {
     const controller = new AbortController();
     abortRef.current = controller;
     manualStopRef.current = false;
-    let finalText = '';
-    let streamDone = false;
-    const localBlocks: StreamBlock[] = [];
-
-    const syncBlocks = () => {
-      setCurrentAssistantBlocks([...localBlocks]);
-      finalText = localBlocks
-        .filter((b): b is { type: 'text'; content: string } => b.type === 'text')
-        .map((b) => b.content)
-        .join('');
-      setStreamingText(finalText);
-    };
-
-    const findLastToolBlockByIndex = (index: number): number => {
-      for (let i = localBlocks.length - 1; i >= 0; i--) {
-        const b = localBlocks[i];
-        if (b.type === 'tool' && b.index === index) return i;
-      }
-      return -1;
-    };
-
-    const onEvent = (event: ChatStreamEvent) => {
-      if ('conversation_id' in event && event.conversation_id && !convId) {
-        setConversationId(event.conversation_id);
-        convId = event.conversation_id;
-      }
-      const e = event as unknown as { type?: string; title?: string };
-      if (e.type === 'conversation_title' && typeof e.title === 'string') {
-        setConversationTitle(e.title);
-      }
-      if ('error' in event && event.error) throw new Error(event.error);
-      if ('type' in event) {
-        if (event.type === 'thinking') setStreamStatus('thinking');
-        if (event.type === 'checking_tools') setStreamStatus('checking_tools');
-        if (event.type === 'tool_call_start') {
-          const idx = event.index ?? 0;
-          const name = String(event.name || '');
-          const i = findLastToolBlockByIndex(idx);
-          const existingCompleted = i >= 0 && localBlocks[i].type === 'tool' && localBlocks[i].status === 'completed';
-          if (i >= 0 && !existingCompleted) {
-            localBlocks[i] = { ...localBlocks[i], type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' } as StreamBlock;
-          } else {
-            localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' });
-          }
-          syncBlocks();
-        }
-        if (event.type === 'tool_call_delta') {
-          const idx = event.index ?? 0;
-          const delta = event.arguments_delta ?? '';
-          const i = findLastToolBlockByIndex(idx);
-          if (i >= 0 && localBlocks[i].type === 'tool') {
-            localBlocks[i] = { ...localBlocks[i], arguments: (localBlocks[i].arguments || '') + delta };
-            syncBlocks();
-          }
-        }
-        if (event.type === 'tool_call_ready') {
-          const idx = event.index ?? 0;
-          const name = String(event.name || '');
-          const args = event.arguments ?? '{}';
-          const i = findLastToolBlockByIndex(idx);
-          if (i >= 0 && localBlocks[i].type === 'tool') {
-            localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: args, status: 'waiting' };
-          } else {
-            localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'waiting', arguments: args, streaming_content: '' });
-          }
-          syncBlocks();
-        }
-        if (event.type === 'tool_call_executing') {
-          const idx = event.index ?? 0;
-          const i = findLastToolBlockByIndex(idx);
-          if (i >= 0 && localBlocks[i].type === 'tool') {
-            localBlocks[i] = { ...localBlocks[i], status: 'running' };
-            setStreamStatus('tool_running');
-            syncBlocks();
-          }
-        }
-        if (event.type === 'tool_call_done') {
-          const idx = event.index ?? 0;
-          const i = findLastToolBlockByIndex(idx);
-          if (i >= 0 && localBlocks[i].type === 'tool') {
-            localBlocks[i] = { ...localBlocks[i], status: 'completed' };
-            setStreamStatus('tool_result');
-            syncBlocks();
-          }
-        }
-        if (event.type === 'tool_start') {
-          setStreamStatus('tool_running');
-          const name = String(event.tool_name || 'unknown');
-          const idx = (event as { index?: number }).index;
-          if (typeof idx === 'number') {
-            const i = findLastToolBlockByIndex(idx);
-            const existingCompleted = i >= 0 && localBlocks[i].type === 'tool' && localBlocks[i].status === 'completed';
-            if (i >= 0 && !existingCompleted && localBlocks[i].type === 'tool') {
-              localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: event.arguments, status: 'running', streaming_content: '' };
-            } else {
-              localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'running', arguments: event.arguments, streaming_content: '' });
-            }
-          } else {
-            let updated = false;
-            for (let i = 0; i < localBlocks.length; i++) {
-              const b = localBlocks[i];
-              if (b.type === 'tool' && b.tool_name === name && b.status !== 'completed') {
-                localBlocks[i] = { ...b, status: 'running', arguments: event.arguments, streaming_content: '' };
-                updated = true;
-                break;
-              }
-            }
-            if (!updated) {
-              localBlocks.push({ type: 'tool', tool_name: name, status: 'running', arguments: event.arguments, streaming_content: '' });
-            }
-          }
-          syncBlocks();
-        }
-        if (event.type === 'tool_stream') {
-          const name = String(event.tool_name || 'local_cursor_agent');
-          const chunk = typeof (event as { chunk?: string }).chunk === 'string' ? (event as { chunk: string }).chunk : '';
-          if (chunk) {
-            for (let i = localBlocks.length - 1; i >= 0; i--) {
-              const b = localBlocks[i];
-              if (b.type === 'tool' && b.tool_name === name && b.status === 'running') {
-                const cur = b.streaming_content ?? '';
-                localBlocks[i] = { ...b, streaming_content: cur + chunk };
-                break;
-              }
-            }
-            syncBlocks();
-          }
-        }
-        if (event.type === 'tool_result_chunk') {
-          const idx = event.index ?? 0;
-          const i = findLastToolBlockByIndex(idx);
-          if (i >= 0 && localBlocks[i].type === 'tool') {
-            const result = mergeToolResultChunk(localBlocks[i].result, {
-              patches: event.patches,
-              stdout_append: event.stdout_append,
-              set: event.set,
-              readings_by_url: event.readings_by_url,
-            });
-            localBlocks[i] = { ...localBlocks[i], result };
-            syncBlocks();
-          }
-        }
-        if (event.type === 'tool_result') {
-          setStreamStatus('tool_result');
-          const name = event.tool_name;
-          const idx = (event as { index?: number }).index;
-          if (typeof idx === 'number') {
-            const i = findLastToolBlockByIndex(idx);
-            if (i >= 0 && localBlocks[i].type === 'tool') {
-              localBlocks[i] = { ...localBlocks[i], status: 'completed', result: event.result };
-            }
-          } else {
-            for (let i = localBlocks.length - 1; i >= 0; i--) {
-              const b = localBlocks[i];
-              if (b.type === 'tool' && b.tool_name === name) {
-                localBlocks[i] = { ...b, status: 'completed', result: event.result };
-                break;
-              }
-            }
-          }
-          syncBlocks();
-        }
-        if (event.type === 'safety_confirmation_required') {
-          setStreamStatus('awaiting_safety_confirmation');
-          const name = event.tool_name;
-          let updated = false;
-          for (let i = localBlocks.length - 1; i >= 0; i--) {
-            const b = localBlocks[i];
-            if (b.type === 'tool' && b.tool_name === name) {
-              localBlocks[i] = {
-                ...b,
-                status: 'awaiting_confirmation',
-                arguments: event.command ?? (event as { arguments?: string }).arguments,
-                review_id: event.review_id,
-                conversation_id: event.conversation_id || convId,
-                review: event.review,
-                command: event.command,
-                cwd: event.cwd,
-              };
-              updated = true;
-              break;
-            }
-          }
-          if (!updated) {
-            localBlocks.push({
-              type: 'tool',
-              tool_name: name,
-              status: 'awaiting_confirmation',
-              review_id: event.review_id,
-              conversation_id: event.conversation_id || convId,
-              review: event.review,
-              command: event.command,
-              cwd: event.cwd,
-            });
-          }
-          syncBlocks();
-        }
-      }
-      if ('content' in event && typeof event.content === 'string' && event.content.length > 0) {
-        setStreamStatus('streaming_text');
-        const last = localBlocks[localBlocks.length - 1];
-        if (last && last.type === 'text') {
-          last.content += event.content;
-        } else {
-          localBlocks.push({ type: 'text', content: event.content });
-        }
-        syncBlocks();
-      }
-      if ('done' in event && event.done === true) streamDone = true;
-    };
+    streamInFlightRef.current = true;
 
     const timeout = setTimeout(() => {
       controller.abort();
     }, STREAM_TIMEOUT_MS);
 
+    let silentBackgroundAbort = false;
+
     try {
-      await streamChat(session, convId, nextMessage, onEvent, controller.signal);
+      const { streamDone, finalText, localBlocks } = await runV2WithHandlers({
+        convId,
+        start: { tag: 'new_message', message: nextMessage },
+        signal: controller.signal,
+      });
       clearTimeout(timeout);
       if (streamDone || finalText.trim()) {
         shouldScrollToEndRef.current = true;
@@ -505,19 +581,24 @@ export function ChatScreen() {
       }
     } catch (e) {
       clearTimeout(timeout);
-      if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
+      if (e && (e as { name?: string }).name === 'AbortError' && pausedByBackgroundRef.current) {
+        pausedByBackgroundRef.current = false;
+        silentBackgroundAbort = true;
+      } else if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
         shouldScrollToEndRef.current = true;
         const stoppedPrefix = '[已停止]\n';
-        const text = (finalText || '').trim();
+        const cap = streamCaptureRef.current;
+        const text = (cap.text || '').trim();
+        const bl = cap.blocks || [];
         setMessages((prev) => [
           ...prev,
           {
             role: 'assistant',
             content: text ? `${stoppedPrefix}${text}` : '[已停止]',
-            blocks: localBlocks.length ? [{ type: 'text', content: stoppedPrefix }, ...localBlocks] : undefined,
+            blocks: bl.length ? [{ type: 'text', content: stoppedPrefix }, ...bl] : undefined,
           },
         ]);
-      } else {
+      } else if (!silentBackgroundAbort) {
         shouldScrollToEndRef.current = true;
         const msg =
           (e as { name?: string })?.name === 'AbortError'
@@ -528,6 +609,7 @@ export function ChatScreen() {
         setMessages((prev) => [...prev, { role: 'error', content: msg }]);
       }
     } finally {
+      streamInFlightRef.current = false;
       abortRef.current = null;
       manualStopRef.current = false;
       setSubmittingReviewId('');
@@ -536,12 +618,13 @@ export function ChatScreen() {
       setCurrentAssistantBlocks([]);
       setStreamStatus('');
     }
-  }, [session, conversationId, messageInput, loading]);
+  }, [session, conversationId, messageInput, loading, conversationHistoryLoading, runV2WithHandlers]);
 
   /** 回退到第 (afterUserIndex+1) 条 user 消息处并重新生成该条 AI 回复 */
   const handleRegenerate = useCallback(
     async (afterUserIndex: number) => {
-      if (!session || !conversationId || loading || afterUserIndex == null) return;
+      if (!session || !conversationId || loading || conversationHistoryLoading || afterUserIndex == null)
+        return;
       setMessages((prev) => {
         let userCount = 0;
         let keepThroughIdx = -1;
@@ -567,214 +650,16 @@ export function ChatScreen() {
     const controller = new AbortController();
     abortRef.current = controller;
     manualStopRef.current = false;
-    let finalText = '';
-    let streamDone = false;
-    const localBlocks: StreamBlock[] = [];
-
-    const syncBlocks = () => {
-      setCurrentAssistantBlocks([...localBlocks]);
-      finalText = localBlocks
-        .filter((b): b is { type: 'text'; content: string } => b.type === 'text')
-        .map((b) => b.content)
-        .join('');
-      setStreamingText(finalText);
-    };
-
-    const findLastToolBlockByIndex = (index: number): number => {
-      for (let i = localBlocks.length - 1; i >= 0; i--) {
-        const b = localBlocks[i];
-        if (b.type === 'tool' && b.index === index) return i;
-      }
-      return -1;
-    };
-
-    const onEvent = (event: ChatStreamEvent) => {
-      if ('error' in event && event.error) throw new Error(event.error);
-      if ('type' in event) {
-        if (event.type === 'thinking') setStreamStatus('thinking');
-        if (event.type === 'checking_tools') setStreamStatus('checking_tools');
-        if (event.type === 'tool_call_start') {
-          const idx = event.index ?? 0;
-          const name = String(event.name || '');
-          const i = findLastToolBlockByIndex(idx);
-          const existingCompleted = i >= 0 && localBlocks[i].type === 'tool' && localBlocks[i].status === 'completed';
-          if (i >= 0 && !existingCompleted) {
-            localBlocks[i] = { ...localBlocks[i], type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' } as StreamBlock;
-          } else {
-            localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'pending', arguments: '', streaming_content: '' });
-          }
-          syncBlocks();
-        }
-        if (event.type === 'tool_call_delta') {
-          const idx = event.index ?? 0;
-          const delta = event.arguments_delta ?? '';
-          const i = findLastToolBlockByIndex(idx);
-          if (i >= 0 && localBlocks[i].type === 'tool') {
-            localBlocks[i] = { ...localBlocks[i], arguments: (localBlocks[i].arguments || '') + delta };
-            syncBlocks();
-          }
-        }
-        if (event.type === 'tool_call_ready') {
-          const idx = event.index ?? 0;
-          const name = String(event.name || '');
-          const args = event.arguments ?? '{}';
-          const i = findLastToolBlockByIndex(idx);
-          if (i >= 0 && localBlocks[i].type === 'tool') {
-            localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: args, status: 'waiting' };
-          } else {
-            localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'waiting', arguments: args, streaming_content: '' });
-          }
-          syncBlocks();
-        }
-        if (event.type === 'tool_call_executing') {
-          const idx = event.index ?? 0;
-          const i = findLastToolBlockByIndex(idx);
-          if (i >= 0 && localBlocks[i].type === 'tool') {
-            localBlocks[i] = { ...localBlocks[i], status: 'running' };
-            setStreamStatus('tool_running');
-            syncBlocks();
-          }
-        }
-        if (event.type === 'tool_call_done') {
-          const idx = event.index ?? 0;
-          const i = findLastToolBlockByIndex(idx);
-          if (i >= 0 && localBlocks[i].type === 'tool') {
-            localBlocks[i] = { ...localBlocks[i], status: 'completed' };
-            setStreamStatus('tool_result');
-            syncBlocks();
-          }
-        }
-        if (event.type === 'tool_start') {
-          setStreamStatus('tool_running');
-          const name = String(event.tool_name || 'unknown');
-          const idx = (event as { index?: number }).index;
-          if (typeof idx === 'number') {
-            const i = findLastToolBlockByIndex(idx);
-            const existingCompleted = i >= 0 && localBlocks[i].type === 'tool' && localBlocks[i].status === 'completed';
-            if (i >= 0 && !existingCompleted && localBlocks[i].type === 'tool') {
-              localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: event.arguments, status: 'running', streaming_content: '' };
-            } else {
-              localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'running', arguments: event.arguments, streaming_content: '' });
-            }
-          } else {
-            let updated = false;
-            for (let i = 0; i < localBlocks.length; i++) {
-              const b = localBlocks[i];
-              if (b.type === 'tool' && b.tool_name === name && b.status !== 'completed') {
-                localBlocks[i] = { ...b, status: 'running', arguments: event.arguments, streaming_content: '' };
-                updated = true;
-                break;
-              }
-            }
-            if (!updated) {
-              localBlocks.push({ type: 'tool', tool_name: name, status: 'running', arguments: event.arguments, streaming_content: '' });
-            }
-          }
-          syncBlocks();
-        }
-        if (event.type === 'tool_stream') {
-          const name = String(event.tool_name || 'local_cursor_agent');
-          const chunk = typeof (event as { chunk?: string }).chunk === 'string' ? (event as { chunk: string }).chunk : '';
-          if (chunk) {
-            for (let i = localBlocks.length - 1; i >= 0; i--) {
-              const b = localBlocks[i];
-              if (b.type === 'tool' && b.tool_name === name && b.status === 'running') {
-                const cur = b.streaming_content ?? '';
-                localBlocks[i] = { ...b, streaming_content: cur + chunk };
-                break;
-              }
-            }
-            syncBlocks();
-          }
-        }
-        if (event.type === 'tool_result_chunk') {
-          const idx = event.index ?? 0;
-          const i = findLastToolBlockByIndex(idx);
-          if (i >= 0 && localBlocks[i].type === 'tool') {
-            const result = mergeToolResultChunk(localBlocks[i].result, {
-              patches: event.patches,
-              stdout_append: event.stdout_append,
-              set: event.set,
-              readings_by_url: event.readings_by_url,
-            });
-            localBlocks[i] = { ...localBlocks[i], result };
-            syncBlocks();
-          }
-        }
-        if (event.type === 'tool_result') {
-          setStreamStatus('tool_result');
-          const name = event.tool_name;
-          const idx = (event as { index?: number }).index;
-          if (typeof idx === 'number') {
-            const i = findLastToolBlockByIndex(idx);
-            if (i >= 0 && localBlocks[i].type === 'tool') {
-              localBlocks[i] = { ...localBlocks[i], status: 'completed', result: event.result };
-            }
-          } else {
-            for (let i = localBlocks.length - 1; i >= 0; i--) {
-              const b = localBlocks[i];
-              if (b.type === 'tool' && b.tool_name === name) {
-                localBlocks[i] = { ...b, status: 'completed', result: event.result };
-                break;
-              }
-            }
-          }
-          syncBlocks();
-        }
-        if (event.type === 'safety_confirmation_required') {
-          setStreamStatus('awaiting_safety_confirmation');
-          const name = event.tool_name;
-          let updated = false;
-          for (let i = localBlocks.length - 1; i >= 0; i--) {
-            const b = localBlocks[i];
-            if (b.type === 'tool' && b.tool_name === name) {
-              localBlocks[i] = {
-                ...b,
-                status: 'awaiting_confirmation',
-                arguments: event.command ?? (event as { arguments?: string }).arguments,
-                review_id: event.review_id,
-                conversation_id: event.conversation_id || conversationId,
-                review: event.review,
-                command: event.command,
-                cwd: event.cwd,
-              };
-              updated = true;
-              break;
-            }
-          }
-          if (!updated) {
-            localBlocks.push({
-              type: 'tool',
-              tool_name: name,
-              status: 'awaiting_confirmation',
-              review_id: event.review_id,
-              conversation_id: event.conversation_id || conversationId,
-              review: event.review,
-              command: event.command,
-              cwd: event.cwd,
-            });
-          }
-          syncBlocks();
-        }
-      }
-      if ('content' in event && typeof event.content === 'string' && event.content.length > 0) {
-        setStreamStatus('streaming_text');
-        const last = localBlocks[localBlocks.length - 1];
-        if (last && last.type === 'text') {
-          last.content += event.content;
-        } else {
-          localBlocks.push({ type: 'text', content: event.content });
-        }
-        syncBlocks();
-      }
-      if ('done' in event && event.done === true) streamDone = true;
-    };
+    streamInFlightRef.current = true;
 
     const timeout = setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
+    let silentBackgroundAbort = false;
+
     try {
-      await streamChat(session, conversationId, '', onEvent, controller.signal, {
-        regenerate: true,
-        after_user_index: afterUserIndex,
+      const { streamDone, finalText, localBlocks } = await runV2WithHandlers({
+        convId: conversationId,
+        start: { tag: 'regenerate', after_user_index: afterUserIndex },
+        signal: controller.signal,
       });
       clearTimeout(timeout);
       if (streamDone || finalText.trim()) {
@@ -790,19 +675,24 @@ export function ChatScreen() {
       }
     } catch (e) {
       clearTimeout(timeout);
-      if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
+      if (e && (e as { name?: string }).name === 'AbortError' && pausedByBackgroundRef.current) {
+        pausedByBackgroundRef.current = false;
+        silentBackgroundAbort = true;
+      } else if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
         shouldScrollToEndRef.current = true;
         const stoppedPrefix = '[已停止]\n';
-        const text = (finalText || '').trim();
+        const cap = streamCaptureRef.current;
+        const text = (cap.text || '').trim();
+        const bl = cap.blocks || [];
         setMessages((prev) => [
           ...prev,
           {
             role: 'assistant',
             content: text ? `${stoppedPrefix}${text}` : '[已停止]',
-            blocks: localBlocks.length ? [{ type: 'text', content: stoppedPrefix }, ...localBlocks] : undefined,
+            blocks: bl.length ? [{ type: 'text', content: stoppedPrefix }, ...bl] : undefined,
           },
         ]);
-      } else {
+      } else if (!silentBackgroundAbort) {
         shouldScrollToEndRef.current = true;
         const msg =
           (e as { name?: string })?.name === 'AbortError'
@@ -813,6 +703,7 @@ export function ChatScreen() {
         setMessages((prev) => [...prev, { role: 'error', content: msg }]);
       }
     } finally {
+      streamInFlightRef.current = false;
       abortRef.current = null;
       manualStopRef.current = false;
       setSubmittingReviewId('');
@@ -822,7 +713,7 @@ export function ChatScreen() {
       setStreamStatus('');
     }
   },
-    [session, conversationId, loading]
+    [session, conversationId, loading, conversationHistoryLoading, runV2WithHandlers]
   );
 
   const handleStop = useCallback(async () => {
@@ -900,6 +791,119 @@ export function ChatScreen() {
     flushAssistant();
     return out;
   }, []);
+
+  /** 从服务端 active_chat_v2_run_id 恢复流（打开会话 / 回到前台） */
+  const resumeV2Stream = useCallback(
+    async (runId: string, cid: string) => {
+      if (!session) return;
+      if (streamInFlightRef.current) return;
+      streamInFlightRef.current = true;
+      setV2ResumeUiActive(true);
+      setError('');
+      setLoading(true);
+      setStreamingText('');
+      setCurrentAssistantBlocks([]);
+      setStreamStatus('thinking');
+      shouldScrollToEndRef.current = true;
+      const controller = new AbortController();
+      abortRef.current = controller;
+      manualStopRef.current = false;
+      const timeout = setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
+      try {
+        const { streamDone, finalText, localBlocks, lastConvId } = await runV2WithHandlers({
+          convId: cid,
+          start: { tag: 'resume', run_id: runId },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        try {
+          const { conversation } = await getConversation(session, lastConvId);
+          const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
+          let synced = rawMessagesToLocal(raw);
+          const stillRunning = typeof conversation?.active_chat_v2_run_id === 'string' && conversation.active_chat_v2_run_id.trim();
+          if (stillRunning) {
+            synced = truncateMessagesAfterLastUser(synced);
+          }
+          setMessages(synced);
+          const t = conversation?.title?.trim();
+          if (t) setConversationTitle(t);
+        } catch {
+          if (streamDone || finalText.trim()) {
+            shouldScrollToEndRef.current = true;
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: 'assistant',
+                content: finalText.trim() || '(empty response)',
+                blocks: localBlocks.length ? localBlocks : undefined,
+              },
+            ]);
+          }
+        }
+      } catch (e) {
+        clearTimeout(timeout);
+        if (e && (e as { name?: string }).name === 'AbortError' && pausedByBackgroundRef.current) {
+          pausedByBackgroundRef.current = false;
+        } else if (!(e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current)) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+        try {
+          const { conversation } = await getConversation(session, cid);
+          const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
+          let synced = rawMessagesToLocal(raw);
+          const stillRunning = typeof conversation?.active_chat_v2_run_id === 'string' && conversation.active_chat_v2_run_id.trim();
+          if (stillRunning) {
+            synced = truncateMessagesAfterLastUser(synced);
+          }
+          setMessages(synced);
+        } catch {
+          /* ignore */
+        }
+      } finally {
+        streamInFlightRef.current = false;
+        abortRef.current = null;
+        manualStopRef.current = false;
+        setSubmittingReviewId('');
+        setV2ResumeUiActive(false);
+        setLoading(false);
+        setStreamingText('');
+        setCurrentAssistantBlocks([]);
+        setStreamStatus('');
+      }
+    },
+    [session, runV2WithHandlers, rawMessagesToLocal]
+  );
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'background' || next === 'inactive') {
+        hadBackgroundPauseRef.current = true;
+        if (abortRef.current && !manualStopRef.current) {
+          pausedByBackgroundRef.current = true;
+          abortRef.current.abort();
+        }
+      }
+      if (next !== 'active') return;
+      if (!hadBackgroundPauseRef.current) return;
+      hadBackgroundPauseRef.current = false;
+      const sess = sessionRef.current;
+      const cid = conversationIdRef.current;
+      if (!sess || !cid || streamInFlightRef.current) return;
+      getConversation(sess, cid)
+        .then(({ conversation }) => {
+          const rid = conversation?.active_chat_v2_run_id;
+          const s = typeof rid === 'string' ? rid.trim() : '';
+          if (!s) return;
+          const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
+          setMessages(truncateMessagesAfterLastUser(rawMessagesToLocal(raw)));
+          resumeV2Stream(s, cid);
+        })
+        .catch(() => {
+          /* ignore */
+        });
+    });
+    return () => sub.remove();
+  }, [resumeV2Stream, rawMessagesToLocal]);
 
   // local_exec_command：运行中自动半展开(preview)、成功结束自动折叠；记录开始/结束时间供耗时显示
   useEffect(() => {
@@ -991,27 +995,66 @@ export function ChatScreen() {
   // 从历史对话列表进入时，根据路由参数加载对话
   useEffect(() => {
     const id = params?.conversationId;
-    if (!id || !session) return;
+    if (!id || !session) {
+      setConversationHistoryLoading(false);
+      return;
+    }
     let cancelled = false;
-    setLoading(true);
+    const gen = ++conversationRouteFetchGenRef.current;
+    setConversationHistoryLoading(true);
     getConversation(session, id)
       .then(({ conversation }) => {
-        if (cancelled) return;
+        if (cancelled || gen !== conversationRouteFetchGenRef.current) return;
+        const tUi0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        setConversationHistoryLoading(false);
         const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
         shouldScrollToEndRef.current = true;
         scrollToEndAnimatedRef.current = false;
-        setMessages(rawMessagesToLocal(raw));
+        const rid = conversation?.active_chat_v2_run_id;
+        const runId = typeof rid === 'string' ? rid.trim() : '';
+        const tMap0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        let localMsgs = rawMessagesToLocal(raw);
+        if (runId) {
+          localMsgs = truncateMessagesAfterLastUser(localMsgs);
+        }
+        const tMap1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        setMessages(localMsgs);
         setConversationId(id);
         setConversationTitle(conversation?.title?.trim() || '新对话');
+        convProfileLog('ChatScreen.routeOpen.afterGet', {
+          conversationId: id,
+          rawMessageCount: raw.length,
+          localMessageCount: localMsgs.length,
+          hasActiveRun: Boolean(runId),
+          rawToLocalMs: Math.round(tMap1 - tMap0),
+          syncWorkBeforeSetStateMs: Math.round(tMap1 - tUi0),
+        });
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const tPaint = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            convProfileLog('ChatScreen.routeOpen.after2xRAF', {
+              conversationId: id,
+              msSinceUiStart: Math.round(tPaint - tUi0),
+            });
+          });
+        });
+        if (runId) {
+          resumeV2Stream(runId, id);
+        } else {
+          setLoading(false);
+        }
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : '打开对话失败');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (cancelled || gen !== conversationRouteFetchGenRef.current) return;
+        setConversationHistoryLoading(false);
+        setError(e instanceof Error ? e.message : '打开对话失败');
+        setLoading(false);
       });
-    return () => { cancelled = true; };
-  }, [params?.conversationId, session, rawMessagesToLocal]);
+    return () => {
+      cancelled = true;
+      setConversationHistoryLoading(false);
+    };
+  }, [params?.conversationId, session, rawMessagesToLocal, resumeV2Stream]);
 
   const handleSafetyDecision = useCallback(
     async (reviewId: string, decision: 'approve' | 'reject') => {
@@ -1369,7 +1412,7 @@ export function ChatScreen() {
                     showCopyButton={isLastAssistant && bi === lastTextBlockIdx}
                     showRegenerateButton={bi === lastTextBlockIdx}
                     onRegenerate={afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined}
-                    regenerateDisabled={!conversationId || loading}
+                    regenerateDisabled={!conversationId || loading || conversationHistoryLoading}
                   />
                 </View>
               ) : (
@@ -1387,7 +1430,7 @@ export function ChatScreen() {
                 showCopyButton={isLastAssistant}
                 showRegenerateButton
                 onRegenerate={afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined}
-                regenerateDisabled={!conversationId || loading}
+                regenerateDisabled={!conversationId || loading || conversationHistoryLoading}
               />
             )
           )}
@@ -1396,9 +1439,15 @@ export function ChatScreen() {
     );
   };
 
-  const showEmpty = messages.length === 0 && !loading;
-  const streamStatusBracketLabel =
-    streamStatus === 'thinking'
+  const showEmpty =
+    messages.length === 0 && !loading && !conversationHistoryLoading;
+  const streamEmptyPlaceholderResume =
+    v2ResumeUiActive &&
+    currentAssistantBlocks.length === 0 &&
+    !(streamingText && streamingText.trim());
+  const streamStatusBracketLabel = streamEmptyPlaceholderResume
+    ? 'resuming'
+    : streamStatus === 'thinking'
       ? 'thinking'
       : streamStatus === 'checking_tools'
         ? 'checking tools'
@@ -1415,6 +1464,9 @@ export function ChatScreen() {
         : streamStatus === 'awaiting_safety_confirmation'
           ? '等待安全确认'
           : 'Thinking...';
+  const streamBubblePlaceholderText = streamEmptyPlaceholderResume
+    ? 'Resuming...'
+    : streamStatusLabel;
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -1491,7 +1543,7 @@ export function ChatScreen() {
             ) : (
               messages.map(renderMessage)
             )}
-            {loading ? (
+            {loading && !conversationHistoryLoading ? (
               <View style={[styles.bubbleWrap, styles.assistantBubbleWrap]}>
                 <View style={[styles.bubble, styles.assistantBubble]}>
                   <Text style={styles.bubbleRole}>Flops ({streamStatusBracketLabel})</Text>
@@ -1515,7 +1567,9 @@ export function ChatScreen() {
                   ) : null}
                   {currentAssistantBlocks.length === 0 ? (
                     <View style={styles.assistantTextBlock}>
-                      <MarkdownContent text={streamingText || streamStatusLabel} />
+                      <MarkdownContent
+                        text={streamingText || streamBubblePlaceholderText}
+                      />
                     </View>
                   ) : null}
                 </View>
@@ -1523,6 +1577,11 @@ export function ChatScreen() {
             ) : null}
             </View>
           </ScrollView>
+          {conversationHistoryLoading ? (
+            <View style={styles.historyLoadingOverlay}>
+              <ActivityIndicator size="large" color="#374151" />
+            </View>
+          ) : null}
           {/* 底部整块贴屏底：渐变铺满整块并延伸到底，输入行叠在渐变底部，无单独白底 */}
           <View style={[styles.bottomOverlay, { height: bottomOverlayHeight }]}>
             <LinearGradient
@@ -1545,7 +1604,7 @@ export function ChatScreen() {
                 onChangeText={setMessageInput}
                 placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
                 placeholderTextColor="#9ca3af"
-                editable={!loading}
+                editable={!loading && !conversationHistoryLoading}
                 onSubmitEditing={handleSendMessage}
                 returnKeyType="send"
               />
@@ -1594,7 +1653,14 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   containerInner: { flex: 1 },
   keyboardView: { flex: 1 },
-  scrollAndGradientWrap: { flex: 1 },
+  scrollAndGradientWrap: { flex: 1, position: 'relative' },
+  historyLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.88)',
+    zIndex: 20,
+  },
   bottomOverlay: {
     position: 'absolute',
     bottom: 0,
@@ -1619,7 +1685,8 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    zIndex: 10,
+    /** 须高于 historyLoadingOverlay(20)，拉历史时仍可点返回 / 标题区 / 加号 */
+    zIndex: 30,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -1641,7 +1708,8 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: 0,
     width: 24,
-    zIndex: 10,
+    /** 须高于 historyLoadingOverlay(20)，否则拉历史时全屏遮罩会挡住侧滑返回 */
+    zIndex: 30,
   },
   headerTitleWrap: {
     flex: 1,

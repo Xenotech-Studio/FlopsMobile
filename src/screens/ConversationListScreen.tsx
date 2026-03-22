@@ -16,18 +16,24 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
-import Animated, { useSharedValue, runOnUI } from 'react-native-reanimated';
+import { useSharedValue, runOnUI } from 'react-native-reanimated';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
-import { listConversations, deleteConversation, type ConversationListItem } from '../api';
+import {
+  listConversations,
+  deleteConversation,
+  runInboxStream,
+  type ConversationListItem,
+} from '../api';
 import type { RootStackParamList } from '../navigation/types';
 import { shadowFab, borderLight, shadowMenu, shadowCircleButton } from '../theme/shadows';
 import { LIST_PADDING_BOTTOM_WITH_FOOTER, HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import { TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { PullToRefreshRing } from '../components/PullToRefreshRing';
+import { InboxRunSpinner, InboxUnreadCheck } from '../components/InboxListIndicators';
 
 const EDGE_WIDTH = 24;
 const PULL_RING_THRESHOLD = 125;
@@ -53,6 +59,9 @@ export function ConversationListScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
+  /** 与 Web 侧栏一致：GET /conversations 的 chat_v2_running + inbox/stream SSE */
+  const [chatV2RunningByConv, setChatV2RunningByConv] = useState<Record<string, boolean>>({});
+  const [chatV2UnreadByConv, setChatV2UnreadByConv] = useState<Record<string, boolean>>({});
 
   const pullDistanceShared = useSharedValue(0);
   const refreshingShared = useSharedValue(false);
@@ -79,7 +88,28 @@ export function ConversationListScreen() {
     }
     try {
       const { conversations } = await listConversations(session);
-      setList(conversations ?? []);
+      const rows = conversations ?? [];
+      setList(rows);
+      setChatV2RunningByConv((prev) => {
+        const next = { ...prev };
+        rows.forEach((c) => {
+          if (Object.prototype.hasOwnProperty.call(c, 'chat_v2_running')) {
+            if (c.chat_v2_running) next[c.id] = true;
+            else delete next[c.id];
+          }
+        });
+        return next;
+      });
+      setChatV2UnreadByConv((prev) => {
+        const next = { ...prev };
+        rows.forEach((c) => {
+          if (Object.prototype.hasOwnProperty.call(c, 'chat_v2_unread')) {
+            if (c.chat_v2_unread) next[c.id] = true;
+            else delete next[c.id];
+          }
+        });
+        return next;
+      });
     } catch {
       setList([]);
     } finally {
@@ -106,6 +136,66 @@ export function ConversationListScreen() {
   React.useEffect(() => {
     loadList();
   }, [loadList]);
+
+  React.useEffect(() => {
+    if (!session) return undefined;
+    const ac = new AbortController();
+    let cancelled = false;
+    const pump = async () => {
+      try {
+        await runInboxStream(session, ac.signal, (msg) => {
+          if (cancelled) return;
+          const type = msg.type;
+          if (type === 'inbox_snapshot' && msg.running && typeof msg.running === 'object') {
+            setChatV2RunningByConv(
+              Object.fromEntries(
+                Object.entries(msg.running as Record<string, unknown>).filter(([, v]) => v === true)
+              ) as Record<string, boolean>
+            );
+          }
+          if (
+            type === 'inbox_snapshot' &&
+            Object.prototype.hasOwnProperty.call(msg, 'unread') &&
+            msg.unread &&
+            typeof msg.unread === 'object'
+          ) {
+            setChatV2UnreadByConv(
+              Object.fromEntries(
+                Object.entries(msg.unread as Record<string, unknown>).filter(([, v]) => v === true)
+              ) as Record<string, boolean>
+            );
+          }
+          if (type === 'conversation_run' && msg.conversation_id != null) {
+            const id = String(msg.conversation_id);
+            setChatV2RunningByConv((prev) => {
+              const next = { ...prev };
+              if (msg.running) next[id] = true;
+              else delete next[id];
+              return next;
+            });
+          } else if (type === 'conversation_unread' && msg.conversation_id != null) {
+            const id = String(msg.conversation_id);
+            setChatV2UnreadByConv((prev) => {
+              const next = { ...prev };
+              if (msg.unread) next[id] = true;
+              else delete next[id];
+              return next;
+            });
+          }
+        });
+      } catch (e: unknown) {
+        const name = e && typeof e === 'object' && 'name' in e ? (e as { name?: string }).name : '';
+        if (name !== 'AbortError') {
+          /* 断线后无自动重连；用户下拉刷新列表会同步 running 标记 */
+        }
+      }
+    };
+    pump();
+    return () => {
+      cancelled = true;
+      ac.abort();
+    };
+  }, [session]);
 
   const onRefresh = useCallback(() => loadList(true), [loadList]);
 
@@ -170,6 +260,16 @@ export function ConversationListScreen() {
             try {
               await deleteConversation(session, conv.id);
               setList((prev) => prev.filter((c) => c.id !== conv.id));
+              setChatV2RunningByConv((prev) => {
+                const next = { ...prev };
+                delete next[conv.id];
+                return next;
+              });
+              setChatV2UnreadByConv((prev) => {
+                const next = { ...prev };
+                delete next[conv.id];
+                return next;
+              });
             } catch (e) {
               Alert.alert('删除失败', e instanceof Error ? e.message : '请稍后重试');
             }
@@ -191,9 +291,16 @@ export function ConversationListScreen() {
       onLongPress={() => onDeleteConversation(item)}
       activeOpacity={0.7}
     >
-      <Text style={styles.itemTitle} numberOfLines={1}>
-        {(item.title && item.title.trim()) || '新对话'}
-      </Text>
+      <View style={styles.itemTitleRow}>
+        <Text style={styles.itemTitle} numberOfLines={1}>
+          {(item.title && item.title.trim()) || '新对话'}
+        </Text>
+        {chatV2RunningByConv[item.id] ? (
+          <InboxRunSpinner />
+        ) : chatV2UnreadByConv[item.id] ? (
+          <InboxUnreadCheck />
+        ) : null}
+      </View>
       {item.updated_at ? (
         <Text style={styles.itemMeta} numberOfLines={1}>
           {formatTime(item.updated_at)}
@@ -270,6 +377,7 @@ export function ConversationListScreen() {
           style={styles.list}
           data={list}
           keyExtractor={(item) => item.id}
+          extraData={{ chatV2RunningByConv, chatV2UnreadByConv }}
           renderItem={renderItem}
           onScroll={Platform.OS === 'ios' ? handleScroll : undefined}
           scrollEventThrottle={16}
@@ -387,7 +495,12 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f3f4f6',
   },
-  itemTitle: { fontSize: 16, fontWeight: '600', color: '#111827' },
+  itemTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  itemTitle: { flex: 1, minWidth: 0, fontSize: 16, fontWeight: '600', color: '#111827' },
   itemMeta: { fontSize: 13, color: '#6b7280', marginTop: 4 },
   footerHint: { fontSize: 12, color: '#9ca3af', textAlign: 'center', paddingVertical: 16 },
   refreshIndicatorFixed: {
