@@ -526,6 +526,7 @@ export function ChatScreen() {
         if ('conversation_id' in event && event.conversation_id) {
           streamTargetRef.current = event.conversation_id;
           setConversationId(event.conversation_id);
+          conversationIdRef.current = event.conversation_id;
         }
         const e = event as unknown as { type?: string; title?: string };
         if (e.type === 'conversation_title' && typeof e.title === 'string') {
@@ -734,8 +735,10 @@ export function ChatScreen() {
         if ('done' in event && event.done === true) streamDone = true;
       };
 
+      /** 与 FlopsWeb Chat.jsx 一致：用本轮固定的 convId 判断存活；勿与 streamTargetRef 比（首包前 ref 可能尚未随 setState 同步） */
+      const streamSessionConvId = opts.convId;
       await streamChatV2Loop(session, streamTargetRef.current, opts.start, onEvent, opts.signal, {
-        isAlive: () => conversationIdRef.current === streamTargetRef.current,
+        isAlive: () => conversationIdRef.current === streamSessionConvId && !opts.signal.aborted,
       });
 
       return { streamDone, finalText, localBlocks, lastConvId: streamTargetRef.current };
@@ -765,6 +768,7 @@ export function ChatScreen() {
         );
         convId = id;
         setConversationId(id);
+        conversationIdRef.current = id;
         setConversationTitle(nextMessage.slice(0, 50) || '新对话');
       } catch (e) {
         setError(e instanceof Error ? e.message : '创建会话失败');
@@ -1028,6 +1032,7 @@ export function ChatScreen() {
     const bidForCreate = String(draftAgentId || '').trim();
     setError('');
     setConversationId('');
+    conversationIdRef.current = '';
     setConversationTitle('');
     setMessages([]);
     setServerRawMessages([]);
@@ -1041,6 +1046,7 @@ export function ChatScreen() {
           bidForCreate ? { bound_agent_id: bidForCreate } : undefined
         );
         setConversationId(id);
+        conversationIdRef.current = id;
         setConversationTitle('新对话');
       }
     } catch (e) {
@@ -1280,6 +1286,7 @@ export function ChatScreen() {
         const tMap1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
         setMessages(localMsgs);
         setConversationId(id);
+        conversationIdRef.current = id;
         setConversationTitle(conversation?.title?.trim() || '新对话');
         convProfileLog('ChatScreen.routeOpen.afterGet', {
           conversationId: id,
