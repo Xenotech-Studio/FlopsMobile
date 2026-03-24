@@ -6,6 +6,7 @@ import { ProfileScreen } from '../screens/ProfileScreen';
 import { UsageSettingsScreen } from '../screens/UsageSettingsScreen';
 import { AccountActionsScreen } from '../screens/AccountActionsScreen';
 import { ChangePasswordScreen } from '../screens/ChangePasswordScreen';
+import { SoulSettingsScreen } from '../screens/SoulSettingsScreen';
 import type { RootStackParamList } from './types';
 
 const Stack = createStackNavigator<RootStackParamList>();
@@ -68,6 +69,15 @@ export function RootNavigator() {
         name="ChangePassword"
         component={ChangePasswordScreen}
         options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="SoulSettings"
+        component={SoulSettingsScreen}
+        options={{
+          headerShown: false,
+          gestureEnabled: true,
+          cardStyleInterpolator: profileCardStyleInterpolator,
+        }}
       />
     </Stack.Navigator>
   );

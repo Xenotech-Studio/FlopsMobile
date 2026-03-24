@@ -233,6 +233,15 @@ export function ProfileScreen() {
           <TouchableOpacity
             style={[styles.row, styles.rowBorder]}
             activeOpacity={0.7}
+            onPress={() => navigation.navigate('SoulSettings')}
+          >
+            <Ionicons name="sparkles-outline" size={22} color="#6b7280" />
+            <Text style={styles.rowLabel}>人设（SOUL）</Text>
+            <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.row, styles.rowBorder]}
+            activeOpacity={0.7}
             onPress={() => navigation.navigate('UsageSettings')}
           >
             <Ionicons name="stats-chart-outline" size={22} color="#6b7280" />

@@ -191,6 +191,11 @@ export type ConversationMessage = {
   tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }>;
 };
 
+export type AgentProfile = {
+  display_name?: string;
+  call_name?: string;
+};
+
 export type Conversation = {
   id: string;
   title?: string;
@@ -201,6 +206,8 @@ export type Conversation = {
   active_chat_v2_run_id?: string;
   usage_stats?: UsageStats;
   usage_runs?: UsageRun[];
+  bound_agent_id?: string;
+  agent_profile?: AgentProfile;
 };
 
 /**
@@ -337,14 +344,20 @@ export async function deleteConversation(
 }
 
 /**
- * 创建会话：POST /api/conversations
+ * 创建会话：POST /api/conversations（可选 body.bound_agent_id，与 FlopsWeb 一致）
  */
-export async function createConversation(session: Session): Promise<{ id: string }> {
+export async function createConversation(
+  session: Session,
+  opts?: { bound_agent_id?: string }
+): Promise<{ id: string }> {
   const base = session.server_base_url;
+  const body: Record<string, string> = {};
+  const bid = String(opts?.bound_agent_id || '').trim();
+  if (bid) body.bound_agent_id = bid;
   const res = await fetchWithDebugLog(`${base}api/conversations`, {
     method: 'POST',
     headers: authHeaders(session.access_token),
-    body: JSON.stringify({}),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -353,6 +366,38 @@ export async function createConversation(session: Session): Promise<{ id: string
   const data = (await res.json()) as { id?: string };
   if (!data.id) throw new Error('服务端未返回会话 id');
   return { id: data.id };
+}
+
+/** GET /api/agentf/agent-ids — 与 FlopsWeb Chat.jsx 一致 */
+export async function getAgentIds(session: Session): Promise<string[]> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/agentf/agent-ids`, {
+    method: 'GET',
+    headers: authHeaders(session.access_token),
+  });
+  if (!res.ok) return [];
+  const data = (await res.json()) as { agent_ids?: unknown };
+  return Array.isArray(data.agent_ids) ? data.agent_ids.map(String) : [];
+}
+
+/** GET /api/agent/profile?agent_id= — 与 FlopsWeb 一致 */
+export async function getAgentProfile(session: Session, agentId: string): Promise<AgentProfile> {
+  const base = session.server_base_url;
+  const id = String(agentId || '').trim();
+  if (!id) return {};
+  const res = await fetchWithDebugLog(
+    `${base}api/agent/profile?agent_id=${encodeURIComponent(id)}`,
+    {
+      method: 'GET',
+      headers: authHeaders(session.access_token),
+    }
+  );
+  if (!res.ok) return {};
+  const data = (await res.json()) as Record<string, unknown>;
+  return {
+    display_name: typeof data.display_name === 'string' ? data.display_name : undefined,
+    call_name: typeof data.call_name === 'string' ? data.call_name : undefined,
+  };
 }
 
 export type StreamChatOptions = {
@@ -677,6 +722,70 @@ export async function setLayoutPreferences(
   }
   const data = (await res.json()) as { preferences?: Record<string, unknown> };
   return data?.preferences && typeof data.preferences === 'object' ? data.preferences : {};
+}
+
+/** 默认助手人设路径，与主对话注入优先级一致（先于根路径 SOUL.md） */
+export const DEFAULT_AGENT_SOUL_FILE = 'default/SOUL.md';
+
+/** GET /api/agentf?file=...&meta=1 — 逻辑 agent 文件（阶段 0 为 SOUL） */
+export type AgentfFilePayload = {
+  content: string;
+  file: string;
+  max_chars: number;
+};
+
+function agentfQuery(file: string, meta: boolean): string {
+  const q = new URLSearchParams({ file });
+  if (meta) q.set('meta', '1');
+  return q.toString();
+}
+
+export async function getAgentfFile(
+  session: Session,
+  file: string,
+  options?: { meta?: boolean }
+): Promise<AgentfFilePayload | string> {
+  const base = session.server_base_url;
+  const meta = options?.meta !== false;
+  const url = `${base}api/agentf?${agentfQuery(file, meta)}`;
+  const res = await fetchWithDebugLog(url, {
+    method: 'GET',
+    headers: authHeaders(session.access_token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `读取文件失败: ${res.status}`);
+  }
+  if (!meta) {
+    return await res.text();
+  }
+  const data = (await res.json()) as { content?: string; file?: string; max_chars?: number };
+  return {
+    content: typeof data.content === 'string' ? data.content : '',
+    file: typeof data.file === 'string' ? data.file : file,
+    max_chars: typeof data.max_chars === 'number' ? data.max_chars : 32000,
+  };
+}
+
+/** POST /api/agentf?file=... — body JSON { content } */
+export async function putAgentfFile(session: Session, file: string, content: string): Promise<AgentfFilePayload> {
+  const base = session.server_base_url;
+  const q = agentfQuery(file, false);
+  const res = await fetchWithDebugLog(`${base}api/agentf?${q}`, {
+    method: 'POST',
+    headers: authHeaders(session.access_token),
+    body: JSON.stringify({ content }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `保存文件失败: ${res.status}`);
+  }
+  const data = (await res.json()) as { content?: string; file?: string; max_chars?: number };
+  return {
+    content: typeof data.content === 'string' ? data.content : '',
+    file: typeof data.file === 'string' ? data.file : file,
+    max_chars: typeof data.max_chars === 'number' ? data.max_chars : 32000,
+  };
 }
 
 export type UsageSummaryMonthly = {

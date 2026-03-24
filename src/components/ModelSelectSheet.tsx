@@ -26,9 +26,17 @@ type Props = {
   onClose: () => void;
   options: ModelSelectOption[];
   onSelectModel: (modelId: string) => void;
+  /** 顶栏标题，默认「选择模型」 */
+  sheetTitle?: string;
 };
 
-export function ModelSelectSheet({ visible, onClose, options, onSelectModel }: Props) {
+export function ModelSelectSheet({
+  visible,
+  onClose,
+  options,
+  onSelectModel,
+  sheetTitle = '选择模型',
+}: Props) {
   const modalRef = useRef<BottomSheetModal>(null);
 
   useEffect(() => {
@@ -70,7 +78,7 @@ export function ModelSelectSheet({ visible, onClose, options, onSelectModel }: P
       handleIndicatorStyle={styles.handle}
     >
       <View style={styles.header}>
-        <Text style={styles.title}>选择模型</Text>
+        <Text style={styles.title}>{sheetTitle}</Text>
         <TouchableOpacity onPress={onClose} style={styles.cancelBtn} activeOpacity={0.7}>
           <Text style={styles.cancelText}>取消</Text>
         </TouchableOpacity>

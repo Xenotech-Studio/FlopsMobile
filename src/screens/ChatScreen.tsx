@@ -33,6 +33,8 @@ import {
   getLayoutPreferences,
   getModelsConfig,
   selectModel,
+  getAgentIds,
+  getAgentProfile,
   type ModelsConfigResponse,
   type ChatStreamEvent,
   type ChatV2StreamStart,
@@ -40,6 +42,7 @@ import {
   type Conversation,
   type UsageStats,
   type UsageRun,
+  type AgentProfile,
 } from '../api';
 import {
   rawMessagesToLocal,
@@ -76,6 +79,7 @@ import {
 } from '../utils/toolCardParsers';
 import { ReadPagesDetailSheet } from '../components/ReadPagesDetailSheet';
 import { ModelSelectSheet } from '../components/ModelSelectSheet';
+import { formatAgentDisplayLabel } from '../utils/agentDisplay';
 import { UsageDetailModal } from '../components/UsageDetailModal';
 import { SearchEngineCard } from './chat-cards/SearchEngineCard';
 import { FileWriteCard } from './chat-cards/FileWriteCard';
@@ -171,9 +175,9 @@ export function ChatScreen() {
   const headerHeight = insets.top + 8 + 12 + HEADER_CIRCLE_BTN_SIZE;
   /** 底部渐变条高度（叠在滚动内容上，透明→白） */
   const gradientStripHeight = 48;
-  /** 输入行高度（输入框+发送按钮） */
+  /** 输入行高度（输入框+发送+底部留白，模型/助手条绝对叠在留白内，不把整块顶上去） */
   const inputRowHeight = 92;
-  /** 底部整块高度：渐变 + 输入行，贴屏幕底，渐变延伸到底无单独白底 */
+  /** 底部整块高度与改前一致：渐变 + 输入区（勿再加一行高度，否则输入框会整体上移） */
   const bottomOverlayHeight = gradientStripHeight + inputRowHeight;
   /** 列表底部留白，让内容可滚入渐变下方 */
   const scrollBottomPadding = bottomOverlayHeight + 12;
@@ -193,6 +197,18 @@ export function ChatScreen() {
   const [availableModels, setAvailableModels] = useState<Record<string, string>>({});
   const [modelConfigLabel, setModelConfigLabel] = useState('');
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const [agentIds, setAgentIds] = useState<string[]>([]);
+  const [draftAgentId, setDraftAgentId] = useState<string | null>(null);
+  const [draftAgentProfile, setDraftAgentProfile] = useState<{ display_name: string; call_name: string }>({
+    display_name: '',
+    call_name: '',
+  });
+  /** 有消息后的会话绑定 agent（来自 GET conversation） */
+  const [conversationMeta, setConversationMeta] = useState<{
+    bound_agent_id?: string;
+    agent_profile?: AgentProfile;
+  } | null>(null);
   const [usageDetailModalBody, setUsageDetailModalBody] = useState<string | null>(null);
   const [messageInput, setMessageInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -249,6 +265,10 @@ export function ChatScreen() {
     setServerRawMessages(raw);
     setUsageStats(conversation.usage_stats ?? null);
     setUsageRuns(Array.isArray(conversation.usage_runs) ? conversation.usage_runs : []);
+    setConversationMeta({
+      bound_agent_id: typeof conversation.bound_agent_id === 'string' ? conversation.bound_agent_id : undefined,
+      agent_profile: conversation.agent_profile,
+    });
   }, []);
 
   const rawToLocalAssistantIndex = useMemo(
@@ -386,6 +406,80 @@ export function ChatScreen() {
       }
     }, [reloadLayoutPrefs, session, applyModelsConfig])
   );
+
+  /** 空会话（欢迎/草稿）：拉 agent 列表，与 FlopsWeb 首页草稿一致 */
+  useEffect(() => {
+    if (!session || messages.length > 0) return;
+    let cancelled = false;
+    getAgentIds(session)
+      .then((ids) => {
+        if (!cancelled) setAgentIds(ids);
+      })
+      .catch(() => {
+        if (!cancelled) setAgentIds([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session, messages.length]);
+
+  /** 草稿页默认选中首个 agent（字母序由服务端 agent_ids 决定） */
+  useEffect(() => {
+    if (messages.length > 0) return;
+    if (!agentIds.length) return;
+    setDraftAgentId((prev) => (prev && agentIds.includes(prev) ? prev : agentIds[0]));
+  }, [messages.length, agentIds]);
+
+  /** 草稿选中 agent 的显示名（气泡与 composer 标签） */
+  useEffect(() => {
+    if (!session || messages.length > 0 || !draftAgentId) return;
+    let cancelled = false;
+    getAgentProfile(session, draftAgentId)
+      .then((p) => {
+        if (cancelled) return;
+        setDraftAgentProfile({
+          display_name: typeof p.display_name === 'string' ? p.display_name : '',
+          call_name: typeof p.call_name === 'string' ? p.call_name : '',
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setDraftAgentProfile({ display_name: '', call_name: '' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session, messages.length, draftAgentId]);
+
+  const composerAgentLabel = useMemo(() => {
+    if (messages.length > 0) {
+      const fromProf = (conversationMeta?.agent_profile?.display_name || '').trim();
+      if (fromProf) return fromProf;
+      const bound = String(conversationMeta?.bound_agent_id || '').trim();
+      if (bound) return formatAgentDisplayLabel(bound);
+      /** 已发首条但 GET conversation 尚未回填 bound 时，沿用草稿区选中 */
+      const draftDn = (draftAgentProfile.display_name || '').trim();
+      if (draftDn) return draftDn;
+      return formatAgentDisplayLabel(draftAgentId);
+    }
+    const draftDn = (draftAgentProfile.display_name || '').trim();
+    if (draftDn) return draftDn;
+    return formatAgentDisplayLabel(draftAgentId);
+  }, [messages.length, conversationMeta, draftAgentProfile.display_name, draftAgentId]);
+
+  const agentSheetOptions = useMemo(
+    () => agentIds.map((id) => ({ label: formatAgentDisplayLabel(id), value: id })),
+    [agentIds]
+  );
+
+  const agentComposerInteractive = messages.length === 0 && agentIds.length > 0;
+  const showAgentComposerColumn = agentIds.length > 0 || messages.length > 0;
+
+  const handleSelectAgent = useCallback((agentId: string) => {
+    const id = String(agentId || '').trim();
+    if (!id) return;
+    setDraftAgentId(id);
+    setAgentPickerOpen(false);
+  }, []);
 
   const canSend = Boolean(
     session && messageInput.trim() && !loading && !conversationHistoryLoading
@@ -664,7 +758,11 @@ export function ChatScreen() {
     let convId = conversationId;
     if (!convId) {
       try {
-        const { id } = await createConversation(session);
+        const bid = String(draftAgentId || '').trim();
+        const { id } = await createConversation(
+          session,
+          bid ? { bound_agent_id: bid } : undefined
+        );
         convId = id;
         setConversationId(id);
         setConversationTitle(nextMessage.slice(0, 50) || '新对话');
@@ -773,6 +871,7 @@ export function ChatScreen() {
     conversationHistoryLoading,
     runV2WithHandlers,
     applyConversationUsageState,
+    draftAgentId,
   ]);
 
   /** 回退到第 (afterUserIndex+1) 条 user 消息处并重新生成该条 AI 回复 */
@@ -926,6 +1025,7 @@ export function ChatScreen() {
 
   const handleNewConversation = useCallback(async () => {
     if (loading) return;
+    const bidForCreate = String(draftAgentId || '').trim();
     setError('');
     setConversationId('');
     setConversationTitle('');
@@ -933,16 +1033,20 @@ export function ChatScreen() {
     setServerRawMessages([]);
     setUsageStats(null);
     setUsageRuns([]);
+    setConversationMeta(null);
     try {
       if (session) {
-        const { id } = await createConversation(session);
+        const { id } = await createConversation(
+          session,
+          bidForCreate ? { bound_agent_id: bidForCreate } : undefined
+        );
         setConversationId(id);
         setConversationTitle('新对话');
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : '创建会话失败');
     }
-  }, [session, loading]);
+  }, [session, loading, draftAgentId]);
 
   /** 从服务端 active_chat_v2_run_id 恢复流（打开会话 / 回到前台） */
   const resumeV2Stream = useCallback(
@@ -1565,7 +1669,7 @@ export function ChatScreen() {
         style={[styles.bubbleWrap, isUser ? styles.userBubbleWrap : styles.assistantBubbleWrap]}
       >
         <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
-          {!isUser && <Text style={styles.bubbleRole}>Flops</Text>}
+          {!isUser && <Text style={styles.bubbleRole}>{composerAgentLabel}</Text>}
           {!isUser && msg.role === 'assistant' && msg.blocks && msg.blocks.length > 0 ? (
             msg.blocks.map((block, bi) => {
               const blocks = msg.blocks ?? [];
@@ -1720,7 +1824,9 @@ export function ChatScreen() {
             {loading && !conversationHistoryLoading ? (
               <View style={[styles.bubbleWrap, styles.assistantBubbleWrap]}>
                 <View style={[styles.bubble, styles.assistantBubble]}>
-                  <Text style={styles.bubbleRole}>Flops ({streamStatusBracketLabel})</Text>
+                  <Text style={styles.bubbleRole}>
+                    {composerAgentLabel} ({streamStatusBracketLabel})
+                  </Text>
                   {currentAssistantBlocks.length > 0 ? (
                     currentAssistantBlocks.map((block, bi) => {
                       const prevBlock = currentAssistantBlocks[bi - 1];
@@ -1771,81 +1877,117 @@ export function ChatScreen() {
               end={{ x: 0.5, y: 1 }}
               pointerEvents="none"
             />
-            <View style={styles.inputRowInOverlay} pointerEvents="box-none">
-              <TextInput
-                style={styles.composerInput}
-                value={messageInput}
-                onChangeText={setMessageInput}
-                placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
-                placeholderTextColor="#9ca3af"
-                editable={!loading && !conversationHistoryLoading}
-                onSubmitEditing={handleSendMessage}
-                returnKeyType="send"
-              />
-              <Pressable
-                style={[
-                  styles.sendBtn,
-                  loading && styles.sendBtnStop,
-                  (!canSend && !loading) && styles.sendBtnDisabled,
-                ]}
-                onPress={loading ? handleStop : handleSendMessage}
-                disabled={!loading && !canSend}
-              >
-                {loading ? (
-                  <Ionicons name="stop" size={24} color="#fff" />
-                ) : (
-                  <Ionicons name="send" size={22} color="#fff" />
-                )}
-              </Pressable>
-              {session ? (
-                <TouchableOpacity
-                  style={styles.composerModelInComposer}
-                  onPress={() => setModelPickerOpen(true)}
-                  activeOpacity={0.7}
-                  accessibilityLabel="选择模型"
-                  hitSlop={{ top: 4, bottom: 4, left: 8, right: 8 }}
+            <View style={styles.bottomOverlayInner} pointerEvents="box-none">
+              <View style={styles.inputRowInOverlay} pointerEvents="box-none">
+                <TextInput
+                  style={styles.composerInput}
+                  value={messageInput}
+                  onChangeText={setMessageInput}
+                  placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
+                  placeholderTextColor="#9ca3af"
+                  editable={!loading && !conversationHistoryLoading}
+                  onSubmitEditing={handleSendMessage}
+                  returnKeyType="send"
+                />
+                <Pressable
+                  style={[
+                    styles.sendBtn,
+                    loading && styles.sendBtnStop,
+                    (!canSend && !loading) && styles.sendBtnDisabled,
+                  ]}
+                  onPress={loading ? handleStop : handleSendMessage}
+                  disabled={!loading && !canSend}
                 >
-                  <Text
-                    style={styles.composerModelTriggerText}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                  >
-                    {composerModelTriggerLabel}
-                  </Text>
-                  <Ionicons name="chevron-down" size={14} color="#6b7280" />
-                </TouchableOpacity>
-              ) : null}
-              {showTokenUsageInChat &&
-              usageStats &&
-              conversationId &&
-              !conversationHistoryLoading ? (
-                <TouchableOpacity
-                  style={styles.composerUsageInComposer}
-                  onPress={() =>
-                    setUsageDetailModalBody(
-                      formatUsageHoverDetail(usageStats, {
-                        currencyMode: usageCurrencyDisplay,
-                        modelPriceReference,
-                        selectedModelId,
-                        scope: 'conversation',
-                      })
-                    )
-                  }
-                  activeOpacity={0.7}
-                  accessibilityLabel="本对话用量详情"
-                  hitSlop={{ top: 4, bottom: 4, left: 8, right: 8 }}
-                >
-                  <Text
-                    style={styles.composerUsageText}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                  >
-                    {formatConversationUsageHeaderLine(usageStats, {
-                      currencyMode: usageCurrencyDisplay,
-                    })}
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
+                  {loading ? (
+                    <Ionicons name="stop" size={24} color="#fff" />
+                  ) : (
+                    <Ionicons name="send" size={22} color="#fff" />
+                  )}
+                </Pressable>
+                {session ? (
+                  <View style={styles.composerMetaRowAbsolute}>
+                    <View style={styles.composerMetaPills}>
+                      <TouchableOpacity
+                        style={styles.composerMetaChip}
+                        onPress={() => setModelPickerOpen(true)}
+                        activeOpacity={0.7}
+                        accessibilityLabel="选择模型"
+                        hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                      >
+                        <Text
+                          style={styles.composerModelTriggerText}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                        >
+                          {composerModelTriggerLabel}
+                        </Text>
+                        <Ionicons name="chevron-down" size={14} color="#6b7280" />
+                      </TouchableOpacity>
+                      {showAgentComposerColumn ? (
+                        agentComposerInteractive ? (
+                          <TouchableOpacity
+                            style={styles.composerMetaChip}
+                            onPress={() => setAgentPickerOpen(true)}
+                            activeOpacity={0.7}
+                            accessibilityLabel="选择助手"
+                            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                          >
+                            <Text
+                              style={styles.composerModelTriggerText}
+                              numberOfLines={1}
+                              ellipsizeMode="tail"
+                            >
+                              {composerAgentLabel}
+                            </Text>
+                            <Ionicons name="chevron-down" size={14} color="#6b7280" />
+                          </TouchableOpacity>
+                        ) : (
+                          <View style={styles.composerMetaChipReadonly}>
+                            <Text
+                              style={styles.composerAgentReadonlyText}
+                              numberOfLines={1}
+                              ellipsizeMode="tail"
+                            >
+                              {composerAgentLabel}
+                            </Text>
+                          </View>
+                        )
+                      ) : null}
+                    </View>
+                    {showTokenUsageInChat &&
+                    usageStats &&
+                    conversationId &&
+                    !conversationHistoryLoading ? (
+                      <TouchableOpacity
+                        style={styles.composerUsageInMetaRow}
+                        onPress={() =>
+                          setUsageDetailModalBody(
+                            formatUsageHoverDetail(usageStats, {
+                              currencyMode: usageCurrencyDisplay,
+                              modelPriceReference,
+                              selectedModelId,
+                              scope: 'conversation',
+                            })
+                          )
+                        }
+                        activeOpacity={0.7}
+                        accessibilityLabel="本对话用量详情"
+                        hitSlop={{ top: 4, bottom: 4, left: 8, right: 8 }}
+                      >
+                        <Text
+                          style={styles.composerUsageText}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                        >
+                          {formatConversationUsageHeaderLine(usageStats, {
+                            currencyMode: usageCurrencyDisplay,
+                          })}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                ) : null}
+              </View>
             </View>
           </View>
         </View>
@@ -1876,6 +2018,13 @@ export function ChatScreen() {
       options={modelSheetOptions}
       onSelectModel={(id) => void handleSelectModel(id)}
     />
+    <ModelSelectSheet
+      visible={agentPickerOpen}
+      onClose={() => setAgentPickerOpen(false)}
+      options={agentSheetOptions}
+      sheetTitle="选择助手"
+      onSelectModel={(id) => void handleSelectAgent(id)}
+    />
     <UsageDetailModal
       visible={usageDetailModalBody != null}
       onClose={() => setUsageDetailModalBody(null)}
@@ -1904,19 +2053,66 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 10,
   },
-  inputRowInOverlay: {
+  bottomOverlayInner: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
+    flexDirection: 'column',
+    justifyContent: 'flex-end',
+  },
+  /** 底部留白留给绝对定位的模型/助手/用量条（与改前「模型贴在输入区底」同一思路，不把整块顶高） */
+  inputRowInOverlay: {
+    position: 'relative',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    paddingLeft: 20,
+    paddingRight: 20,
     paddingTop: 12,
-    paddingBottom: 28,
+    paddingBottom: 26,
     gap: 12,
-    /** 供底部用量条 absolute 定位，不改动输入行 flex */
     overflow: 'visible',
+  },
+  /** 叠在输入行底部留白内；paddingLeft 与 scrollContent(28) 对齐；paddingRight 较小让右侧用量更贴屏缘 */
+  composerMetaRowAbsolute: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: 32,
+    paddingRight: 32,
+    gap: 8,
+  },
+  composerMetaPills: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'nowrap',
+    gap: 10,
+  },
+  composerMetaChip: {
+    flexShrink: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  composerMetaChipReadonly: {
+    flexShrink: 1,
+    minWidth: 0,
+    justifyContent: 'flex-start',
+  },
+  composerAgentReadonlyText: {
+    fontSize: 11,
+    color: '#6b7280',
+  },
+  composerUsageInMetaRow: {
+    flexShrink: 0,
+    maxWidth: '42%',
+    alignItems: 'flex-end',
   },
   topBar: {
     position: 'absolute',
@@ -1957,31 +2153,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   headerTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
-  /** 与 composerUsageInComposer 同一底缘：左侧 Web/Desktop 同款模型切换入口 */
-  composerModelInComposer: {
-    position: 'absolute',
-    left: 32,
-    bottom: 6,
-    maxWidth: '40%',
-    zIndex: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
   /** 与 composerUsageText 同档：小号、灰色、常规字重 */
   composerModelTriggerText: {
     flexShrink: 1,
     fontSize: 11,
     color: '#6b7280',
-  },
-  /** 贴在输入行容器底缘内侧（落在 paddingBottom 区域），相对输入框在右下 */
-  composerUsageInComposer: {
-    position: 'absolute',
-    right: 45,
-    bottom: 6,
-    maxWidth: '78%',
-    zIndex: 12,
-    alignItems: 'flex-end',
   },
   composerUsageText: {
     fontSize: 11,
