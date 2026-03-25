@@ -236,7 +236,7 @@ export function ProfileScreen() {
             onPress={() => navigation.navigate('SoulSettings')}
           >
             <Ionicons name="sparkles-outline" size={22} color="#6b7280" />
-            <Text style={styles.rowLabel}>人设（SOUL）</Text>
+            <Text style={styles.rowLabel}>Agent 与记忆</Text>
             <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
           </TouchableOpacity>
           <TouchableOpacity

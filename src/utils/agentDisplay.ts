@@ -4,3 +4,13 @@ export function formatAgentDisplayLabel(agentId: string | null | undefined): str
   if (!s || s === 'default') return 'FLOPS';
   return s;
 }
+
+/** 优先用服务端 profile 的 display_name，否则回退 formatAgentDisplayLabel(agentId) */
+export function resolveAgentDisplayLabel(
+  agentId: string | null | undefined,
+  displayName?: string | null
+): string {
+  const dn = String(displayName ?? '').trim();
+  if (dn) return dn;
+  return formatAgentDisplayLabel(agentId);
+}

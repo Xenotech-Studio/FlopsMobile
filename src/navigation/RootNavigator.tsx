@@ -27,10 +27,27 @@ function profileCardStyleInterpolator({ current, layouts }: { current: { progres
   };
 }
 
+/** 右侧滑入（与账户操作页体验一致） */
+function rightCardStyleInterpolator({ current, layouts }: { current: { progress: number }; layouts: { screen: { width: number } } }) {
+  return {
+    cardStyle: {
+      transform: [
+        {
+          translateX: current.progress.interpolate({
+            inputRange: [0, 1],
+            outputRange: [layouts.screen.width, 0],
+          }),
+        },
+      ],
+    },
+  };
+}
+
 export function RootNavigator() {
   return (
     <Stack.Navigator
       initialRouteName="Main"
+      detachInactiveScreens
       screenOptions={{
         headerShown: false,
         contentStyle: { backgroundColor: '#fff' },
@@ -57,7 +74,7 @@ export function RootNavigator() {
         options={{
           headerShown: false,
           gestureEnabled: true,
-          cardStyleInterpolator: profileCardStyleInterpolator,
+          cardStyleInterpolator: rightCardStyleInterpolator,
         }}
       />
       <Stack.Screen
@@ -76,7 +93,7 @@ export function RootNavigator() {
         options={{
           headerShown: false,
           gestureEnabled: true,
-          cardStyleInterpolator: profileCardStyleInterpolator,
+          cardStyleInterpolator: rightCardStyleInterpolator,
         }}
       />
     </Stack.Navigator>

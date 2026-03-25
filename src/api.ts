@@ -400,6 +400,35 @@ export async function getAgentProfile(session: Session, agentId: string): Promis
   };
 }
 
+/** PUT /api/agent/profile — body { agent_id, display_name?, call_name? }，与 server.py 一致 */
+export async function putAgentProfile(
+  session: Session,
+  agentId: string,
+  body: { display_name: string; call_name: string }
+): Promise<AgentProfile> {
+  const base = session.server_base_url;
+  const id = String(agentId || '').trim();
+  if (!id) throw new Error('缺少 agent_id');
+  const res = await fetchWithDebugLog(`${base}api/agent/profile`, {
+    method: 'PUT',
+    headers: authHeaders(session.access_token),
+    body: JSON.stringify({
+      agent_id: id,
+      display_name: body.display_name,
+      call_name: body.call_name,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `保存资料失败: ${res.status}`);
+  }
+  const data = (await res.json()) as Record<string, unknown>;
+  return {
+    display_name: typeof data.display_name === 'string' ? data.display_name : undefined,
+    call_name: typeof data.call_name === 'string' ? data.call_name : undefined,
+  };
+}
+
 export type StreamChatOptions = {
   /** 重新回答：不发送新消息，让服务端截断后重新流式生成 */
   regenerate?: boolean;

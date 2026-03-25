@@ -139,14 +139,14 @@ export function UsageSettingsScreen() {
         pointerEvents="box-only"
       />
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>用量与显示</Text>
         <TouchableOpacity
-          style={styles.closeBtn}
+          style={styles.backBtn}
           onPress={() => navigation.goBack()}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
-          <Ionicons name="close" size={24} color="#374151" />
+          <Ionicons name="chevron-back" size={26} color="#374151" />
         </TouchableOpacity>
+        <Text style={styles.headerTitle}>用量与显示</Text>
       </View>
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
@@ -262,15 +262,15 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    justifyContent: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#e5e7eb',
     backgroundColor: '#fff',
   },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
-  closeBtn: { padding: 4 },
+  headerTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginLeft: 2 },
+  backBtn: { padding: 8, width: 44 },
   scroll: { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 32 },
   card: {

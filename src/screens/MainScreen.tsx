@@ -56,6 +56,7 @@ export function MainScreen() {
           title: '对话',
           headerShown: false,
           tabBarLabel: 'Chat',
+          unmountOnBlur: true,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="chatbubbles" size={size} color={color} />
           ),
@@ -68,6 +69,7 @@ export function MainScreen() {
           headerShown: false,
           title: '任务',
           tabBarLabel: 'Tasks',
+          unmountOnBlur: true,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="checkmark-done" size={size} color={color} />
           ),
@@ -79,6 +81,7 @@ export function MainScreen() {
         options={{
           title: 'Docs',
           tabBarLabel: 'Docs',
+          unmountOnBlur: true,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="document-text" size={size} color={color} />
           ),

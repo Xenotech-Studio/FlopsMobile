@@ -79,7 +79,7 @@ import {
 } from '../utils/toolCardParsers';
 import { ReadPagesDetailSheet } from '../components/ReadPagesDetailSheet';
 import { ModelSelectSheet } from '../components/ModelSelectSheet';
-import { formatAgentDisplayLabel } from '../utils/agentDisplay';
+import { resolveAgentDisplayLabel } from '../utils/agentDisplay';
 import { UsageDetailModal } from '../components/UsageDetailModal';
 import { SearchEngineCard } from './chat-cards/SearchEngineCard';
 import { FileWriteCard } from './chat-cards/FileWriteCard';
@@ -204,6 +204,8 @@ export function ChatScreen() {
     display_name: '',
     call_name: '',
   });
+  /** 各 agent_id 的 display_name（用于底部选择与标签，避免只显示裸 id） */
+  const [agentDisplayNameById, setAgentDisplayNameById] = useState<Record<string, string>>({});
   /** 有消息后的会话绑定 agent（来自 GET conversation） */
   const [conversationMeta, setConversationMeta] = useState<{
     bound_agent_id?: string;
@@ -211,6 +213,8 @@ export function ChatScreen() {
   } | null>(null);
   const [usageDetailModalBody, setUsageDetailModalBody] = useState<string | null>(null);
   const [messageInput, setMessageInput] = useState('');
+  /** 回到本页时强制重建输入框，避免多行/高度在其它页编辑后残留 */
+  const [composerRemountKey, setComposerRemountKey] = useState(0);
   const [loading, setLoading] = useState(false);
   /** 仅从路由拉取对话历史（GET conversation）期间，与流式 loading 分离 */
   const [conversationHistoryLoading, setConversationHistoryLoading] = useState(false);
@@ -407,6 +411,17 @@ export function ChatScreen() {
     }, [reloadLayoutPrefs, session, applyModelsConfig])
   );
 
+  const composerRemountSkipFirstFocusRef = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (composerRemountSkipFirstFocusRef.current) {
+        composerRemountSkipFirstFocusRef.current = false;
+        return;
+      }
+      setComposerRemountKey((n) => n + 1);
+    }, [])
+  );
+
   /** 空会话（欢迎/草稿）：拉 agent 列表，与 FlopsWeb 首页草稿一致 */
   useEffect(() => {
     if (!session || messages.length > 0) return;
@@ -423,6 +438,60 @@ export function ChatScreen() {
     };
   }, [session, messages.length]);
 
+  const agentIdsProfileFetchKey = useMemo(
+    () =>
+      [...new Set(agentIds.map((x) => String(x || '').trim()).filter(Boolean))].sort().join('\0'),
+    [agentIds]
+  );
+
+  /** 草稿会话：为可选 agent 列表拉 display_name */
+  useEffect(() => {
+    if (!session || !agentIdsProfileFetchKey) return;
+    const ids = agentIdsProfileFetchKey.split('\0').filter(Boolean);
+    let cancelled = false;
+    void Promise.all(
+      ids.map((id) =>
+        getAgentProfile(session, id).then((p) => {
+          const dn = (p.display_name || '').trim();
+          return [id, dn] as const;
+        })
+      )
+    ).then((entries) => {
+      if (cancelled) return;
+      setAgentDisplayNameById((prev) => {
+        const next = { ...prev };
+        for (const [id, dn] of entries) {
+          if (dn) next[id] = dn;
+        }
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session, agentIdsProfileFetchKey]);
+
+  const boundAgentIdForLabel = String(conversationMeta?.bound_agent_id || '').trim();
+  const boundMetaDisplayName = String(conversationMeta?.agent_profile?.display_name || '').trim();
+  const boundCachedDisplayName = boundAgentIdForLabel
+    ? (agentDisplayNameById[boundAgentIdForLabel] ?? '')
+    : '';
+
+  /** 有消息会话：meta 未带 display_name 时补拉 profile */
+  useEffect(() => {
+    if (!session || !boundAgentIdForLabel || boundMetaDisplayName || boundCachedDisplayName) return;
+    let cancelled = false;
+    getAgentProfile(session, boundAgentIdForLabel).then((p) => {
+      if (cancelled) return;
+      const dn = (p.display_name || '').trim();
+      if (!dn) return;
+      setAgentDisplayNameById((prev) => ({ ...prev, [boundAgentIdForLabel]: dn }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session, boundAgentIdForLabel, boundMetaDisplayName, boundCachedDisplayName]);
+
   /** 草稿页默认选中首个 agent（字母序由服务端 agent_ids 决定） */
   useEffect(() => {
     if (messages.length > 0) return;
@@ -437,10 +506,18 @@ export function ChatScreen() {
     getAgentProfile(session, draftAgentId)
       .then((p) => {
         if (cancelled) return;
+        const display_name = typeof p.display_name === 'string' ? p.display_name : '';
+        const call_name = typeof p.call_name === 'string' ? p.call_name : '';
         setDraftAgentProfile({
-          display_name: typeof p.display_name === 'string' ? p.display_name : '',
-          call_name: typeof p.call_name === 'string' ? p.call_name : '',
+          display_name,
+          call_name,
         });
+        const dn = display_name.trim();
+        if (dn) {
+          setAgentDisplayNameById((prev) =>
+            prev[draftAgentId] === dn ? prev : { ...prev, [draftAgentId]: dn }
+          );
+        }
       })
       .catch(() => {
         if (!cancelled) setDraftAgentProfile({ display_name: '', call_name: '' });
@@ -451,24 +528,37 @@ export function ChatScreen() {
   }, [session, messages.length, draftAgentId]);
 
   const composerAgentLabel = useMemo(() => {
+    const labelFor = (id: string | null | undefined) =>
+      resolveAgentDisplayLabel(id, id ? agentDisplayNameById[id] : undefined);
     if (messages.length > 0) {
       const fromProf = (conversationMeta?.agent_profile?.display_name || '').trim();
       if (fromProf) return fromProf;
       const bound = String(conversationMeta?.bound_agent_id || '').trim();
-      if (bound) return formatAgentDisplayLabel(bound);
+      if (bound) return labelFor(bound);
       /** 已发首条但 GET conversation 尚未回填 bound 时，沿用草稿区选中 */
       const draftDn = (draftAgentProfile.display_name || '').trim();
       if (draftDn) return draftDn;
-      return formatAgentDisplayLabel(draftAgentId);
+      return labelFor(draftAgentId);
     }
     const draftDn = (draftAgentProfile.display_name || '').trim();
     if (draftDn) return draftDn;
-    return formatAgentDisplayLabel(draftAgentId);
-  }, [messages.length, conversationMeta, draftAgentProfile.display_name, draftAgentId]);
+    return labelFor(draftAgentId);
+  }, [
+    messages.length,
+    conversationMeta?.agent_profile?.display_name,
+    conversationMeta?.bound_agent_id,
+    draftAgentProfile.display_name,
+    draftAgentId,
+    agentDisplayNameById,
+  ]);
 
   const agentSheetOptions = useMemo(
-    () => agentIds.map((id) => ({ label: formatAgentDisplayLabel(id), value: id })),
-    [agentIds]
+    () =>
+      agentIds.map((id) => ({
+        label: resolveAgentDisplayLabel(id, agentDisplayNameById[id]),
+        value: id,
+      })),
+    [agentIds, agentDisplayNameById]
   );
 
   const agentComposerInteractive = messages.length === 0 && agentIds.length > 0;
@@ -1887,6 +1977,7 @@ export function ChatScreen() {
             <View style={styles.bottomOverlayInner} pointerEvents="box-none">
               <View style={styles.inputRowInOverlay} pointerEvents="box-none">
                 <TextInput
+                  key={composerRemountKey}
                   style={styles.composerInput}
                   value={messageInput}
                   onChangeText={setMessageInput}
