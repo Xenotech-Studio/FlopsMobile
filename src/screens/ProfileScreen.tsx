@@ -25,6 +25,7 @@ import { useSession } from '../context/SessionContext';
 import { shadowSoftSubtle } from '../theme/shadows';
 import { getCurrentUserInfo } from '../api';
 import { APP_VERSION } from '../appVersion';
+import { getChangelogChanges } from '../changelog';
 import {
   getLatest,
   getReleases,
@@ -61,6 +62,7 @@ export function ProfileScreen() {
   const [downloadedPath, setDownloadedPath] = useState<string | null>(null);
   const [downloadedVersion, setDownloadedVersion] = useState<string | null>(null);
   const [userInfo, setUserInfo] = useState<{ avatarUrl?: string; nickname?: string } | null>(null);
+  const [expandedChangelogVersion, setExpandedChangelogVersion] = useState<string | null>(null);
 
   useEffect(() => {
     if (!session) {
@@ -376,22 +378,62 @@ export function ProfileScreen() {
                       ) : versionHistory.length > 0 ? (
                         versionHistory.map((rel) => {
                           const isCurrent = rel.version === APP_VERSION;
+                          const isChangelogExpanded = expandedChangelogVersion === rel.version;
+                          const changes = getChangelogChanges(rel.version);
+                          const filename = rel.filename;
                           return (
                             <View key={rel.version} style={styles.versionHistoryItem}>
-                              <Text style={styles.versionHistoryVersion}>
-                                v{rel.version}
-                                {isCurrent ? ' (当前)' : ''}
-                              </Text>
-                              {!isCurrent && rel.filename && (
-                                <TouchableOpacity
-                                  onPress={() => {
-                                    const url = `${serverBaseUrl.replace(/\/$/, '')}/api/android-update/${encodeURIComponent(rel.filename)}`;
-                                    Linking.openURL(url).catch(() => {});
-                                  }}
-                                  style={styles.versionHistoryInstallBtn}
-                                >
-                                  <Text style={styles.versionHistoryInstallBtnText}>安装此版本</Text>
-                                </TouchableOpacity>
+                              <View style={styles.versionHistoryRow}>
+                                <Text style={styles.versionHistoryVersion}>
+                                  v{rel.version}
+                                  {isCurrent ? ' (当前)' : ''}
+                                </Text>
+                                <View style={styles.versionHistoryActions}>
+                                  <TouchableOpacity
+                                    onPress={() => {
+                                      setExpandedChangelogVersion((prev) =>
+                                        prev === rel.version ? null : rel.version
+                                      );
+                                    }}
+                                    style={styles.versionHistoryChangelogBtn}
+                                  >
+                                    <Ionicons
+                                      name={isChangelogExpanded ? 'chevron-down' : 'chevron-forward'}
+                                      size={16}
+                                      color="#6b7280"
+                                    />
+                                    <Text style={styles.versionHistoryChangelogBtnText}>更新说明</Text>
+                                  </TouchableOpacity>
+                                  {!isCurrent && filename && (
+                                    <TouchableOpacity
+                                      onPress={() => {
+                                        if (!filename) return;
+                                        const url = `${serverBaseUrl.replace(/\/$/, '')}/api/android-update/${encodeURIComponent(filename)}`;
+                                        Linking.openURL(url).catch(() => {});
+                                      }}
+                                      style={styles.versionHistoryInstallBtn}
+                                    >
+                                      <Text style={styles.versionHistoryInstallBtnText}>安装此版本</Text>
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
+                              </View>
+                              {isChangelogExpanded && (
+                                <View style={styles.versionHistoryChangelog}>
+                                  {changes.length > 0 ? (
+                                    changes.map((line, idx) => (
+                                      <View
+                                        key={`${rel.version}-${idx}`}
+                                        style={styles.versionHistoryChangelogItem}
+                                      >
+                                        <Text style={styles.versionHistoryChangelogBullet}>•</Text>
+                                        <Text style={styles.versionHistoryChangelogText}>{line}</Text>
+                                      </View>
+                                    ))
+                                  ) : (
+                                    <Text style={styles.versionHistoryChangelogEmpty}>暂无更新说明</Text>
+                                  )}
+                                </View>
                               )}
                             </View>
                           );
@@ -560,15 +602,51 @@ const styles = StyleSheet.create({
   versionHistoryBody: { marginLeft: 8, marginTop: 4 },
   versionHistoryLoader: { marginVertical: 12 },
   versionHistoryItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: '#f3f4f6',
   },
+  versionHistoryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
   versionHistoryVersion: { fontSize: 14, color: '#111827' },
+  versionHistoryActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  versionHistoryChangelogBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    backgroundColor: '#f3f4f6',
+  },
+  versionHistoryChangelogBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '500' },
   versionHistoryInstallBtn: { paddingVertical: 4, paddingHorizontal: 10 },
   versionHistoryInstallBtnText: { fontSize: 14, color: '#0a7b0a', fontWeight: '500' },
+  versionHistoryChangelog: { marginTop: 10 },
+  versionHistoryChangelogItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  versionHistoryChangelogBullet: {
+    width: 14,
+    color: '#6b7280',
+    lineHeight: 18,
+  },
+  versionHistoryChangelogText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#374151',
+    lineHeight: 18,
+  },
+  versionHistoryChangelogEmpty: { fontSize: 13, color: '#9ca3af' },
   versionHistoryEmpty: { fontSize: 14, color: '#6b7280', marginVertical: 12 },
 });

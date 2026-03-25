@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, Modal, StyleSheet } from 'react-native';
 import { useVersionWelcome, type VersionWelcomeType } from '../context/VersionWelcomeContext';
+import { getChangelogChanges } from '../changelog';
 
 const COPY: Record<VersionWelcomeType, { title: string; subtitle: string }> = {
   upgrade: {
@@ -20,6 +21,7 @@ export function VersionWelcomeScreen() {
   if (!showWelcome || !welcomeType) return null;
 
   const { title, subtitle } = COPY[welcomeType];
+  const changes = welcomeType === 'upgrade' ? getChangelogChanges(currentVersion) : [];
 
   return (
     <Modal visible transparent animationType="fade">
@@ -33,6 +35,21 @@ export function VersionWelcomeScreen() {
             )}
             <Text style={styles.versionLabel}>当前版本：{currentVersion}</Text>
           </View>
+          {welcomeType === 'upgrade' && (
+            <View style={styles.changelog}>
+              <Text style={styles.changelogTitle}>本次更新</Text>
+              {changes.length > 0 ? (
+                changes.map((line, idx) => (
+                  <View key={`${idx}-${line}`} style={styles.changelogItem}>
+                    <Text style={styles.changelogBullet}>•</Text>
+                    <Text style={styles.changelogText}>{line}</Text>
+                  </View>
+                ))
+              ) : (
+                <Text style={styles.changelogEmpty}>暂无更新说明</Text>
+              )}
+            </View>
+          )}
           <TouchableOpacity style={styles.btn} onPress={dismissWelcome} activeOpacity={0.8}>
             <Text style={styles.btnText}>进入</Text>
           </TouchableOpacity>
@@ -76,6 +93,35 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#94a3b8',
     marginBottom: 4,
+  },
+  changelog: {
+    marginBottom: 18,
+  },
+  changelogTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 10,
+  },
+  changelogItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  changelogBullet: {
+    width: 14,
+    color: '#475569',
+    lineHeight: 20,
+  },
+  changelogText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#475569',
+    lineHeight: 20,
+  },
+  changelogEmpty: {
+    fontSize: 13,
+    color: '#94a3b8',
   },
   btn: {
     backgroundColor: '#0f172a',
