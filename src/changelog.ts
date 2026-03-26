@@ -4,8 +4,9 @@ export type ChangelogEntry = {
   changes?: string[];
 };
 
+// 数据文件名不可为 changelog.json：Metro 解析 `from '../changelog'` 时 sourceExts 中 json 先于 ts，会错误绑定到 JSON 而非本文件。
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const changelogData = require('./changelog.json') as ChangelogEntry[] | undefined;
+const changelogData = require('./changelog.bundled.json') as ChangelogEntry[] | undefined;
 
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = Array.isArray(changelogData) ? changelogData : [];
 
