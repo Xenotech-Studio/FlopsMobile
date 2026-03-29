@@ -45,14 +45,24 @@ export function ToolCardFrame({
         onPress={() => setToolCardMode(cardKey, 'preview')}
         accessibilityLabel="点击展开"
       >
-        <Text style={styles.toolCardCollapsedName} numberOfLines={1}>
-          {collapsedName}
-        </Text>
-        {collapsedTail != null && collapsedTail !== '' ? (
-          <Text style={[styles.toolCardCollapsedTail, { flex: 1 }]} numberOfLines={1} ellipsizeMode="tail">
-            {collapsedTail}
+        <View style={styles.toolCardCollapsedMain}>
+          <Text
+            style={styles.toolCardCollapsedName}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+          >
+            {collapsedName}
           </Text>
-        ) : null}
+          {collapsedTail != null && collapsedTail !== '' ? (
+            <Text
+              style={styles.toolCardCollapsedTail}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+            >
+              {collapsedTail}
+            </Text>
+          ) : null}
+        </View>
         <View style={styles.toolCardBadgeWrap}>
           <Text style={[styles.toolCardBadge, collapsedBadgeStyle]}>{getToolStatusLabel(status)}</Text>
         </View>
