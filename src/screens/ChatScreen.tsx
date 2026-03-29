@@ -1934,15 +1934,22 @@ export function ChatScreen() {
                   anchorRef={contextCompressAnchorRef}
                 />
               ) : null}
-              {showTokenUsageInChat &&
-              (segmentUsage || compressUsagePart) &&
-              lastTextBlockIdx < 0 &&
-              msg.role === 'assistant' ? (
+              {/* 仅有工具块、无 assistant 文本时：与 Web ChatMessageList renderBlocks 一致（有重新生成和/或用量、压缩条） */}
+              {lastTextBlockIdx < 0 &&
+              msg.role === 'assistant' &&
+              (afterUserIndex >= 0 ||
+                (showTokenUsageInChat && Boolean(segmentUsage)) ||
+                showCompressOnThisAssistant) ? (
                 <View style={styles.assistantTextBlock}>
                   <MarkdownContent
                     text=""
-                    usageHint={segmentUsage}
-                    usageDetail={segmentDetail}
+                    showRegenerateButton={afterUserIndex >= 0}
+                    onRegenerate={
+                      afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined
+                    }
+                    regenerateDisabled={!conversationId || loading || conversationHistoryLoading}
+                    usageHint={showTokenUsageInChat ? segmentUsage : undefined}
+                    usageDetail={showTokenUsageInChat ? segmentDetail : undefined}
                     compressHint={showCompressOnThisAssistant ? compressUsagePart : undefined}
                     onCompressClick={
                       showCompressOnThisAssistant ? scrollToContextCompressAnchor : undefined
@@ -2122,6 +2129,38 @@ export function ChatScreen() {
                     anchorRef={contextCompressAnchorRef}
                   />
                 ) : null}
+                {/* 与 Web Chat.jsx no-assistant-reply-hint：最后一条是 user 且无流式中时，提示未回复并允许重新生成 */}
+                {!conversationHistoryLoading &&
+                messages.length > 0 &&
+                !loading &&
+                (() => {
+                  const lastMsg = messages[messages.length - 1];
+                  if (lastMsg.role !== 'user') return null;
+                  const noReplyAfterUserIndex =
+                    messages.filter((m) => m.role === 'user').length - 1;
+                  if (noReplyAfterUserIndex < 0) return null;
+                  const regenDisabled =
+                    !conversationId || loading || conversationHistoryLoading;
+                  return (
+                    <View
+                      key="no-assistant-reply-hint"
+                      style={[styles.bubbleWrap, styles.assistantBubbleWrap]}
+                    >
+                      <View style={[styles.bubble, styles.assistantBubble]}>
+                        <Text style={styles.bubbleRole}>{composerAgentLabel}</Text>
+                        <View style={styles.assistantTextBlock}>
+                          <MarkdownContent
+                            text="Flops未回复任何内容"
+                            showRegenerateButton
+                            contentWrapperStyle={styles.assistantEmptyReplyMarkdownContent}
+                            onRegenerate={() => handleRegenerate(noReplyAfterUserIndex)}
+                            regenerateDisabled={regenDisabled}
+                          />
+                        </View>
+                      </View>
+                    </View>
+                  );
+                })()}
               </>
             )}
             {loading && !conversationHistoryLoading ? (
@@ -2515,6 +2554,8 @@ const styles = StyleSheet.create({
   errorText: { color: '#dc2626', fontSize: 14 },
   assistantTextBlock: { marginTop: 10 },
   assistantTextBlockCompactAbove: { marginTop: 8 },
+  /** 与 Web .assistant-empty-reply-block .markdown-content 一致，仅弱化提示正文 */
+  assistantEmptyReplyMarkdownContent: { opacity: 0.62 },
   toolPackageNavLine: {
     marginTop: -4,
     paddingVertical: 2,

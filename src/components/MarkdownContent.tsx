@@ -2,7 +2,7 @@
  * Markdown 渲染 + 可选复制按钮，与 FlopsDesktop 的 MarkdownContent 能力对齐
  */
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, type ViewStyle } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import Clipboard from '@react-native-clipboard/clipboard';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -58,6 +58,8 @@ type Props = {
   /** 点击压缩提示时滚动到摘要分界 */
   onCompressClick?: () => void;
   compressAriaLabel?: string;
+  /** 仅作用于正文区域（不含底部工具栏），如「未回复」提示与 Web .assistant-empty-reply-block 一致弱化 */
+  contentWrapperStyle?: ViewStyle;
 };
 
 export function MarkdownContent({
@@ -71,6 +73,7 @@ export function MarkdownContent({
   compressHint,
   onCompressClick,
   compressAriaLabel,
+  contentWrapperStyle,
 }: Props) {
   const [copied, setCopied] = useState(false);
   const [usageDetailOpen, setUsageDetailOpen] = useState(false);
@@ -104,10 +107,10 @@ export function MarkdownContent({
 
   return (
     <View style={styles.wrap}>
-      <View style={styles.content}>
+      <View style={[styles.content, contentWrapperStyle]}>
         {source ? (
           <Markdown style={markdownStyles}>{source}</Markdown>
-        ) : hasUsage || hasCompress ? null : (
+        ) : showToolbar ? null : (
           <Text style={styles.placeholder}>（无内容）</Text>
         )}
       </View>
