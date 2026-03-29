@@ -2203,7 +2203,7 @@ export function ChatScreen() {
               <ActivityIndicator size="large" color="#374151" />
             </View>
           ) : null}
-          {/* 底部整块贴屏底：渐变铺满整块并延伸到底，输入行叠在渐变底部，无单独白底 */}
+          {/* 底部整块贴屏底：渐变铺满整块并延伸到底，输入行叠在渐变底部，无单独白底；点渐变区（未点到输入/发送）可滚到底 */}
           <View style={[styles.bottomOverlay, { height: bottomOverlayHeight }]}>
             <LinearGradient
               colors={[
@@ -2217,6 +2217,12 @@ export function ChatScreen() {
               start={{ x: 0.5, y: 0 }}
               end={{ x: 0.5, y: 1 }}
               pointerEvents="none"
+            />
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={() => scrollRef.current?.scrollToEnd({ animated: true })}
+              accessibilityRole="button"
+              accessibilityLabel="滚动到对话底部"
             />
             <View style={styles.bottomOverlayInner} pointerEvents="box-none">
               <View style={styles.inputRowInOverlay} pointerEvents="box-none">
