@@ -362,24 +362,6 @@ export function ChatScreen() {
     });
   }, [scrollContentPaddingTop]);
 
-  const streamContextCompressUi = useMemo(() => {
-    let streamLastTextIdx = -1;
-    for (let i = 0; i < currentAssistantBlocks.length; i++) {
-      if (currentAssistantBlocks[i]?.type === 'text') streamLastTextIdx = i;
-    }
-    const compressOnStream =
-      showTokenUsageInChat &&
-      Boolean(conversationId) &&
-      contextCompressMessagePercent != null;
-    const streamCompressHint = compressOnStream ? `${contextCompressMessagePercent}%已压缩` : undefined;
-    return { streamLastTextIdx, compressOnStream, streamCompressHint };
-  }, [
-    currentAssistantBlocks,
-    showTokenUsageInChat,
-    conversationId,
-    contextCompressMessagePercent,
-  ]);
-
   const usageByAssistantIdx = useMemo(() => {
     const m: Record<number, UsageStats> = {};
     for (const r of usageRuns) {
@@ -2152,28 +2134,12 @@ export function ChatScreen() {
                     currentAssistantBlocks.map((block, bi) => {
                       const prevBlock = currentAssistantBlocks[bi - 1];
                       const compactAbove = prevBlock != null && isToolPackageNavBlock(prevBlock);
-                      const { streamLastTextIdx, compressOnStream, streamCompressHint } = streamContextCompressUi;
                       return block.type === 'text' ? (
                         <View
                           key={bi}
                           style={[styles.assistantTextBlock, compactAbove && styles.assistantTextBlockCompactAbove]}
                         >
-                          <MarkdownContent
-                            text={block.content}
-                            compressHint={
-                              bi === streamLastTextIdx ? streamCompressHint : undefined
-                            }
-                            onCompressClick={
-                              compressOnStream && bi === streamLastTextIdx
-                                ? scrollToContextCompressAnchor
-                                : undefined
-                            }
-                            compressAriaLabel={
-                              compressOnStream && bi === streamLastTextIdx
-                                ? contextCompressScrollToAnchorTitle
-                                : undefined
-                            }
-                          />
+                          <MarkdownContent text={block.content} />
                         </View>
                       ) : (
                         <React.Fragment key={`stream-tool-${bi}`}>
@@ -2184,20 +2150,7 @@ export function ChatScreen() {
                   ) : null}
                   {currentAssistantBlocks.length === 0 ? (
                     <View style={styles.assistantTextBlock}>
-                      <MarkdownContent
-                        text={streamingText || streamBubblePlaceholderText}
-                        compressHint={streamContextCompressUi.streamCompressHint}
-                        onCompressClick={
-                          streamContextCompressUi.compressOnStream
-                            ? scrollToContextCompressAnchor
-                            : undefined
-                        }
-                        compressAriaLabel={
-                          streamContextCompressUi.compressOnStream
-                            ? contextCompressScrollToAnchorTitle
-                            : undefined
-                        }
-                      />
+                      <MarkdownContent text={streamingText || streamBubblePlaceholderText} />
                     </View>
                   ) : null}
                 </View>

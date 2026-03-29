@@ -1,17 +1,19 @@
-import React from 'react';
+/**
+ * 上下文摘要详情：与 UsageDetailModal / ModelSelectSheet 同款 Bottom Sheet（顶栏、分隔线、滚动区）。
+ */
+import React, { useCallback, useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import {
-  Modal,
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-  Platform,
-} from 'react-native';
+  BottomSheetModal,
+  BottomSheetScrollView,
+  BottomSheetBackdrop,
+} from '@gorhom/bottom-sheet';
+import type { BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import type { ContextSummary, ConversationMessage } from '../api';
 import { MarkdownContent } from './MarkdownContent';
 import { getCompressedRegionLastMessagePreview } from '../utils/contextCompress';
+import { shadowSheet } from '../theme/shadows';
+import { TASK_FONT_SIZE_BODY } from '../theme/typography';
 
 type Props = {
   visible: boolean;
@@ -21,159 +23,202 @@ type Props = {
 };
 
 export function ContextCompressSummaryModal({ visible, onClose, activeSummary, rawMessages }: Props) {
+  const modalRef = useRef<BottomSheetModal>(null);
+
+  useEffect(() => {
+    if (visible) modalRef.current?.present();
+    else modalRef.current?.dismiss();
+  }, [visible]);
+
+  const handleSheetChanges = useCallback(
+    (index: number) => {
+      if (index === -1) onClose();
+    },
+    [onClose]
+  );
+
+  const renderBackdrop = useCallback(
+    (props: BottomSheetBackdropProps) => (
+      <BottomSheetBackdrop
+        {...props}
+        opacity={0.35}
+        pressBehavior="close"
+        appearsOnIndex={0}
+        disappearsOnIndex={-1}
+      />
+    ),
+    []
+  );
+
   const e = activeSummary?.covers_exclusive_end;
   const ei = typeof e === 'number' && Number.isFinite(e) ? Math.floor(e) : 0;
   const summaryText = String(activeSummary?.summary_text || '').trim();
-  const createdAt = activeSummary?.created_at ? String(activeSummary.created_at) : '';
-  const sid = activeSummary?.id ? String(activeSummary.id) : '';
-  const metaTitle = [sid && `id ${sid}`, createdAt].filter(Boolean).join(' · ');
   const snippetPreview = getCompressedRegionLastMessagePreview(rawMessages, e);
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.sheet} onPress={(ev) => ev.stopPropagation()}>
-          <View style={styles.header}>
-            <View style={styles.headerTextCol}>
-              <Text style={styles.title} accessibilityRole="header">
-                摘要
-              </Text>
-              {metaTitle ? (
-                <Text style={styles.metaSubtitle} numberOfLines={2}>
-                  {metaTitle}
-                </Text>
-              ) : null}
-            </View>
-            <TouchableOpacity
-              onPress={onClose}
-              style={styles.closeBtn}
-              accessibilityLabel="关闭"
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+    <BottomSheetModal
+      ref={modalRef}
+      snapPoints={['50%', '90%']}
+      index={0}
+      onChange={handleSheetChanges}
+      onDismiss={onClose}
+      enablePanDownToClose
+      enableDynamicSizing={false}
+      backdropComponent={renderBackdrop}
+      backgroundStyle={[styles.sheetBg, styles.sheetShadow]}
+      handleIndicatorStyle={styles.handle}
+    >
+      <View style={styles.header}>
+        <View style={styles.headerTextCol}>
+          <Text style={styles.title} accessibilityRole="header">
+            摘要
+          </Text>
+        </View>
+        <TouchableOpacity onPress={onClose} style={styles.cancelBtn} activeOpacity={0.7}>
+          <Text style={styles.cancelText}>取消</Text>
+        </TouchableOpacity>
+      </View>
+      <View style={styles.headerBorder} />
+      <BottomSheetScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.rangeBox}>
+          {ei > 0 ? (
+            <View
+              style={styles.rangeLineRow}
+              accessibilityLabel={
+                snippetPreview
+                  ? `摘要范围：前 ${ei} 条 · 至「${snippetPreview}」`
+                  : `摘要范围：前 ${ei} 条 · 至（无文本）`
+              }
+              accessible
             >
-              <Text style={styles.closeText}>×</Text>
-            </TouchableOpacity>
-          </View>
-          <ScrollView style={styles.bodyScroll} contentContainerStyle={styles.bodyContent}>
-            <View style={styles.rangeBox}>
-              {ei > 0 ? (
-                <Text style={styles.rangeText}>
-                  摘要范围：前 <Text style={styles.mono}>{ei}</Text> 条 · 至
-                  {snippetPreview ? (
-                    <>
-                      <Text style={styles.rangeText}>「</Text>
-                      <Text style={styles.snippet} numberOfLines={3}>
-                        {snippetPreview}
-                      </Text>
-                      <Text style={styles.rangeText}>」</Text>
-                    </>
-                  ) : (
-                    <Text style={styles.muted}>（无文本）</Text>
-                  )}
+              <Text style={styles.rangeFixed} numberOfLines={1}>
+                摘要范围：前{' '}
+              </Text>
+              <Text style={[styles.mono, styles.rangeFixed]} numberOfLines={1}>
+                {ei}
+              </Text>
+              <Text style={styles.rangeFixed} numberOfLines={1}>
+                {' '}
+                条 · 至
+              </Text>
+              {snippetPreview ? (
+                <>
+                  <Text style={styles.rangeFixed} numberOfLines={1}>
+                    「
+                  </Text>
+                  <View style={styles.rangeSnippetFlex}>
+                    <Text
+                      style={styles.rangeSnippetText}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {snippetPreview}
+                    </Text>
+                  </View>
+                  <Text style={styles.rangeFixed} numberOfLines={1}>
+                    」
+                  </Text>
+                </>
+              ) : (
+                <Text style={[styles.rangeMutedInline, styles.rangeFixed]} numberOfLines={1}>
+                  （无文本）
                 </Text>
-              ) : (
-                <Text style={styles.muted}>—</Text>
               )}
             </View>
-            <View style={styles.summaryMarkdown}>
-              {summaryText ? (
-                <MarkdownContent text={summaryText} />
-              ) : (
-                <Text style={styles.muted}>（空）</Text>
-              )}
-            </View>
-          </ScrollView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+          ) : (
+            <Text style={styles.muted}>—</Text>
+          )}
+        </View>
+        <View style={styles.summaryMarkdown}>
+          {summaryText ? (
+            <MarkdownContent text={summaryText} />
+          ) : (
+            <Text style={styles.muted}>（空）</Text>
+          )}
+        </View>
+      </BottomSheetScrollView>
+    </BottomSheetModal>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 24,
-  },
-  sheet: {
-    maxHeight: '88%',
+  sheetBg: {
     backgroundColor: '#fff',
-    borderRadius: 14,
-    overflow: 'hidden',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.2,
-        shadowRadius: 24,
-      },
-      android: { elevation: 12 },
-    }),
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
   },
+  sheetShadow: { ...shadowSheet },
+  handle: { backgroundColor: '#c7c7cc', width: 36 },
   header: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e5e7eb',
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    paddingBottom: 12,
     gap: 8,
   },
   headerTextCol: {
     flex: 1,
     minWidth: 0,
   },
-  title: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#111827',
+  headerBorder: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#e5e7eb',
   },
-  metaSubtitle: {
-    marginTop: 4,
-    fontSize: 12,
-    color: '#9ca3af',
-  },
-  closeBtn: {
-    marginLeft: 8,
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-  },
-  closeText: {
-    fontSize: 28,
-    lineHeight: 30,
-    color: '#6b7280',
-  },
-  bodyScroll: {
-    maxHeight: 480,
-  },
-  bodyContent: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    paddingBottom: 24,
+  title: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: '#111827' },
+  cancelBtn: { paddingVertical: 8, paddingHorizontal: 4 },
+  cancelText: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827' },
+  scrollContent: {
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    paddingBottom: 48,
+    backgroundColor: '#fff',
   },
   rangeBox: {
     marginBottom: 12,
+    minWidth: 0,
   },
-  rangeText: {
-    fontSize: 14,
-    color: '#374151',
-    lineHeight: 22,
+  /** 与 Web .context-compress-meta-range-line：单行、预览段省略 */
+  rangeLineRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    width: '100%',
+    minWidth: 0,
+    flexWrap: 'nowrap',
+  },
+  rangeFixed: {
+    flexShrink: 0,
+    fontSize: 11,
+    lineHeight: 15,
+    color: '#737373',
+  },
+  rangeSnippetFlex: {
+    flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
+  },
+  rangeSnippetText: {
+    fontSize: 11,
+    lineHeight: 15,
+    color: '#737373',
   },
   mono: {
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
-    fontSize: 14,
-    color: '#111827',
+    fontSize: 11,
+    color: '#525252',
   },
-  snippet: {
-    fontSize: 14,
-    color: '#4b5563',
-    lineHeight: 22,
+  rangeMutedInline: {
+    fontSize: 11,
+    lineHeight: 15,
+    color: '#a3a3a3',
   },
   muted: {
-    fontSize: 14,
+    fontSize: TASK_FONT_SIZE_BODY,
     color: '#9ca3af',
   },
   summaryMarkdown: {
