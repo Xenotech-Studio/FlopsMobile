@@ -99,6 +99,13 @@ type ToolBlock = Extract<StreamBlock, { type: 'tool' }>;
 
 const STREAM_TIMEOUT_MS = 300000;
 
+/** High-resolution time when available (e.g. Hermes), else `Date.now()`. Avoids bare `performance` (not in RN TS libs). */
+function perfNowMs(): number {
+  const w = globalThis as typeof globalThis & { performance?: { now?: () => number } };
+  const n = w.performance?.now;
+  return typeof n === 'function' ? n.call(w.performance) : Date.now();
+}
+
 const TOOL_PACKAGE_NAV_NAMES = ['open_tool_packages', 'close_tool_packages'];
 
 
@@ -1455,20 +1462,20 @@ export function ChatScreen() {
     getConversation(session, id)
       .then(({ conversation }) => {
         if (cancelled || gen !== conversationRouteFetchGenRef.current) return;
-        const tUi0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const tUi0 = perfNowMs();
         setConversationHistoryLoading(false);
         const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
         shouldScrollToEndRef.current = true;
         scrollToEndAnimatedRef.current = false;
         const rid = conversation?.active_chat_v2_run_id;
         const runId = typeof rid === 'string' ? rid.trim() : '';
-        const tMap0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const tMap0 = perfNowMs();
         applyConversationUsageState(conversation);
         let localMsgs = rawMessagesToLocal(raw);
         if (runId) {
           localMsgs = truncateMessagesAfterLastUser(localMsgs);
         }
-        const tMap1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const tMap1 = perfNowMs();
         setMessages(localMsgs);
         setConversationId(id);
         conversationIdRef.current = id;
@@ -1483,7 +1490,7 @@ export function ChatScreen() {
         });
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            const tPaint = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            const tPaint = perfNowMs();
             convProfileLog('ChatScreen.routeOpen.after2xRAF', {
               conversationId: id,
               msSinceUiStart: Math.round(tPaint - tUi0),
@@ -2817,6 +2824,28 @@ const styles = StyleSheet.create({
   },
   fileToolPreviewScroll: { maxHeight: 120, marginTop: 8 },
   fileToolPreviewScrollContent: { paddingBottom: 4 },
+  /** local_exec_command 半折叠：与 Web .tool-card-exec-scroll-preview 类似 */
+  execToolPreviewScroll: { maxHeight: 140, marginTop: 6 },
+  execToolPreviewScrollContent: { paddingBottom: 6 },
+  toolCardExecBody: { marginTop: 4 },
+  toolCardExecPrompt: {
+    fontSize: 12,
+    color: '#262626',
+    lineHeight: 18,
+    marginBottom: 6,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+  },
+  toolCardExecPromptPrefix: { color: '#64748b', fontWeight: '600' as const },
+  toolCardExecCwd: { color: '#737373' },
+  /** 时间在滚动区外，避免输出更新时底栏随 scrollToEnd 抖动 */
+  toolCardExecExit: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#e5e5e5',
+    fontSize: 11,
+    color: '#64748b',
+  },
   fileToolPreviewFade: {
     position: 'absolute',
     left: 0,
