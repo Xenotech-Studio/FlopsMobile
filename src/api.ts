@@ -196,6 +196,14 @@ export type AgentProfile = {
   call_name?: string;
 };
 
+/** 服务端上下文摘要（与 Web/Desktop flops-chat-ui 一致） */
+export type ContextSummary = {
+  id?: string;
+  summary_text?: string;
+  covers_exclusive_end?: number;
+  created_at?: string;
+};
+
 export type Conversation = {
   id: string;
   title?: string;
@@ -208,6 +216,9 @@ export type Conversation = {
   usage_runs?: UsageRun[];
   bound_agent_id?: string;
   agent_profile?: AgentProfile;
+  /** 当前生效的上下文摘要 id（若有则可能存在压缩分界展示） */
+  active_context_summary_id?: string;
+  context_summaries?: ContextSummary[];
 };
 
 /**

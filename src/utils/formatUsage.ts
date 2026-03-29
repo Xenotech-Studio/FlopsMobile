@@ -1,6 +1,6 @@
 import { formatUsdCnyHeaderMoney } from './usageDisplay';
 import type { UsageCurrencyMode } from '../constants/pricingDisplay';
-import type { UsageStats } from '../api';
+import type { UsageStats, ConversationMessage, ContextSummary } from '../api';
 
 function totalTokensFromUsage(u: UsageStats | null | undefined): number {
   if (!u || typeof u !== 'object') return 0;
@@ -20,6 +20,31 @@ export function formatUsageTiny(u: UsageStats | null | undefined, options?: { cu
   const costStr =
     cost != null && Number(cost) > 0 ? ` · ${formatUsdCnyHeaderMoney(Number(cost), currencyMode)}` : '';
   return `耗 ${tt} tok${costStr}`;
+}
+
+/**
+ * 当前会话若有 active 上下文摘要，返回「按服务端原始消息条数」计的已压缩比例 0–100（null 表示无摘要或未生效）。
+ * 与 FlopsDesktop `formatUsage.js` / flops-chat-ui 逻辑一致。
+ */
+export function getConversationContextCompressMessagePercent(conv: {
+  messages?: ConversationMessage[] | null;
+  active_context_summary_id?: string | null;
+  context_summaries?: ContextSummary[] | null;
+} | null | undefined): number | null {
+  if (!conv || typeof conv !== 'object') return null;
+  const aidRaw = conv.active_context_summary_id;
+  const aid = typeof aidRaw === 'string' ? aidRaw.trim() : '';
+  const raw = conv.messages;
+  if (!aid || !Array.isArray(raw) || raw.length === 0) return null;
+  const sums = conv.context_summaries;
+  const active = Array.isArray(sums) ? sums.find((s) => s && typeof s === 'object' && s.id === aid) : null;
+  if (!active) return null;
+  const e = active.covers_exclusive_end;
+  if (typeof e !== 'number' || !Number.isFinite(e)) return null;
+  const ei = Math.floor(e);
+  if (ei <= 0 || ei > raw.length) return null;
+  const pct = Math.round((ei / raw.length) * 100);
+  return Math.min(100, Math.max(0, pct));
 }
 
 export function formatConversationUsageHeaderLine(

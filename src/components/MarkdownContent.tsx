@@ -53,6 +53,11 @@ type Props = {
   usageHint?: string;
   /** 弹窗多行详情；不传则仅展示 usageHint */
   usageDetail?: string;
+  /** 上下文压缩比例提示（如「42%已压缩」），与 Web/Desktop 对齐 */
+  compressHint?: string;
+  /** 点击压缩提示时滚动到摘要分界 */
+  onCompressClick?: () => void;
+  compressAriaLabel?: string;
 };
 
 export function MarkdownContent({
@@ -63,11 +68,15 @@ export function MarkdownContent({
   regenerateDisabled = false,
   usageHint,
   usageDetail,
+  compressHint,
+  onCompressClick,
+  compressAriaLabel,
 }: Props) {
   const [copied, setCopied] = useState(false);
   const [usageDetailOpen, setUsageDetailOpen] = useState(false);
   const source = String(text ?? '').trim();
   const hasUsage = typeof usageHint === 'string' && usageHint.trim().length > 0;
+  const hasCompress = typeof compressHint === 'string' && compressHint.trim().length > 0;
   const detailText =
     typeof usageDetail === 'string' && usageDetail.trim().length > 0
       ? usageDetail.trim()
@@ -90,19 +99,20 @@ export function MarkdownContent({
   const showToolbar =
     showCopyButton ||
     (showRegenerateButton && typeof onRegenerate === 'function') ||
-    hasUsage;
+    hasUsage ||
+    hasCompress;
 
   return (
     <View style={styles.wrap}>
       <View style={styles.content}>
         {source ? (
           <Markdown style={markdownStyles}>{source}</Markdown>
-        ) : hasUsage ? null : (
+        ) : hasUsage || hasCompress ? null : (
           <Text style={styles.placeholder}>（无内容）</Text>
         )}
       </View>
       {showToolbar ? (
-        <View style={[styles.toolbarRow, hasUsage && styles.toolbarRowFull]}>
+        <View style={[styles.toolbarRow, (hasUsage || hasCompress) && styles.toolbarRowFull]}>
           <View style={styles.toolbarLeft}>
             {showRegenerateButton && typeof onRegenerate === 'function' ? (
               <TouchableOpacity
@@ -124,21 +134,44 @@ export function MarkdownContent({
               </TouchableOpacity>
             ) : null}
           </View>
-          {hasUsage ? (
+          {hasUsage || hasCompress ? (
             <>
               <View style={styles.toolbarSpacer} />
-              <TouchableOpacity
-                style={styles.usageChip}
-                onPress={showUsagePress}
-                disabled={!detailText}
-                accessibilityLabel="用量详情"
-                accessibilityRole="button"
-                hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-              >
-                <Text style={styles.usageChipText} numberOfLines={1}>
-                  {usageHint!.trim()}
-                </Text>
-              </TouchableOpacity>
+              <View style={styles.toolbarRightChips}>
+                {hasUsage ? (
+                  <TouchableOpacity
+                    style={styles.usageChip}
+                    onPress={showUsagePress}
+                    disabled={!detailText}
+                    accessibilityLabel="用量详情"
+                    accessibilityRole="button"
+                    hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                  >
+                    <Text style={styles.usageChipText} numberOfLines={1}>
+                      {usageHint!.trim()}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+                {hasCompress ? (
+                  onCompressClick ? (
+                    <TouchableOpacity
+                      style={styles.compressChip}
+                      onPress={onCompressClick}
+                      accessibilityLabel={compressAriaLabel || compressHint!.trim()}
+                      accessibilityRole="button"
+                      hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                    >
+                      <Text style={styles.compressChipText} numberOfLines={1}>
+                        {compressHint!.trim()}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text style={styles.compressChipText} numberOfLines={1}>
+                      {compressHint!.trim()}
+                    </Text>
+                  )
+                ) : null}
+              </View>
             </>
           ) : null}
         </View>
@@ -192,6 +225,26 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   usageChipText: {
+    fontSize: 12,
+    color: '#6b7280',
+  },
+  toolbarRightChips: {
+    flexDirection: 'row',
+    flexShrink: 1,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+    gap: 10,
+    maxWidth: '100%',
+  },
+  compressChip: {
+    flexShrink: 1,
+    maxWidth: '48%',
+    paddingVertical: 4,
+    paddingHorizontal: 0,
+    backgroundColor: 'transparent',
+  },
+  compressChipText: {
     fontSize: 12,
     color: '#6b7280',
   },

@@ -16,6 +16,8 @@ import {
   Animated,
   AppState,
   Alert,
+  InteractionManager,
+  Dimensions,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -43,6 +45,7 @@ import {
   type UsageStats,
   type UsageRun,
   type AgentProfile,
+  type ContextSummary,
 } from '../api';
 import {
   rawMessagesToLocal,
@@ -56,7 +59,9 @@ import {
   formatUsageTiny,
   formatUsageHoverDetail,
   formatConversationUsageHeaderLine,
+  getConversationContextCompressMessagePercent,
 } from '../utils/formatUsage';
+import { resolveContextCompressDividerPlacement } from '../utils/contextCompress';
 import { normalizeUsageCurrencyMode, type UsageCurrencyMode } from '../constants/pricingDisplay';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { MarkdownContent } from '../components/MarkdownContent';
@@ -81,6 +86,7 @@ import { ReadPagesDetailSheet } from '../components/ReadPagesDetailSheet';
 import { ModelSelectSheet } from '../components/ModelSelectSheet';
 import { resolveAgentDisplayLabel } from '../utils/agentDisplay';
 import { UsageDetailModal } from '../components/UsageDetailModal';
+import { ContextCompressDividerRow } from '../components/ContextCompressDividerRow';
 import { SearchEngineCard } from './chat-cards/SearchEngineCard';
 import { FileWriteCard } from './chat-cards/FileWriteCard';
 import { FileEditCard } from './chat-cards/FileEditCard';
@@ -186,6 +192,8 @@ export function ChatScreen() {
   const [conversationTitle, setConversationTitle] = useState(params?.conversationTitle ?? '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [serverRawMessages, setServerRawMessages] = useState<ConversationMessage[]>([]);
+  const [contextSummaries, setContextSummaries] = useState<ContextSummary[]>([]);
+  const [activeContextSummaryId, setActiveContextSummaryId] = useState('');
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
   const [usageRuns, setUsageRuns] = useState<UsageRun[]>([]);
   const [showTokenUsageInChat, setShowTokenUsageInChat] = useState(true);
@@ -236,6 +244,11 @@ export function ChatScreen() {
     entry: Record<string, unknown>;
   } | null>(null);
   const scrollRef = useRef<ScrollView>(null);
+  /** ScrollView 可视区域高度，用于把摘要分界滚到竖直方向居中 */
+  const scrollViewportHeightRef = useRef(0);
+  const chatContentWrapRef = useRef<View>(null);
+  /** 摘要分界行原生节点，用于 measureLayout 相对 chatContentWrap 得到可 scrollTo 的偏移 */
+  const contextCompressAnchorRef = useRef<View>(null);
   /** 流式文件卡片(半折叠)内部 ScrollView 引用，保持视图跟随最后几行 */
   const fileToolPreviewScrollRefs = useRef<Record<string, ScrollView | null>>({});
   /** key -> { startMs, completedSec }，用于 exec 卡片耗时与自动折叠 */
@@ -269,6 +282,10 @@ export function ChatScreen() {
     setServerRawMessages(raw);
     setUsageStats(conversation.usage_stats ?? null);
     setUsageRuns(Array.isArray(conversation.usage_runs) ? conversation.usage_runs : []);
+    const sums = conversation.context_summaries;
+    setContextSummaries(Array.isArray(sums) ? sums : []);
+    const aid = conversation.active_context_summary_id;
+    setActiveContextSummaryId(typeof aid === 'string' ? aid.trim() : '');
     setConversationMeta({
       bound_agent_id: typeof conversation.bound_agent_id === 'string' ? conversation.bound_agent_id : undefined,
       agent_profile: conversation.agent_profile,
@@ -279,6 +296,82 @@ export function ChatScreen() {
     () => rawMessagesToLocalWithUsageMap(serverRawMessages).rawToLocalAssistantIndex,
     [serverRawMessages]
   );
+
+  const conversationForContextCompress = useMemo(
+    () => ({
+      messages: serverRawMessages,
+      context_summaries: contextSummaries,
+      active_context_summary_id: activeContextSummaryId,
+    }),
+    [serverRawMessages, contextSummaries, activeContextSummaryId]
+  );
+
+  const contextCompressMessagePercent = useMemo(
+    () => getConversationContextCompressMessagePercent(conversationForContextCompress),
+    [conversationForContextCompress]
+  );
+
+  const contextCompressPlacement = useMemo(
+    () =>
+      resolveContextCompressDividerPlacement({
+        messageCount: messages.length,
+        rawMessages: serverRawMessages,
+        contextSummaries,
+        activeContextSummaryId,
+      }),
+    [messages.length, serverRawMessages, contextSummaries, activeContextSummaryId]
+  );
+
+  const contextCompressScrollToAnchorTitle = '滚动到「摘要」位置（列表中间）';
+
+  const scrollContentPaddingTop = headerHeight + 20;
+
+  const scrollToContextCompressAnchor = useCallback(() => {
+    const divider = contextCompressAnchorRef.current;
+    const wrap = chatContentWrapRef.current;
+    const sv = scrollRef.current;
+    if (!divider || !wrap || !sv) return;
+    const runMeasure = () => {
+      // Fabric：measureLayout 的参照必须是原生 View 节点
+      divider.measureLayout(
+        wrap,
+        (_left, top, _width, height) => {
+          const dividerTopInContent = scrollContentPaddingTop + top;
+          const dividerCenter = dividerTopInContent + Math.max(0, height) / 2;
+          let viewportH = scrollViewportHeightRef.current;
+          if (!(viewportH > 0)) {
+            viewportH = Dimensions.get('window').height * 0.45;
+          }
+          const scrollY = Math.max(0, dividerCenter - viewportH / 2);
+          sv.scrollTo({ y: scrollY, animated: true });
+        },
+        () => {
+          /* measureLayout 失败时忽略 */
+        }
+      );
+    };
+    requestAnimationFrame(() => {
+      InteractionManager.runAfterInteractions(runMeasure);
+    });
+  }, [scrollContentPaddingTop]);
+
+  const streamContextCompressUi = useMemo(() => {
+    let streamLastTextIdx = -1;
+    for (let i = 0; i < currentAssistantBlocks.length; i++) {
+      if (currentAssistantBlocks[i]?.type === 'text') streamLastTextIdx = i;
+    }
+    const compressOnStream =
+      showTokenUsageInChat &&
+      Boolean(conversationId) &&
+      contextCompressMessagePercent != null;
+    const streamCompressHint = compressOnStream ? `${contextCompressMessagePercent}%已压缩` : undefined;
+    return { streamLastTextIdx, compressOnStream, streamCompressHint };
+  }, [
+    currentAssistantBlocks,
+    showTokenUsageInChat,
+    conversationId,
+    contextCompressMessagePercent,
+  ]);
 
   const usageByAssistantIdx = useMemo(() => {
     const m: Record<number, UsageStats> = {};
@@ -1126,6 +1219,8 @@ export function ChatScreen() {
     setConversationTitle('');
     setMessages([]);
     setServerRawMessages([]);
+    setContextSummaries([]);
+    setActiveContextSummaryId('');
     setUsageStats(null);
     setUsageRuns([]);
     setConversationMeta(null);
@@ -1760,57 +1855,167 @@ export function ChatScreen() {
             scope: 'segment',
           })
         : undefined;
-    return (
+
+    const ccPl = contextCompressPlacement;
+    const showCompressOnThisAssistant =
+      showTokenUsageInChat &&
+      Boolean(conversationId) &&
+      contextCompressMessagePercent != null &&
+      idx === lastAssistantIdx &&
+      !loading &&
+      !conversationHistoryLoading;
+    const compressUsagePart = showCompressOnThisAssistant
+      ? `${contextCompressMessagePercent}%已压缩`
+      : '';
+    const ccInside = ccPl?.kind === 'insideAssistantBlocks' && ccPl.assistantMessageIndex === idx;
+    const assistantBlocks = msg.role === 'assistant' ? msg.blocks : undefined;
+    const ccBlockInsert =
+      ccInside && Array.isArray(assistantBlocks) && assistantBlocks.length > 0
+        ? Math.min(ccPl.insertBeforeBlockIndex, assistantBlocks.length)
+        : -1;
+
+    const bubble = (
       <View
         key={`${msg.role}-${idx}`}
         style={[styles.bubbleWrap, isUser ? styles.userBubbleWrap : styles.assistantBubbleWrap]}
       >
         <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
           {!isUser && <Text style={styles.bubbleRole}>{composerAgentLabel}</Text>}
-          {!isUser && msg.role === 'assistant' && msg.blocks && msg.blocks.length > 0 ? (
-            msg.blocks.map((block, bi) => {
-              const blocks = msg.blocks ?? [];
-              const prevBlock = blocks[bi - 1];
-              const compactAbove = prevBlock != null && isToolPackageNavBlock(prevBlock);
-              return block.type === 'text' ? (
-                <View
-                  key={bi}
-                  style={[styles.assistantTextBlock, compactAbove && styles.assistantTextBlockCompactAbove]}
-                >
+          {!isUser && msg.role === 'assistant' && assistantBlocks && assistantBlocks.length > 0 ? (
+            <>
+              {assistantBlocks.map((block, bi) => {
+                const blocks = assistantBlocks;
+                const prevBlock = blocks[bi - 1];
+                const compactAbove = prevBlock != null && isToolPackageNavBlock(prevBlock);
+                return block.type === 'text' ? (
+                  <React.Fragment key={bi}>
+                    {ccInside && ccBlockInsert === bi && bi < blocks.length ? (
+                      <ContextCompressDividerRow
+                        activeSummary={ccPl.activeSummary}
+                        rawMessages={serverRawMessages}
+                        anchorRef={contextCompressAnchorRef}
+                      />
+                    ) : null}
+                    <View
+                      style={[styles.assistantTextBlock, compactAbove && styles.assistantTextBlockCompactAbove]}
+                    >
+                      <MarkdownContent
+                        text={block.content}
+                        showCopyButton={isLastAssistant && bi === lastTextBlockIdx}
+                        showRegenerateButton={bi === lastTextBlockIdx}
+                        onRegenerate={afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined}
+                        regenerateDisabled={!conversationId || loading || conversationHistoryLoading}
+                        usageHint={bi === lastTextBlockIdx ? segmentUsage : undefined}
+                        usageDetail={bi === lastTextBlockIdx ? segmentDetail : undefined}
+                        compressHint={
+                          bi === lastTextBlockIdx && showCompressOnThisAssistant ? compressUsagePart : undefined
+                        }
+                        onCompressClick={
+                          showCompressOnThisAssistant && bi === lastTextBlockIdx
+                            ? scrollToContextCompressAnchor
+                            : undefined
+                        }
+                        compressAriaLabel={
+                          showCompressOnThisAssistant && bi === lastTextBlockIdx
+                            ? contextCompressScrollToAnchorTitle
+                            : undefined
+                        }
+                      />
+                    </View>
+                  </React.Fragment>
+                ) : (
+                  <React.Fragment key={`msg-tool-${idx}-${bi}`}>
+                    {ccInside && ccBlockInsert === bi ? (
+                      <ContextCompressDividerRow
+                        activeSummary={ccPl.activeSummary}
+                        rawMessages={serverRawMessages}
+                        anchorRef={contextCompressAnchorRef}
+                      />
+                    ) : null}
+                    {renderToolBlock(block, `msg-tool-${idx}-${bi}`)}
+                  </React.Fragment>
+                );
+              })}
+              {ccInside &&
+              Array.isArray(assistantBlocks) &&
+              ccBlockInsert >= assistantBlocks.length ? (
+                <ContextCompressDividerRow
+                  activeSummary={ccPl.activeSummary}
+                  rawMessages={serverRawMessages}
+                  anchorRef={contextCompressAnchorRef}
+                />
+              ) : null}
+              {showTokenUsageInChat &&
+              (segmentUsage || compressUsagePart) &&
+              lastTextBlockIdx < 0 &&
+              msg.role === 'assistant' ? (
+                <View style={styles.assistantTextBlock}>
                   <MarkdownContent
-                    text={block.content}
-                    showCopyButton={isLastAssistant && bi === lastTextBlockIdx}
-                    showRegenerateButton={bi === lastTextBlockIdx}
-                    onRegenerate={afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined}
-                    regenerateDisabled={!conversationId || loading || conversationHistoryLoading}
-                    usageHint={bi === lastTextBlockIdx ? segmentUsage : undefined}
-                    usageDetail={bi === lastTextBlockIdx ? segmentDetail : undefined}
+                    text=""
+                    usageHint={segmentUsage}
+                    usageDetail={segmentDetail}
+                    compressHint={showCompressOnThisAssistant ? compressUsagePart : undefined}
+                    onCompressClick={
+                      showCompressOnThisAssistant ? scrollToContextCompressAnchor : undefined
+                    }
+                    compressAriaLabel={
+                      showCompressOnThisAssistant ? contextCompressScrollToAnchorTitle : undefined
+                    }
                   />
                 </View>
-              ) : (
-                <React.Fragment key={`msg-tool-${idx}-${bi}`}>
-                  {renderToolBlock(block, `msg-tool-${idx}-${bi}`)}
-                </React.Fragment>
-              );
-            })
+              ) : null}
+            </>
           ) : (
             isUser ? (
-              <Text style={styles.userText} selectable>{msg.content}</Text>
+              <Text style={styles.userText} selectable>
+                {msg.content}
+              </Text>
             ) : (
-              <MarkdownContent
-                text={msg.content}
-                showCopyButton={isLastAssistant}
-                showRegenerateButton
-                onRegenerate={afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined}
-                regenerateDisabled={!conversationId || loading || conversationHistoryLoading}
-                usageHint={segmentUsage}
-                usageDetail={segmentDetail}
-              />
+              <>
+                {ccInside && ccPl.insertBeforeBlockIndex <= 0 ? (
+                  <ContextCompressDividerRow
+                    activeSummary={ccPl.activeSummary}
+                    rawMessages={serverRawMessages}
+                    anchorRef={contextCompressAnchorRef}
+                  />
+                ) : null}
+                <MarkdownContent
+                  text={msg.content}
+                  showCopyButton={isLastAssistant}
+                  showRegenerateButton
+                  onRegenerate={afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined}
+                  regenerateDisabled={!conversationId || loading || conversationHistoryLoading}
+                  usageHint={segmentUsage}
+                  usageDetail={segmentDetail}
+                  compressHint={showCompressOnThisAssistant ? compressUsagePart : undefined}
+                  onCompressClick={showCompressOnThisAssistant ? scrollToContextCompressAnchor : undefined}
+                  compressAriaLabel={
+                    showCompressOnThisAssistant ? contextCompressScrollToAnchorTitle : undefined
+                  }
+                />
+              </>
             )
           )}
         </View>
       </View>
     );
+
+    if (isUser) {
+      return (
+        <React.Fragment key={`frag-user-${idx}`}>
+          {ccPl?.kind === 'beforeIndex' && ccPl.insertBeforeIndex === idx ? (
+            <ContextCompressDividerRow
+              activeSummary={ccPl.activeSummary}
+              rawMessages={serverRawMessages}
+              anchorRef={contextCompressAnchorRef}
+            />
+          ) : null}
+          {bubble}
+        </React.Fragment>
+      );
+    }
+
+    return bubble;
   };
 
   const showEmpty =
@@ -1894,6 +2099,9 @@ export function ChatScreen() {
           <ScrollView
             ref={scrollRef}
             style={styles.scroll}
+            onLayout={(e) => {
+              scrollViewportHeightRef.current = e.nativeEvent.layout.height;
+            }}
             contentContainerStyle={[
               styles.scrollContent,
               { paddingTop: headerHeight + 20, paddingBottom: scrollBottomPadding },
@@ -1909,14 +2117,23 @@ export function ChatScreen() {
             }}
             keyboardShouldPersistTaps="handled"
           >
-            <View style={styles.chatContentWrap}>
+            <View ref={chatContentWrapRef} style={styles.chatContentWrap} collapsable={false}>
             {showEmpty ? (
               <View style={styles.emptyStage}>
                 <Text style={styles.welcomeTitle}>Hi, {session.user_id}</Text>
                 <Text style={styles.welcomeSubtitle}>输入第一句话开始对话。</Text>
               </View>
             ) : (
-              messages.map(renderMessage)
+              <>
+                {messages.map(renderMessage)}
+                {contextCompressPlacement?.kind === 'afterLastVisible' && messages.length > 0 ? (
+                  <ContextCompressDividerRow
+                    activeSummary={contextCompressPlacement.activeSummary}
+                    rawMessages={serverRawMessages}
+                    anchorRef={contextCompressAnchorRef}
+                  />
+                ) : null}
+              </>
             )}
             {loading && !conversationHistoryLoading ? (
               <View style={[styles.bubbleWrap, styles.assistantBubbleWrap]}>
@@ -1928,12 +2145,28 @@ export function ChatScreen() {
                     currentAssistantBlocks.map((block, bi) => {
                       const prevBlock = currentAssistantBlocks[bi - 1];
                       const compactAbove = prevBlock != null && isToolPackageNavBlock(prevBlock);
+                      const { streamLastTextIdx, compressOnStream, streamCompressHint } = streamContextCompressUi;
                       return block.type === 'text' ? (
                         <View
                           key={bi}
                           style={[styles.assistantTextBlock, compactAbove && styles.assistantTextBlockCompactAbove]}
                         >
-                          <MarkdownContent text={block.content} />
+                          <MarkdownContent
+                            text={block.content}
+                            compressHint={
+                              bi === streamLastTextIdx ? streamCompressHint : undefined
+                            }
+                            onCompressClick={
+                              compressOnStream && bi === streamLastTextIdx
+                                ? scrollToContextCompressAnchor
+                                : undefined
+                            }
+                            compressAriaLabel={
+                              compressOnStream && bi === streamLastTextIdx
+                                ? contextCompressScrollToAnchorTitle
+                                : undefined
+                            }
+                          />
                         </View>
                       ) : (
                         <React.Fragment key={`stream-tool-${bi}`}>
@@ -1946,6 +2179,17 @@ export function ChatScreen() {
                     <View style={styles.assistantTextBlock}>
                       <MarkdownContent
                         text={streamingText || streamBubblePlaceholderText}
+                        compressHint={streamContextCompressUi.streamCompressHint}
+                        onCompressClick={
+                          streamContextCompressUi.compressOnStream
+                            ? scrollToContextCompressAnchor
+                            : undefined
+                        }
+                        compressAriaLabel={
+                          streamContextCompressUi.compressOnStream
+                            ? contextCompressScrollToAnchorTitle
+                            : undefined
+                        }
                       />
                     </View>
                   ) : null}
