@@ -186,13 +186,51 @@ export function parseFileToolArgs(block: { tool_name?: string; arguments?: unkno
   return { pathDisplay, oldString: '', newString: '', content };
 }
 
-type ExecCommandArgs = { command: string; cwd: string; description: string; programName: string };
+const LOCAL_EXEC_COMMAND_TIMEOUT_CAP_SECONDS = 86400;
+
+/** 与 FlopsDesktop runtime_service._executor_timeout_seconds 对 payload 的解析一致；无有效字段时为 cap */
+export function coerceExecutorTimeoutSecondsFromPayload(
+  obj: Record<string, unknown>,
+  rawFallback: string
+): number {
+  const v = obj.timeout_seconds;
+  let n: number | null = null;
+  if (typeof v === 'number' && Number.isFinite(v)) n = Math.floor(v);
+  else if (typeof v === 'string' && v.trim()) {
+    const p = parseInt(v.trim(), 10);
+    if (Number.isFinite(p)) n = p;
+  }
+  if ((n == null || n <= 0) && rawFallback) {
+    const m = rawFallback.match(/"timeout_seconds"\s*:\s*(\d+)/);
+    if (m) {
+      const p = parseInt(m[1], 10);
+      if (Number.isFinite(p) && p > 0) n = p;
+    }
+  }
+  if (n == null || n <= 0) n = LOCAL_EXEC_COMMAND_TIMEOUT_CAP_SECONDS;
+  return Math.min(Math.max(1, n), LOCAL_EXEC_COMMAND_TIMEOUT_CAP_SECONDS);
+}
+
+type ExecCommandArgs = {
+  command: string;
+  cwd: string;
+  description: string;
+  programName: string;
+  timeoutSeconds: number;
+};
 
 export function parseExecCommandArgs(block: { tool_name?: string; arguments?: unknown }): ExecCommandArgs {
-  const empty: ExecCommandArgs = { command: '', cwd: '', description: '', programName: '' };
+  const empty: ExecCommandArgs = {
+    command: '',
+    cwd: '',
+    description: '',
+    programName: '',
+    timeoutSeconds: coerceExecutorTimeoutSecondsFromPayload({}, ''),
+  };
   if (!block || block.tool_name !== 'local_exec_command') return empty;
 
   const raw = block.arguments;
+  const rawStr = typeof raw === 'string' ? raw : '';
   let obj: Record<string, unknown> = {};
   try {
     if (typeof raw === 'string') obj = JSON.parse(raw || '{}') as Record<string, unknown>;
@@ -209,6 +247,7 @@ export function parseExecCommandArgs(block: { tool_name?: string; arguments?: un
     cwd,
     description: desc,
     programName: command ? command.split(/\s+/)[0].replace(/^.*\//, '') : '',
+    timeoutSeconds: coerceExecutorTimeoutSecondsFromPayload(obj, rawStr),
   };
 }
 

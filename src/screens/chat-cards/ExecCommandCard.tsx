@@ -44,15 +44,34 @@ export function ExecCommandCard({
 }: Props) {
   const execArgs = parseExecCommandArgs(block);
   const resultObj = block.result && typeof block.result === 'object' ? (block.result as Record<string, unknown>) : null;
+  const rto = resultObj?.executor_timeout_seconds;
+  const hasExecutorTimeout = typeof rto === 'number' && Number.isFinite(rto) && rto > 0;
+  const timeoutPart = hasExecutorTimeout ? formatSec(Math.floor(rto)) : '--';
+  const rel = resultObj?.executor_elapsed_seconds;
+  const executorElapsedSec =
+    typeof rel === 'number' && Number.isFinite(rel) && rel >= 0 ? Math.floor(rel) : null;
   const stdout = resultObj && typeof resultObj.stdout === 'string' ? resultObj.stdout : '';
   const exitCode = resultObj && typeof resultObj.exit_code === 'number' ? resultObj.exit_code : null;
   const isRunning = block.status === 'running' || block.status === 'pending';
+
+  const elapsedSecForDisplay =
+    block.status === 'completed'
+      ? executorElapsedSec != null
+        ? executorElapsedSec
+        : completedSec
+      : isRunning
+        ? executorElapsedSec != null
+          ? executorElapsedSec
+          : elapsedSec
+        : null;
 
   const headerLabel = execArgs.description || '终端命令';
   const programTail = execArgs.programName ? ` (${execArgs.programName})` : '';
   const lastLine = stripAnsi(stdout).trim().split(/\n/).filter(Boolean).pop() ?? '';
   const tailText = lastLine.length > 60 ? '…' + lastLine.slice(-60) : lastLine;
-  const timeStr = completedSec != null ? ` (执行完成 ${formatSec(completedSec)})` : isRunning ? ` (${formatSec(elapsedSec)})` : '';
+  const timeRatio =
+    elapsedSecForDisplay != null ? `${formatSec(elapsedSecForDisplay)}/${timeoutPart}` : '';
+  const timeStr = timeRatio ? ` (${timeRatio})` : '';
   const collapsedTail = (tailText ? tailText + timeStr : timeStr) || ' ';
 
   const isFull = viewMode === 'full';
@@ -131,9 +150,11 @@ export function ExecCommandCard({
           </Text>
         ) : null}
 
-        {(isRunning && elapsedSec >= 0) || completedSec != null ? (
+        {elapsedSecForDisplay != null && (isRunning || block.status === 'completed') ? (
           <Text style={styles.toolCardSafetyMeta} numberOfLines={1}>
-            {block.status === 'completed' ? `执行完成（${formatSec(completedSec ?? 0)}）` : `执行中（${formatSec(elapsedSec)}）`}
+            {block.status === 'completed'
+              ? `执行完成（${formatSec(elapsedSecForDisplay)}/${timeoutPart}）`
+              : `执行中（${formatSec(elapsedSecForDisplay)}/${timeoutPart}）`}
           </Text>
         ) : null}
 
