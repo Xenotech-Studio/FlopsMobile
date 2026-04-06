@@ -7,15 +7,16 @@ import {
   RefreshControl,
   ActivityIndicator,
   Platform,
-  PanResponder,
   Vibration,
+  BackHandler,
 } from 'react-native';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
-import Animated, { useSharedValue, runOnUI } from 'react-native-reanimated';
+import Animated, { useSharedValue, runOnJS, runOnUI } from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import DraggableFlatList from 'react-native-draggable-flatlist';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useTask } from '../context/TaskContext';
@@ -31,10 +32,13 @@ import { shadowCircleButtonThemed, shadowFabThemed, shadowSoft } from '../theme/
 import { HEADER_CIRCLE_BTN_SIZE, LIST_TOP_EXTRA, LIST_PADDING_BOTTOM_WITH_FOOTER } from '../theme/layout';
 import { TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import { SystemGestureExclusionView } from '../components/SystemGestureExclusionView';
 import { PullToRefreshRing } from '../components/PullToRefreshRing';
 import { filterTasksByStatusLevel } from '../utils/taskFilters';
 
 const EDGE_WIDTH = 24;
+/** Android 加宽 + SystemGestureExclusionView，与对话列表左缘开 Profile 一致 */
+const LEFT_EDGE_STRIP_WIDTH = Platform.OS === 'android' ? 56 : EDGE_WIDTH;
 const PULL_RING_THRESHOLD = 120;
 const MIN_REFRESH_DURATION_MS = 1000;
 const SWIPE_THRESHOLD = 60;
@@ -50,10 +54,9 @@ function createTasksHomeStyles(c: AppColors) {
     leftEdgeGesture: {
       position: 'absolute',
       left: 0,
-      top: 0,
       bottom: 0,
-      width: EDGE_WIDTH,
-      zIndex: 10,
+      zIndex: 30,
+      ...(Platform.OS === 'android' ? { elevation: 24 } : null),
     },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     placeholderText: { fontSize: 16, color: c.textMuted },
@@ -108,6 +111,8 @@ function createTasksHomeStyles(c: AppColors) {
       alignItems: 'center',
       paddingHorizontal: 16,
       paddingVertical: 12,
+      zIndex: 40,
+      ...(Platform.OS === 'android' ? { elevation: 26 } : null),
     },
     calendarBtn: {
       flexDirection: 'row',
@@ -298,6 +303,34 @@ export function TasksHomeScreen() {
     navigation.navigate('ProjectList');
   }, [navigation]);
 
+  /**
+   * Android：边缘返回与左缘右滑目标一致时走 BackHandler，避免根栈直接 finish。
+   */
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'android') return undefined;
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        onProjectsPress();
+        return true;
+      });
+      return () => sub.remove();
+    }, [onProjectsPress])
+  );
+
+  const leftEdgeOpenProjectListGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetX(10)
+        .failOffsetY([-24, 24])
+        .onEnd((e) => {
+          'worklet';
+          if (e.translationX > SWIPE_THRESHOLD) {
+            runOnJS(onProjectsPress)();
+          }
+        }),
+    [onProjectsPress]
+  );
+
   const onCreateTask = useCallback(() => {
     if (projects.length === 0) return;
     setShowProjectSelect(true);
@@ -333,25 +366,6 @@ export function TasksHomeScreen() {
     [updatePullDistance]
   );
 
-  const gestureStartX = useRef(0);
-  const leftEdgeOpenProjectList = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 10,
-      onPanResponderGrant: (evt) => {
-        gestureStartX.current = evt.nativeEvent.pageX;
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        if (
-          gestureState.dx > SWIPE_THRESHOLD &&
-          gestureStartX.current <= EDGE_WIDTH + 20
-        ) {
-          navigation.navigate('ProjectList');
-        }
-      },
-    })
-  ).current;
-
   if (!session) {
     return (
       <View style={styles.centered}>
@@ -366,11 +380,6 @@ export function TasksHomeScreen() {
 
   return (
     <View style={styles.container}>
-      <View
-        style={styles.leftEdgeGesture}
-        {...leftEdgeOpenProjectList.panHandlers}
-        pointerEvents="box-only"
-      />
       {/* 顶部栏：毛玻璃 + 渐变，绝对定位；列表内容在其下滚动 */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
         <BlurHeaderBackground
@@ -505,6 +514,13 @@ export function TasksHomeScreen() {
         isAheadOfToday={isAheadOfToday}
         onCancelAheadOfToday={cancelAheadOfToday}
       />
+      <GestureDetector gesture={leftEdgeOpenProjectListGesture}>
+        <SystemGestureExclusionView
+          style={[styles.leftEdgeGesture, { width: LEFT_EDGE_STRIP_WIDTH, top: headerHeight }]}
+          pointerEvents="box-only"
+          collapsable={false}
+        />
+      </GestureDetector>
     </View>
   );
 }

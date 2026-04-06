@@ -13,11 +13,12 @@ import {
   Platform,
   Vibration,
   useWindowDimensions,
+  BackHandler,
 } from 'react-native';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSharedValue, runOnUI, runOnJS } from 'react-native-reanimated';
-import { useNavigation, type NavigationProp } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, type NavigationProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
@@ -32,14 +33,15 @@ import { shadowFabThemed, shadowMenu, shadowCircleButtonThemed } from '../theme/
 import { LIST_PADDING_BOTTOM_WITH_FOOTER, HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import { TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import { SystemGestureExclusionView } from '../components/SystemGestureExclusionView';
 import { PullToRefreshRing } from '../components/PullToRefreshRing';
 import { InboxRunSpinner, InboxUnreadCheck } from '../components/InboxListIndicators';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 
-/** iOS 左缘条宽度；Android 略加宽便于在系统返回热区内抢到手势 */
+/** iOS 左缘条宽度；Android 加宽以覆盖常见系统返回热区，并由 SystemGestureExclusionView 排除边缘手势 */
 const EDGE_WIDTH = 24;
-const LEFT_EDGE_STRIP_WIDTH = Platform.OS === 'android' ? 40 : EDGE_WIDTH;
+const LEFT_EDGE_STRIP_WIDTH = Platform.OS === 'android' ? 56 : EDGE_WIDTH;
 const PULL_RING_THRESHOLD = 125;
 const SWIPE_THRESHOLD = 60;
 
@@ -240,6 +242,21 @@ export function ConversationListScreen() {
     (rootNav as NavigationProp<RootStackParamList> | undefined)?.navigate('Profile');
   }, [rootNav]);
 
+  /**
+   * Android：边缘返回手势会走 onBackPressed；在根栈上未处理时会 finish 退出应用。
+   * 对话列表页将「返回」统一转为打开 Profile（与左缘右滑目标一致）。
+   */
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'android') return undefined;
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        openProfileFromLeftEdge();
+        return true;
+      });
+      return () => sub.remove();
+    }, [openProfileFromLeftEdge])
+  );
+
   /** 仅左缘条接收手势：在此区域内右滑即等价于「从左缘滑入」；用 RNGH 减轻与 Android 系统返回争用 */
   const leftEdgeOpenProfileGesture = useMemo(
     () =>
@@ -314,13 +331,6 @@ export function ConversationListScreen() {
 
   return (
     <View style={styles.container}>
-      <GestureDetector gesture={leftEdgeOpenProfileGesture}>
-        <View
-          style={[styles.leftEdgeGesture, { width: LEFT_EDGE_STRIP_WIDTH }]}
-          pointerEvents="box-only"
-          collapsable={false}
-        />
-      </GestureDetector>
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
         <BlurHeaderBackground
           style={StyleSheet.absoluteFill}
@@ -467,6 +477,13 @@ export function ConversationListScreen() {
       <TouchableOpacity style={styles.fab} onPress={onNewConversation} activeOpacity={0.85}>
         <Ionicons name="add" size={26} color={colors.textPrimary} />
       </TouchableOpacity>
+      <GestureDetector gesture={leftEdgeOpenProfileGesture}>
+        <SystemGestureExclusionView
+          style={[styles.leftEdgeGesture, { width: LEFT_EDGE_STRIP_WIDTH, top: headerHeight }]}
+          pointerEvents="box-only"
+          collapsable={false}
+        />
+      </GestureDetector>
     </View>
   );
 }
@@ -477,9 +494,9 @@ function createConversationListStyles(c: AppColors) {
     leftEdgeGesture: {
       position: 'absolute',
       left: 0,
-      top: 0,
       bottom: 0,
-      zIndex: 10,
+      zIndex: 30,
+      ...(Platform.OS === 'android' ? { elevation: 24 } : null),
     },
     topBar: {
       position: 'absolute',
