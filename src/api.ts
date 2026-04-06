@@ -49,6 +49,13 @@ export type ChatStreamEvent =
   | { type: 'safety_confirmation_required'; tool_name: string; review_id: string; command?: string; cwd?: string; arguments?: string; review?: Record<string, unknown>; conversation_id?: string }
   | { type: 'safety_review'; tool_name: string; review: Record<string, unknown> }
   | { type: 'step_complete' }
+  | {
+      type: 'history_revision';
+      conversation_id?: string;
+      seq?: number;
+      reason?: string;
+      action?: string;
+    }
   | { type: 'cancelled'; done?: boolean }
   | {
       type: 'usage';

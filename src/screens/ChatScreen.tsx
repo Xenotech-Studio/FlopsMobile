@@ -858,6 +858,31 @@ export function ChatScreen() {
             }
             syncBlocks();
           }
+          if (event.type === 'history_revision') {
+            const ev = event as { conversation_id?: string };
+            const cid = String(ev.conversation_id || streamTargetRef.current || '').trim();
+            if (cid && cid === conversationIdRef.current && session) {
+              void (async () => {
+                try {
+                  const { conversation } = await getConversation(session, cid);
+                  applyConversationUsageState(conversation);
+                  const raw =
+                    conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
+                  let synced = rawMessagesToLocal(raw);
+                  const stillRunning =
+                    typeof conversation?.active_chat_v2_run_id === 'string' &&
+                    conversation.active_chat_v2_run_id.trim();
+                  if (stillRunning) synced = truncateMessagesAfterLastUser(synced);
+                  if (conversationIdRef.current === cid) {
+                    shouldScrollToEndRef.current = true;
+                    setMessages(synced);
+                  }
+                } catch {
+                  /* ignore */
+                }
+              })();
+            }
+          }
           if (event.type === 'safety_confirmation_required') {
             setStreamStatus('awaiting_safety_confirmation');
             const name = event.tool_name;
@@ -915,7 +940,7 @@ export function ChatScreen() {
 
       return { streamDone, finalText, localBlocks, lastConvId: streamTargetRef.current };
     },
-    [session]
+    [session, applyConversationUsageState]
   );
 
   const handleSendMessage = useCallback(async () => {
