@@ -36,7 +36,7 @@ function createProjectSelectSheetStyles(c: AppColors) {
     },
     headerBorder: {
       height: c.headerBarBottomBorderWidth,
-      backgroundColor: c.border,
+      backgroundColor: c.headerBarBottomBorderColor,
     },
     title: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: c.textPrimary },
     cancelBtn: { paddingVertical: 8, paddingHorizontal: 4 },

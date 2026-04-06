@@ -23,7 +23,7 @@ export function MainScreen() {
       headerStyle: {
         backgroundColor: colors.headerBarBackground,
         borderBottomWidth: colors.headerBarBottomBorderWidth,
-        borderBottomColor: colors.border,
+        borderBottomColor: colors.headerBarBottomBorderColor,
       },
       headerTitleStyle: {
         fontSize: 18,
@@ -37,7 +37,12 @@ export function MainScreen() {
       tabBarStyle: {
         backgroundColor: colors.surface,
         borderTopWidth: 1,
-        borderTopColor: colors.tabBarTopBorder,
+        // Android：与圆钮/FAB 一致，用细描边代替 BottomTabBar 默认 elevation: 8
+        borderTopColor:
+          Platform.OS === 'android'
+            ? colors.androidCircleFabHairline
+            : colors.tabBarTopBorder,
+        ...(Platform.OS === 'android' ? { elevation: 0 } : {}),
         paddingTop: 8,
         paddingBottom: insets.bottom,
         height: TAB_BAR_BASE_HEIGHT + insets.bottom,

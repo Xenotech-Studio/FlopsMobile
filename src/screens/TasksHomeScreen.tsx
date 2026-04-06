@@ -46,7 +46,7 @@ type Nav = StackNavigationProp<TasksStackParamList, 'TasksHome'>;
 
 function createTasksHomeStyles(c: AppColors) {
   return StyleSheet.create({
-    container: { flex: 1, backgroundColor: c.conversationListBackground },
+    container: { flex: 1, backgroundColor: c.chatScreenBackground },
     leftEdgeGesture: {
       position: 'absolute',
       left: 0,
@@ -123,7 +123,7 @@ function createTasksHomeStyles(c: AppColors) {
         ios: {
           ...shadowSoft,
           borderWidth: 1,
-          borderColor: c.hairlineBorder,
+          borderColor: c.androidCircleFabHairline,
         },
         android: {
           borderWidth: 1,
@@ -142,7 +142,7 @@ function createTasksHomeStyles(c: AppColors) {
         ios: {
           ...shadowSoft,
           borderWidth: 1,
-          borderColor: c.hairlineBorder,
+          borderColor: c.androidCircleFabHairline,
         },
         android: {
           borderWidth: 1,
@@ -376,7 +376,7 @@ export function TasksHomeScreen() {
         <BlurHeaderBackground
           style={StyleSheet.absoluteFill}
           topSolidHeight={insets.top + 8}
-          gradientBaseHex={colors.conversationListBackground}
+          gradientBaseHex={colors.chatScreenBackground}
         />
         <TouchableOpacity
           style={styles.circleBtn}

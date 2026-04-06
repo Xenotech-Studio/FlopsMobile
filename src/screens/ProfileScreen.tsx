@@ -22,7 +22,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
-import { shadowSoftSubtle } from '../theme/shadows';
+import { shadowCardThemed } from '../theme/shadows';
 import type { AppColors } from '../theme/appColors';
 import { useAppTheme } from '../context/ThemeContext';
 import { getCurrentUserInfo } from '../api';
@@ -484,7 +484,7 @@ function createProfileStyles(c: AppColors) {
       paddingHorizontal: 16,
       paddingBottom: 12,
       borderBottomWidth: c.headerBarBottomBorderWidth,
-      borderBottomColor: c.border,
+      borderBottomColor: c.headerBarBottomBorderColor,
       backgroundColor: c.headerBarBackground,
     },
     headerTitle: { fontSize: 18, fontWeight: '700', color: c.textHeader },
@@ -498,7 +498,8 @@ function createProfileStyles(c: AppColors) {
       paddingHorizontal: 20,
       alignItems: 'center',
       marginBottom: 20,
-      ...shadowSoftSubtle,
+      // Android：与圆钮/FAB 一致用细描边；iOS 保持原极轻阴影（与 shadowSoftSubtle 同参）
+      ...shadowCardThemed(c),
     },
     avatarWrap: {
       width: 72,
@@ -555,7 +556,7 @@ function createProfileStyles(c: AppColors) {
       paddingHorizontal: 16,
       paddingVertical: 14,
       borderBottomWidth: c.headerBarBottomBorderWidth,
-      borderBottomColor: c.border,
+      borderBottomColor: c.headerBarBottomBorderColor,
     },
     modalTitle: { fontSize: 18, fontWeight: '700', color: c.textHeader },
     modalBody: { maxHeight: 400 },

@@ -244,7 +244,7 @@ function createLoginStyles(c: AppColors) {
       justifyContent: 'space-between',
       padding: 12,
       borderBottomWidth: c.headerBarBottomBorderWidth,
-      borderBottomColor: c.border,
+      borderBottomColor: c.headerBarBottomBorderColor,
     },
     modalTitle: { fontSize: 16, fontWeight: '600', color: c.textHeader },
     modalHeaderButtons: { flexDirection: 'row', gap: 8 },

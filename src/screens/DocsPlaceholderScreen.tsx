@@ -9,7 +9,7 @@ function createDocsPlaceholderStyles(c: AppColors) {
       flex: 1,
       justifyContent: 'center',
       alignItems: 'center',
-      backgroundColor: c.conversationListBackground,
+      backgroundColor: c.chatScreenBackground,
     },
     icon: {
       fontSize: 48,

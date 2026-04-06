@@ -325,7 +325,7 @@ export function ConversationListScreen() {
         <BlurHeaderBackground
           style={StyleSheet.absoluteFill}
           topSolidHeight={insets.top + 8}
-          gradientBaseHex={colors.conversationListBackground}
+          gradientBaseHex={colors.chatScreenBackground}
         />
         <TouchableOpacity
           style={styles.circleBtn}
@@ -473,7 +473,7 @@ export function ConversationListScreen() {
 
 function createConversationListStyles(c: AppColors) {
   return StyleSheet.create({
-    container: { flex: 1, backgroundColor: c.conversationListBackground },
+    container: { flex: 1, backgroundColor: c.chatScreenBackground },
     leftEdgeGesture: {
       position: 'absolute',
       left: 0,
@@ -546,7 +546,7 @@ function createConversationListStyles(c: AppColors) {
     menuItemText: { fontSize: 16, color: c.textPrimary },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     loadingText: { marginTop: 12, fontSize: 15, color: c.textMuted },
-    list: { flex: 1, backgroundColor: c.conversationListBackground },
+    list: { flex: 1, backgroundColor: c.chatScreenBackground },
     listContent: { paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
     emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
     emptyWrap: {

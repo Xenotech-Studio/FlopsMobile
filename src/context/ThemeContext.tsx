@@ -6,9 +6,14 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import { Appearance, useColorScheme } from 'react-native';
+import { Appearance, Platform, useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { darkColors, lightColors, type AppColors } from '../theme/appColors';
+import {
+  darkColors,
+  lightColors,
+  withLightPlatformListCanvas,
+  type AppColors,
+} from '../theme/appColors';
 
 const STORAGE_KEY = '@FlopsMobile/themePreference';
 
@@ -64,7 +69,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     [preference, systemOverride]
   );
 
-  const colors = useMemo(() => (isDark ? darkColors : lightColors), [isDark]);
+  const colors = useMemo(() => {
+    const base = isDark ? darkColors : lightColors;
+    return withLightPlatformListCanvas(isDark, base, Platform.OS);
+  }, [isDark]);
 
   const setPreference = useCallback(async (p: ThemePreference) => {
     setPrefState(p);

@@ -41,7 +41,7 @@ export function TasksNavigator() {
       initialRouteName="TasksHome"
       screenOptions={{
         headerShown: false,
-        cardStyle: { backgroundColor: colors.conversationListBackground },
+        cardStyle: { backgroundColor: colors.chatScreenBackground },
       }}
     >
       <Stack.Screen

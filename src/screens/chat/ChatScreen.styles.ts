@@ -1,6 +1,6 @@
 import { Platform, StyleSheet } from 'react-native';
-import { shadowCircleButtonThemed, shadowFab, shadowSoft } from '../../theme/shadows';
-import { HEADER_CIRCLE_BTN_SIZE } from '../../theme/layout';
+import { androidCircleFabOutline, shadowCircleButtonThemed } from '../../theme/shadows';
+import { CHAT_COMPOSER_CONTROL_SIZE, CHAT_COMPOSER_SEND_BTN_SIZE } from '../../theme/layout';
 import { TASK_FONT_SIZE_TITLE } from '../../theme/typography';
 import type { AppColors } from '../../theme/appColors';
 
@@ -9,7 +9,7 @@ const CHAT_SCROLL_PADDING_H = 5;
 /** 空对话欢迎语在 scroll 水平留白基础上再增加的左右内边距 */
 const EMPTY_WELCOME_PADDING_EXTRA_H = 20;
 /** 底栏输入框 + 发送键所在行的水平内边距 */
-const COMPOSER_ROW_PADDING_H = 14;
+const COMPOSER_ROW_PADDING_H = 16;
 /**
  * 底部模型/助手/用量选择条的水平内边距（与输入行独立，可单独调）
  */
@@ -19,7 +19,7 @@ const COMPOSER_META_ROW_PADDING_RIGHT = 25;
 export function createChatStyles(c: AppColors) {
   return StyleSheet.create({
 
-  container: { flex: 1, backgroundColor: c.background },
+  container: { flex: 1, backgroundColor: c.chatScreenBackground },
   containerInner: { flex: 1 },
   keyboardView: { flex: 1 },
   scrollAndGradientWrap: { flex: 1, position: 'relative' },
@@ -28,7 +28,7 @@ export function createChatStyles(c: AppColors) {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: c.background,
+    backgroundColor: c.chatScreenBackground,
     zIndex: 20,
   },
   bottomOverlay: {
@@ -113,9 +113,9 @@ export function createChatStyles(c: AppColors) {
     paddingBottom: 12,
   },
   circleBtn: {
-    width: HEADER_CIRCLE_BTN_SIZE,
-    height: HEADER_CIRCLE_BTN_SIZE,
-    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
+    width: CHAT_COMPOSER_CONTROL_SIZE,
+    height: CHAT_COMPOSER_CONTROL_SIZE,
+    borderRadius: CHAT_COMPOSER_CONTROL_SIZE / 2,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: c.surface,
@@ -671,27 +671,35 @@ export function createChatStyles(c: AppColors) {
   composerInput: {
     flex: 1,
     backgroundColor: c.inputBg,
-    borderWidth: 1,
-    borderColor: c.hairlineBorder,
-    borderRadius: 28,
+    borderRadius: CHAT_COMPOSER_CONTROL_SIZE / 2,
+    minHeight: CHAT_COMPOSER_CONTROL_SIZE,
     paddingHorizontal: 20,
     paddingVertical: 14,
     fontSize: 16,
     color: c.textPrimary,
-    ...(Platform.OS === 'ios' ? shadowSoft : {}),
+    /** iOS：无描边 + 与顶栏圆钮差异化的 offset0 阴影；Android：与顶栏圆钮同 androidCircleFabOutline */
+    ...(Platform.OS === 'ios'
+      ? {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 0 },
+          shadowOpacity: 0.07,
+          shadowRadius: 14,
+        }
+      : Platform.OS === 'android'
+        ? androidCircleFabOutline(c)
+        : {}),
   },
+  /** 实心圆钮：`chatComposerSendBackground`（浅色柔灰深、深色仅略亮于 userBubble） */
   sendBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 28,
-    backgroundColor: c.primary,
+    width: CHAT_COMPOSER_SEND_BTN_SIZE,
+    height: CHAT_COMPOSER_SEND_BTN_SIZE,
+    borderRadius: CHAT_COMPOSER_SEND_BTN_SIZE / 2,
+    backgroundColor: c.chatComposerSendBackground,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 0,
     overflow: 'hidden',
-    ...(Platform.OS === 'ios' ? shadowFab : {}),
   },
   sendBtnStop: { backgroundColor: c.danger },
-  sendBtnDisabled: { opacity: 0.5 },
   });
 }

@@ -20,7 +20,7 @@ function createAccountActionsStyles(c: AppColors) {
       paddingHorizontal: 16,
       paddingBottom: 12,
       borderBottomWidth: c.headerBarBottomBorderWidth,
-      borderBottomColor: c.border,
+      borderBottomColor: c.headerBarBottomBorderColor,
       backgroundColor: c.headerBarBackground,
     },
     backBtn: { padding: 4 },

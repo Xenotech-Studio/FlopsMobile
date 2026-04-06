@@ -5,10 +5,10 @@
 import { Platform } from 'react-native';
 import type { AppColors } from './appColors';
 
-/** 浅色描边，用于 Android 圆形按钮、FAB 等（替代 elevation 避免方向不一致） */
+/** 浅色描边（与 light `androidCircleFabHairline` 同阶）；无主题时的 Android 圆钮/FAB 等 */
 export const borderLight = {
   borderWidth: 1 as const,
-  borderColor: 'rgba(0,0,0,0.10)' as const,
+  borderColor: 'rgba(0,0,0,0.06)' as const,
 };
 
 // --- 阴影预设（iOS 用 shadow*，Android 用 elevation）---
@@ -59,6 +59,17 @@ const shadowCircleButtonIos = {
   shadowRadius: 12,
 };
 
+/**
+ * Android：顶栏圆钮、FAB、聊天输入框等统一替代阴影方案（无 elevation + 主题细描边）。
+ */
+export function androidCircleFabOutline(c: AppColors) {
+  return {
+    elevation: 0 as const,
+    borderWidth: 1 as const,
+    borderColor: c.androidCircleFabHairline,
+  };
+}
+
 /** Header 圆形按钮：iOS 阴影，Android 仅描边（固定浅灰边，无主题时请用此） */
 export const shadowCircleButton = Platform.select({
   ios: shadowCircleButtonIos,
@@ -69,16 +80,12 @@ export const shadowCircleButton = Platform.select({
 });
 
 /**
- * Header 圆形按钮（随主题）：Android 用 `androidCircleFabHairline`（浅色与 Tab 顶线解耦，避免亮模式下重边）。
+ * Header 圆形按钮（随主题）：Android 用 `androidCircleFabHairline`（浅色宜与 Tab 顶线同阶、极淡）。
  */
 export function shadowCircleButtonThemed(c: AppColors) {
   return Platform.select({
     ios: shadowCircleButtonIos,
-    android: {
-      elevation: 0,
-      borderWidth: 1 as const,
-      borderColor: c.androidCircleFabHairline,
-    },
+    android: androidCircleFabOutline(c),
   });
 }
 
@@ -101,11 +108,7 @@ export const shadowFab = Platform.select({
 export function shadowFabThemed(c: AppColors) {
   return Platform.select({
     ios: shadowFabIos,
-    android: {
-      elevation: 0,
-      borderWidth: 1 as const,
-      borderColor: c.androidCircleFabHairline,
-    },
+    android: androidCircleFabOutline(c),
   });
 }
 

@@ -5,14 +5,16 @@
 export type AppColors = {
   background: string;
   backgroundSecondary: string;
-  /** 会话列表页主画布；暗色介于纯黑页底与底部 Tab（surface）之间 */
+  /** 聊天页主画布：亮模式极浅灰（与任务详情页底一致）；暗色同 background */
+  chatScreenBackground: string;
+  /** 列表类主画布（任务栈、Docs 占位等）；浅色与 chatScreenBackground 一致 */
   conversationListBackground: string;
-  /** 会话列表每行底部分割线（宜比 surfaceMuted 更弱、更贴列表底） */
+  /** 会话/任务列表行底分割线；浅色须略深于 chat 列表底，避免与画布融在一起 */
   conversationListSeparator: string;
   /** 底部 Tab 栏顶部分割线（宜比通用 border 更淡） */
   tabBarTopBorder: string;
   /**
-   * Android：顶栏圆钮、会话列表 FAB 等 1px 描边（与 tabBarTopBorder 解耦，避免浅色 Tab 调深时把白底按钮圈成重边）。
+   * 顶栏圆钮、FAB、Android 卡片替代阴影等 1px 描边；浅色宜极淡（约 6% 黑）；暗色为低对比白边。
    */
   androidCircleFabHairline: string;
   surface: string;
@@ -21,6 +23,8 @@ export type AppColors = {
   headerBarBackground: string;
   /** 顶栏、Modal/Sheet 标题栏底部分割线宽度；暗色为 0 */
   headerBarBottomBorderWidth: number;
+  /** 与分割线宽度配对；Android 浅色下在 withLightPlatformListCanvas 中改为 androidCircleFabHairline */
+  headerBarBottomBorderColor: string;
   inputBg: string;
   overlayScrim: string;
   /** 全屏 Modal、下拉菜单等自定义遮罩；暗色加重以压住底层 */
@@ -67,6 +71,10 @@ export type AppColors = {
 
   userBubble: string;
   onUserBubble: string;
+  /**
+   * 聊天输入区发送圆钮底色。深色略亮于 userBubble；浅色用柔化深灰（不必与 primary 同阶）。
+   */
+  chatComposerSendBackground: string;
 
   primary: string;
   onPrimary: string;
@@ -87,17 +95,43 @@ export type AppColors = {
   hairlineBorder: string;
 };
 
+/**
+ * 浅色列表/聊天主画布：iOS 用极浅灰；Android 在 ThemeContext 中覆写为 `LIGHT_LIST_CANVAS_ANDROID`（略深）。
+ */
+export const LIGHT_LIST_CANVAS_IOS = '#f9fafb';
+/** 浅色同语义画布：Android 略深于 iOS；仍浅于 surfaceMuted，避免与次要块面色黏连 */
+export const LIGHT_LIST_CANVAS_ANDROID = '#f7f7f7';
+
+/** 浅色 + Android：列表画布略加深，顶栏/Sheet 标题下分割线改为 androidCircleFabHairline（与圆钮描边一致）。 */
+export function withLightPlatformListCanvas(
+  isDark: boolean,
+  colors: AppColors,
+  platformOS: string
+): AppColors {
+  if (isDark || platformOS !== 'android') return colors;
+  return {
+    ...colors,
+    backgroundSecondary: LIGHT_LIST_CANVAS_ANDROID,
+    chatScreenBackground: LIGHT_LIST_CANVAS_ANDROID,
+    conversationListBackground: LIGHT_LIST_CANVAS_ANDROID,
+    headerBarBottomBorderColor: colors.androidCircleFabHairline,
+  };
+}
+
 export const lightColors: AppColors = {
   background: '#ffffff',
-  backgroundSecondary: '#f9fafb',
-  conversationListBackground: '#ffffff',
-  conversationListSeparator: '#f9f9f9',
+  backgroundSecondary: LIGHT_LIST_CANVAS_IOS,
+  chatScreenBackground: LIGHT_LIST_CANVAS_IOS,
+  /** 与 chatScreenBackground 同色；Android 浅色下由 withLightPlatformListCanvas 同步加深 */
+  conversationListBackground: LIGHT_LIST_CANVAS_IOS,
+  conversationListSeparator: '#f3f3f3',
   tabBarTopBorder: 'rgba(0,0,0,0.06)',
-  androidCircleFabHairline: 'rgba(0,0,0,0.10)',
+  androidCircleFabHairline: 'rgba(0,0,0,0.04)',
   surface: '#ffffff',
   surfaceMuted: '#f3f4f6',
   headerBarBackground: '#ffffff',
   headerBarBottomBorderWidth: 1,
+  headerBarBottomBorderColor: '#e5e7eb',
   inputBg: '#ffffff',
   overlayScrim: 'rgba(255,255,255,0.88)',
   modalBackdrop: 'rgba(0,0,0,0.38)',
@@ -143,6 +177,8 @@ export const lightColors: AppColors = {
   /* 与 FlopsWeb :root --chat-user-bubble-* 一致（柔化纯黑气泡） */
   userBubble: '#1c1c1c',
   onUserBubble: '#f0f0f0',
+  /** 比 #0f172a 柔和，仍为深底 + 白标 */
+  chatComposerSendBackground: '#374151',
 
   primary: '#0f172a',
   onPrimary: '#ffffff',
@@ -166,6 +202,7 @@ export const darkColors: AppColors = {
   /** 聊天主画布、任务列表等与会话列表统一的深灰底 */
   background: '#101010',
   backgroundSecondary: '#0a0a0b',
+  chatScreenBackground: '#101010',
   conversationListBackground: '#101010',
   /** 略亮于列表底，对比低于原 surfaceMuted，分割线更暗、更弱 */
   conversationListSeparator: '#222222',
@@ -176,6 +213,7 @@ export const darkColors: AppColors = {
   surfaceMuted: '#2c2c2e',
   headerBarBackground: '#141414',
   headerBarBottomBorderWidth: 0,
+  headerBarBottomBorderColor: '#3f3f46',
   inputBg: '#1c1c1e',
   overlayScrim: 'rgba(0,0,0,0.88)',
   modalBackdrop: 'rgba(0,0,0,0.82)',
@@ -221,6 +259,8 @@ export const darkColors: AppColors = {
   /* 与 FlopsDesktop theme-desktop --chat-user-bubble-* 一致（暗色底 + 浅字，避免近白气泡） */
   userBubble: '#34343a',
   onUserBubble: '#c9c9d1',
+  /** 比 #34343a 略抬一档，避免与 primary 近白圆钮抢视觉 */
+  chatComposerSendBackground: '#3e3e45',
 
   primary: '#e2e8f0',
   onPrimary: '#0f172a',
@@ -240,10 +280,16 @@ export const darkColors: AppColors = {
   hairlineBorder: 'rgba(255,255,255,0.15)',
 };
 
+function rgbaFromHex(hex: string, alpha: number): string {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex.trim());
+  if (!m) return `rgba(0,0,0,${alpha})`;
+  return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${alpha})`;
+}
+
 /** 底部渐变条：透明 → 与背景融合 */
 export function chatBottomGradientColors(isDark: boolean, c: AppColors): string[] {
   if (isDark) return ['rgba(0,0,0,0)', c.background];
-  return [`rgba(245,245,245,0)`, c.toolCardBg];
+  return [rgbaFromHex(c.chatScreenBackground, 0), c.toolCardBg];
 }
 
 /** RefreshControl 渐层（iOS） */
@@ -251,27 +297,19 @@ export function chatRefreshProgressColors(c: AppColors): string[] {
   return [c.textSecondary, c.textMuted];
 }
 
-/** 输入区底部白/黑渐变遮罩 */
-export function chatInputOverlayGradient(isDark: boolean): string[] {
-  if (isDark) {
-    /* 与 darkColors.background #101010 对齐（RGB 16,16,16） */
-    return [
-      'rgba(16,16,16,0)',
-      'rgba(16,16,16,0.5)',
-      'rgba(16,16,16,0.9)',
-      'rgba(16,16,16,0.98)',
-    ];
-  }
+/** 输入区底部渐变遮罩（与 chatScreenBackground 同色阶融合） */
+export function chatInputOverlayGradient(c: AppColors): string[] {
+  const bg = c.chatScreenBackground;
   return [
-    'rgba(255,255,255,0)',
-    'rgba(255,255,255,0.5)',
-    'rgba(255,255,255,0.9)',
-    'rgba(255,255,255,0.98)',
+    rgbaFromHex(bg, 0),
+    rgbaFromHex(bg, 0.5),
+    rgbaFromHex(bg, 0.9),
+    rgbaFromHex(bg, 0.98),
   ];
 }
 
 /** 工具卡片半折叠底部淡出 */
 export function toolPreviewFadeGradient(isDark: boolean, c: AppColors): string[] {
   if (isDark) return ['rgba(0,0,0,0)', c.toolCardBg];
-  return ['rgba(245,245,245,0)', c.toolCardBg];
+  return [rgbaFromHex(c.chatScreenBackground, 0), c.toolCardBg];
 }

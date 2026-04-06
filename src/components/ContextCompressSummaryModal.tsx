@@ -80,7 +80,12 @@ export function ContextCompressSummaryModal({ visible, onClose, activeSummary, r
           <Text style={styles.cancelText}>取消</Text>
         </TouchableOpacity>
       </View>
-      <View style={[styles.headerBorder, { height: colors.headerBarBottomBorderWidth }]} />
+      <View
+        style={{
+          height: colors.headerBarBottomBorderWidth,
+          backgroundColor: colors.headerBarBottomBorderColor,
+        }}
+      />
       <BottomSheetScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator
@@ -167,10 +172,6 @@ const styles = StyleSheet.create({
   headerTextCol: {
     flex: 1,
     minWidth: 0,
-  },
-  headerBorder: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: '#e5e7eb',
   },
   title: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: '#111827' },
   cancelBtn: { paddingVertical: 8, paddingHorizontal: 4 },

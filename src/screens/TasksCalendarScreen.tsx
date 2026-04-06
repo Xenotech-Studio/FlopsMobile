@@ -32,7 +32,7 @@ type Nav = StackNavigationProp<TasksStackParamList, 'TasksCalendar'>;
 
 function createTasksCalendarStyles(c: AppColors) {
   return StyleSheet.create({
-    container: { flex: 1, backgroundColor: c.conversationListBackground },
+    container: { flex: 1, backgroundColor: c.chatScreenBackground },
     topBar: {
       position: 'absolute',
       top: 0,
@@ -107,7 +107,7 @@ export function TasksCalendarScreen() {
         <BlurHeaderBackground
           style={StyleSheet.absoluteFill}
           topSolidHeight={insets.top + 8}
-          gradientBaseHex={colors.conversationListBackground}
+          gradientBaseHex={colors.chatScreenBackground}
         />
         <TouchableOpacity style={styles.circleBtn} onPress={onBack} activeOpacity={0.7}>
           <Ionicons name="chevron-back" size={24} color={colors.textSecondary} />

@@ -8,6 +8,16 @@ import { Platform } from 'react-native';
 /** 任务相关页 header 左右圆形按钮（返回、筛选等）的直径 */
 export const HEADER_CIRCLE_BTN_SIZE = 54;
 
+/**
+ * 聊天页：顶栏返回/新建圆钮直径，与 composer 单行输入框 minHeight 对齐。
+ */
+export const CHAT_COMPOSER_CONTROL_SIZE = 52;
+
+/**
+ * 聊天发送钮直径：略小于 {@link CHAT_COMPOSER_CONTROL_SIZE}，深色实心钮视觉更重故收小一圈。
+ */
+export const CHAT_COMPOSER_SEND_BTN_SIZE = 48;
+
 /** 任务列表：第一行距离 header 下方的额外间距（iOS / 默认） */
 export const LIST_TOP_EXTRA_BASE = 5;
 

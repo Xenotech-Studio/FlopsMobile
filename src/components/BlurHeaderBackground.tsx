@@ -9,7 +9,7 @@ type BlurHeaderBackgroundProps = {
   topSolidHeight?: number;
   /**
    * 渐变与顶部实色的 RGB 基准（6 位 hex）。
-   * 默认 `colors.background`（如聊天页纯黑）；会话列表可传 `colors.conversationListBackground` 与列表底对齐。
+   * 默认 `colors.background`；列表/聊天顶栏可传 `colors.chatScreenBackground` 或与列表底同色的 token。
    */
   gradientBaseHex?: string;
 };

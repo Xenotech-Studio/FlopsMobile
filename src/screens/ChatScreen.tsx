@@ -68,7 +68,7 @@ import { normalizeUsageCurrencyMode, type UsageCurrencyMode } from '../constants
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
-import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
+import { CHAT_COMPOSER_CONTROL_SIZE } from '../theme/layout';
 import { chatInputOverlayGradient, toolPreviewFadeGradient } from '../theme/appColors';
 import { useAppTheme } from '../context/ThemeContext';
 import { createChatStyles } from './chat/ChatScreen.styles';
@@ -196,7 +196,7 @@ export function ChatScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Chat'>>();
   const { colors, isDark } = useAppTheme();
   const styles = useMemo(() => createChatStyles(colors), [colors]);
-  const headerHeight = insets.top + 8 + 12 + HEADER_CIRCLE_BTN_SIZE;
+  const headerHeight = insets.top + 8 + 12 + CHAT_COMPOSER_CONTROL_SIZE;
   /** 底部渐变条高度（叠在滚动内容上，透明→白） */
   const gradientStripHeight = 48;
   /** 输入行高度（输入框+发送+底部留白，模型/助手条绝对叠在留白内，不把整块顶上去） */
@@ -2096,7 +2096,11 @@ export function ChatScreen() {
         />
       ) : null}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <BlurHeaderBackground style={StyleSheet.absoluteFill} topSolidHeight={insets.top + 8} />
+        <BlurHeaderBackground
+          style={StyleSheet.absoluteFill}
+          topSolidHeight={insets.top + 8}
+          gradientBaseHex={colors.chatScreenBackground}
+        />
         {canGoBack ? (
           <TouchableOpacity
             style={styles.circleBtn}
@@ -2246,7 +2250,7 @@ export function ChatScreen() {
           {/* 底部整块贴屏底：渐变铺满整块并延伸到底，输入行叠在渐变底部，无单独白底；点渐变区（未点到输入/发送）可滚到底 */}
           <View style={[styles.bottomOverlay, { height: bottomOverlayHeight }]}>
             <LinearGradient
-              colors={chatInputOverlayGradient(isDark)}
+              colors={chatInputOverlayGradient(colors)}
               locations={[0, 0.45, 0.7, 1]}
               style={StyleSheet.absoluteFill}
               start={{ x: 0.5, y: 0 }}
@@ -2273,18 +2277,26 @@ export function ChatScreen() {
                   returnKeyType="send"
                 />
                 <Pressable
-                  style={[
-                    styles.sendBtn,
-                    loading && styles.sendBtnStop,
-                    (!canSend && !loading) && styles.sendBtnDisabled,
-                  ]}
+                  style={[styles.sendBtn, loading && styles.sendBtnStop]}
                   onPress={loading ? handleStop : handleSendMessage}
                   disabled={!loading && !canSend}
                 >
                   {loading ? (
-                    <Ionicons name="stop" size={24} color={colors.onPrimary} />
+                    <Ionicons name="stop" size={22} color={colors.onPrimary} />
                   ) : (
-                    <Ionicons name="send" size={22} color={colors.onPrimary} />
+                    <Ionicons
+                      name="send"
+                      size={20}
+                      color={
+                        !canSend
+                          ? isDark
+                            ? colors.textMuted
+                            : colors.border
+                          : isDark
+                            ? colors.onUserBubble
+                            : colors.chatScreenBackground
+                      }
+                    />
                   )}
                 </Pressable>
                 {session ? (

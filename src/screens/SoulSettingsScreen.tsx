@@ -98,7 +98,7 @@ function createSoulSettingsStyles(c: AppColors) {
     topChrome: {
       backgroundColor: c.headerBarBackground,
       borderBottomWidth: c.headerBarBottomBorderWidth,
-      borderBottomColor: c.border,
+      borderBottomColor: c.headerBarBottomBorderColor,
     },
     header: {
       flexDirection: 'row',
@@ -141,7 +141,7 @@ function createSoulSettingsStyles(c: AppColors) {
     },
     agentSheetHeaderBorder: {
       height: c.headerBarBottomBorderWidth,
-      backgroundColor: c.border,
+      backgroundColor: c.headerBarBottomBorderColor,
     },
     agentSheetTitle: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: c.textPrimary },
     agentSheetCloseBtn: { paddingVertical: 8, paddingHorizontal: 4 },

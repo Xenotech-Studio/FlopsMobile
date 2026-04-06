@@ -29,7 +29,7 @@ type Nav = StackNavigationProp<TasksStackParamList, 'ProjectList'>;
 
 function createProjectListStyles(c: AppColors) {
   return StyleSheet.create({
-    container: { flex: 1, backgroundColor: c.conversationListBackground },
+    container: { flex: 1, backgroundColor: c.chatScreenBackground },
     rightEdgeGesture: {
       position: 'absolute',
       right: 0,
@@ -51,8 +51,8 @@ function createProjectListStyles(c: AppColors) {
       paddingBottom: 12,
     },
     /** 与 ConversationListScreen 列表画布一致（避免 FlatList 与容器之间露底） */
-    mainContent: { flex: 1, backgroundColor: c.conversationListBackground },
-    list: { flex: 1, backgroundColor: c.conversationListBackground },
+    mainContent: { flex: 1, backgroundColor: c.chatScreenBackground },
+    list: { flex: 1, backgroundColor: c.chatScreenBackground },
     titleWrap: { flex: 1, justifyContent: 'center' },
     title: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: c.textHeader },
     circleBtn: {
@@ -73,13 +73,14 @@ function createProjectListStyles(c: AppColors) {
     emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_DEFAULT },
     empty: { paddingVertical: 48, alignItems: 'center' },
     emptyText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: c.placeholder },
+    /** 行分割线：与 ConversationListScreen `item` 一致（同色 + 1px 底边） */
     projectRow: {
       flexDirection: 'row',
       alignItems: 'center',
       minHeight: 76,
       paddingVertical: 18,
       paddingHorizontal: 0,
-      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomWidth: 1,
       borderBottomColor: c.conversationListSeparator,
       gap: 12,
     },
@@ -158,7 +159,7 @@ export function ProjectListScreen() {
         <BlurHeaderBackground
           style={StyleSheet.absoluteFill}
           topSolidHeight={insets.top + 8}
-          gradientBaseHex={colors.conversationListBackground}
+          gradientBaseHex={colors.chatScreenBackground}
         />
         <View style={styles.titleWrap}>
           <Text style={styles.title}>项目</Text>

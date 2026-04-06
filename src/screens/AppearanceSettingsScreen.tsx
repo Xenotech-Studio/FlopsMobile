@@ -31,7 +31,7 @@ export function AppearanceSettingsScreen() {
             paddingTop: insets.top + 8,
             backgroundColor: colors.headerBarBackground,
             borderBottomWidth: colors.headerBarBottomBorderWidth,
-            borderBottomColor: colors.border,
+            borderBottomColor: colors.headerBarBottomBorderColor,
           },
         ]}
       >

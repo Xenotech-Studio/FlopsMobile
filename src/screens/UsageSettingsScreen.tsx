@@ -56,7 +56,7 @@ function createUsageSettingsStyles(c: AppColors) {
       paddingHorizontal: 8,
       paddingBottom: 10,
       borderBottomWidth: c.headerBarBottomBorderWidth,
-      borderBottomColor: c.border,
+      borderBottomColor: c.headerBarBottomBorderColor,
       backgroundColor: c.headerBarBackground,
     },
     headerTitle: { fontSize: 20, fontWeight: '700', color: c.textHeader, marginLeft: 2 },
