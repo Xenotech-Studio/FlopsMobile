@@ -26,6 +26,14 @@ import type { TaskItem, Project } from '../taskApi';
 import { TaskRow } from '../components/TaskRow';
 import { TaskFilterSheet, type StatusLevel } from '../components/TaskFilterSheet';
 import { ProjectSelectSheet } from '../components/ProjectSelectSheet';
+import {
+  CreateTaskRegionSheet,
+  type CreateRegionChoice,
+} from '../components/CreateTaskRegionSheet';
+import {
+  listUnorderedDumpParentsForProject,
+  displayTitleForDumpParent,
+} from '../utils/taskChoreRegion';
 import type { AppColors } from '../theme/appColors';
 import { useAppTheme } from '../context/ThemeContext';
 import { shadowCircleButtonThemed, shadowFabThemed, shadowSoft } from '../theme/shadows';
@@ -187,6 +195,7 @@ export function TasksHomeScreen() {
   const {
     todayTasks,
     todayDate,
+    tasks,
     projects,
     isLoadingTasks,
     errorMessage,
@@ -215,6 +224,11 @@ export function TasksHomeScreen() {
 
   const [filterVisible, setFilterVisible] = useState(false);
   const [showProjectSelect, setShowProjectSelect] = useState(false);
+  const [showCreateRegionSheet, setShowCreateRegionSheet] = useState(false);
+  const [pendingCreateProject, setPendingCreateProject] = useState<Project | null>(null);
+  const [createRegionDumpOptions, setCreateRegionDumpOptions] = useState<{ id: string; title: string }[]>(
+    []
+  );
   const [statusLevel, setStatusLevel] = useState<StatusLevel>(3);
   const [showTimeLabels, setShowTimeLabels] = useState(false);
   const [showProjectName, setShowProjectName] = useState(true);
@@ -339,12 +353,56 @@ export function TasksHomeScreen() {
   const onSelectProjectForCreate = useCallback(
     (project: Project) => {
       setShowProjectSelect(false);
+      const dumpParents = listUnorderedDumpParentsForProject(tasks, project.id);
+      if (dumpParents.length === 0) {
+        navigation.navigate('TaskDetail', {
+          projectId: project.id,
+          projectName: project.name ?? project.id,
+          createPlacement: 'unorganized',
+        });
+        return;
+      }
+      setPendingCreateProject(project);
+      setCreateRegionDumpOptions(
+        dumpParents.map((t) => ({
+          id: t.id,
+          title: displayTitleForDumpParent(t),
+        }))
+      );
+      setShowCreateRegionSheet(true);
+    },
+    [navigation, tasks]
+  );
+
+  const onCloseCreateRegionSheet = useCallback(() => {
+    setShowCreateRegionSheet(false);
+    setPendingCreateProject(null);
+    setCreateRegionDumpOptions([]);
+  }, []);
+
+  const onSelectCreateRegion = useCallback(
+    (choice: CreateRegionChoice) => {
+      const project = pendingCreateProject;
+      if (!project) {
+        onCloseCreateRegionSheet();
+        return;
+      }
+      onCloseCreateRegionSheet();
+      if (choice.kind === 'unorganized') {
+        navigation.navigate('TaskDetail', {
+          projectId: project.id,
+          projectName: project.name ?? project.id,
+          createPlacement: 'unorganized',
+        });
+        return;
+      }
       navigation.navigate('TaskDetail', {
         projectId: project.id,
         projectName: project.name ?? project.id,
+        createPlacement: { kind: 'chore_area', parentTaskId: choice.parentTaskId },
       });
     },
-    [navigation]
+    [navigation, pendingCreateProject, onCloseCreateRegionSheet]
   );
 
   const onCalendarPress = useCallback(() => {
@@ -498,6 +556,13 @@ export function TasksHomeScreen() {
         onClose={() => setShowProjectSelect(false)}
         projects={projects}
         onSelectProject={onSelectProjectForCreate}
+      />
+      <CreateTaskRegionSheet
+        visible={showCreateRegionSheet}
+        projectLabel={pendingCreateProject?.name ?? pendingCreateProject?.id ?? ''}
+        dumpParents={createRegionDumpOptions}
+        onClose={onCloseCreateRegionSheet}
+        onSelect={onSelectCreateRegion}
       />
       <TaskFilterSheet
         visible={filterVisible}

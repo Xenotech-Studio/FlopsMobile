@@ -27,13 +27,17 @@ import { StackActions } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useTask } from '../context/TaskContext';
-import type { TasksStackParamList } from '../navigation/types';
+import type { TasksStackParamList, TaskCreatePlacement } from '../navigation/types';
 import type { TaskItem, NewTaskPayload } from '../taskApi';
 import {
   getDoneQualityWhenToggling,
   projectHasAcceptancePhase,
   shouldShowDoneQualitySelect,
 } from '../utils/taskAcceptance';
+import {
+  buildChoreEdgeStatePayload,
+  nextChoreOrderForParent,
+} from '../utils/taskChoreRegion';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { IOSStyleSwitch } from '../components/IOSStyleSwitch';
 import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
@@ -137,12 +141,16 @@ export function TaskDetailScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { tasks, projects, updateTask, addTask, getAuth, todayDate } = useTask();
+
+  const routeParams = params as TasksStackParamList['TaskDetail'];
   const { colors } = useAppTheme();
   const styles = useMemo(() => createTaskDetailStyles(colors), [colors]);
 
-  const isCreate = 'projectId' in params && params.projectId != null;
-  const projectId = isCreate ? params.projectId! : '';
-  const taskId = !isCreate ? (params as { taskId: string }).taskId : '';
+  const isCreate = 'projectId' in routeParams && routeParams.projectId != null;
+  const projectId = isCreate ? routeParams.projectId : '';
+  const taskId = !isCreate ? (routeParams as { taskId: string }).taskId : '';
+  const createPlacement: TaskCreatePlacement | undefined =
+    isCreate && 'createPlacement' in routeParams ? routeParams.createPlacement : undefined;
 
   const task = tasks.find((t) => t.id === taskId) ?? null;
   const project = projects.find((p) => p.id === (isCreate ? projectId : task?.project_id));
@@ -394,14 +402,23 @@ export function TaskDetailScreen() {
     }
     setSaving(true);
     try {
+      const newId = generateId();
+      const placement = createPlacement;
+      const unorganized = placement === 'unorganized';
+      const choreParentId =
+        placement && typeof placement === 'object' && placement.kind === 'chore_area'
+          ? placement.parentTaskId
+          : undefined;
+
       const payload: NewTaskPayload = {
-        id: generateId(),
+        id: newId,
         project_id: projectId,
         title: t,
         type: editedType,
         description: '', // 忽略该字段，仅兼容接口
         note: editedNote.trim() || undefined,
         childrenId: [],
+        childrenEdgeState: {},
         done: editedDone,
         ismine: true,
         relPos: { x: 0, y: 0 },
@@ -415,7 +432,46 @@ export function TaskDetailScreen() {
         done_quality: editedDoneQuality,
         users: [auth.userId],
       };
-      await addTask(payload);
+      if (unorganized) {
+        payload.unorganized = true;
+      }
+      if (choreParentId) {
+        payload.primaryParentId = choreParentId;
+      }
+
+      const created = await addTask(payload);
+
+      if (choreParentId) {
+        const parent = tasks.find((x) => String(x.id) === String(choreParentId));
+        if (!parent) {
+          Alert.alert(
+            '已创建',
+            '任务已保存，但未找到目标无序区父节点以完成挂接。请在网页流程图中检查父子关系。'
+          );
+        } else {
+          const childId = String(created.id);
+          const prevChildren = (parent.childrenId || []).map(String);
+          const childrenId = prevChildren.includes(childId) ? prevChildren : [...prevChildren, childId];
+          const order = nextChoreOrderForParent(parent);
+          const edgePayload = buildChoreEdgeStatePayload(order);
+          const nextEdge = { ...(parent.childrenEdgeState || {}), [childId]: edgePayload };
+          try {
+            await updateTask({
+              ...parent,
+              childrenId,
+              childrenEdgeState: nextEdge,
+            });
+          } catch (linkErr) {
+            Alert.alert(
+              '挂接失败',
+              linkErr instanceof Error
+                ? linkErr.message
+                : '任务已创建，但未能写入父节点的无序区边。可稍后在网页流程图中调整。'
+            );
+          }
+        }
+      }
+
       navigation.dispatch(StackActions.pop(1));
     } catch (e) {
       Alert.alert('创建失败', e instanceof Error ? e.message : '请重试');
@@ -433,8 +489,11 @@ export function TaskDetailScreen() {
     editedEndDateTime,
     editedStartDateTime,
     projectId,
+    createPlacement,
     getAuth,
     addTask,
+    updateTask,
+    tasks,
     navigation,
   ]);
 

@@ -19,6 +19,14 @@ export interface TaskItem {
   description: string;
   note?: string | null;
   childrenId: string[];
+  /** 与 Web FlowTask 一致：弱先后 / chore 等边状态，子 id -> state */
+  childrenEdgeState?: Record<string, unknown> | null;
+  /** 显式主父（多父时布局用） */
+  primaryParentId?: string | null;
+  /** 视口左上角「未整理」暂存区 */
+  unorganized?: boolean | null;
+  /** chore_area 等节点的区域设置（与 Web choreZone 对齐） */
+  choreZone?: Record<string, unknown> | null;
   done: boolean;
   ismine: boolean;
   relPos: TaskPosition;
@@ -58,6 +66,9 @@ export interface NewTaskPayload {
   description: string;
   note?: string | null;
   childrenId: string[];
+  childrenEdgeState?: Record<string, unknown>;
+  primaryParentId?: string | null;
+  unorganized?: boolean;
   done: boolean;
   ismine: boolean;
   relPos: TaskPosition;
