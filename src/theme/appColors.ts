@@ -114,8 +114,9 @@ export const lightColors: AppColors = {
   toolInnerSurface6: '#f8f8f8',
   readPagesTrackBg: '#c8c8c8',
 
-  userBubble: '#000000',
-  onUserBubble: '#ffffff',
+  /* 与 FlopsWeb :root --chat-user-bubble-* 一致（柔化纯黑气泡） */
+  userBubble: '#1c1c1c',
+  onUserBubble: '#f0f0f0',
 
   primary: '#0f172a',
   onPrimary: '#ffffff',
@@ -180,8 +181,9 @@ export const darkColors: AppColors = {
   toolInnerSurface6: '#27272a',
   readPagesTrackBg: '#52525b',
 
-  userBubble: '#e5e7eb',
-  onUserBubble: '#0f172a',
+  /* 与 FlopsDesktop theme-desktop --chat-user-bubble-* 一致（暗色底 + 浅字，避免近白气泡） */
+  userBubble: '#34343a',
+  onUserBubble: '#c9c9d1',
 
   primary: '#e2e8f0',
   onPrimary: '#0f172a',

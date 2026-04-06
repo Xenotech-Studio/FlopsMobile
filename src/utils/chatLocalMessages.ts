@@ -102,6 +102,19 @@ export type RawMessagesLocalResult = {
   rawToLocalAssistantIndex: Map<number, number>;
 };
 
+function isTruthyMetaFlag(v: unknown): boolean {
+  return v === true || v === 1 || v === 'true';
+}
+
+/** 与 Web/Desktop messageTransform.rawUserMessageIsMetaOnly 一致 */
+export function rawUserMessageIsMetaOnly(msg: ConversationMessage | null | undefined): boolean {
+  if (!msg || msg.role !== 'user') return false;
+  if (isTruthyMetaFlag(msg.isMeta)) return true;
+  const md = msg.metadata;
+  if (md && typeof md === 'object' && isTruthyMetaFlag(md.isMeta)) return true;
+  return false;
+}
+
 /**
  * 单次遍历生成本地消息列表与 raw→assistant 下标映射（供 usage_runs 对齐）。
  */
@@ -129,6 +142,7 @@ export function rawMessagesToLocalWithUsageMap(raw: ConversationMessage[]): RawM
     if (!msg || typeof msg.role !== 'string') continue;
     if (msg.role === 'system') continue;
     if (msg.role === 'user') {
+      if (rawUserMessageIsMetaOnly(msg)) continue;
       flushAssistant();
       const content = typeof msg.content === 'string' ? msg.content : '';
       messages.push({ role: 'user', content });

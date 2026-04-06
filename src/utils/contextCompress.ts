@@ -3,7 +3,12 @@
  * Mobile 气泡内 blocks 未做 document 合并，insideAssistant 的 insertBeforeBlockIndex 按「合并前 blocks」计。
  */
 import type { ConversationMessage, ContextSummary } from '../api';
-import { coalesceAssistantTurn, rawMessagesToLocal, type ChatMessage } from './chatLocalMessages';
+import {
+  coalesceAssistantTurn,
+  rawMessagesToLocal,
+  rawUserMessageIsMetaOnly,
+  type ChatMessage,
+} from './chatLocalMessages';
 
 function parseToolMessageResult(msg: ConversationMessage): unknown {
   if (!msg || msg.role !== 'tool') return null;
@@ -41,6 +46,7 @@ export function mapRawMessageIndexToLocalBubbleIndex(raw: ConversationMessage[] 
     if (!msg || typeof msg.role !== 'string') continue;
     if (msg.role === 'system') continue;
     if (msg.role === 'user') {
+      if (rawUserMessageIsMetaOnly(msg)) continue;
       flushAssistant();
       const content = typeof msg.content === 'string' ? msg.content : '';
       bubbles.push({ role: 'user', content });
@@ -64,6 +70,7 @@ function extractAssistantGroupContainingRawIndex(arr: ConversationMessage[], e: 
     if (!msg || typeof msg.role !== 'string') continue;
     if (msg.role === 'system') continue;
     if (msg.role === 'user') {
+      if (rawUserMessageIsMetaOnly(msg)) continue;
       if (assistantGroup.some((x) => x.rawIndex === e)) return assistantGroup;
       assistantGroup = [];
       continue;
@@ -324,7 +331,11 @@ export function getCompressedRegionLastMessagePreview(
     if (!m || typeof m.role !== 'string') return '';
     const role = m.role;
     if (role === 'tool' || role === 'system') return '';
-    if (role === 'user' || role === 'assistant') {
+    if (role === 'user') {
+      if (rawUserMessageIsMetaOnly(m)) return '';
+      return collapseWhitespace(typeof m.content === 'string' ? m.content : '');
+    }
+    if (role === 'assistant') {
       return collapseWhitespace(typeof m.content === 'string' ? m.content : '');
     }
     return '';

@@ -194,6 +194,8 @@ export type ConversationListItem = {
 export type ConversationMessage = {
   role: string;
   content?: string;
+  /** 技能注入等：仅进模型上下文，不展示为用户气泡（与服务端 isMeta 一致） */
+  isMeta?: boolean;
   metadata?: Record<string, unknown>;
   tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }>;
 };

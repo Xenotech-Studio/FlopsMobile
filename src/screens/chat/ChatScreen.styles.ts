@@ -172,7 +172,7 @@ export function createChatStyles(c: AppColors) {
     paddingHorizontal: 4,
   },
   bubbleRole: { fontSize: 12, color: c.textMuted, marginBottom: 6 },
-  userText: { fontSize: 16, color: c.onPrimary },
+  userText: { fontSize: 16, color: c.onUserBubble },
   assistantText: { fontSize: 16, color: c.textPrimary, lineHeight: 24 },
   streamStatus: { fontSize: 14, color: c.textMuted, fontStyle: 'italic' },
   errorWrap: { marginBottom: 18, padding: 14, backgroundColor: c.errorBg, borderRadius: 8 },
