@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, StyleSheet, Platform } from 'react-native';
+import React, { useMemo } from 'react';
+import { View, Platform } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { PlatformPressable } from '@react-navigation/elements';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,6 +8,7 @@ import { ConversationListScreen } from './ConversationListScreen';
 import { TasksNavigator } from './TasksNavigator';
 import { DocsPlaceholderScreen } from './DocsPlaceholderScreen';
 import type { MainTabParamList } from '../navigation/types';
+import { useAppTheme } from '../context/ThemeContext';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
@@ -15,40 +16,43 @@ const TAB_BAR_BASE_HEIGHT = 60;
 
 export function MainScreen() {
   const insets = useSafeAreaInsets();
+  const { colors } = useAppTheme();
+
+  const screenOptions = useMemo(
+    () => ({
+      headerStyle: { backgroundColor: colors.surface },
+      headerTitleStyle: {
+        fontSize: 18,
+        fontWeight: '700' as const,
+        color: colors.textHeader,
+        ...(Platform.OS === 'android' ? { marginLeft: -22 } : {}),
+      },
+      headerTitleAlign: 'center' as const,
+      headerShadowVisible: false,
+      headerTintColor: colors.textSecondary,
+      tabBarStyle: {
+        backgroundColor: colors.surface,
+        borderTopWidth: 1,
+        borderTopColor: colors.border,
+        paddingTop: 8,
+        paddingBottom: insets.bottom,
+        height: TAB_BAR_BASE_HEIGHT + insets.bottom,
+      },
+      tabBarActiveTintColor: colors.textHeader,
+      tabBarInactiveTintColor: colors.placeholder,
+      tabBarLabelStyle: { fontSize: 12, fontWeight: '600' as const },
+      ...(Platform.OS === 'android' && {
+        tabBarButton: (props: React.ComponentProps<typeof PlatformPressable>) => (
+          <PlatformPressable {...props} android_ripple={{ color: 'transparent' }} />
+        ),
+      }),
+    }),
+    [colors, insets.bottom]
+  );
 
   return (
     <View style={{ flex: 1 }}>
-      <Tab.Navigator
-      initialRouteName="Chat"
-      screenOptions={{
-        headerStyle: { backgroundColor: '#fff' },
-        headerTitleStyle: {
-          fontSize: 18,
-          fontWeight: '700',
-          color: '#0f172a',
-          ...(Platform.OS === 'android' ? { marginLeft: -22 } : {}),
-        },
-        headerTitleAlign: 'center',
-        headerShadowVisible: false,
-        headerTintColor: '#374151',
-        tabBarStyle: {
-          backgroundColor: '#fff',
-          borderTopWidth: 1,
-          borderTopColor: '#e5e7eb',
-          paddingTop: 8,
-          paddingBottom: insets.bottom,
-          height: TAB_BAR_BASE_HEIGHT + insets.bottom,
-        },
-        tabBarActiveTintColor: '#0f172a',
-        tabBarInactiveTintColor: '#9ca3af',
-        tabBarLabelStyle: { fontSize: 12, fontWeight: '600' },
-        ...(Platform.OS === 'android' && {
-          tabBarButton: (props) => (
-            <PlatformPressable {...props} android_ripple={{ color: 'transparent' }} />
-          ),
-        }),
-      }}
-    >
+      <Tab.Navigator initialRouteName="Chat" screenOptions={screenOptions}>
       <Tab.Screen
         name="Chat"
         component={ConversationListScreen}

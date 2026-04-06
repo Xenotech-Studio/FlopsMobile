@@ -72,7 +72,8 @@ function run() {
     }
   }
   if (runTarget === 'android') {
-    args.push('--no-packager', '--port', String(METRO_PORT));
+    // build.gradle debug 使用 applicationIdSuffix ".dev"；CLI 不会自动合并，需与 Gradle 一致否则 am start 包名错误
+    args.push('--no-packager', '--port', String(METRO_PORT), '--appIdSuffix', 'dev');
     if (target === 'android:real') {
       const deviceId = getFirstRealAndroidDevice();
       if (!deviceId) {

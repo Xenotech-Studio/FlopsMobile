@@ -7,7 +7,9 @@ import { UsageSettingsScreen } from '../screens/UsageSettingsScreen';
 import { AccountActionsScreen } from '../screens/AccountActionsScreen';
 import { ChangePasswordScreen } from '../screens/ChangePasswordScreen';
 import { SoulSettingsScreen } from '../screens/SoulSettingsScreen';
+import { AppearanceSettingsScreen } from '../screens/AppearanceSettingsScreen';
 import type { RootStackParamList } from './types';
+import { useAppTheme } from '../context/ThemeContext';
 
 const Stack = createStackNavigator<RootStackParamList>();
 
@@ -44,13 +46,14 @@ function rightCardStyleInterpolator({ current, layouts }: { current: { progress:
 }
 
 export function RootNavigator() {
+  const { colors } = useAppTheme();
   return (
     <Stack.Navigator
       initialRouteName="Main"
       detachInactiveScreens
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: '#fff' },
+        cardStyle: { backgroundColor: colors.background },
       }}
     >
       <Stack.Screen name="Main" component={MainScreen} />
@@ -90,6 +93,15 @@ export function RootNavigator() {
       <Stack.Screen
         name="SoulSettings"
         component={SoulSettingsScreen}
+        options={{
+          headerShown: false,
+          gestureEnabled: true,
+          cardStyleInterpolator: rightCardStyleInterpolator,
+        }}
+      />
+      <Stack.Screen
+        name="AppearanceSettings"
+        component={AppearanceSettingsScreen}
         options={{
           headerShown: false,
           gestureEnabled: true,

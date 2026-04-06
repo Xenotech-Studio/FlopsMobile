@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -34,6 +34,8 @@ import { TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { PullToRefreshRing } from '../components/PullToRefreshRing';
 import { InboxRunSpinner, InboxUnreadCheck } from '../components/InboxListIndicators';
+import { useAppTheme } from '../context/ThemeContext';
+import type { AppColors } from '../theme/appColors';
 
 const EDGE_WIDTH = 24;
 const PULL_RING_THRESHOLD = 125;
@@ -54,6 +56,8 @@ export function ConversationListScreen() {
   const insets = useSafeAreaInsets();
   const { width: winWidth } = useWindowDimensions();
   const { session } = useSession();
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createConversationListStyles(colors), [colors]);
   const rootNav = navigation.getParent() as NavigationProp<RootStackParamList> | undefined;
   const [list, setList] = useState<ConversationListItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -323,7 +327,7 @@ export function ConversationListScreen() {
           onPress={() => rootNav?.navigate('Profile')}
           activeOpacity={0.7}
         >
-          <Ionicons name="person-outline" size={22} color="#374151" />
+          <Ionicons name="person-outline" size={22} color={colors.textSecondary} />
         </TouchableOpacity>
         <View style={styles.topBarCenter} pointerEvents="none">
           <Text style={styles.topBarTitle}>对话</Text>
@@ -333,7 +337,7 @@ export function ConversationListScreen() {
           onPress={() => setMenuVisible(true)}
           activeOpacity={0.7}
         >
-          <Ionicons name="menu" size={24} color="#374151" />
+          <Ionicons name="menu" size={24} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
 
@@ -360,7 +364,7 @@ export function ConversationListScreen() {
               onPress={onNewConversation}
               activeOpacity={0.7}
             >
-              <Ionicons name="add-circle-outline" size={20} color="#374151" />
+              <Ionicons name="add-circle-outline" size={20} color={colors.textSecondary} />
               <Text style={styles.menuItemText}>新建对话</Text>
             </TouchableOpacity>
           </View>
@@ -369,7 +373,7 @@ export function ConversationListScreen() {
 
       {loading && list.length === 0 ? (
         <View style={[styles.centered, { paddingTop: headerHeight }]}>
-          <ActivityIndicator size="large" color="#0f172a" />
+          <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.loadingText}>加载中...</Text>
         </View>
       ) : (
@@ -388,7 +392,7 @@ export function ConversationListScreen() {
           }
           ListEmptyComponent={
             <View style={styles.emptyWrap}>
-              <Ionicons name="chatbubbles-outline" size={64} color="#d1d5db" />
+              <Ionicons name="chatbubbles-outline" size={64} color={colors.border} />
               <Text style={styles.emptyTitle}>暂无历史对话</Text>
               <Text style={styles.emptySubtitle}>点击下方「新对话」开始</Text>
             </View>
@@ -402,8 +406,8 @@ export function ConversationListScreen() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              colors={['#0f172a']}
-              tintColor="#0f172a"
+              colors={[colors.primary]}
+              tintColor={colors.primary}
               progressViewOffset={Platform.OS === 'android' ? headerHeight : undefined}
             />
           }
@@ -416,113 +420,115 @@ export function ConversationListScreen() {
             refreshing={refreshingShared}
             threshold={PULL_RING_THRESHOLD}
             refreshingState={refreshing}
-            color="#0f172a"
+            color={colors.primary}
           />
         </View>
       ) : null}
       <TouchableOpacity style={styles.fab} onPress={onNewConversation} activeOpacity={0.85}>
-        <Ionicons name="add" size={26} color="#111827" />
+        <Ionicons name="add" size={26} color={colors.textPrimary} />
       </TouchableOpacity>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  leftEdgeGesture: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: EDGE_WIDTH,
-    zIndex: 10,
-  },
-  topBar: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
-  circleBtn: {
-    width: HEADER_CIRCLE_BTN_SIZE,
-    height: HEADER_CIRCLE_BTN_SIZE,
-    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    ...shadowCircleButton,
-  },
-  topBarCenter: { alignItems: 'center', flex: 1 },
-  topBarTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
-  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
-  menuPanel: {
-    position: 'absolute',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingVertical: 8,
-    ...shadowMenu,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-  },
-  menuItemText: { fontSize: 16, color: '#111827' },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { marginTop: 12, fontSize: 15, color: '#6b7280' },
-  list: { flex: 1 },
-  listContent: { paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
-  emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
-  emptyWrap: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyTitle: { fontSize: 18, fontWeight: '600', color: '#374151', marginTop: 16 },
-  emptySubtitle: { fontSize: 14, color: '#9ca3af', marginTop: 8 },
-  item: {
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
-  },
-  itemTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  itemTitle: { flex: 1, minWidth: 0, fontSize: 16, fontWeight: '600', color: '#111827' },
-  itemMeta: { fontSize: 13, color: '#6b7280', marginTop: 4 },
-  footerHint: { fontSize: 12, color: '#9ca3af', textAlign: 'center', paddingVertical: 16 },
-  refreshIndicatorFixed: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    zIndex: 9,
-  },
-  fab: {
-    position: 'absolute',
-    right: 20,
-    bottom: 24,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...borderLight,
-    ...shadowFab,
-  },
-});
+function createConversationListStyles(c: AppColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.background },
+    leftEdgeGesture: {
+      position: 'absolute',
+      left: 0,
+      top: 0,
+      bottom: 0,
+      width: EDGE_WIDTH,
+      zIndex: 10,
+    },
+    topBar: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      zIndex: 10,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingBottom: 12,
+    },
+    circleBtn: {
+      width: HEADER_CIRCLE_BTN_SIZE,
+      height: HEADER_CIRCLE_BTN_SIZE,
+      borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: c.surface,
+      ...shadowCircleButton,
+    },
+    topBarCenter: { alignItems: 'center', flex: 1 },
+    topBarTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: c.textHeader },
+    menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
+    menuPanel: {
+      position: 'absolute',
+      backgroundColor: c.surface,
+      borderRadius: 12,
+      paddingVertical: 8,
+      ...shadowMenu,
+    },
+    menuItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingVertical: 12,
+      paddingHorizontal: 16,
+    },
+    menuItemText: { fontSize: 16, color: c.textPrimary },
+    centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    loadingText: { marginTop: 12, fontSize: 15, color: c.textMuted },
+    list: { flex: 1 },
+    listContent: { paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
+    emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
+    emptyWrap: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingVertical: 60,
+    },
+    emptyTitle: { fontSize: 18, fontWeight: '600', color: c.textSecondary, marginTop: 16 },
+    emptySubtitle: { fontSize: 14, color: c.placeholder, marginTop: 8 },
+    item: {
+      paddingHorizontal: 20,
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: c.surfaceMuted,
+    },
+    itemTitleRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    itemTitle: { flex: 1, minWidth: 0, fontSize: 16, fontWeight: '600', color: c.textPrimary },
+    itemMeta: { fontSize: 13, color: c.textMuted, marginTop: 4 },
+    footerHint: { fontSize: 12, color: c.placeholder, textAlign: 'center', paddingVertical: 16 },
+    refreshIndicatorFixed: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 12,
+      zIndex: 9,
+    },
+    fab: {
+      position: 'absolute',
+      right: 20,
+      bottom: 24,
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      backgroundColor: c.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+      ...borderLight,
+      ...shadowFab,
+    },
+  });
+}

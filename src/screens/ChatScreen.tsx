@@ -18,6 +18,8 @@ import {
   Alert,
   InteractionManager,
   Dimensions,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -67,8 +69,9 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
-import { TASK_FONT_SIZE_TITLE } from '../theme/typography';
-import { shadowCircleButton, shadowFab, shadowSoft } from '../theme/shadows';
+import { chatInputOverlayGradient, toolPreviewFadeGradient } from '../theme/appColors';
+import { useAppTheme } from '../context/ThemeContext';
+import { createChatStyles } from './chat/ChatScreen.styles';
 import { mergeToolResultChunk } from '../utils/toolResultPatch';
 import { ansiToSegments } from '../utils/ansiToSegments';
 import {
@@ -160,7 +163,13 @@ function truncateMessagesAfterLastUser(messages: ChatMessage[]): ChatMessage[] {
 type ChatRouteParams = RootStackParamList['Chat'];
 
 /** Header 底部的 loading 条（与 Web flops-read-pages-card-header-loadbar 一致） */
-function ReadPagesHeaderLoadBar() {
+function ReadPagesHeaderLoadBar({
+  trackStyle,
+  barStyle,
+}: {
+  trackStyle: StyleProp<ViewStyle>;
+  barStyle: StyleProp<ViewStyle>;
+}) {
   const translateX = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     const loop = Animated.loop(
@@ -174,8 +183,8 @@ function ReadPagesHeaderLoadBar() {
   }, [translateX]);
   const slide = translateX.interpolate({ inputRange: [0, 1], outputRange: [-60, 160] });
   return (
-    <View style={styles.readPagesHeaderLoadBarTrack}>
-      <Animated.View style={[styles.readPagesHeaderLoadBarBar, { transform: [{ translateX: slide }] }]} />
+    <View style={trackStyle}>
+      <Animated.View style={[barStyle, { transform: [{ translateX: slide }] }]} />
     </View>
   );
 }
@@ -185,6 +194,8 @@ export function ChatScreen() {
   const insets = useSafeAreaInsets();
   const route = useRoute();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Chat'>>();
+  const { colors, isDark } = useAppTheme();
+  const styles = useMemo(() => createChatStyles(colors), [colors]);
   const headerHeight = insets.top + 8 + 12 + HEADER_CIRCLE_BTN_SIZE;
   /** 底部渐变条高度（叠在滚动内容上，透明→白） */
   const gradientStripHeight = 48;
@@ -1605,7 +1616,7 @@ export function ChatScreen() {
       <View style={styles.fileToolPreviewClip}>
         {children}
         <LinearGradient
-          colors={['rgba(245,245,245,0)', '#f5f5f5']}
+          colors={toolPreviewFadeGradient(isDark, colors)}
           style={styles.fileToolPreviewFade}
           pointerEvents="none"
         />
@@ -1684,7 +1695,12 @@ export function ChatScreen() {
         getToolStatusLabel={getToolStatusLabel}
         viewMode={viewMode}
         isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
-        renderHeaderLoadBar={() => <ReadPagesHeaderLoadBar />}
+        renderHeaderLoadBar={() => (
+          <ReadPagesHeaderLoadBar
+            trackStyle={styles.readPagesHeaderLoadBarTrack}
+            barStyle={styles.readPagesHeaderLoadBarBar}
+          />
+        )}
       />
     );
   }
@@ -2087,7 +2103,7 @@ export function ChatScreen() {
             onPress={() => navigation.goBack()}
             activeOpacity={0.7}
           >
-            <Ionicons name="chevron-back" size={24} color="#374151" />
+            <Ionicons name="chevron-back" size={24} color={colors.textSecondary} />
           </TouchableOpacity>
         ) : (
           <View style={styles.circleBtn} />
@@ -2103,7 +2119,7 @@ export function ChatScreen() {
           disabled={loading}
           activeOpacity={0.7}
         >
-          <Ionicons name="add" size={24} color="#374151" />
+          <Ionicons name="add" size={24} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
 
@@ -2224,18 +2240,13 @@ export function ChatScreen() {
           </ScrollView>
           {conversationHistoryLoading ? (
             <View style={styles.historyLoadingOverlay}>
-              <ActivityIndicator size="large" color="#374151" />
+              <ActivityIndicator size="large" color={colors.textSecondary} />
             </View>
           ) : null}
           {/* 底部整块贴屏底：渐变铺满整块并延伸到底，输入行叠在渐变底部，无单独白底；点渐变区（未点到输入/发送）可滚到底 */}
           <View style={[styles.bottomOverlay, { height: bottomOverlayHeight }]}>
             <LinearGradient
-              colors={[
-                'rgba(255,255,255,0)',
-                'rgba(255,255,255,0.5)',
-                'rgba(255,255,255,0.9)',
-                'rgba(255,255,255,0.98)',
-              ]}
+              colors={chatInputOverlayGradient(isDark)}
               locations={[0, 0.45, 0.7, 1]}
               style={StyleSheet.absoluteFill}
               start={{ x: 0.5, y: 0 }}
@@ -2256,7 +2267,7 @@ export function ChatScreen() {
                   value={messageInput}
                   onChangeText={setMessageInput}
                   placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
-                  placeholderTextColor="#9ca3af"
+                  placeholderTextColor={colors.placeholder}
                   editable={!loading && !conversationHistoryLoading}
                   onSubmitEditing={handleSendMessage}
                   returnKeyType="send"
@@ -2271,9 +2282,9 @@ export function ChatScreen() {
                   disabled={!loading && !canSend}
                 >
                   {loading ? (
-                    <Ionicons name="stop" size={24} color="#fff" />
+                    <Ionicons name="stop" size={24} color={colors.onPrimary} />
                   ) : (
-                    <Ionicons name="send" size={22} color="#fff" />
+                    <Ionicons name="send" size={22} color={colors.onPrimary} />
                   )}
                 </Pressable>
                 {session ? (
@@ -2293,7 +2304,7 @@ export function ChatScreen() {
                         >
                           {composerModelTriggerLabel}
                         </Text>
-                        <Ionicons name="chevron-down" size={14} color="#6b7280" />
+                        <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
                       </TouchableOpacity>
                       {showAgentComposerColumn ? (
                         agentComposerInteractive ? (
@@ -2311,7 +2322,7 @@ export function ChatScreen() {
                             >
                               {composerAgentLabel}
                             </Text>
-                            <Ionicons name="chevron-down" size={14} color="#6b7280" />
+                            <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
                           </TouchableOpacity>
                         ) : (
                           <View style={styles.composerMetaChipReadonly}>
@@ -2406,674 +2417,3 @@ export function ChatScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  containerInner: { flex: 1 },
-  keyboardView: { flex: 1 },
-  scrollAndGradientWrap: { flex: 1, position: 'relative' },
-  historyLoadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.88)',
-    zIndex: 20,
-  },
-  bottomOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    zIndex: 10,
-  },
-  bottomOverlayInner: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    flexDirection: 'column',
-    justifyContent: 'flex-end',
-  },
-  /** 底部留白留给绝对定位的模型/助手/用量条（与改前「模型贴在输入区底」同一思路，不把整块顶高） */
-  inputRowInOverlay: {
-    position: 'relative',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingLeft: 20,
-    paddingRight: 20,
-    paddingTop: 12,
-    paddingBottom: 26,
-    gap: 12,
-    overflow: 'visible',
-  },
-  /** 叠在输入行底部留白内；paddingLeft 与 scrollContent(28) 对齐；paddingRight 较小让右侧用量更贴屏缘 */
-  composerMetaRowAbsolute: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 6,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingLeft: 32,
-    paddingRight: 32,
-    gap: 8,
-  },
-  composerMetaPills: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'nowrap',
-    gap: 10,
-  },
-  composerMetaChip: {
-    flexShrink: 1,
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  composerMetaChipReadonly: {
-    flexShrink: 1,
-    minWidth: 0,
-    justifyContent: 'flex-start',
-  },
-  composerAgentReadonlyText: {
-    fontSize: 11,
-    color: '#6b7280',
-  },
-  composerUsageInMetaRow: {
-    flexShrink: 0,
-    maxWidth: '42%',
-    alignItems: 'flex-end',
-  },
-  topBar: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    /** 须高于 historyLoadingOverlay(20)，拉历史时仍可点返回 / 标题区 / 加号 */
-    zIndex: 30,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
-  circleBtn: {
-    width: HEADER_CIRCLE_BTN_SIZE,
-    height: HEADER_CIRCLE_BTN_SIZE,
-    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    ...shadowCircleButton,
-  },
-  leftEdgeGesture: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 24,
-    /** 须高于 historyLoadingOverlay(20)，否则拉历史时全屏遮罩会挡住侧滑返回 */
-    zIndex: 30,
-  },
-  headerTitleWrap: {
-    flex: 1,
-    minWidth: 0,
-    justifyContent: 'center',
-    alignItems: 'flex-start',
-    paddingHorizontal: 8,
-  },
-  headerTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
-  /** 与 composerUsageText 同档：小号、灰色、常规字重 */
-  composerModelTriggerText: {
-    flexShrink: 1,
-    fontSize: 11,
-    color: '#6b7280',
-  },
-  composerUsageText: {
-    fontSize: 11,
-    color: '#6b7280',
-    textAlign: 'right',
-    maxWidth: '100%',
-  },
-  globalError: { color: '#dc2626', fontSize: 13, paddingHorizontal: 28, paddingVertical: 8 },
-  scroll: { flex: 1 },
-  scrollContent: {
-    paddingHorizontal: 28,
-    paddingVertical: 20,
-    paddingBottom: 32,
-    alignItems: 'center',
-  },
-  chatContentWrap: {
-    width: '100%',
-    maxWidth: 380,
-  },
-  emptyStage: { flex: 1, paddingVertical: 40 },
-  welcomeTitle: { fontSize: 22, fontWeight: '700', color: '#0f172a', marginBottom: 8 },
-  welcomeSubtitle: { fontSize: 15, color: '#6b7280' },
-  bubbleWrap: { marginBottom: 18 },
-  userBubbleWrap: { alignItems: 'flex-end' },
-  assistantBubbleWrap: { width: '100%' },
-  bubble: {
-    maxWidth: '85%',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: 14,
-  },
-  userBubble: { backgroundColor: '#000000' },
-  assistantBubble: {
-    width: '100%',
-    maxWidth: '100%',
-    backgroundColor: 'transparent',
-    borderWidth: 0,
-    borderRadius: 0,
-    paddingVertical: 10,
-    paddingHorizontal: 4,
-  },
-  bubbleRole: { fontSize: 12, color: '#6b7280', marginBottom: 6 },
-  userText: { fontSize: 16, color: '#fff' },
-  assistantText: { fontSize: 16, color: '#111827', lineHeight: 24 },
-  streamStatus: { fontSize: 14, color: '#6b7280', fontStyle: 'italic' },
-  errorWrap: { marginBottom: 18, padding: 14, backgroundColor: '#fef2f2', borderRadius: 8 },
-  errorText: { color: '#dc2626', fontSize: 14 },
-  assistantTextBlock: { marginTop: 10 },
-  assistantTextBlockCompactAbove: { marginTop: 8 },
-  /** 与 Web .assistant-empty-reply-block .markdown-content 一致，仅弱化提示正文 */
-  assistantEmptyReplyMarkdownContent: { opacity: 0.62 },
-  toolPackageNavLine: {
-    marginTop: -4,
-    paddingVertical: 2,
-  },
-  toolPackageNavLineText: {
-    fontSize: 12,
-    color: '#9ca3af',
-    lineHeight: 18,
-  },
-  toolCard: {
-    marginTop: 4,
-    marginBottom: 4,
-    marginLeft: 0,
-    marginRight: 0,
-    padding: 14,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e5e5e5',
-  },
-  toolCardCollapsed: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    minHeight: 36,
-    minWidth: 0,
-  },
-  toolCardCollapsedPressed: { backgroundColor: '#e5e5e5' },
-  /** 单行折叠：占满徽章左侧剩余宽度，避免标题过长把「成功」顶出卡片 */
-  toolCardCollapsedMain: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginRight: 6,
-  },
-  toolCardCollapsedName: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#1f2937',
-    marginRight: 8,
-    flexShrink: 1,
-    minWidth: 0,
-  },
-  toolCardCollapsedTail: {
-    flex: 1,
-    minWidth: 0,
-    fontSize: 11,
-    color: '#64748b',
-    marginRight: 0,
-  },
-  toolCardBadgeWrap: { marginLeft: 4, flexShrink: 0 },
-  toolCardBadge: {
-    fontSize: 11,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#d4d4d4',
-    color: '#525252',
-    backgroundColor: '#e5e5e5',
-  },
-  toolCardBadgeOk: {
-    color: '#374151',
-    backgroundColor: '#e5e5e5',
-    borderColor: '#d4d4d4',
-  },
-  toolCardBadgeSuccess: {
-    color: '#374151',
-    backgroundColor: '#e5e5e5',
-    borderColor: '#d4d4d4',
-  },
-  toolCardContentPressed: { opacity: 0.95 },
-  toolCardExpandRow: {
-    marginTop: 8,
-    marginHorizontal: -10,
-    marginBottom: -10,
-    paddingVertical: 2,
-    paddingHorizontal: 10,
-    paddingBottom: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  toolCardExpandRowPressed: { backgroundColor: '#e5e5e5' },
-  toolCardHeader: { fontSize: 13, fontWeight: '600', color: '#1f2937', marginBottom: 8, minWidth: 0 },
-  toolCardHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 8,
-    marginBottom: 8,
-  },
-  toolCardHeaderMain: { flex: 1, minWidth: 0 },
-  toolCardHeaderFilename: { fontSize: 13, fontWeight: '600', color: '#262626' },
-  toolCardHeaderFilenamePlaceholder: { fontSize: 13, fontWeight: '600', color: '#737373' },
-  toolCardHeaderEditSummary: { fontSize: 11, fontWeight: '500', color: '#525252', marginTop: 2 },
-  toolCardBodyMuted: { fontSize: 12, color: '#737373', fontStyle: 'italic', marginTop: 6 },
-  /** search_engine：与 FlopsDesktop search-engine-card.css 对齐 */
-  searchEngineHeaderMain: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#1f2937',
-    lineHeight: 20,
-  },
-  searchEngineWrap: {
-    flexDirection: 'column',
-    gap: 10,
-  },
-  searchEngineQueriesSection: {},
-  searchEngineQueriesLine: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'baseline',
-    gap: 6,
-    rowGap: 6,
-  },
-  searchEngineQueriesPrefix: {
-    fontSize: 12,
-    color: '#a3a3a3',
-    marginRight: 4,
-  },
-  searchEngineQueryChip: {
-    fontSize: 12,
-    color: '#737373',
-    textDecorationLine: 'underline',
-  },
-  searchEngineQueryChipOpen: {
-    color: '#404040',
-  },
-  searchEngineQueryExpanded: {
-    marginTop: 8,
-    paddingLeft: 12,
-    borderLeftWidth: 2,
-    borderLeftColor: '#eee',
-  },
-  searchEnginePerQueryList: {
-    marginTop: 6,
-    paddingTop: 6,
-    paddingLeft: 12,
-    paddingRight: 8,
-    paddingBottom: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
-  },
-  searchEnginePerQueryItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
-    paddingVertical: 4,
-  },
-  searchEnginePerQueryIndex: {
-    fontSize: 11,
-    color: '#a3a3a3',
-    lineHeight: 18,
-    minWidth: 18,
-  },
-  searchEnginePerQueryMain: {
-    flex: 1,
-    minWidth: 0,
-    gap: 2,
-  },
-  searchEnginePerQueryLink: {
-    fontSize: 12,
-    fontWeight: '400',
-    color: '#171717',
-    flexWrap: 'wrap',
-  },
-  searchEnginePerQueryTitle: {
-    fontSize: 12,
-    fontWeight: '400',
-    color: '#171717',
-  },
-  searchEnginePerQueryDesc: {
-    fontSize: 12,
-    color: '#737373',
-    lineHeight: 17,
-    marginTop: 2,
-  },
-  searchEngineHero: {
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
-  },
-  searchEngineHeroHead: {
-    flexDirection: 'row',
-    flexWrap: 'nowrap',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 8,
-    minWidth: 0,
-    overflow: 'hidden',
-  },
-  searchEngineGoalInline: {
-    flex: 1,
-    minWidth: 0,
-    fontSize: 12,
-    lineHeight: 17,
-    color: '#737373',
-  },
-  searchEngineHeroSep: {
-    flexShrink: 0,
-    fontSize: 12,
-    color: '#d4d4d4',
-  },
-  searchEngineHeroLabelInline: {
-    flexShrink: 0,
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#525252',
-    letterSpacing: 0.3,
-  },
-  searchEngineHeroGrid: {
-    gap: 10,
-  },
-  searchEngineHeroItem: {
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#eaeaea',
-    minWidth: 0,
-    gap: 2,
-  },
-  searchEngineHeroLink: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#171717',
-    lineHeight: 19,
-  },
-  searchEngineHeroTitle: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#171717',
-    lineHeight: 19,
-  },
-  searchEngineHeroDesc: {
-    fontSize: 12,
-    color: '#737373',
-    lineHeight: 17,
-    marginTop: 2,
-  },
-  searchEngineMuted: {
-    fontSize: 13,
-    color: '#737373',
-    margin: 0,
-  },
-  searchEngineError: {
-    fontSize: 13,
-    color: '#b91c1c',
-    margin: 0,
-  },
-  /** 与 Web `.tool-card-write-preview` 半折叠区域一致 */
-  fileToolPreviewFullWrap: { marginTop: 8 },
-  fileToolPreviewClip: {
-    maxHeight: 120,
-    marginTop: 8,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  fileToolPreviewScroll: { maxHeight: 120, marginTop: 8 },
-  fileToolPreviewScrollContent: { paddingBottom: 4 },
-  /** local_exec_command 半折叠：与 Web .tool-card-exec-scroll-preview 类似 */
-  execToolPreviewScroll: { maxHeight: 140, marginTop: 6 },
-  execToolPreviewScrollContent: { paddingBottom: 6 },
-  toolCardExecBody: { marginTop: 4 },
-  toolCardExecPrompt: {
-    fontSize: 12,
-    color: '#262626',
-    lineHeight: 18,
-    marginBottom: 6,
-    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
-  },
-  toolCardExecPromptPrefix: { color: '#64748b', fontWeight: '600' as const },
-  toolCardExecCwd: { color: '#737373' },
-  /** 时间在滚动区外，避免输出更新时底栏随 scrollToEnd 抖动 */
-  toolCardExecExit: {
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#e5e5e5',
-    fontSize: 11,
-    color: '#64748b',
-  },
-  fileToolPreviewFade: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 36,
-  },
-  fileToolPreviewEllipsis: {
-    position: 'absolute',
-    bottom: 2,
-    left: 0,
-    right: 0,
-    textAlign: 'center',
-    fontSize: 12,
-    color: '#737373',
-  },
-  toolCardWritePreview: {},
-  toolCardWritePreviewText: { marginTop: 0 },
-  toolCardDiff: { flexDirection: 'row', gap: 12, marginTop: 8 },
-  toolCardDiffPreview: { marginTop: 0 },
-  toolCardDiffSide: { flex: 1, minWidth: 0 },
-  toolCardDiffOld: { borderRightWidth: 1, borderRightColor: '#e5e5e5', paddingRight: 12 },
-  toolCardDiffLabel: { fontSize: 11, fontWeight: '600', color: '#737373', marginBottom: 2 },
-  toolCardDiffPre: {
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    fontSize: 12,
-    lineHeight: 18,
-    color: '#262626',
-    margin: 0,
-  },
-  toolCardBody: { fontSize: 13, color: '#1e293b', marginTop: 6, lineHeight: 20 },
-  toolCardCodeText: {
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    fontSize: 12,
-    color: '#0f172a',
-    lineHeight: 18,
-    marginTop: 6,
-  },
-  toolCardSafetyMeta: { fontSize: 11, color: '#64748b', marginTop: 6 },
-  toolCardSafetyReason: { fontSize: 12, color: '#334155', marginTop: 6 },
-  readPagesEntryBox: {
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e5e5',
-  },
-  readPagesEntryTitle: { fontSize: 12, fontWeight: '600', color: '#111827' },
-  readPagesTextBlock: { fontSize: 13, color: '#1e293b', lineHeight: 20, marginTop: 6 },
-  readPagesErrorText: { fontSize: 12, color: '#991b1b', marginTop: 6 },
-  readPagesLinksText: { fontSize: 12, color: '#334155', marginTop: 6 },
-  readPagesUrlListWrap: { marginTop: 8, gap: 6 },
-  readPagesUrlItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  readPagesUrlLink: { flex: 1, fontSize: 12, color: '#2563eb' },
-  readPagesCardsScrollView: { marginTop: 8 },
-  readPagesCardsScroll: { paddingVertical: 4, gap: 4 },
-  readPagesSmallCard: {
-    width: 160,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#d8d8d8',
-    overflow: 'hidden',
-    marginRight: 6,
-  },
-  readPagesSmallCardHeader: {
-    position: 'relative',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    backgroundColor: '#ebebeb',
-    borderBottomWidth: 1,
-    borderBottomColor: '#d5d5d5',
-  },
-  readPagesSmallCardHeaderStreaming: {
-    borderBottomWidth: 0,
-    paddingBottom: 9,
-  },
-  readPagesHeaderLoadBarTrack: {
-    position: 'absolute',
-    left: 8,
-    right: 8,
-    bottom: 0,
-    height: 2,
-    backgroundColor: '#c8c8c8',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  readPagesHeaderLoadBarBar: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    width: 56,
-    height: 2,
-    backgroundColor: '#667eea',
-    borderRadius: 2,
-  },
-  readPagesSmallCardTitle: { flex: 1, fontSize: 11, fontWeight: '600', color: '#262626', minWidth: 0 },
-  readPagesSmallCardBodyWrap: {
-    width: '100%',
-    aspectRatio: 1,
-    minHeight: 0,
-    overflow: 'hidden',
-  },
-  readPagesCardSquare: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#ececec',
-  },
-  readPagesCardSquareBody: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#f5f5f5',
-  },
-  readPagesCardSquareCenter: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  readPagesCardBodyScroll: {
-    padding: 8,
-    paddingBottom: 12,
-  },
-  readPagesCardThumb: { width: '100%', aspectRatio: 1, backgroundColor: '#f0f0f0' },
-  readPagesCardSpinner: { marginVertical: 20 },
-  toolCardSafetyAdvice: {
-    fontSize: 12,
-    marginTop: 10,
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#e5e5e5',
-    backgroundColor: '#f8f8f8',
-  },
-  toolCardSafetyAdviceDanger: {
-    color: '#991b1b',
-    backgroundColor: '#fff1f2',
-    borderColor: '#fecdd3',
-  },
-  safetyActions: { flexDirection: 'row', gap: 8, marginTop: 8 },
-  safetyBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6, backgroundColor: '#e5e7eb' },
-  safetyBtnPrimary: { backgroundColor: '#000000' },
-  safetyBtnText: { color: '#374151', fontSize: 14 },
-  safetyBtnPrimaryText: { color: '#fff', fontSize: 14 },
-  cursorAgentWrap: { marginTop: 8, gap: 14 },
-  cursorAgentPromptCard: {
-    padding: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    backgroundColor: '#f9fafb',
-  },
-  cursorAgentPromptLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#6b7280',
-    marginBottom: 8,
-    letterSpacing: 0.4,
-  },
-  cursorAgentPromptText: { fontSize: 14, lineHeight: 22, color: '#111827' },
-  cursorAgentPromptMeta: { fontSize: 12, color: '#6b7280', marginTop: 10 },
-  cursorAgentReply: {
-    padding: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e5e5e5',
-    backgroundColor: '#fff',
-  },
-  cursorAgentReplyLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#525252',
-    marginBottom: 10,
-    letterSpacing: 0.4,
-  },
-  cursorAgentReplyBody: { marginTop: 4 },
-  cursorAgentReplyLoading: { fontSize: 13, color: '#6b7280', fontStyle: 'italic' },
-  cursorAgentReplyEmpty: { fontSize: 13, color: '#6b7280', fontStyle: 'italic' },
-  cursorAgentReplyError: {
-    fontSize: 13,
-    color: '#b91c1c',
-    backgroundColor: '#fef2f2',
-    padding: 8,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#fecaca',
-  },
-  composerInput: {
-    flex: 1,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.10)',
-    borderRadius: 28,
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    fontSize: 16,
-    color: '#111827',
-    ...(Platform.OS === 'ios' ? shadowSoft : {}),
-  },
-  sendBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 28,
-    backgroundColor: '#0f172a',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 0,
-    overflow: 'hidden',
-    ...(Platform.OS === 'ios' ? shadowFab : {}),
-  },
-  sendBtnStop: { backgroundColor: '#dc2626' },
-  sendBtnDisabled: { opacity: 0.5 },
-});

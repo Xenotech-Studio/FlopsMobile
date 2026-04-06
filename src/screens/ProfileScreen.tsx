@@ -1,7 +1,7 @@
 /**
  * 用户信息与设置页，从左侧滑入；含账户信息、用量与显示、关于/检查更新；退出登录在「账户操作」子页。
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -23,6 +23,8 @@ import type { RootStackParamList } from '../navigation/types';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
 import { shadowSoftSubtle } from '../theme/shadows';
+import type { AppColors } from '../theme/appColors';
+import { useAppTheme } from '../context/ThemeContext';
 import { getCurrentUserInfo } from '../api';
 import { APP_VERSION } from '../appVersion';
 import { getChangelogChanges } from '../changelog';
@@ -45,6 +47,8 @@ type DownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';
 export function ProfileScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { session, serverBaseUrl } = useSession();
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createProfileStyles(colors), [colors]);
   const { width: screenWidth } = useWindowDimensions();
   const gestureStartX = useRef(0);
 
@@ -205,7 +209,7 @@ export function ProfileScreen() {
           onPress={() => navigation.goBack()}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
-          <Ionicons name="close" size={24} color="#374151" />
+          <Ionicons name="close" size={24} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
 
@@ -228,36 +232,45 @@ export function ProfileScreen() {
             activeOpacity={0.7}
             onPress={() => navigation.navigate('AccountActions')}
           >
-            <Ionicons name="settings-outline" size={22} color="#6b7280" />
+            <Ionicons name="settings-outline" size={22} color={colors.textMuted} />
             <Text style={styles.rowLabel}>账户操作</Text>
-            <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+            <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.row, styles.rowBorder]}
             activeOpacity={0.7}
             onPress={() => navigation.navigate('SoulSettings')}
           >
-            <Ionicons name="sparkles-outline" size={22} color="#6b7280" />
+            <Ionicons name="sparkles-outline" size={22} color={colors.textMuted} />
             <Text style={styles.rowLabel}>Agent 与记忆</Text>
-            <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+            <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.row, styles.rowBorder]}
             activeOpacity={0.7}
             onPress={() => navigation.navigate('UsageSettings')}
           >
-            <Ionicons name="stats-chart-outline" size={22} color="#6b7280" />
+            <Ionicons name="stats-chart-outline" size={22} color={colors.textMuted} />
             <Text style={styles.rowLabel}>用量与显示</Text>
-            <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+            <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.row, styles.rowBorder]}
+            activeOpacity={0.7}
+            onPress={() => navigation.navigate('AppearanceSettings')}
+          >
+            <Ionicons name="moon-outline" size={22} color={colors.textMuted} />
+            <Text style={styles.rowLabel}>外观</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.row, styles.rowBorder]}
             activeOpacity={0.7}
             onPress={openUpdateModal}
           >
-            <Ionicons name="information-circle-outline" size={22} color="#6b7280" />
+            <Ionicons name="information-circle-outline" size={22} color={colors.textMuted} />
             <Text style={styles.rowLabel}>关于 / 检查更新</Text>
-            <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+            <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -277,7 +290,7 @@ export function ProfileScreen() {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>关于</Text>
               <TouchableOpacity onPress={closeUpdateModal} hitSlop={12}>
-                <Ionicons name="close" size={24} color="#374151" />
+                <Ionicons name="close" size={24} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.modalBody} contentContainerStyle={styles.modalBodyContent}>
@@ -297,7 +310,7 @@ export function ProfileScreen() {
                       disabled={updateStatus === 'checking'}
                     >
                       {updateStatus === 'checking' ? (
-                        <ActivityIndicator size="small" color="#fff" />
+                        <ActivityIndicator size="small" color={colors.onPrimary} />
                       ) : (
                         <Text style={styles.updateCheckBtnText}>检查更新</Text>
                       )}
@@ -364,7 +377,7 @@ export function ProfileScreen() {
                     <Ionicons
                       name={versionHistoryExpanded ? 'chevron-down' : 'chevron-forward'}
                       size={18}
-                      color="#6b7280"
+                      color={colors.textMuted}
                     />
                     <Text style={styles.versionHistoryTitle}>
                       历史版本
@@ -374,7 +387,7 @@ export function ProfileScreen() {
                   {versionHistoryExpanded && (
                     <View style={styles.versionHistoryBody}>
                       {versionHistoryLoading && versionHistory.length === 0 ? (
-                        <ActivityIndicator size="small" color="#6b7280" style={styles.versionHistoryLoader} />
+                        <ActivityIndicator size="small" color={colors.textMuted} style={styles.versionHistoryLoader} />
                       ) : versionHistory.length > 0 ? (
                         versionHistory.map((rel) => {
                           const isCurrent = rel.version === APP_VERSION;
@@ -400,7 +413,7 @@ export function ProfileScreen() {
                                     <Ionicons
                                       name={isChangelogExpanded ? 'chevron-down' : 'chevron-forward'}
                                       size={16}
-                                      color="#6b7280"
+                                      color={colors.textMuted}
                                     />
                                     <Text style={styles.versionHistoryChangelogBtnText}>更新说明</Text>
                                   </TouchableOpacity>
@@ -453,200 +466,202 @@ export function ProfileScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f9fafb' },
-  rightEdgeGesture: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: EDGE_WIDTH,
-    zIndex: 10,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-    backgroundColor: '#fff',
-  },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
-  closeBtn: { padding: 4 },
-  scroll: { flex: 1 },
-  scrollContent: { padding: 20, paddingBottom: 40 },
-  userCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    paddingVertical: 24,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-    marginBottom: 20,
-    ...shadowSoftSubtle,
-  },
-  avatarWrap: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: '#0f172a',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-    overflow: 'hidden',
-  },
-  avatarImage: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-  },
-  avatarText: { fontSize: 28, fontWeight: '700', color: '#fff' },
-  userId: { fontSize: 18, fontWeight: '600', color: '#111827' },
-  userMeta: { fontSize: 13, color: '#6b7280', marginTop: 4 },
-  section: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    overflow: 'hidden',
-    marginBottom: 24,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    gap: 12,
-  },
-  rowBorder: { borderTopWidth: 1, borderTopColor: '#f3f4f6' },
-  rowLabel: { flex: 1, fontSize: 16, color: '#111827' },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  modalContent: {
-    width: '100%',
-    maxWidth: 400,
-    maxHeight: '80%',
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  modalTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
-  modalBody: { maxHeight: 400 },
-  modalBodyContent: { padding: 16, paddingBottom: 24 },
-  updateRow: { marginBottom: 12 },
-  updateLabel: { fontSize: 14, color: '#6b7280', marginBottom: 4 },
-  updateVersion: { fontSize: 17, fontWeight: '600', color: '#111827' },
-  updateCheckBtn: {
-    backgroundColor: '#0f172a',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-    alignItems: 'center',
-    minWidth: 120,
-  },
-  updateCheckBtnDisabled: { opacity: 0.7 },
-  updateCheckBtnText: { fontSize: 16, fontWeight: '600', color: '#fff' },
-  updateStatusWrap: { marginTop: 8, marginBottom: 8 },
-  updateStatusText: { fontSize: 14, color: '#374151' },
-  updateStatusError: { fontSize: 14, color: '#dc2626' },
-  updateDownloadBtn: {
-    backgroundColor: '#0f172a',
-    paddingVertical: 12,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  updateDownloadBtnText: { fontSize: 16, fontWeight: '600', color: '#fff' },
-  updateDownloadProgressWrap: { marginTop: 12 },
-  updateProgressBar: {
-    height: 6,
-    backgroundColor: '#e5e7eb',
-    borderRadius: 3,
-    marginTop: 8,
-    overflow: 'hidden',
-  },
-  updateProgressFill: {
-    height: '100%',
-    backgroundColor: '#0f172a',
-    borderRadius: 3,
-  },
-  updateReadyWrap: { marginTop: 12 },
-  updateReadyText: { fontSize: 14, color: '#374151', marginBottom: 12 },
-  updateInstallBtn: {
-    backgroundColor: '#0a7b0a',
-    paddingVertical: 12,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  updateInstallBtnText: { fontSize: 16, fontWeight: '600', color: '#fff' },
-  versionHistoryHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 20,
-    paddingVertical: 8,
-  },
-  versionHistoryTitle: { fontSize: 15, color: '#374151' },
-  versionHistoryBody: { marginLeft: 8, marginTop: 4 },
-  versionHistoryLoader: { marginVertical: 12 },
-  versionHistoryItem: {
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
-  },
-  versionHistoryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  versionHistoryVersion: { fontSize: 14, color: '#111827' },
-  versionHistoryActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  versionHistoryChangelogBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 10,
-    backgroundColor: '#f3f4f6',
-  },
-  versionHistoryChangelogBtnText: { fontSize: 13, color: '#6b7280', fontWeight: '500' },
-  versionHistoryInstallBtn: { paddingVertical: 4, paddingHorizontal: 10 },
-  versionHistoryInstallBtnText: { fontSize: 14, color: '#0a7b0a', fontWeight: '500' },
-  versionHistoryChangelog: { marginTop: 10 },
-  versionHistoryChangelogItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 8,
-  },
-  versionHistoryChangelogBullet: {
-    width: 14,
-    color: '#6b7280',
-    lineHeight: 18,
-  },
-  versionHistoryChangelogText: {
-    flex: 1,
-    fontSize: 13,
-    color: '#374151',
-    lineHeight: 18,
-  },
-  versionHistoryChangelogEmpty: { fontSize: 13, color: '#9ca3af' },
-  versionHistoryEmpty: { fontSize: 14, color: '#6b7280', marginVertical: 12 },
-});
+function createProfileStyles(c: AppColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.backgroundSecondary },
+    rightEdgeGesture: {
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      width: EDGE_WIDTH,
+      zIndex: 10,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: c.border,
+      backgroundColor: c.surface,
+    },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: c.textHeader },
+    closeBtn: { padding: 4 },
+    scroll: { flex: 1 },
+    scrollContent: { padding: 20, paddingBottom: 40 },
+    userCard: {
+      backgroundColor: c.surface,
+      borderRadius: 16,
+      paddingVertical: 24,
+      paddingHorizontal: 20,
+      alignItems: 'center',
+      marginBottom: 20,
+      ...shadowSoftSubtle,
+    },
+    avatarWrap: {
+      width: 72,
+      height: 72,
+      borderRadius: 36,
+      backgroundColor: c.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 12,
+      overflow: 'hidden',
+    },
+    avatarImage: {
+      width: 72,
+      height: 72,
+      borderRadius: 36,
+    },
+    avatarText: { fontSize: 28, fontWeight: '700', color: c.onPrimary },
+    userId: { fontSize: 18, fontWeight: '600', color: c.textPrimary },
+    userMeta: { fontSize: 13, color: c.textMuted, marginTop: 4 },
+    section: {
+      backgroundColor: c.surface,
+      borderRadius: 12,
+      overflow: 'hidden',
+      marginBottom: 24,
+    },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 14,
+      paddingHorizontal: 16,
+      gap: 12,
+    },
+    rowBorder: { borderTopWidth: 1, borderTopColor: c.surfaceMuted },
+    rowLabel: { flex: 1, fontSize: 16, color: c.textPrimary },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.4)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 24,
+    },
+    modalContent: {
+      width: '100%',
+      maxWidth: 400,
+      maxHeight: '80%',
+      backgroundColor: c.surface,
+      borderRadius: 16,
+      overflow: 'hidden',
+    },
+    modalHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: c.border,
+    },
+    modalTitle: { fontSize: 18, fontWeight: '700', color: c.textHeader },
+    modalBody: { maxHeight: 400 },
+    modalBodyContent: { padding: 16, paddingBottom: 24 },
+    updateRow: { marginBottom: 12 },
+    updateLabel: { fontSize: 14, color: c.textMuted, marginBottom: 4 },
+    updateVersion: { fontSize: 17, fontWeight: '600', color: c.textPrimary },
+    updateCheckBtn: {
+      backgroundColor: c.primary,
+      paddingVertical: 12,
+      paddingHorizontal: 20,
+      borderRadius: 10,
+      alignItems: 'center',
+      minWidth: 120,
+    },
+    updateCheckBtnDisabled: { opacity: 0.7 },
+    updateCheckBtnText: { fontSize: 16, fontWeight: '600', color: c.onPrimary },
+    updateStatusWrap: { marginTop: 8, marginBottom: 8 },
+    updateStatusText: { fontSize: 14, color: c.textSecondary },
+    updateStatusError: { fontSize: 14, color: c.danger },
+    updateDownloadBtn: {
+      backgroundColor: c.primary,
+      paddingVertical: 12,
+      borderRadius: 10,
+      alignItems: 'center',
+      marginTop: 8,
+    },
+    updateDownloadBtnText: { fontSize: 16, fontWeight: '600', color: c.onPrimary },
+    updateDownloadProgressWrap: { marginTop: 12 },
+    updateProgressBar: {
+      height: 6,
+      backgroundColor: c.border,
+      borderRadius: 3,
+      marginTop: 8,
+      overflow: 'hidden',
+    },
+    updateProgressFill: {
+      height: '100%',
+      backgroundColor: c.primary,
+      borderRadius: 3,
+    },
+    updateReadyWrap: { marginTop: 12 },
+    updateReadyText: { fontSize: 14, color: c.textSecondary, marginBottom: 12 },
+    updateInstallBtn: {
+      backgroundColor: c.success,
+      paddingVertical: 12,
+      borderRadius: 10,
+      alignItems: 'center',
+    },
+    updateInstallBtnText: { fontSize: 16, fontWeight: '600', color: '#fff' },
+    versionHistoryHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 20,
+      paddingVertical: 8,
+    },
+    versionHistoryTitle: { fontSize: 15, color: c.textSecondary },
+    versionHistoryBody: { marginLeft: 8, marginTop: 4 },
+    versionHistoryLoader: { marginVertical: 12 },
+    versionHistoryItem: {
+      paddingVertical: 10,
+      borderBottomWidth: 1,
+      borderBottomColor: c.surfaceMuted,
+    },
+    versionHistoryRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12,
+    },
+    versionHistoryVersion: { fontSize: 14, color: c.textPrimary },
+    versionHistoryActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    versionHistoryChangelogBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingVertical: 4,
+      paddingHorizontal: 8,
+      borderRadius: 10,
+      backgroundColor: c.surfaceMuted,
+    },
+    versionHistoryChangelogBtnText: { fontSize: 13, color: c.textMuted, fontWeight: '500' },
+    versionHistoryInstallBtn: { paddingVertical: 4, paddingHorizontal: 10 },
+    versionHistoryInstallBtnText: { fontSize: 14, color: c.success, fontWeight: '500' },
+    versionHistoryChangelog: { marginTop: 10 },
+    versionHistoryChangelogItem: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      marginBottom: 8,
+    },
+    versionHistoryChangelogBullet: {
+      width: 14,
+      color: c.textMuted,
+      lineHeight: 18,
+    },
+    versionHistoryChangelogText: {
+      flex: 1,
+      fontSize: 13,
+      color: c.textSecondary,
+      lineHeight: 18,
+    },
+    versionHistoryChangelogEmpty: { fontSize: 13, color: c.placeholder },
+    versionHistoryEmpty: { fontSize: 14, color: c.textMuted, marginVertical: 12 },
+  });
+}

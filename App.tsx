@@ -2,12 +2,18 @@
  * Flops Mobile - Chat + 历史对话列表（主页面带底部 Tab：Chat / Tasks / Calendar）
  */
 
-import React from 'react';
-import { StatusBar, useColorScheme, View, ActivityIndicator, StyleSheet } from 'react-native';
+import React, { useMemo } from 'react';
+import { StatusBar, View, ActivityIndicator, StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
-import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
+import {
+  NavigationContainer,
+  createNavigationContainerRef,
+  DarkTheme,
+  DefaultTheme,
+} from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { ThemeProvider, useAppTheme } from './src/context/ThemeContext';
 import { SessionProvider, useSession } from './src/context/SessionContext';
 import { TaskProvider } from './src/context/TaskContext';
 import { VersionWelcomeProvider } from './src/context/VersionWelcomeContext';
@@ -29,12 +35,28 @@ const initialNavState = {
 
 function AppContent() {
   const { session, isLoading } = useSession();
-  const isDark = useColorScheme() === 'dark';
+  const { isDark, colors } = useAppTheme();
+
+  const navigationTheme = useMemo(
+    () => ({
+      ...(isDark ? DarkTheme : DefaultTheme),
+      colors: {
+        ...(isDark ? DarkTheme.colors : DefaultTheme.colors),
+        primary: colors.primary,
+        background: colors.background,
+        card: colors.surface,
+        text: colors.textPrimary,
+        border: colors.border,
+        notification: colors.danger,
+      },
+    }),
+    [isDark, colors]
+  );
 
   if (isLoading) {
     return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color={isDark ? '#fff' : '#0f172a'} />
+      <View style={[styles.loading, { backgroundColor: colors.background }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -44,7 +66,7 @@ function AppContent() {
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       {session ? (
         <VersionWelcomeProvider>
-          <NavigationContainer ref={navigationRef} initialState={initialNavState}>
+          <NavigationContainer ref={navigationRef} initialState={initialNavState} theme={navigationTheme}>
             <BottomSheetModalProvider>
               <TaskProvider>
                 <RootNavigator />
@@ -64,9 +86,11 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <SessionProvider>
-          <AppContent />
-        </SessionProvider>
+        <ThemeProvider>
+          <SessionProvider>
+            <AppContent />
+          </SessionProvider>
+        </ThemeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
@@ -77,6 +101,5 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#fff',
   },
 });

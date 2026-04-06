@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "postinstall": "patch-package",
-    "android": "react-native run-android",
+    "android": "react-native run-android --appIdSuffix dev",
     "build": "node scripts/build.js",
     "dev": "node scripts/dev.js",
     "ios": "react-native run-ios --mode Debug",

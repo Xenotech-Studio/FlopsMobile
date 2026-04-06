@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import type { ContextSummary, ConversationMessage } from '../api';
 import { ContextCompressSummaryModal } from './ContextCompressSummaryModal';
+import { useAppTheme } from '../context/ThemeContext';
+import type { AppColors } from '../theme/appColors';
 
 type Props = {
   activeSummary: ContextSummary;
@@ -11,8 +13,42 @@ type Props = {
   anchorRef?: React.RefObject<View | null>;
 };
 
+function createDividerStyles(c: AppColors) {
+  return StyleSheet.create({
+    root: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginVertical: 14,
+      paddingHorizontal: 4,
+      gap: 10,
+    },
+    line: {
+      flex: 1,
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: c.border,
+    },
+    trigger: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      maxWidth: '78%',
+      gap: 6,
+    },
+    icon: {
+      flexShrink: 0,
+    },
+    label: {
+      flex: 1,
+      fontSize: 12,
+      color: c.textMuted,
+      lineHeight: 17,
+    },
+  });
+}
+
 export function ContextCompressDividerRow({ activeSummary, rawMessages, anchorRef }: Props) {
   const [open, setOpen] = useState(false);
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createDividerStyles(colors), [colors]);
 
   return (
     <>
@@ -25,7 +61,7 @@ export function ContextCompressDividerRow({ activeSummary, rawMessages, anchorRe
           accessibilityRole="button"
           accessibilityLabel="上文已压缩为摘要，点击查看范围与全文"
         >
-          <Ionicons name="layers-outline" size={18} color="#6b7280" style={styles.icon} />
+          <Ionicons name="layers-outline" size={18} color={colors.textMuted} style={styles.icon} />
           <Text style={styles.label} numberOfLines={2}>
             上文已压缩为摘要，点击查看范围与全文
           </Text>
@@ -41,33 +77,3 @@ export function ContextCompressDividerRow({ activeSummary, rawMessages, anchorRe
     </>
   );
 }
-
-const styles = StyleSheet.create({
-  root: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 14,
-    paddingHorizontal: 4,
-    gap: 10,
-  },
-  line: {
-    flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: '#e5e7eb',
-  },
-  trigger: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    maxWidth: '78%',
-    gap: 6,
-  },
-  icon: {
-    flexShrink: 0,
-  },
-  label: {
-    flex: 1,
-    fontSize: 12,
-    color: '#6b7280',
-    lineHeight: 17,
-  },
-});
