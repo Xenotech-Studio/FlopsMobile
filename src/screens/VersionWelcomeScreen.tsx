@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, TouchableOpacity, Modal, StyleSheet } from 'react-native';
 import { useVersionWelcome, type VersionWelcomeType } from '../context/VersionWelcomeContext';
 import { getChangelogChanges } from '../changelog';
+import { useAppTheme } from '../context/ThemeContext';
+import type { AppColors } from '../theme/appColors';
 
 const COPY: Record<VersionWelcomeType, { title: string; subtitle: string }> = {
   upgrade: {
@@ -15,6 +17,8 @@ const COPY: Record<VersionWelcomeType, { title: string; subtitle: string }> = {
 };
 
 export function VersionWelcomeScreen() {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createVersionWelcomeStyles(colors), [colors]);
   const { showWelcome, welcomeType, currentVersion, previousVersion, dismissWelcome } =
     useVersionWelcome();
 
@@ -59,79 +63,83 @@ export function VersionWelcomeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 24,
-    width: '100%',
-    maxWidth: 320,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#0f172a',
-    marginBottom: 10,
-  },
-  subtitle: {
-    fontSize: 15,
-    color: '#475569',
-    lineHeight: 22,
-    marginBottom: 14,
-  },
-  versionRow: {
-    marginBottom: 20,
-  },
-  versionLabel: {
-    fontSize: 13,
-    color: '#94a3b8',
-    marginBottom: 4,
-  },
-  changelog: {
-    marginBottom: 18,
-  },
-  changelogTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0f172a',
-    marginBottom: 10,
-  },
-  changelogItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 8,
-  },
-  changelogBullet: {
-    width: 14,
-    color: '#475569',
-    lineHeight: 20,
-  },
-  changelogText: {
-    flex: 1,
-    fontSize: 14,
-    color: '#475569',
-    lineHeight: 20,
-  },
-  changelogEmpty: {
-    fontSize: 13,
-    color: '#94a3b8',
-  },
-  btn: {
-    backgroundColor: '#0f172a',
-    borderRadius: 10,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  btnText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
-  },
-});
+function createVersionWelcomeStyles(c: AppColors) {
+  return StyleSheet.create({
+    backdrop: {
+      flex: 1,
+      backgroundColor: c.modalBackdrop,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 24,
+    },
+    card: {
+      backgroundColor: c.surface,
+      borderRadius: 12,
+      padding: 24,
+      width: '100%',
+      maxWidth: 320,
+      borderWidth: 1,
+      borderColor: c.borderMuted,
+    },
+    title: {
+      fontSize: 20,
+      fontWeight: '700',
+      color: c.textHeader,
+      marginBottom: 10,
+    },
+    subtitle: {
+      fontSize: 15,
+      color: c.textSecondary,
+      lineHeight: 22,
+      marginBottom: 14,
+    },
+    versionRow: {
+      marginBottom: 20,
+    },
+    versionLabel: {
+      fontSize: 13,
+      color: c.textMuted,
+      marginBottom: 4,
+    },
+    changelog: {
+      marginBottom: 18,
+    },
+    changelogTitle: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: c.textHeader,
+      marginBottom: 10,
+    },
+    changelogItem: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      marginBottom: 8,
+    },
+    changelogBullet: {
+      width: 14,
+      color: c.textMutedSlate,
+      lineHeight: 20,
+    },
+    changelogText: {
+      flex: 1,
+      fontSize: 14,
+      color: c.textSecondary,
+      lineHeight: 20,
+    },
+    changelogEmpty: {
+      fontSize: 13,
+      color: c.placeholder,
+    },
+    btn: {
+      backgroundColor: c.primary,
+      borderRadius: 10,
+      paddingVertical: 14,
+      alignItems: 'center',
+    },
+    btnText: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: c.onPrimary,
+    },
+  });
+}

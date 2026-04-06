@@ -16,7 +16,7 @@ import {
   ActivityIndicator,
   Image,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -46,6 +46,7 @@ type DownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';
 
 export function ProfileScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const insets = useSafeAreaInsets();
   const { session, serverBaseUrl } = useSession();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createProfileStyles(colors), [colors]);
@@ -196,13 +197,13 @@ export function ProfileScreen() {
   const initial = session.user_id.slice(0, 1).toUpperCase() || '?';
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
       <View
         style={[styles.rightEdgeGesture, { right: 0 }]}
         {...rightEdgeClose.panHandlers}
         pointerEvents="box-only"
       />
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <Text style={styles.headerTitle}>账户</Text>
         <TouchableOpacity
           style={styles.closeBtn}
@@ -481,10 +482,10 @@ function createProfileStyles(c: AppColors) {
       alignItems: 'center',
       justifyContent: 'space-between',
       paddingHorizontal: 16,
-      paddingVertical: 12,
-      borderBottomWidth: 1,
+      paddingBottom: 12,
+      borderBottomWidth: c.headerBarBottomBorderWidth,
       borderBottomColor: c.border,
-      backgroundColor: c.surface,
+      backgroundColor: c.headerBarBackground,
     },
     headerTitle: { fontSize: 18, fontWeight: '700', color: c.textHeader },
     closeBtn: { padding: 4 },
@@ -534,7 +535,7 @@ function createProfileStyles(c: AppColors) {
     rowLabel: { flex: 1, fontSize: 16, color: c.textPrimary },
     modalOverlay: {
       flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.4)',
+      backgroundColor: c.modalBackdrop,
       justifyContent: 'center',
       alignItems: 'center',
       padding: 24,
@@ -553,7 +554,7 @@ function createProfileStyles(c: AppColors) {
       justifyContent: 'space-between',
       paddingHorizontal: 16,
       paddingVertical: 14,
-      borderBottomWidth: 1,
+      borderBottomWidth: c.headerBarBottomBorderWidth,
       borderBottomColor: c.border,
     },
     modalTitle: { fontSize: 18, fontWeight: '700', color: c.textHeader },

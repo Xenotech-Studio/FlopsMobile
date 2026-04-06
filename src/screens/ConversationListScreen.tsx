@@ -8,7 +8,6 @@ import {
   StyleSheet,
   RefreshControl,
   Alert,
-  PanResponder,
   Modal,
   Pressable,
   Platform,
@@ -16,7 +15,8 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
-import { useSharedValue, runOnUI } from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { useSharedValue, runOnUI, runOnJS } from 'react-native-reanimated';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -28,7 +28,7 @@ import {
   type ConversationListItem,
 } from '../api';
 import type { RootStackParamList } from '../navigation/types';
-import { shadowFab, borderLight, shadowMenu, shadowCircleButton } from '../theme/shadows';
+import { shadowFabThemed, shadowMenu, shadowCircleButtonThemed } from '../theme/shadows';
 import { LIST_PADDING_BOTTOM_WITH_FOOTER, HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import { TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
@@ -37,7 +37,9 @@ import { InboxRunSpinner, InboxUnreadCheck } from '../components/InboxListIndica
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 
+/** iOS 左缘条宽度；Android 略加宽便于在系统返回热区内抢到手势 */
 const EDGE_WIDTH = 24;
+const LEFT_EDGE_STRIP_WIDTH = Platform.OS === 'android' ? 40 : EDGE_WIDTH;
 const PULL_RING_THRESHOLD = 125;
 const SWIPE_THRESHOLD = 60;
 
@@ -63,6 +65,7 @@ export function ConversationListScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
+  const [deleteConvTarget, setDeleteConvTarget] = useState<ConversationListItem | null>(null);
   /** 与 Web 侧栏一致：GET /conversations 的 chat_v2_running + inbox/stream SSE */
   const [chatV2RunningByConv, setChatV2RunningByConv] = useState<Record<string, boolean>>({});
   const [chatV2UnreadByConv, setChatV2UnreadByConv] = useState<Record<string, boolean>>({});
@@ -233,56 +236,52 @@ export function ConversationListScreen() {
     rootNav?.navigate('Chat', undefined);
   }, [rootNav]);
 
-  const gestureStartX = useRef(0);
-  const leftEdgeOpenProfile = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 10,
-      onPanResponderGrant: (evt) => {
-        gestureStartX.current = evt.nativeEvent.pageX;
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        if (
-          gestureState.dx > SWIPE_THRESHOLD &&
-          gestureStartX.current <= EDGE_WIDTH + 20
-        ) {
-          (rootNav as NavigationProp<RootStackParamList> | undefined)?.navigate('Profile');
-        }
-      },
-    })
-  ).current;
+  const openProfileFromLeftEdge = useCallback(() => {
+    (rootNav as NavigationProp<RootStackParamList> | undefined)?.navigate('Profile');
+  }, [rootNav]);
 
-  const onDeleteConversation = useCallback(
-    (conv: ConversationListItem) => {
-      if (!session) return;
-      Alert.alert('删除对话', `确定要删除「${(conv.title && conv.title.trim()) || '新对话'}」吗？`, [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '删除',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteConversation(session, conv.id);
-              setList((prev) => prev.filter((c) => c.id !== conv.id));
-              setChatV2RunningByConv((prev) => {
-                const next = { ...prev };
-                delete next[conv.id];
-                return next;
-              });
-              setChatV2UnreadByConv((prev) => {
-                const next = { ...prev };
-                delete next[conv.id];
-                return next;
-              });
-            } catch (e) {
-              Alert.alert('删除失败', e instanceof Error ? e.message : '请稍后重试');
-            }
-          },
-        },
-      ]);
-    },
-    [session]
+  /** 仅左缘条接收手势：在此区域内右滑即等价于「从左缘滑入」；用 RNGH 减轻与 Android 系统返回争用 */
+  const leftEdgeOpenProfileGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetX(10)
+        .failOffsetY([-24, 24])
+        .onEnd((e) => {
+          'worklet';
+          if (e.translationX > SWIPE_THRESHOLD) {
+            runOnJS(openProfileFromLeftEdge)();
+          }
+        }),
+    [openProfileFromLeftEdge]
   );
+
+  const closeDeleteConvModal = useCallback(() => setDeleteConvTarget(null), []);
+
+  const confirmDeleteConversation = useCallback(async () => {
+    if (!session || !deleteConvTarget) return;
+    const conv = deleteConvTarget;
+    setDeleteConvTarget(null);
+    try {
+      await deleteConversation(session, conv.id);
+      setList((prev) => prev.filter((c) => c.id !== conv.id));
+      setChatV2RunningByConv((prev) => {
+        const next = { ...prev };
+        delete next[conv.id];
+        return next;
+      });
+      setChatV2UnreadByConv((prev) => {
+        const next = { ...prev };
+        delete next[conv.id];
+        return next;
+      });
+    } catch (e) {
+      Alert.alert('删除失败', e instanceof Error ? e.message : '请稍后重试');
+    }
+  }, [session, deleteConvTarget]);
+
+  const onDeleteConversation = useCallback((conv: ConversationListItem) => {
+    setDeleteConvTarget(conv);
+  }, []);
 
   if (!session) return null;
 
@@ -315,13 +314,19 @@ export function ConversationListScreen() {
 
   return (
     <View style={styles.container}>
-      <View
-        style={styles.leftEdgeGesture}
-        {...leftEdgeOpenProfile.panHandlers}
-        pointerEvents="box-only"
-      />
+      <GestureDetector gesture={leftEdgeOpenProfileGesture}>
+        <View
+          style={[styles.leftEdgeGesture, { width: LEFT_EDGE_STRIP_WIDTH }]}
+          pointerEvents="box-only"
+          collapsable={false}
+        />
+      </GestureDetector>
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
-        <BlurHeaderBackground style={StyleSheet.absoluteFill} topSolidHeight={insets.top + 8} />
+        <BlurHeaderBackground
+          style={StyleSheet.absoluteFill}
+          topSolidHeight={insets.top + 8}
+          gradientBaseHex={colors.conversationListBackground}
+        />
         <TouchableOpacity
           style={styles.circleBtn}
           onPress={() => rootNav?.navigate('Profile')}
@@ -367,6 +372,41 @@ export function ConversationListScreen() {
               <Ionicons name="add-circle-outline" size={20} color={colors.textSecondary} />
               <Text style={styles.menuItemText}>新建对话</Text>
             </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={deleteConvTarget != null}
+        transparent
+        animationType="fade"
+        onRequestClose={closeDeleteConvModal}
+      >
+        <Pressable style={styles.menuOverlay} onPress={closeDeleteConvModal}>
+          <View style={styles.deleteModalCenter} pointerEvents="box-none">
+            <View style={styles.deleteModalCard} onStartShouldSetResponder={() => true}>
+              <Text style={styles.deleteModalTitle}>删除对话</Text>
+              <Text style={styles.deleteModalBody}>
+                确定要删除「
+                {(deleteConvTarget?.title && deleteConvTarget.title.trim()) || '新对话'}」吗？
+              </Text>
+              <View style={styles.deleteModalActions}>
+                <TouchableOpacity
+                  style={[styles.deleteModalBtn, styles.deleteModalBtnCancel]}
+                  onPress={closeDeleteConvModal}
+                  activeOpacity={0.75}
+                >
+                  <Text style={styles.deleteModalBtnCancelText}>取消</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.deleteModalBtn, styles.deleteModalBtnDanger]}
+                  onPress={confirmDeleteConversation}
+                  activeOpacity={0.75}
+                >
+                  <Text style={styles.deleteModalBtnDangerText}>删除</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
         </Pressable>
       </Modal>
@@ -433,13 +473,12 @@ export function ConversationListScreen() {
 
 function createConversationListStyles(c: AppColors) {
   return StyleSheet.create({
-    container: { flex: 1, backgroundColor: c.background },
+    container: { flex: 1, backgroundColor: c.conversationListBackground },
     leftEdgeGesture: {
       position: 'absolute',
       left: 0,
       top: 0,
       bottom: 0,
-      width: EDGE_WIDTH,
       zIndex: 10,
     },
     topBar: {
@@ -461,11 +500,35 @@ function createConversationListStyles(c: AppColors) {
       justifyContent: 'center',
       alignItems: 'center',
       backgroundColor: c.surface,
-      ...shadowCircleButton,
+      ...shadowCircleButtonThemed(c),
     },
     topBarCenter: { alignItems: 'center', flex: 1 },
     topBarTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: c.textHeader },
-    menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)' },
+    menuOverlay: { flex: 1, backgroundColor: c.modalBackdrop },
+    deleteModalCenter: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 24,
+    },
+    deleteModalCard: {
+      backgroundColor: c.surface,
+      borderRadius: 16,
+      padding: 20,
+      width: '100%',
+      maxWidth: 340,
+      borderWidth: 1,
+      borderColor: c.borderMuted,
+      ...shadowMenu,
+    },
+    deleteModalTitle: { fontSize: 18, fontWeight: '700', color: c.textHeader, marginBottom: 8 },
+    deleteModalBody: { fontSize: 15, color: c.textSecondary, lineHeight: 22, marginBottom: 20 },
+    deleteModalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10 },
+    deleteModalBtn: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 10 },
+    deleteModalBtnCancel: { backgroundColor: c.surfaceMuted },
+    deleteModalBtnDanger: { backgroundColor: c.roseBg },
+    deleteModalBtnCancelText: { fontSize: 16, color: c.textPrimary },
+    deleteModalBtnDangerText: { fontSize: 16, fontWeight: '600', color: c.danger },
     menuPanel: {
       position: 'absolute',
       backgroundColor: c.surface,
@@ -483,7 +546,7 @@ function createConversationListStyles(c: AppColors) {
     menuItemText: { fontSize: 16, color: c.textPrimary },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     loadingText: { marginTop: 12, fontSize: 15, color: c.textMuted },
-    list: { flex: 1 },
+    list: { flex: 1, backgroundColor: c.conversationListBackground },
     listContent: { paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
     emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
     emptyWrap: {
@@ -498,7 +561,7 @@ function createConversationListStyles(c: AppColors) {
       paddingHorizontal: 20,
       paddingVertical: 14,
       borderBottomWidth: 1,
-      borderBottomColor: c.surfaceMuted,
+      borderBottomColor: c.conversationListSeparator,
     },
     itemTitleRow: {
       flexDirection: 'row',
@@ -527,8 +590,7 @@ function createConversationListStyles(c: AppColors) {
       backgroundColor: c.surface,
       alignItems: 'center',
       justifyContent: 'center',
-      ...borderLight,
-      ...shadowFab,
+      ...shadowFabThemed(c),
     },
   });
 }

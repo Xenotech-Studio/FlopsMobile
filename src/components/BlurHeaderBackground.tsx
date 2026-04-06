@@ -7,38 +7,48 @@ type BlurHeaderBackgroundProps = {
   style?: ViewStyle;
   /** 顶部纯色区域高度（安全区 + 上间距），渐变只在其下方（按钮+标题区域） */
   topSolidHeight?: number;
+  /**
+   * 渐变与顶部实色的 RGB 基准（6 位 hex）。
+   * 默认 `colors.background`（如聊天页纯黑）；会话列表可传 `colors.conversationListBackground` 与列表底对齐。
+   */
+  gradientBaseHex?: string;
 };
 
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex.trim());
+  if (!m) return null;
+  return { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
+}
+
+function rgbaFromBase(hex: string, a: number): string {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return `rgba(0,0,0,${a})`;
+  return `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`;
+}
+
 /**
- * 顶栏背景：顶部纯色；下方为自上而下白到透明的渐变（上慢下快）。
+ * 顶栏背景：顶部纯色；下方为自上而下到透明的渐变（上慢下快）。
  */
-export function BlurHeaderBackground({ style, topSolidHeight = 0 }: BlurHeaderBackgroundProps) {
-  const { isDark } = useAppTheme();
+export function BlurHeaderBackground({
+  style,
+  topSolidHeight = 0,
+  gradientBaseHex,
+}: BlurHeaderBackgroundProps) {
+  const { colors } = useAppTheme();
+  const base = gradientBaseHex ?? colors.background;
 
   const { solidTop, gradientColors } = useMemo(() => {
-    if (isDark) {
-      return {
-        solidTop: 'rgba(0,0,0,0.98)' as const,
-        gradientColors: [
-          'rgba(0,0,0,0.98)',
-          'rgba(0,0,0,0.92)',
-          'rgba(0,0,0,0.6)',
-          'rgba(0,0,0,0.2)',
-          'rgba(0,0,0,0.05)',
-        ] as const,
-      };
-    }
     return {
-      solidTop: 'rgba(255,255,255,0.98)' as const,
+      solidTop: rgbaFromBase(base, 0.98),
       gradientColors: [
-        'rgba(255,255,255,0.98)',
-        'rgba(255,255,255,0.92)',
-        'rgba(255,255,255,0.6)',
-        'rgba(255,255,255,0.2)',
-        'rgba(255,255,255,0.05)',
+        rgbaFromBase(base, 0.98),
+        rgbaFromBase(base, 0.92),
+        rgbaFromBase(base, 0.6),
+        rgbaFromBase(base, 0.2),
+        rgbaFromBase(base, 0.05),
       ] as const,
     };
-  }, [isDark]);
+  }, [base]);
 
   const gradientStyle = [styles.gradient, topSolidHeight > 0 && { top: topSolidHeight }];
   return (

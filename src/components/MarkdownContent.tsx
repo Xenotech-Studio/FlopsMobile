@@ -22,6 +22,8 @@ function buildMarkdownStyles(c: AppColors) {
       paddingHorizontal: 6,
       paddingVertical: 3,
       borderRadius: 4,
+      borderWidth: 1,
+      borderColor: c.border,
     },
     code_block: {
       backgroundColor: c.surfaceMuted,
@@ -31,7 +33,17 @@ function buildMarkdownStyles(c: AppColors) {
       padding: 12,
       marginVertical: 10,
     },
-    fence: { color: c.textPrimary, fontSize: 13 },
+    /** 库默认 fence 带 #f5f5f5，合并时未覆盖的键会保留，须与 code_block 一样写满主题色 */
+    fence: {
+      backgroundColor: c.surfaceMuted,
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 8,
+      padding: 12,
+      marginVertical: 10,
+      color: c.textPrimary,
+      fontSize: 13,
+    },
     link: { color: c.link },
     strong: { fontWeight: '700' as const },
     em: { fontStyle: 'italic' as const },

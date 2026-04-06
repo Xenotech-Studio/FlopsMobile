@@ -20,7 +20,11 @@ export function MainScreen() {
 
   const screenOptions = useMemo(
     () => ({
-      headerStyle: { backgroundColor: colors.surface },
+      headerStyle: {
+        backgroundColor: colors.headerBarBackground,
+        borderBottomWidth: colors.headerBarBottomBorderWidth,
+        borderBottomColor: colors.border,
+      },
       headerTitleStyle: {
         fontSize: 18,
         fontWeight: '700' as const,
@@ -33,7 +37,7 @@ export function MainScreen() {
       tabBarStyle: {
         backgroundColor: colors.surface,
         borderTopWidth: 1,
-        borderTopColor: colors.border,
+        borderTopColor: colors.tabBarTopBorder,
         paddingTop: 8,
         paddingBottom: insets.bottom,
         height: TAB_BAR_BASE_HEIGHT + insets.bottom,

@@ -5,10 +5,28 @@
 export type AppColors = {
   background: string;
   backgroundSecondary: string;
+  /** 会话列表页主画布；暗色介于纯黑页底与底部 Tab（surface）之间 */
+  conversationListBackground: string;
+  /** 会话列表每行底部分割线（宜比 surfaceMuted 更弱、更贴列表底） */
+  conversationListSeparator: string;
+  /** 底部 Tab 栏顶部分割线（宜比通用 border 更淡） */
+  tabBarTopBorder: string;
+  /**
+   * Android：顶栏圆钮、会话列表 FAB 等 1px 描边（与 tabBarTopBorder 解耦，避免浅色 Tab 调深时把白底按钮圈成重边）。
+   */
+  androidCircleFabHairline: string;
   surface: string;
   surfaceMuted: string;
+  /** 实心顶栏 / 顶栏条背景（不含毛玻璃头上的圆形操作钮，圆钮仍用 surface） */
+  headerBarBackground: string;
+  /** 顶栏、Modal/Sheet 标题栏底部分割线宽度；暗色为 0 */
+  headerBarBottomBorderWidth: number;
   inputBg: string;
   overlayScrim: string;
+  /** 全屏 Modal、下拉菜单等自定义遮罩；暗色加重以压住底层 */
+  modalBackdrop: string;
+  /** @gorhom/bottom-sheet 背后 dim */
+  bottomSheetBackdropOpacity: number;
 
   textPrimary: string;
   textHeader: string;
@@ -72,10 +90,18 @@ export type AppColors = {
 export const lightColors: AppColors = {
   background: '#ffffff',
   backgroundSecondary: '#f9fafb',
+  conversationListBackground: '#ffffff',
+  conversationListSeparator: '#f9f9f9',
+  tabBarTopBorder: 'rgba(0,0,0,0.06)',
+  androidCircleFabHairline: 'rgba(0,0,0,0.10)',
   surface: '#ffffff',
   surfaceMuted: '#f3f4f6',
+  headerBarBackground: '#ffffff',
+  headerBarBottomBorderWidth: 1,
   inputBg: '#ffffff',
   overlayScrim: 'rgba(255,255,255,0.88)',
+  modalBackdrop: 'rgba(0,0,0,0.38)',
+  bottomSheetBackdropOpacity: 0.4,
 
   textPrimary: '#111827',
   textHeader: '#0f172a',
@@ -137,12 +163,23 @@ export const lightColors: AppColors = {
 };
 
 export const darkColors: AppColors = {
-  background: '#000000',
+  /** 聊天主画布、任务列表等与会话列表统一的深灰底 */
+  background: '#101010',
   backgroundSecondary: '#0a0a0b',
-  surface: '#1c1c1e',
+  conversationListBackground: '#101010',
+  /** 略亮于列表底，对比低于原 surfaceMuted，分割线更暗、更弱 */
+  conversationListSeparator: '#222222',
+  /** Tab 顶线：低透明白边，比 #3f3f46 的 border 更淡 */
+  tabBarTopBorder: 'rgba(255,255,255,0.02)',
+  androidCircleFabHairline: 'rgba(255,255,255,0.02)',
+  surface: '#1f1f1f',
   surfaceMuted: '#2c2c2e',
+  headerBarBackground: '#141414',
+  headerBarBottomBorderWidth: 0,
   inputBg: '#1c1c1e',
   overlayScrim: 'rgba(0,0,0,0.88)',
+  modalBackdrop: 'rgba(0,0,0,0.82)',
+  bottomSheetBackdropOpacity: 0.68,
 
   textPrimary: '#f3f4f6',
   textHeader: '#f9fafb',
@@ -217,11 +254,12 @@ export function chatRefreshProgressColors(c: AppColors): string[] {
 /** 输入区底部白/黑渐变遮罩 */
 export function chatInputOverlayGradient(isDark: boolean): string[] {
   if (isDark) {
+    /* 与 darkColors.background #101010 对齐（RGB 16,16,16） */
     return [
-      'rgba(0,0,0,0)',
-      'rgba(0,0,0,0.5)',
-      'rgba(0,0,0,0.9)',
-      'rgba(0,0,0,0.98)',
+      'rgba(16,16,16,0)',
+      'rgba(16,16,16,0.5)',
+      'rgba(16,16,16,0.9)',
+      'rgba(16,16,16,0.98)',
     ];
   }
   return [

@@ -2,7 +2,7 @@
  * 筛选面板：与 FlowTaskIOS TaskFilterPanel 对齐
  * 从底部弹出、可拉高（50% / 90% 停靠），区块：归属 / 状态 / 显示 / 近期删除
  */
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -18,9 +18,123 @@ import {
 } from '@gorhom/bottom-sheet';
 import type { BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import { shadowSheet, shadowCard } from '../theme/shadows';
+import type { AppColors } from '../theme/appColors';
+import { useAppTheme } from '../context/ThemeContext';
+import { shadowSheet, shadowCardThemed } from '../theme/shadows';
 import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL } from '../theme/typography';
 import { IOSStyleSwitch } from './IOSStyleSwitch';
+
+function createTaskFilterSheetStyles(c: AppColors, segmentFillOverlay: string) {
+  return StyleSheet.create({
+    sheetBg: {
+      backgroundColor: c.backgroundSecondary,
+      borderTopLeftRadius: 32,
+      borderTopRightRadius: 32,
+    },
+    sheetShadow: { ...shadowSheet },
+    handle: { backgroundColor: c.borderD5, width: 36 },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingTop: 8,
+      paddingBottom: 0,
+    },
+    title: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: c.textPrimary },
+    doneBtnWrap: {
+      paddingVertical: 8,
+      paddingHorizontal: 16,
+      backgroundColor: c.surfaceMuted,
+      borderRadius: 22,
+    },
+    doneBtn: { fontSize: 16, fontWeight: '600', color: c.textPrimary },
+    scrollContent: { paddingBottom: 48, backgroundColor: c.backgroundSecondary },
+    section: { marginTop: 16, paddingHorizontal: 16 },
+    sectionHeader: {
+      fontSize: TASK_FONT_SIZE_SMALL,
+      fontWeight: '400',
+      color: c.textMuted,
+      marginBottom: 12,
+      textTransform: 'uppercase',
+    },
+    card: {
+      backgroundColor: c.surface,
+      borderRadius: 28,
+      overflow: 'hidden',
+      ...shadowCardThemed(c),
+    },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 16,
+      paddingHorizontal: 20,
+    },
+    rowBorder: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: c.border,
+    },
+    rowLabel: { fontSize: TASK_FONT_SIZE_BODY, color: c.textPrimary },
+    rowButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 16,
+      paddingHorizontal: 20,
+      gap: 10,
+    },
+    rowButtonText: { fontSize: TASK_FONT_SIZE_BODY, color: c.textPrimary, flex: 1 },
+    segmentWrap: { paddingVertical: 20, paddingHorizontal: 20 },
+    segmentTrack: {
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: c.borderMuted,
+      overflow: 'hidden',
+      position: 'relative',
+    },
+    segmentFill: {
+      position: 'absolute',
+      left: 0,
+      top: 0,
+      bottom: 0,
+      backgroundColor: segmentFillOverlay,
+      borderRadius: 20,
+    },
+    segmentThumb: {
+      position: 'absolute',
+      top: 2,
+      bottom: 2,
+      backgroundColor: c.textPrimary,
+      borderRadius: 18,
+    },
+    segmentLabels: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      top: 0,
+      bottom: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    segmentLabel: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      height: 40,
+    },
+    segmentLabelText: {
+      fontSize: TASK_FONT_SIZE_SMALL,
+      fontWeight: '600',
+      color: c.textPrimary,
+    },
+    segmentLabelTextActive: { color: c.onPrimary },
+    segmentLabelTextIncluded: { color: c.textMuted },
+    segmentCaption: {
+      fontSize: TASK_FONT_SIZE_SMALL,
+      color: c.textMuted,
+      marginTop: 16,
+    },
+  });
+}
 
 /** 渐进式状态筛选：与 FlowTaskIOS StatusLevel 一致 */
 export type StatusLevel = 0 | 1 | 2 | 3;
@@ -69,6 +183,12 @@ export function TaskFilterSheet({
 }: TaskFilterSheetProps) {
   const modalRef = useRef<BottomSheetModal>(null);
   const { width } = useWindowDimensions();
+  const { colors, isDark } = useAppTheme();
+  const segmentFillOverlay = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(17,24,39,0.15)';
+  const styles = useMemo(
+    () => createTaskFilterSheetStyles(colors, segmentFillOverlay),
+    [colors, segmentFillOverlay]
+  );
 
   useEffect(() => {
     if (visible) modalRef.current?.present();
@@ -83,13 +203,13 @@ export function TaskFilterSheet({
     (props: BottomSheetBackdropProps) => (
       <BottomSheetBackdrop
         {...props}
-        opacity={0.35}
+        opacity={colors.bottomSheetBackdropOpacity}
         pressBehavior="close"
         appearsOnIndex={0}
         disappearsOnIndex={-1}
       />
     ),
-    []
+    [colors.bottomSheetBackdropOpacity]
   );
 
   const segmentWidth = (width - 32 - 40) / 4;
@@ -124,7 +244,7 @@ export function TaskFilterSheet({
                   onClose();
                 }}
               >
-                <Ionicons name="arrow-undo" size={20} color="#111827" />
+                <Ionicons name="arrow-undo" size={20} color={colors.textPrimary} />
                 <Text style={styles.rowButtonText}>取消提前进入</Text>
                 <View style={{ flex: 1 }} />
               </TouchableOpacity>
@@ -214,9 +334,9 @@ export function TaskFilterSheet({
                   onShowDeletedTasks();
                 }}
               >
-                <Ionicons name="trash-outline" size={20} color="#111827" />
+                <Ionicons name="trash-outline" size={20} color={colors.textPrimary} />
                 <Text style={styles.rowButtonText}>查看近期删除</Text>
-                <Ionicons name="chevron-forward" size={16} color="#9ca3af" />
+                <Ionicons name="chevron-forward" size={16} color={colors.placeholder} />
               </TouchableOpacity>
             </View>
           </View>
@@ -225,109 +345,3 @@ export function TaskFilterSheet({
     </BottomSheetModal>
   );
 }
-
-const styles = StyleSheet.create({
-  sheetBg: { backgroundColor: '#f2f2f7', borderTopLeftRadius: 32, borderTopRightRadius: 32 },
-  sheetShadow: { ...shadowSheet },
-  handle: { backgroundColor: '#c7c7cc', width: 36 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 0,
-  },
-  title: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: '#111827' },
-  doneBtnWrap: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    backgroundColor: '#e8e8ed',
-    borderRadius: 22,
-  },
-  doneBtn: { fontSize: 16, fontWeight: '600', color: '#111827' },
-  scrollContent: { paddingBottom: 48, backgroundColor: '#f2f2f7' },
-  section: { marginTop: 16, paddingHorizontal: 16 },
-  sectionHeader: {
-    fontSize: TASK_FONT_SIZE_SMALL,
-    fontWeight: '400',
-    color: '#6b7280',
-    marginBottom: 12,
-    textTransform: 'uppercase',
-  },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 28,
-    overflow: 'hidden',
-    ...shadowCard,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-  },
-  rowBorder: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#e5e7eb',
-  },
-  rowLabel: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827' },
-  rowButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    gap: 10,
-  },
-  rowButtonText: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827', flex: 1 },
-  segmentWrap: { paddingVertical: 20, paddingHorizontal: 20 },
-  segmentTrack: {
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#e5e7eb',
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  segmentFill: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(17,24,39,0.15)',
-    borderRadius: 20,
-  },
-  segmentThumb: {
-    position: 'absolute',
-    top: 2,
-    bottom: 2,
-    backgroundColor: '#111827',
-    borderRadius: 18,
-  },
-  segmentLabels: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  segmentLabel: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 40,
-  },
-  segmentLabelText: {
-    fontSize: TASK_FONT_SIZE_SMALL,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  segmentLabelTextActive: { color: '#fff' },
-  segmentLabelTextIncluded: { color: '#6b7280' },
-  segmentCaption: {
-    fontSize: TASK_FONT_SIZE_SMALL,
-    color: '#6b7280',
-    marginTop: 16,
-  },
-});

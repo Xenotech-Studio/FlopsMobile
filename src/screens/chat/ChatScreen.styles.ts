@@ -1,8 +1,20 @@
 import { Platform, StyleSheet } from 'react-native';
-import { shadowCircleButton, shadowFab, shadowSoft } from '../../theme/shadows';
+import { shadowCircleButtonThemed, shadowFab, shadowSoft } from '../../theme/shadows';
 import { HEADER_CIRCLE_BTN_SIZE } from '../../theme/layout';
 import { TASK_FONT_SIZE_TITLE } from '../../theme/typography';
 import type { AppColors } from '../../theme/appColors';
+
+/** 历史消息区水平内边距（略收窄左右留白） */
+const CHAT_SCROLL_PADDING_H = 5;
+/** 空对话欢迎语在 scroll 水平留白基础上再增加的左右内边距 */
+const EMPTY_WELCOME_PADDING_EXTRA_H = 20;
+/** 底栏输入框 + 发送键所在行的水平内边距 */
+const COMPOSER_ROW_PADDING_H = 14;
+/**
+ * 底部模型/助手/用量选择条的水平内边距（与输入行独立，可单独调）
+ */
+const COMPOSER_META_ROW_PADDING_LEFT = 25;
+const COMPOSER_META_ROW_PADDING_RIGHT = 25;
 
 export function createChatStyles(c: AppColors) {
   return StyleSheet.create({
@@ -11,11 +23,12 @@ export function createChatStyles(c: AppColors) {
   containerInner: { flex: 1 },
   keyboardView: { flex: 1 },
   scrollAndGradientWrap: { flex: 1, position: 'relative' },
+  /** 与主画布同色：避免暗色下 overlayScrim（近黑半透明）比 #101010 更暗一块 */
   historyLoadingOverlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: c.overlayScrim,
+    backgroundColor: c.background,
     zIndex: 20,
   },
   bottomOverlay: {
@@ -38,14 +51,14 @@ export function createChatStyles(c: AppColors) {
     position: 'relative',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingLeft: 20,
-    paddingRight: 20,
+    paddingLeft: COMPOSER_ROW_PADDING_H,
+    paddingRight: COMPOSER_ROW_PADDING_H,
     paddingTop: 12,
     paddingBottom: 26,
     gap: 12,
     overflow: 'visible',
   },
-  /** 叠在输入行底部留白内；paddingLeft 与 scrollContent(28) 对齐；paddingRight 较小让右侧用量更贴屏缘 */
+  /** 叠在输入行底部留白内；左右 padding 见 COMPOSER_META_ROW_*，与输入行解耦 */
   composerMetaRowAbsolute: {
     position: 'absolute',
     left: 0,
@@ -53,8 +66,8 @@ export function createChatStyles(c: AppColors) {
     bottom: 6,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingLeft: 32,
-    paddingRight: 32,
+    paddingLeft: COMPOSER_META_ROW_PADDING_LEFT,
+    paddingRight: COMPOSER_META_ROW_PADDING_RIGHT,
     gap: 8,
   },
   composerMetaPills: {
@@ -106,7 +119,7 @@ export function createChatStyles(c: AppColors) {
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: c.surface,
-    ...shadowCircleButton,
+    ...shadowCircleButtonThemed(c),
   },
   leftEdgeGesture: {
     position: 'absolute',
@@ -137,10 +150,10 @@ export function createChatStyles(c: AppColors) {
     textAlign: 'right',
     maxWidth: '100%',
   },
-  globalError: { color: c.danger, fontSize: 13, paddingHorizontal: 28, paddingVertical: 8 },
+  globalError: { color: c.danger, fontSize: 13, paddingHorizontal: CHAT_SCROLL_PADDING_H, paddingVertical: 8 },
   scroll: { flex: 1 },
   scrollContent: {
-    paddingHorizontal: 28,
+    paddingHorizontal: CHAT_SCROLL_PADDING_H,
     paddingVertical: 20,
     paddingBottom: 32,
     alignItems: 'center',
@@ -149,7 +162,11 @@ export function createChatStyles(c: AppColors) {
     width: '100%',
     maxWidth: 380,
   },
-  emptyStage: { flex: 1, paddingVertical: 40 },
+  emptyStage: {
+    flex: 1,
+    paddingVertical: 40,
+    paddingHorizontal: EMPTY_WELCOME_PADDING_EXTRA_H,
+  },
   welcomeTitle: { fontSize: 22, fontWeight: '700', color: c.textHeader, marginBottom: 8 },
   welcomeSubtitle: { fontSize: 15, color: c.textMuted },
   bubbleWrap: { marginBottom: 18 },

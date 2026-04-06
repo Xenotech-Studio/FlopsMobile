@@ -14,7 +14,88 @@ import {
   type NativeScrollEvent,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import type { AppColors } from '../theme/appColors';
+import { useAppTheme } from '../context/ThemeContext';
 import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL } from '../theme/typography';
+
+function createMonthCalendarStyles(c: AppColors) {
+  return StyleSheet.create({
+    container: {
+      paddingHorizontal: 12,
+      paddingVertical: 12,
+    },
+    containerCompact: {
+      paddingTop: 0,
+      paddingBottom: 4,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 12,
+    },
+    arrowBtn: { padding: 4 },
+    monthTitle: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: c.textPrimary },
+    weekdayRow: {
+      flexDirection: 'row',
+      marginBottom: 6,
+    },
+    weekdayText: {
+      flex: 1,
+      textAlign: 'center',
+      fontSize: TASK_FONT_SIZE_SMALL,
+      color: c.textMuted,
+      fontWeight: '500',
+    },
+    grid: {},
+    gridFixed: { flex: 1 },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 4,
+    },
+    rowFixed: { flex: 1, marginBottom: 0 },
+    cell: {
+      flex: 1,
+      aspectRatio: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginHorizontal: 2,
+    },
+    cellFixed: {},
+    cellInner: {
+      width: 40,
+      height: 40,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    cellCircle: {
+      position: 'absolute',
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+    },
+    /** 与聊天用户气泡一致 */
+    cellCircleSelected: {
+      backgroundColor: c.userBubble,
+    },
+    cellCircleSelectedOther: {
+      backgroundColor: c.userBubble,
+    },
+    cellText: { fontSize: 15, color: c.textPrimary, fontWeight: '500' },
+    cellTextOtherMonth: { color: c.textQuaternary },
+    cellTextSelected: { color: c.onUserBubble, fontWeight: '600' },
+    cellTextToday: { color: c.textPrimary, fontWeight: '800' },
+    dot: {
+      position: 'absolute',
+      bottom: 5,
+      width: 4,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: c.textPrimary,
+    },
+  });
+}
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 
@@ -120,6 +201,8 @@ export function MonthCalendar({
   hideHeader = false,
   rowHeight: propRowHeight,
 }: MonthCalendarProps) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createMonthCalendarStyles(colors), [colors]);
   const today = useMemo(() => new Date(), []);
   const viewYear = propDisplayYear ?? selectedDate.getFullYear();
   const viewMonth = propDisplayMonth ?? selectedDate.getMonth();
@@ -167,7 +250,7 @@ export function MonthCalendar({
             <View style={styles.arrowBtn} />
           ) : (
             <TouchableOpacity onPress={goPrevMonth} style={styles.arrowBtn} hitSlop={8}>
-              <Ionicons name="chevron-back" size={22} color="#374151" />
+              <Ionicons name="chevron-back" size={22} color={colors.textSecondary} />
             </TouchableOpacity>
           )}
           <Text style={styles.monthTitle}>{monthTitle}</Text>
@@ -175,7 +258,7 @@ export function MonthCalendar({
             <View style={styles.arrowBtn} />
           ) : (
             <TouchableOpacity onPress={goNextMonth} style={styles.arrowBtn} hitSlop={8}>
-              <Ionicons name="chevron-forward" size={22} color="#374151" />
+              <Ionicons name="chevron-forward" size={22} color={colors.textSecondary} />
             </TouchableOpacity>
           )}
         </View>
@@ -234,7 +317,12 @@ export function MonthCalendar({
                       {cell.day}
                     </Text>
                     {extra?.hasTask !== false && (extra?.count ?? 0) > 0 && (
-                      <View style={styles.dot} />
+                      <View
+                        style={[
+                          styles.dot,
+                          cell.isSelected && { backgroundColor: colors.onUserBubble },
+                        ]}
+                      />
                     )}
                   </View>
                 </TouchableOpacity>
@@ -246,82 +334,6 @@ export function MonthCalendar({
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-  },
-  containerCompact: {
-    paddingTop: 0,
-    paddingBottom: 4,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  arrowBtn: { padding: 4 },
-  monthTitle: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: '#111827' },
-  weekdayRow: {
-    flexDirection: 'row',
-    marginBottom: 6,
-  },
-  weekdayText: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: TASK_FONT_SIZE_SMALL,
-    color: '#6b7280',
-    fontWeight: '500',
-  },
-  grid: {},
-  gridFixed: { flex: 1 },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  rowFixed: { flex: 1, marginBottom: 0 },
-  cell: {
-    flex: 1,
-    aspectRatio: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginHorizontal: 2,
-  },
-  cellFixed: {},
-  cellInner: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  cellCircle: {
-    position: 'absolute',
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-  },
-  cellCircleSelected: {
-    backgroundColor: '#111827',
-  },
-  cellCircleSelectedOther: {
-    backgroundColor: '#111827',
-  },
-  cellText: { fontSize: 15, color: '#111827', fontWeight: '500' },
-  cellTextOtherMonth: { color: '#d1d5db' },
-  cellTextSelected: { color: '#fff', fontWeight: '600' },
-  cellTextToday: { color: '#111827', fontWeight: '800' },
-  dot: {
-    position: 'absolute',
-    bottom: 5,
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#111827',
-  },
-});
 
 // --- 纵向滚动切换月份（snap），每行固定高度、月份高度随行数变化 ---
 
@@ -394,11 +406,25 @@ function isSameDayScroll(a: Date, b: Date): boolean {
   );
 }
 
+function createScrollMonthTitleStyle(c: AppColors) {
+  return StyleSheet.create({
+    monthTitleWrap: {
+      height: CALENDAR_TITLE_HEIGHT,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    monthTitle: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: c.textPrimary },
+  });
+}
+
 export function MonthCalendarScroll({
   selectedDate,
   onSelectDate,
   getDayExtra,
 }: MonthCalendarScrollProps) {
+  const { colors } = useAppTheme();
+  const scrollStyles = useMemo(() => createScrollMonthTitleStyle(colors), [colors]);
+
   const initialIndex = useMemo(() => {
     const y = selectedDate.getFullYear();
     const m = selectedDate.getMonth();
@@ -485,7 +511,7 @@ export function MonthCalendarScroll({
         </View>
       );
     },
-    [displaySelected, handleSelectDate, getDayExtra]
+    [displaySelected, handleSelectDate, getDayExtra, scrollStyles]
   );
 
   return (
@@ -507,12 +533,3 @@ export function MonthCalendarScroll({
     </View>
   );
 }
-
-const scrollStyles = StyleSheet.create({
-  monthTitleWrap: {
-    height: CALENDAR_TITLE_HEIGHT,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  monthTitle: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: '#111827' },
-});

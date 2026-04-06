@@ -1,7 +1,7 @@
 /**
  * 修改密码页：当前密码、新密码、确认新密码，校验后调用服务端 API。
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -14,16 +14,79 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
 import { changePassword } from '../api';
+import { useAppTheme } from '../context/ThemeContext';
+import type { AppColors } from '../theme/appColors';
 
 const MIN_PASSWORD_LENGTH = 6;
 
+function createChangePasswordStyles(c: AppColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.backgroundSecondary },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingBottom: 12,
+      borderBottomWidth: c.headerBarBottomBorderWidth,
+      borderBottomColor: c.border,
+      backgroundColor: c.headerBarBackground,
+    },
+    backBtn: { padding: 4 },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: c.textHeader },
+    headerRight: { width: 32 },
+    keyboard: { flex: 1 },
+    scroll: { flex: 1 },
+    scrollContent: { padding: 20, paddingBottom: 40 },
+    hint: {
+      fontSize: 14,
+      color: c.textMuted,
+      lineHeight: 20,
+      marginBottom: 20,
+    },
+    label: {
+      fontSize: 14,
+      color: c.textSecondary,
+      marginBottom: 8,
+    },
+    input: {
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      fontSize: 16,
+      color: c.textPrimary,
+      backgroundColor: c.inputBg,
+      marginBottom: 16,
+    },
+    errorText: {
+      fontSize: 14,
+      color: c.danger,
+      marginBottom: 12,
+    },
+    submitBtn: {
+      backgroundColor: c.primary,
+      paddingVertical: 14,
+      borderRadius: 10,
+      alignItems: 'center',
+      marginTop: 8,
+    },
+    submitBtnDisabled: { opacity: 0.7 },
+    submitBtnText: { fontSize: 16, fontWeight: '600', color: c.onPrimary },
+  });
+}
+
 export function ChangePasswordScreen() {
   const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createChangePasswordStyles(colors), [colors]);
   const { session, serverBaseUrl } = useSession();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -77,14 +140,14 @@ export function ChangePasswordScreen() {
   }, [currentPassword, newPassword, confirmPassword, session, serverBaseUrl, navigation]);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <View style={styles.header}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity
           style={styles.backBtn}
           onPress={() => navigation.goBack()}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
-          <Ionicons name="arrow-back" size={24} color="#374151" />
+          <Ionicons name="arrow-back" size={24} color={colors.textSecondary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>修改密码</Text>
         <View style={styles.headerRight} />
@@ -111,7 +174,7 @@ export function ChangePasswordScreen() {
               setError('');
             }}
             placeholder="请输入当前密码"
-            placeholderTextColor="#9ca3af"
+            placeholderTextColor={colors.placeholder}
             secureTextEntry
             autoCapitalize="none"
             autoCorrect={false}
@@ -127,7 +190,7 @@ export function ChangePasswordScreen() {
               setError('');
             }}
             placeholder={`至少 ${MIN_PASSWORD_LENGTH} 位字符`}
-            placeholderTextColor="#9ca3af"
+            placeholderTextColor={colors.placeholder}
             secureTextEntry
             autoCapitalize="none"
             autoCorrect={false}
@@ -143,7 +206,7 @@ export function ChangePasswordScreen() {
               setError('');
             }}
             placeholder="请再次输入新密码"
-            placeholderTextColor="#9ca3af"
+            placeholderTextColor={colors.placeholder}
             secureTextEntry
             autoCapitalize="none"
             autoCorrect={false}
@@ -159,7 +222,7 @@ export function ChangePasswordScreen() {
             activeOpacity={0.8}
           >
             {loading ? (
-              <ActivityIndicator size="small" color="#fff" />
+              <ActivityIndicator size="small" color={colors.onPrimary} />
             ) : (
               <Text style={styles.submitBtnText}>确认修改</Text>
             )}
@@ -169,59 +232,3 @@ export function ChangePasswordScreen() {
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f9fafb' },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-    backgroundColor: '#fff',
-  },
-  backBtn: { padding: 4 },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
-  headerRight: { width: 32 },
-  keyboard: { flex: 1 },
-  scroll: { flex: 1 },
-  scrollContent: { padding: 20, paddingBottom: 40 },
-  hint: {
-    fontSize: 14,
-    color: '#6b7280',
-    lineHeight: 20,
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 14,
-    color: '#374151',
-    marginBottom: 8,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: '#111827',
-    backgroundColor: '#fff',
-    marginBottom: 16,
-  },
-  errorText: {
-    fontSize: 14,
-    color: '#dc2626',
-    marginBottom: 12,
-  },
-  submitBtn: {
-    backgroundColor: '#0f172a',
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  submitBtnDisabled: { opacity: 0.7 },
-  submitBtnText: { fontSize: 16, fontWeight: '600', color: '#fff' },
-});

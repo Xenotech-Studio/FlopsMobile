@@ -37,7 +37,9 @@ import {
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { IOSStyleSwitch } from '../components/IOSStyleSwitch';
 import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
-import { shadowCircleButton, shadowCard } from '../theme/shadows';
+import type { AppColors } from '../theme/appColors';
+import { useAppTheme } from '../context/ThemeContext';
+import { shadowCircleButtonThemed, shadowCardThemed } from '../theme/shadows';
 import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 
 type Route = RouteProp<TasksStackParamList, 'TaskDetail'>;
@@ -135,6 +137,8 @@ export function TaskDetailScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { tasks, projects, updateTask, addTask, getAuth, todayDate } = useTask();
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createTaskDetailStyles(colors), [colors]);
 
   const isCreate = 'projectId' in params && params.projectId != null;
   const projectId = isCreate ? params.projectId! : '';
@@ -447,7 +451,7 @@ export function TaskDetailScreen() {
   if (!isCreate && !task) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#0f172a" />
+        <ActivityIndicator size="large" color={colors.primary} />
         <Text style={styles.loadingText}>加载中...</Text>
       </View>
     );
@@ -460,9 +464,13 @@ export function TaskDetailScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <BlurHeaderBackground style={StyleSheet.absoluteFill} topSolidHeight={insets.top + 8} />
+        <BlurHeaderBackground
+          style={StyleSheet.absoluteFill}
+          topSolidHeight={insets.top + 8}
+          gradientBaseHex={colors.backgroundSecondary}
+        />
         <TouchableOpacity style={[styles.circleBtn, styles.circleBtnLeft]} onPress={onBack} activeOpacity={0.7}>
-          <Ionicons name="chevron-back" size={24} color="#374151" />
+          <Ionicons name="chevron-back" size={24} color={colors.textSecondary} />
         </TouchableOpacity>
         <View style={styles.topBarCenter}>
           <Text style={styles.topBarTitle}>{headerTitle}</Text>
@@ -474,7 +482,7 @@ export function TaskDetailScreen() {
             disabled={!editedTitle.trim() || saving}
           >
             {saving ? (
-              <ActivityIndicator size="small" color="#0f172a" />
+              <ActivityIndicator size="small" color={colors.primary} />
             ) : (
               <Text style={[styles.createBtnText, !editedTitle.trim() && styles.createBtnTextDisabled]}>
                 创建
@@ -490,7 +498,7 @@ export function TaskDetailScreen() {
             <Ionicons
               name={showMetadata ? 'chevron-up' : 'ellipsis-horizontal'}
               size={showMetadata ? 20 : 22}
-              color="#374151"
+              color={colors.textSecondary}
             />
           </TouchableOpacity>
         )}
@@ -547,7 +555,7 @@ export function TaskDetailScreen() {
                     value={editedTitle}
                     onChangeText={(t) => setEditedTitle(t)}
                     placeholder="任务标题"
-                    placeholderTextColor="#9ca3af"
+                    placeholderTextColor={colors.placeholder}
                     multiline
                     {...(Platform.OS === 'android' && { includeFontPadding: false })}
                   />
@@ -577,7 +585,7 @@ export function TaskDetailScreen() {
                     <IOSStyleSwitch
                       value={editedDoing}
                       onValueChange={setEditedDoing}
-                      trackColorOff="#e5e7eb"
+                      trackColorOff={colors.border}
                       trackColorOn={taskColor}
                     />
                   </View>
@@ -606,7 +614,7 @@ export function TaskDetailScreen() {
                       if (v) setEditedDoing(false);
                       setEditedDone(v);
                     }}
-                    trackColorOff="#e5e7eb"
+                    trackColorOff={colors.border}
                     trackColorOn={taskColor}
                   />
                 </View>
@@ -641,7 +649,7 @@ export function TaskDetailScreen() {
                         ).find((o) => o.value === (editedDone && showDoneQualityPicker ? editedDoneQuality : editedPriority))
                           ?.label ?? ''}
                       </Text>
-                      <Ionicons name="chevron-forward" size={16} color="#9ca3af" />
+                      <Ionicons name="chevron-forward" size={16} color={colors.placeholder} />
                     </TouchableOpacity>
                   </View>
                 )}
@@ -668,7 +676,7 @@ export function TaskDetailScreen() {
                     <Text style={styles.pickerRowText}>
                       {TYPE_OPTIONS.find((o) => o.value === editedType)?.label ?? ''}
                     </Text>
-                    <Ionicons name="chevron-forward" size={16} color="#9ca3af" />
+                    <Ionicons name="chevron-forward" size={16} color={colors.placeholder} />
                   </TouchableOpacity>
                 </View>
                 <View style={[styles.row, styles.rowLast]}>
@@ -686,7 +694,7 @@ export function TaskDetailScreen() {
                   <Ionicons
                     name={showDateTimeEditor ? 'chevron-down' : 'chevron-forward'}
                     size={14}
-                    color="#6b7280"
+                    color={colors.textMuted}
                   />
                   <Text style={styles.timeRowLabel}>截止日期</Text>
                   <Text style={styles.timeRowValue} numberOfLines={1}>
@@ -706,7 +714,7 @@ export function TaskDetailScreen() {
                         activeOpacity={0.7}
                       >
                         <View style={styles.timeActionRow}>
-                          <Ionicons name="calendar-outline" size={18} color="#0f172a" />
+                          <Ionicons name="calendar-outline" size={18} color={colors.primary} />
                           <Text style={styles.timeActionText}>设置截止日期</Text>
                         </View>
                       </TouchableOpacity>
@@ -782,8 +790,8 @@ export function TaskDetailScreen() {
                           activeOpacity={0.7}
                         >
                           <View style={styles.timeActionRow}>
-                            <Ionicons name="swap-horizontal-outline" size={18} color="#111827" />
-                            <Text style={[styles.timeActionText, { color: '#111827' }]}>
+                            <Ionicons name="swap-horizontal-outline" size={18} color={colors.textPrimary} />
+                            <Text style={[styles.timeActionText, { color: colors.textPrimary }]}>
                               {editedStartDateTime ? '切换为截止时间' : '转为起止时间'}
                             </Text>
                           </View>
@@ -797,7 +805,7 @@ export function TaskDetailScreen() {
                           activeOpacity={0.7}
                         >
                           <View style={styles.timeActionRow}>
-                            <Ionicons name="trash-outline" size={18} color="#dc2626" />
+                            <Ionicons name="trash-outline" size={18} color={colors.danger} />
                             <Text style={styles.timeActionTextDanger}>
                               清除所有时间
                             </Text>
@@ -845,8 +853,8 @@ export function TaskDetailScreen() {
                           activeOpacity={0.7}
                         >
                           <View style={styles.timeActionRow}>
-                            <Ionicons name="swap-horizontal-outline" size={18} color="#111827" />
-                            <Text style={[styles.timeActionText, { color: '#111827' }]}>
+                            <Ionicons name="swap-horizontal-outline" size={18} color={colors.textPrimary} />
+                            <Text style={[styles.timeActionText, { color: colors.textPrimary }]}>
                               转为起止时间
                             </Text>
                           </View>
@@ -857,7 +865,7 @@ export function TaskDetailScreen() {
                           activeOpacity={0.7}
                         >
                           <View style={styles.timeActionRow}>
-                            <Ionicons name="trash-outline" size={18} color="#dc2626" />
+                            <Ionicons name="trash-outline" size={18} color={colors.danger} />
                             <Text style={styles.timeActionTextDanger}>
                               清除截止日期
                             </Text>
@@ -868,7 +876,7 @@ export function TaskDetailScreen() {
                     {editedDone && task?.completed_time && (
                       <View style={[styles.row, styles.rowLast]}>
                         <Text style={styles.rowLabel}>完成时间</Text>
-                        <Text style={[styles.rowValue, { color: '#22c55e' }]}>
+                        <Text style={[styles.rowValue, { color: colors.success }]}>
                           {formatCompletedTime(task.completed_time)}
                         </Text>
                       </View>
@@ -928,7 +936,7 @@ export function TaskDetailScreen() {
 
           {saving && !isCreate ? (
             <View style={styles.savingRow}>
-              <ActivityIndicator size="small" color="#6b7280" />
+              <ActivityIndicator size="small" color={colors.textMuted} />
               <Text style={styles.savingText}>保存中...</Text>
             </View>
           ) : null}
@@ -994,7 +1002,7 @@ export function TaskDetailScreen() {
           return (
             <Modal visible transparent animationType="fade">
               <TouchableOpacity
-                style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]}
+                style={[StyleSheet.absoluteFill, { backgroundColor: colors.modalBackdrop }]}
                 activeOpacity={1}
                 onPress={() => setTimePicker(null)}
               >
@@ -1014,192 +1022,206 @@ export function TaskDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f2f2f7' },
-  topBar: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
-  circleBtn: {
-    width: HEADER_CIRCLE_BTN_SIZE,
-    height: HEADER_CIRCLE_BTN_SIZE,
-    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    ...shadowCircleButton,
-  },
-  circleBtnLeft: {},
-  circleBtnRight: {},
-  createBtn: { minWidth: 60 },
-  createBtnText: { fontSize: 16, fontWeight: '600', color: '#0f172a' },
-  createBtnTextDisabled: { color: '#9ca3af' },
-  topBarCenter: { alignItems: 'center', flex: 1 },
-  topBarTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
-  keyboardWrap: { flex: 1, backgroundColor: '#f2f2f7' },
-  scroll: { flex: 1, backgroundColor: 'transparent' },
-  scrollContent: { padding: 16, paddingBottom: 40, backgroundColor: '#f2f2f7' },
-  /** 与 TaskFilterSheet 卡片圆角一致 */
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 28,
-    paddingHorizontal: 16,
-    paddingVertical: 0,
-    marginBottom: 16,
-    ...shadowCard,
-  },
-  /** iOS 原生风格：相对胶囊定位的日期/时间选择器卡片，点周边关闭 */
-  timePickerCard: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 12,
-    ...shadowCard,
-  },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f2f2f7' },
-  loadingText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280' },
+function createTaskDetailStyles(c: AppColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.backgroundSecondary },
+    topBar: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      zIndex: 10,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingBottom: 12,
+    },
+    circleBtn: {
+      width: HEADER_CIRCLE_BTN_SIZE,
+      height: HEADER_CIRCLE_BTN_SIZE,
+      borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: c.surface,
+      ...shadowCircleButtonThemed(c),
+    },
+    circleBtnLeft: {},
+    circleBtnRight: {},
+    createBtn: { minWidth: 60 },
+    createBtnText: { fontSize: 16, fontWeight: '600', color: c.textHeader },
+    createBtnTextDisabled: { color: c.placeholder },
+    topBarCenter: { alignItems: 'center', flex: 1 },
+    topBarTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: c.textHeader },
+    keyboardWrap: { flex: 1, backgroundColor: c.backgroundSecondary },
+    scroll: { flex: 1, backgroundColor: 'transparent' },
+    scrollContent: { padding: 16, paddingBottom: 40, backgroundColor: c.backgroundSecondary },
+    /** 与 TaskFilterSheet 卡片圆角一致 */
+    card: {
+      backgroundColor: c.surface,
+      borderRadius: 28,
+      paddingHorizontal: 16,
+      paddingVertical: 0,
+      marginBottom: 16,
+      ...shadowCardThemed(c),
+    },
+    /** iOS 原生风格：相对胶囊定位的日期/时间选择器卡片，点周边关闭 */
+    timePickerCard: {
+      backgroundColor: c.surface,
+      borderRadius: 20,
+      paddingHorizontal: 16,
+      paddingTop: 12,
+      paddingBottom: 12,
+      ...shadowCardThemed(c),
+    },
+    centered: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: c.backgroundSecondary,
+    },
+    loadingText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: c.textMuted },
 
-  /** 标题行（状态图标 + 任务名）：上边距固定 16，下边距由 titleLineCount 决定（1 行 14 / 多行 18） */
-  sectionTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-    paddingTop: 16,
-  },
-  statusIconWrap: { padding: 10, margin: -10 },
-  statusRing: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 2,
-    backgroundColor: 'transparent',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  titleInputWrap: { flex: 1, position: 'relative' },
-  /** 高度与 lineHeight 由 JS 按 titleLineCount × TITLE_LINE_HEIGHT 写死；marginTop -4 把整框上移，缓解贴底线 */
-  titleInput: {
-    flex: 1,
-    fontSize: TASK_FONT_SIZE_TITLE,
-    fontWeight: '600',
-    color: '#111827',
-    paddingVertical: 0,
-  },
-  /** 隐藏 Text 与标题同宽同字体，用于 onTextLayout 取 lines.length（TextInput 无行数 API） */
-  titleMeasureWrap: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    opacity: 0,
-    zIndex: -1,
-  },
-  titleMeasureText: {
-    fontSize: TASK_FONT_SIZE_TITLE,
-    fontWeight: '600',
-    color: '#111827',
-  },
+    /** 标题行（状态图标 + 任务名）：上边距固定 16，下边距由 titleLineCount 决定（1 行 14 / 多行 18） */
+    sectionTitleRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 12,
+      paddingTop: 16,
+    },
+    statusIconWrap: { padding: 10, margin: -10 },
+    statusRing: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      borderWidth: 2,
+      backgroundColor: 'transparent',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    titleInputWrap: { flex: 1, position: 'relative' },
+    /** 高度与 lineHeight 由 JS 按 titleLineCount × TITLE_LINE_HEIGHT 写死；marginTop -4 把整框上移，缓解贴底线 */
+    titleInput: {
+      flex: 1,
+      fontSize: TASK_FONT_SIZE_TITLE,
+      fontWeight: '600',
+      color: c.textPrimary,
+      paddingVertical: 0,
+    },
+    /** 隐藏 Text 与标题同宽同字体，用于 onTextLayout 取 lines.length（TextInput 无行数 API） */
+    titleMeasureWrap: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      top: 0,
+      opacity: 0,
+      zIndex: -1,
+    },
+    titleMeasureText: {
+      fontSize: TASK_FONT_SIZE_TITLE,
+      fontWeight: '600',
+      color: c.textPrimary,
+    },
 
-  section: {},
-  /** 区域标题：卡片外上方灰色小字 */
-  sectionHeaderOuter: {
-    fontSize: TASK_FONT_SIZE_SMALL,
-    fontWeight: '400',
-    color: '#6b7280',
-    marginLeft: 10,
-    marginBottom: 12,
-    marginTop: 8,
-  },
-  sectionHeader: {
-    fontSize: TASK_FONT_SIZE_SMALL,
-    fontWeight: '600',
-    color: '#6b7280',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 12,
-    paddingBottom: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e5e7eb',
-  },
-  rowFirst: { paddingTop: 16 },
-  rowLast: { paddingBottom: 16, borderBottomWidth: 0 },
-  rowLabel: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827' },
-  rowValue: { fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280' },
-  pickerRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  pickerRowText: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827' },
+    section: {},
+    /** 区域标题：卡片外上方灰色小字 */
+    sectionHeaderOuter: {
+      fontSize: TASK_FONT_SIZE_SMALL,
+      fontWeight: '400',
+      color: c.textMuted,
+      marginLeft: 10,
+      marginBottom: 12,
+      marginTop: 8,
+    },
+    sectionHeader: {
+      fontSize: TASK_FONT_SIZE_SMALL,
+      fontWeight: '600',
+      color: c.textMuted,
+      marginBottom: 8,
+      textTransform: 'uppercase',
+    },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingTop: 12,
+      paddingBottom: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
+    },
+    rowFirst: { paddingTop: 16 },
+    rowLast: { paddingBottom: 16, borderBottomWidth: 0 },
+    rowLabel: { fontSize: TASK_FONT_SIZE_BODY, color: c.textPrimary },
+    rowValue: { fontSize: TASK_FONT_SIZE_SMALL, color: c.textMuted },
+    pickerRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    pickerRowText: { fontSize: TASK_FONT_SIZE_BODY, color: c.textPrimary },
 
-  /** 时间卡片首行：与普通 row 一致 */
-  timeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingTop: 16,
-    paddingBottom: 10,
-  },
-  timeRowWithBorder: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e5e7eb',
-  },
-  timeRowLabel: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827', flex: 0 },
-  timeRowValue: { flex: 1, fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280', textAlign: 'right' },
-  timeBody: {},
-  timePill: {
-    backgroundColor: '#f3f4f6',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  timePillText: { fontSize: 15, color: '#111827' },
-  timeActionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  timeActionText: { fontSize: TASK_FONT_SIZE_BODY, color: '#0f172a', fontWeight: '500' },
-  timeActionTextDanger: { fontSize: TASK_FONT_SIZE_BODY, color: '#dc2626', fontWeight: '500' },
+    /** 时间卡片首行：与普通 row 一致 */
+    timeRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingTop: 16,
+      paddingBottom: 10,
+    },
+    timeRowWithBorder: {
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.border,
+    },
+    timeRowLabel: { fontSize: TASK_FONT_SIZE_BODY, color: c.textPrimary, flex: 0 },
+    timeRowValue: { flex: 1, fontSize: TASK_FONT_SIZE_SMALL, color: c.textMuted, textAlign: 'right' },
+    timeBody: {},
+    timePill: {
+      backgroundColor: c.surfaceMuted,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+    },
+    timePillText: { fontSize: 15, color: c.textPrimary },
+    timeActionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    timeActionText: { fontSize: TASK_FONT_SIZE_BODY, color: c.textHeader, fontWeight: '500' },
+    timeActionTextDanger: { fontSize: TASK_FONT_SIZE_BODY, color: c.danger, fontWeight: '500' },
 
-  input: {
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: '#111827',
-  },
-  /** 备注区与标题行同框式：上下 20、左右在 card 的 16 上再加 8 共 24 */
-  noteRow: {
-    paddingTop: 20,
-    paddingBottom: 20,
-    paddingHorizontal: 8,
-  },
-  /** 备注正文：与 Task 系统标准正文 17 一致 */
-  noteInput: {
-    textAlignVertical: 'top',
-    fontSize: TASK_FONT_SIZE_BODY,
-    fontWeight: '400',
-    lineHeight: NOTE_LINE_HEIGHT,
-    color: '#111827',
-    paddingVertical: 0,
-    paddingHorizontal: 0,
-    minHeight: 0,
-  },
-  summaryText: { fontSize: TASK_FONT_SIZE_SMALL, fontWeight: '400', color: '#6b7280', marginLeft: 14, marginBottom: 10, lineHeight: 18 },
+    input: {
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      fontSize: 16,
+      color: c.textPrimary,
+    },
+    /** 备注区与标题行同框式：上下 20、左右在 card 的 16 上再加 8 共 24 */
+    noteRow: {
+      paddingTop: 20,
+      paddingBottom: 20,
+      paddingHorizontal: 8,
+    },
+    /** 备注正文：与 Task 系统标准正文 17 一致 */
+    noteInput: {
+      textAlignVertical: 'top',
+      fontSize: TASK_FONT_SIZE_BODY,
+      fontWeight: '400',
+      lineHeight: NOTE_LINE_HEIGHT,
+      color: c.textPrimary,
+      paddingVertical: 0,
+      paddingHorizontal: 0,
+      minHeight: 0,
+    },
+    summaryText: {
+      fontSize: TASK_FONT_SIZE_SMALL,
+      fontWeight: '400',
+      color: c.textMuted,
+      marginLeft: 14,
+      marginBottom: 10,
+      lineHeight: 18,
+    },
 
-  savingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
-  savingText: { fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280' },
-});
+    savingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
+    savingText: { fontSize: TASK_FONT_SIZE_SMALL, color: c.textMuted },
+  });
+}

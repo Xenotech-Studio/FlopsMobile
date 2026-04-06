@@ -43,13 +43,13 @@ export function UsageDetailModal({ visible, onClose, title = '用量详情', bod
     (props: BottomSheetBackdropProps) => (
       <BottomSheetBackdrop
         {...props}
-        opacity={0.35}
+        opacity={colors.bottomSheetBackdropOpacity}
         pressBehavior="close"
         appearsOnIndex={0}
         disappearsOnIndex={-1}
       />
     ),
-    []
+    [colors.bottomSheetBackdropOpacity]
   );
 
   return (
@@ -103,7 +103,7 @@ function createUsageDetailStyles(c: AppColors) {
       paddingBottom: 12,
     },
     headerBorder: {
-      height: StyleSheet.hairlineWidth,
+      height: c.headerBarBottomBorderWidth,
       backgroundColor: c.border,
     },
     title: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: c.textPrimary },

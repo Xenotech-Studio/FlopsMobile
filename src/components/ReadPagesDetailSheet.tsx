@@ -23,6 +23,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { shadowSheet } from '../theme/shadows';
 import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL } from '../theme/typography';
 import { tryParsePartialReadingStream } from '../utils/toolCardParsers';
+import { useAppTheme } from '../context/ThemeContext';
 
 export type ReadPagesDetailEntry = Record<string, unknown>;
 
@@ -40,6 +41,7 @@ export function ReadPagesDetailSheet({
   title,
   entry,
 }: ReadPagesDetailSheetProps) {
+  const { colors } = useAppTheme();
   const modalRef = useRef<BottomSheetModal>(null);
 
   useEffect(() => {
@@ -58,13 +60,13 @@ export function ReadPagesDetailSheet({
     (props: BottomSheetBackdropProps) => (
       <BottomSheetBackdrop
         {...props}
-        opacity={0.35}
+        opacity={colors.bottomSheetBackdropOpacity}
         pressBehavior="close"
         appearsOnIndex={0}
         disappearsOnIndex={-1}
       />
     ),
-    []
+    [colors.bottomSheetBackdropOpacity]
   );
 
   const { height: windowHeight } = useWindowDimensions();

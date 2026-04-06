@@ -1,4 +1,5 @@
 import React from 'react';
+import { Platform } from 'react-native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { MainScreen } from '../screens/MainScreen';
 import { ChatScreen } from '../screens/ChatScreen';
@@ -56,7 +57,14 @@ export function RootNavigator() {
         cardStyle: { backgroundColor: colors.background },
       }}
     >
-      <Stack.Screen name="Main" component={MainScreen} />
+      <Stack.Screen
+        name="Main"
+        component={MainScreen}
+        options={{
+          /** Android：避免与对话列表左缘「右滑开 Profile」争系统返回手势 */
+          gestureEnabled: Platform.OS === 'ios',
+        }}
+      />
       <Stack.Screen
         name="Chat"
         component={ChatScreen}

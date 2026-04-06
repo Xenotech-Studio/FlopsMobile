@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { AppColors } from '../theme/appColors';
+import { useAppTheme } from '../context/ThemeContext';
 import {
   View,
   Text,
@@ -31,9 +33,9 @@ import type { TasksStackParamList } from '../navigation/types';
 import type { TaskItem } from '../taskApi';
 import { TaskRow } from '../components/TaskRow';
 import { TaskFilterSheet, type StatusLevel } from '../components/TaskFilterSheet';
-import { shadowCircleButton, shadowFab, borderLight } from '../theme/shadows';
+import { shadowCircleButtonThemed, shadowFabThemed } from '../theme/shadows';
 import { HEADER_CIRCLE_BTN_SIZE, LIST_TOP_EXTRA, LIST_PADDING_BOTTOM_DEFAULT } from '../theme/layout';
-import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
+import { TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { PullToRefreshRing } from '../components/PullToRefreshRing';
 import { MonthCalendarScroll } from '../components/MonthCalendar';
@@ -75,6 +77,12 @@ function TabBtn({
   paddingLeft: number;
   paddingRight: number;
 }) {
+  const { colors } = useAppTheme();
+  /** 选中：与用户消息气泡同色（userBubble / onUserBubble） */
+  const activeBg = colors.userBubble;
+  const activeFg = colors.onUserBubble;
+  const inactiveFg = colors.textMuted;
+
   const activeVal = useSharedValue(active ? 1 : 0);
 
   useEffect(() => {
@@ -94,16 +102,21 @@ function TabBtn({
       activeOpacity={0.7}
     >
       <Animated.View
-        style={[tabBtnStyles.btnBg, animatedBgStyle]}
+        style={[tabBtnStyles.btnBg, animatedBgStyle, { backgroundColor: activeBg }]}
         pointerEvents="none"
       />
       <View style={tabBtnStyles.btnContent}>
         <Ionicons
           name={icon as any}
           size={16}
-          color={active ? '#fff' : '#111827'}
+          color={active ? activeFg : inactiveFg}
         />
-        <Text style={[tabBtnStyles.label, active && tabBtnStyles.labelActive]}>
+        <Text
+          style={[
+            tabBtnStyles.label,
+            { color: active ? activeFg : inactiveFg },
+          ]}
+        >
           {label}
         </Text>
       </View>
@@ -121,7 +134,6 @@ const tabBtnStyles = StyleSheet.create({
   },
   btnBg: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#111827',
     borderRadius: 999,
   },
   btnContent: {
@@ -130,8 +142,7 @@ const tabBtnStyles = StyleSheet.create({
     gap: 6,
     zIndex: 1,
   },
-  label: { fontSize: TASK_FONT_SIZE_SMALL, fontWeight: '600', color: '#111827' },
-  labelActive: { color: '#fff' },
+  label: { fontSize: TASK_FONT_SIZE_SMALL, fontWeight: '600' },
 });
 
 function getTabPadding(
@@ -184,6 +195,27 @@ function ProjectCalendarTab({
   onRefresh: () => void;
   refreshing: boolean;
 }) {
+  const { colors } = useAppTheme();
+  const calendarTabStyles = useMemo(
+    () =>
+      StyleSheet.create({
+        tabRoot: { flex: 1 },
+        divider: {
+          height: StyleSheet.hairlineWidth,
+          backgroundColor: colors.conversationListSeparator,
+          marginVertical: 8,
+        },
+        tasksScroll: { flex: 1 },
+        empty: { paddingVertical: 48, alignItems: 'center' },
+        emptyText: {
+          marginTop: 12,
+          fontSize: TASK_FONT_SIZE_SMALL,
+          color: colors.placeholder,
+        },
+      }),
+    [colors]
+  );
+
   return (
     <View style={[calendarTabStyles.tabRoot, { paddingTop: headerHeight - 8 }]}>
       <MonthCalendarScroll
@@ -199,7 +231,7 @@ function ProjectCalendarTab({
       >
       {calendarTasks.length === 0 ? (
         <View style={calendarTabStyles.empty}>
-          <Ionicons name="checkmark-done-outline" size={48} color="#9ca3af" />
+          <Ionicons name="checkmark-done-outline" size={48} color={colors.placeholder} />
           <Text style={calendarTabStyles.emptyText}>当日无任务</Text>
         </View>
       ) : (
@@ -219,17 +251,91 @@ function ProjectCalendarTab({
   );
 }
 
-const calendarTabStyles = StyleSheet.create({
-  tabRoot: { flex: 1 },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: '#e5e7eb', marginVertical: 8 },
-  tasksScroll: { flex: 1 },
-  empty: { paddingVertical: 48, alignItems: 'center' },
-  emptyText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#9ca3af' },
-});
+function createProjectDetailScreenStyles(c: AppColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.conversationListBackground },
+    topBar: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      zIndex: 10,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingBottom: 12,
+    },
+    mainContent: { flex: 1 },
+    circleBtn: {
+      width: HEADER_CIRCLE_BTN_SIZE,
+      height: HEADER_CIRCLE_BTN_SIZE,
+      borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: c.surface,
+      ...shadowCircleButtonThemed(c),
+    },
+    topBarCenter: { alignItems: 'center', flex: 1 },
+    refreshIndicatorFixed: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 12,
+      zIndex: 9,
+    },
+    topBarTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: c.textHeader },
+    centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    loadingText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: c.textMuted },
+    listContent: { paddingBottom: LIST_PADDING_BOTTOM_DEFAULT },
+    emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_DEFAULT },
+    empty: { paddingVertical: 48, alignItems: 'center' },
+    emptyText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: c.placeholder },
+    bottomBar: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      gap: 24,
+    },
+    tabCapsule: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      height: 56,
+      paddingHorizontal: TAB_CAPSULE_PADDING,
+      backgroundColor: c.surface,
+      borderRadius: 999,
+      ...shadowCircleButtonThemed(c),
+    },
+    fab: {
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      backgroundColor: c.surface,
+      justifyContent: 'center',
+      alignItems: 'center',
+      ...shadowFabThemed(c),
+    },
+    flowPlaceholder: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    flowPlaceholderText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: c.placeholder },
+  });
+}
 
 export function ProjectDetailScreen() {
   const { params } = useRoute<Route>();
   const navigation = useNavigation<StackNavigationProp<TasksStackParamList, 'ProjectDetail'>>();
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createProjectDetailScreenStyles(colors), [colors]);
   const { projectId, projectName } = params;
   const {
     tasks,
@@ -397,9 +503,13 @@ export function ProjectDetailScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
-        <BlurHeaderBackground style={StyleSheet.absoluteFill} topSolidHeight={insets.top + 8} />
+        <BlurHeaderBackground
+          style={StyleSheet.absoluteFill}
+          topSolidHeight={insets.top + 8}
+          gradientBaseHex={colors.conversationListBackground}
+        />
         <TouchableOpacity style={styles.circleBtn} onPress={onBack} activeOpacity={0.7}>
-          <Ionicons name="chevron-back" size={24} color="#374151" />
+          <Ionicons name="chevron-back" size={24} color={colors.textSecondary} />
         </TouchableOpacity>
         <View style={styles.topBarCenter} pointerEvents="none">
           <Text style={styles.topBarTitle} numberOfLines={1}>{title}</Text>
@@ -409,7 +519,7 @@ export function ProjectDetailScreen() {
           onPress={() => setFilterVisible(true)}
           activeOpacity={0.7}
         >
-          <Ionicons name="filter-outline" size={22} color="#374151" />
+          <Ionicons name="filter-outline" size={22} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
       <View style={styles.mainContent}>
@@ -418,7 +528,7 @@ export function ProjectDetailScreen() {
             {isLoadingTasks && projectTasks.length === 0 ? (
               <View style={[styles.mainContent, { paddingTop: headerHeight }]}>
                 <View style={styles.centered}>
-                  <ActivityIndicator size="large" color="#0f172a" />
+                  <ActivityIndicator size="large" color={colors.primary} />
                   <Text style={styles.loadingText}>加载中...</Text>
                 </View>
               </View>
@@ -441,14 +551,14 @@ export function ProjectDetailScreen() {
                   <RefreshControl
                     refreshing={refreshing}
                     onRefresh={onRefresh}
-                    colors={['#0f172a']}
-                    tintColor="#0f172a"
+                    colors={[colors.primary]}
+                    tintColor={colors.primary}
                     progressViewOffset={Platform.OS === 'android' ? headerHeight + LIST_TOP_EXTRA : undefined}
                   />
                 }
                 ListEmptyComponent={
                   <View style={styles.empty}>
-                    <Ionicons name="checkbox-outline" size={56} color="#9ca3af" />
+                    <Ionicons name="checkbox-outline" size={56} color={colors.placeholder} />
                     <Text style={styles.emptyText}>该项目暂无任务</Text>
                   </View>
                 }
@@ -476,7 +586,7 @@ export function ProjectDetailScreen() {
         )}
         {tab === 'flow' && (
           <View style={[styles.flowPlaceholder, { paddingTop: headerHeight }]}>
-            <Ionicons name="git-network-outline" size={56} color="#9ca3af" />
+            <Ionicons name="git-network-outline" size={56} color={colors.placeholder} />
             <Text style={styles.flowPlaceholderText}>FlowChart 暂不支持</Text>
           </View>
         )}
@@ -489,7 +599,7 @@ export function ProjectDetailScreen() {
             refreshing={refreshingShared}
             threshold={PULL_RING_THRESHOLD}
             refreshingState={refreshing}
-            color="#0f172a"
+            color={colors.primary}
           />
         </View>
       ) : null}
@@ -522,7 +632,7 @@ export function ProjectDetailScreen() {
         </View>
         <View style={{ flex: 1 }} />
         <TouchableOpacity style={styles.fab} onPress={onCreateTask}>
-          <Ionicons name="add" size={26} color="#0f172a" />
+          <Ionicons name="add" size={26} color={colors.primary} />
         </TouchableOpacity>
       </View>
       <TaskFilterSheet
@@ -542,83 +652,3 @@ export function ProjectDetailScreen() {
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  topBar: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
-  mainContent: { flex: 1 },
-  circleBtn: {
-    width: HEADER_CIRCLE_BTN_SIZE,
-    height: HEADER_CIRCLE_BTN_SIZE,
-    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    ...shadowCircleButton,
-  },
-  topBarCenter: { alignItems: 'center', flex: 1 },
-  refreshIndicatorFixed: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    zIndex: 9,
-  },
-  topBarTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280' },
-  listContent: { paddingBottom: LIST_PADDING_BOTTOM_DEFAULT },
-  emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_DEFAULT },
-  empty: { paddingVertical: 48, alignItems: 'center' },
-  emptyText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#9ca3af' },
-  bottomBar: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    gap: 24,
-  },
-  tabCapsule: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 56,
-    paddingHorizontal: TAB_CAPSULE_PADDING,
-    backgroundColor: '#fff',
-    borderRadius: 999,
-    ...borderLight,
-    ...shadowCircleButton,
-  },
-  fab: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#fff',
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...borderLight,
-    ...shadowFab,
-  },
-  flowPlaceholder: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  flowPlaceholderText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#9ca3af' },
-});

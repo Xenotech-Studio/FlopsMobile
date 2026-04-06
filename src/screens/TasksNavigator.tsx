@@ -9,6 +9,7 @@ import { ProjectDetailScreen } from './ProjectDetailScreen';
 import { TaskDetailScreen } from './TaskDetailScreen';
 import { TasksCalendarScreen } from './TasksCalendarScreen';
 import type { TasksStackParamList } from '../navigation/types';
+import { useAppTheme } from '../context/ThemeContext';
 
 const Stack = createStackNavigator<TasksStackParamList>();
 
@@ -34,10 +35,14 @@ function leftSlideInterpolator({ current, layouts }: StackCardInterpolationProps
 }
 
 export function TasksNavigator() {
+  const { colors } = useAppTheme();
   return (
     <Stack.Navigator
       initialRouteName="TasksHome"
-      screenOptions={{ headerShown: false }}
+      screenOptions={{
+        headerShown: false,
+        cardStyle: { backgroundColor: colors.conversationListBackground },
+      }}
     >
       <Stack.Screen
         name="TasksHome"

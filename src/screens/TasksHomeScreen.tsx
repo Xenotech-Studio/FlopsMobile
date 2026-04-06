@@ -25,7 +25,9 @@ import type { TaskItem, Project } from '../taskApi';
 import { TaskRow } from '../components/TaskRow';
 import { TaskFilterSheet, type StatusLevel } from '../components/TaskFilterSheet';
 import { ProjectSelectSheet } from '../components/ProjectSelectSheet';
-import { shadowCircleButton, shadowFab, shadowSoft, borderLight } from '../theme/shadows';
+import type { AppColors } from '../theme/appColors';
+import { useAppTheme } from '../context/ThemeContext';
+import { shadowCircleButtonThemed, shadowFabThemed, shadowSoft } from '../theme/shadows';
 import { HEADER_CIRCLE_BTN_SIZE, LIST_TOP_EXTRA, LIST_PADDING_BOTTOM_WITH_FOOTER } from '../theme/layout';
 import { TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
@@ -42,6 +44,127 @@ const SHOW_PROJECT_KEY = 'showProjectName_todayTasks';
 
 type Nav = StackNavigationProp<TasksStackParamList, 'TasksHome'>;
 
+function createTasksHomeStyles(c: AppColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.conversationListBackground },
+    leftEdgeGesture: {
+      position: 'absolute',
+      left: 0,
+      top: 0,
+      bottom: 0,
+      width: EDGE_WIDTH,
+      zIndex: 10,
+    },
+    centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    placeholderText: { fontSize: 16, color: c.textMuted },
+    topBar: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      zIndex: 10,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingBottom: 12,
+    },
+    mainContent: { flex: 1 },
+    list: { flex: 1 },
+    circleBtn: {
+      width: HEADER_CIRCLE_BTN_SIZE,
+      height: HEADER_CIRCLE_BTN_SIZE,
+      borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: c.surface,
+      ...shadowCircleButtonThemed(c),
+    },
+    topBarCenter: { alignItems: 'center', flex: 1 },
+    refreshIndicatorFixed: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 12,
+      zIndex: 9,
+    },
+    todayTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: c.textHeader },
+    todaySubtitle: { fontSize: TASK_FONT_SIZE_SMALL, color: c.textMuted, marginTop: 4 },
+    errorBar: { backgroundColor: c.errorBg, padding: 12 },
+    errorText: { fontSize: 14, color: c.danger, textAlign: 'center' },
+    loadingText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: c.textMuted },
+    listContent: { paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
+    emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
+    empty: { paddingVertical: 48, alignItems: 'center' },
+    emptyText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: c.placeholder },
+    footer: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+    },
+    calendarBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      backgroundColor: c.surface,
+      borderRadius: Platform.OS === 'android' ? 999 : 22,
+      marginLeft: 12,
+      marginBottom: 8,
+      ...Platform.select({
+        ios: {
+          ...shadowSoft,
+          borderWidth: 1,
+          borderColor: c.hairlineBorder,
+        },
+        android: {
+          borderWidth: 1,
+          borderColor: c.androidCircleFabHairline,
+          elevation: 0,
+        },
+      }),
+    },
+    calendarBtnText: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
+    endTodayBtn: {
+      paddingHorizontal: 20,
+      paddingVertical: 12,
+      backgroundColor: c.surface,
+      borderRadius: 20,
+      ...Platform.select({
+        ios: {
+          ...shadowSoft,
+          borderWidth: 1,
+          borderColor: c.hairlineBorder,
+        },
+        android: {
+          borderWidth: 1,
+          borderColor: c.androidCircleFabHairline,
+          elevation: 0,
+        },
+      }),
+    },
+    endTodayText: { fontSize: 16, fontWeight: '500', color: c.textPrimary },
+    footerSpacer: { flex: 1 },
+    fab: {
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      backgroundColor: c.surface,
+      justifyContent: 'center',
+      alignItems: 'center',
+      ...shadowFabThemed(c),
+    },
+  });
+}
+
 function formatTodayDate(d: Date): string {
   const m = d.getMonth() + 1;
   const day = d.getDate();
@@ -53,6 +176,8 @@ function formatTodayDate(d: Date): string {
 export function TasksHomeScreen() {
   const navigation = useNavigation<Nav>();
   const insets = useSafeAreaInsets();
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createTasksHomeStyles(colors), [colors]);
   const { session } = useSession();
   const {
     todayTasks,
@@ -248,13 +373,17 @@ export function TasksHomeScreen() {
       />
       {/* 顶部栏：毛玻璃 + 渐变，绝对定位；列表内容在其下滚动 */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
-        <BlurHeaderBackground style={StyleSheet.absoluteFill} topSolidHeight={insets.top + 8} />
+        <BlurHeaderBackground
+          style={StyleSheet.absoluteFill}
+          topSolidHeight={insets.top + 8}
+          gradientBaseHex={colors.conversationListBackground}
+        />
         <TouchableOpacity
           style={styles.circleBtn}
           onPress={onProjectsPress}
           activeOpacity={0.7}
         >
-          <Ionicons name="folder-outline" size={24} color="#374151" />
+          <Ionicons name="folder-outline" size={24} color={colors.textSecondary} />
         </TouchableOpacity>
         <View style={styles.topBarCenter} pointerEvents="none">
           <Text style={styles.todayTitle}>{formatTodayDate(todayDate)}</Text>
@@ -265,7 +394,7 @@ export function TasksHomeScreen() {
           onPress={() => setFilterVisible(true)}
           activeOpacity={0.7}
         >
-          <Ionicons name="filter-outline" size={22} color="#374151" />
+          <Ionicons name="filter-outline" size={22} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
 
@@ -279,7 +408,7 @@ export function TasksHomeScreen() {
         {loading ? (
           <View style={[styles.mainContent, { paddingTop: headerHeight }]}>
             <View style={styles.centered}>
-              <ActivityIndicator size="large" color="#0f172a" />
+              <ActivityIndicator size="large" color={colors.primary} />
               <Text style={styles.loadingText}>加载中...</Text>
             </View>
           </View>
@@ -307,14 +436,14 @@ export function TasksHomeScreen() {
               <RefreshControl
                 refreshing={refreshing}
                 onRefresh={onRefresh}
-                colors={['#0f172a']}
-                tintColor="#0f172a"
+                colors={[colors.primary]}
+                tintColor={colors.primary}
                 progressViewOffset={Platform.OS === 'android' ? headerHeight + LIST_TOP_EXTRA : undefined}
               />
             }
             ListEmptyComponent={
               <View style={styles.empty}>
-                <Ionicons name="checkmark-done-outline" size={56} color="#9ca3af" />
+                <Ionicons name="checkmark-done-outline" size={56} color={colors.placeholder} />
                 <Text style={styles.emptyText}>今日无任务</Text>
               </View>
             }
@@ -334,14 +463,14 @@ export function TasksHomeScreen() {
             refreshing={refreshingShared}
             threshold={PULL_RING_THRESHOLD}
             refreshingState={refreshing}
-            color="#0f172a"
+            color={colors.primary}
           />
         </View>
       ) : null}
 
       <View style={[styles.footer, Platform.OS === 'ios' && { paddingBottom: 28 }]}>
         <TouchableOpacity style={styles.calendarBtn} onPress={onCalendarPress} activeOpacity={0.7}>
-          <Ionicons name="calendar-outline" size={20} color="#111827" />
+          <Ionicons name="calendar-outline" size={20} color={colors.textPrimary} />
           <Text style={styles.calendarBtnText}>日历</Text>
         </TouchableOpacity>
         {showEndToday ? (
@@ -351,7 +480,7 @@ export function TasksHomeScreen() {
         ) : null}
         <View style={styles.footerSpacer} />
         <TouchableOpacity style={styles.fab} onPress={onCreateTask}>
-          <Ionicons name="add" size={26} color="#0f172a" />
+          <Ionicons name="add" size={26} color={colors.primary} />
         </TouchableOpacity>
       </View>
 
@@ -379,103 +508,3 @@ export function TasksHomeScreen() {
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  leftEdgeGesture: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: EDGE_WIDTH,
-    zIndex: 10,
-  },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  placeholderText: { fontSize: 16, color: '#6b7280' },
-  topBar: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
-  mainContent: { flex: 1 },
-  list: { flex: 1 },
-  circleBtn: {
-    width: HEADER_CIRCLE_BTN_SIZE,
-    height: HEADER_CIRCLE_BTN_SIZE,
-    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    ...shadowCircleButton,
-  },
-  topBarCenter: { alignItems: 'center', flex: 1 },
-  refreshIndicatorFixed: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    zIndex: 9,
-  },
-  todayTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: '#0f172a' },
-  todaySubtitle: { fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280', marginTop: 4 },
-  errorBar: { backgroundColor: '#fef2f2', padding: 12 },
-  errorText: { fontSize: 14, color: '#dc2626', textAlign: 'center' },
-  loadingText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280' },
-  listContent: { paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
-  emptyList: { flex: 1, paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
-  empty: { paddingVertical: 48, alignItems: 'center' },
-  emptyText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: '#9ca3af' },
-  footer: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  calendarBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#fff',
-    borderRadius: Platform.OS === 'android' ? 999 : 22,
-    marginLeft: 12,
-    marginBottom: 8,
-    ...borderLight,
-    ...(Platform.OS === 'ios' ? shadowSoft : { elevation: 0 }),
-  },
-  calendarBtnText: { fontSize: 15, fontWeight: '600', color: '#111827' },
-  endTodayBtn: {
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    ...borderLight,
-    ...shadowSoft,
-  },
-  endTodayText: { fontSize: 16, fontWeight: '500', color: '#111827' },
-  footerSpacer: { flex: 1 },
-  fab: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#fff',
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...borderLight,
-    ...shadowFab,
-  },
-});

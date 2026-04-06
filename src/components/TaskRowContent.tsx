@@ -11,6 +11,7 @@ import {
   TASK_ROW_PADDING_RIGHT,
 } from '../theme/layout';
 import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL } from '../theme/typography';
+import { useAppTheme } from '../context/ThemeContext';
 
 const RING_SIZE = 24;
 const RING_STROKE = 2;
@@ -40,6 +41,7 @@ export function TaskRowContent({
   priorityLabel,
   priorityColor,
 }: TaskRowContentProps) {
+  const { colors } = useAppTheme();
   const hasSubtitle = Boolean(subtitle && subtitle.length > 0);
   const showPriority = Boolean(priorityLabel && priorityColor);
 
@@ -71,12 +73,18 @@ export function TaskRowContent({
       )}
       <View style={styles.body}>
         <Text
-          style={[styles.title, visualDone && styles.titleDone]}
+          style={[
+            styles.title,
+            { color: colors.textPrimary },
+            visualDone && [styles.titleDone, { color: colors.textMuted }],
+          ]}
           numberOfLines={2}
         >
           {title}
         </Text>
-        {hasSubtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        {hasSubtitle ? (
+          <Text style={[styles.subtitle, { color: colors.placeholder }]}>{subtitle}</Text>
+        ) : null}
         {showPriority && priorityLabel && priorityColor ? (
           <View
             style={[
@@ -121,9 +129,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   body: { flex: 1, minWidth: 0 },
-  title: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827', fontWeight: '400' },
-  titleDone: { textDecorationLine: 'line-through', color: '#6b7280' },
-  subtitle: { fontSize: TASK_FONT_SIZE_SMALL, color: '#9ca3af', marginTop: 2 },
+  title: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '400' },
+  titleDone: { textDecorationLine: 'line-through' },
+  subtitle: { fontSize: TASK_FONT_SIZE_SMALL, marginTop: 2 },
   priorityBadge: {
     alignSelf: 'flex-start',
     paddingHorizontal: 6,

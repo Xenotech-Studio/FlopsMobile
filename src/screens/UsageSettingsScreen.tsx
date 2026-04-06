@@ -1,7 +1,7 @@
 /**
  * 用量显示偏好 + 账户用量统计（与 Web 设置 / Desktop 用量分区对齐）
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -12,7 +12,7 @@ import {
   PanResponder,
   useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
@@ -33,12 +33,95 @@ import {
 } from '../constants/pricingDisplay';
 import { formatUsdCnyEstimate } from '../utils/usageDisplay';
 import { IOSStyleSwitch } from '../components/IOSStyleSwitch';
+import { useAppTheme } from '../context/ThemeContext';
+import type { AppColors } from '../theme/appColors';
 
 const EDGE_WIDTH = 24;
 const SWIPE_THRESHOLD = 60;
 
+function createUsageSettingsStyles(c: AppColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.backgroundSecondary },
+    rightEdgeGesture: {
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      width: EDGE_WIDTH,
+      zIndex: 10,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-start',
+      paddingHorizontal: 8,
+      paddingBottom: 10,
+      borderBottomWidth: c.headerBarBottomBorderWidth,
+      borderBottomColor: c.border,
+      backgroundColor: c.headerBarBackground,
+    },
+    headerTitle: { fontSize: 20, fontWeight: '700', color: c.textHeader, marginLeft: 2 },
+    backBtn: { padding: 8, width: 44 },
+    scroll: { flex: 1 },
+    scrollContent: { padding: 16, paddingBottom: 32 },
+    card: {
+      backgroundColor: c.surface,
+      borderRadius: 12,
+      padding: 16,
+      marginBottom: 14,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.borderMuted,
+    },
+    cardTitle: { fontSize: 16, fontWeight: '700', color: c.textHeader, marginBottom: 8 },
+    cardDesc: { fontSize: 14, color: c.textMuted, lineHeight: 20, marginBottom: 12 },
+    switchRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12,
+    },
+    switchLabel: { flex: 1, fontSize: 15, color: c.textPrimary },
+    radioGroup: { gap: 10 },
+    radioRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    radioOuter: {
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      borderWidth: 2,
+      borderColor: c.borderD4,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    radioOuterOn: { borderColor: c.primary },
+    radioInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: c.primary },
+    radioLabel: { fontSize: 15, color: c.textPrimary },
+    rateLine: { fontSize: 14, color: c.textSecondary },
+    rateStrong: { fontWeight: '700' },
+    usageHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 8,
+    },
+    refreshBtn: { paddingVertical: 4, paddingHorizontal: 8 },
+    refreshBtnText: { fontSize: 14, color: c.link, fontWeight: '600' },
+    note: { fontSize: 12, color: c.placeholder, marginBottom: 12 },
+    sectionLabel: { fontSize: 13, fontWeight: '600', color: c.textSecondary, marginBottom: 8 },
+    sectionSpacer: { marginTop: 16 },
+    listRow: { marginBottom: 10 },
+    monthText: { fontSize: 13, fontWeight: '600', color: c.textPrimary },
+    dateText: { fontSize: 13, fontWeight: '600', color: c.textPrimary },
+    numsText: { fontSize: 13, color: c.textMutedSlate, marginTop: 2 },
+    muted: { fontSize: 14, color: c.placeholder },
+    errText: { fontSize: 14, color: c.danger, marginBottom: 8 },
+    loader: { marginVertical: 16 },
+  });
+}
+
 export function UsageSettingsScreen() {
   const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createUsageSettingsStyles(colors), [colors]);
   const { session } = useSession();
   const { width: screenWidth } = useWindowDimensions();
   const gestureStartX = React.useRef(0);
@@ -132,19 +215,19 @@ export function UsageSettingsScreen() {
   const dailyWithData = (usageSummary?.daily ?? []).filter((d) => d.has_data);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
       <View
         style={[styles.rightEdgeGesture, { right: 0 }]}
         {...rightEdgeClose.panHandlers}
         pointerEvents="box-only"
       />
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity
           style={styles.backBtn}
           onPress={() => navigation.goBack()}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
-          <Ionicons name="chevron-back" size={26} color="#374151" />
+          <Ionicons name="chevron-back" size={26} color={colors.textSecondary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>用量与显示</Text>
       </View>
@@ -209,7 +292,7 @@ export function UsageSettingsScreen() {
           </View>
           <Text style={styles.note}>UTC 按日累计；金额为本地价目表预估，非真实账单。</Text>
           {usageLoading && !usageSummary ? (
-            <ActivityIndicator style={styles.loader} color="#6b7280" />
+            <ActivityIndicator style={styles.loader} color={colors.textMuted} />
           ) : null}
           {usageErr ? <Text style={styles.errText}>{usageErr}</Text> : null}
           {!usageLoading || usageSummary ? (
@@ -249,79 +332,3 @@ export function UsageSettingsScreen() {
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f9fafb' },
-  rightEdgeGesture: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: EDGE_WIDTH,
-    zIndex: 10,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    paddingHorizontal: 8,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e5e7eb',
-    backgroundColor: '#fff',
-  },
-  headerTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginLeft: 2 },
-  backBtn: { padding: 8, width: 44 },
-  scroll: { flex: 1 },
-  scrollContent: { padding: 16, paddingBottom: 32 },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 14,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#e5e7eb',
-  },
-  cardTitle: { fontSize: 16, fontWeight: '700', color: '#0f172a', marginBottom: 8 },
-  cardDesc: { fontSize: 14, color: '#6b7280', lineHeight: 20, marginBottom: 12 },
-  switchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  switchLabel: { flex: 1, fontSize: 15, color: '#111827' },
-  radioGroup: { gap: 10 },
-  radioRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  radioOuter: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#d1d5db',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  radioOuterOn: { borderColor: '#111827' },
-  radioInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#111827' },
-  radioLabel: { fontSize: 15, color: '#111827' },
-  rateLine: { fontSize: 14, color: '#374151' },
-  rateStrong: { fontWeight: '700' },
-  usageHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  refreshBtn: { paddingVertical: 4, paddingHorizontal: 8 },
-  refreshBtnText: { fontSize: 14, color: '#2563eb', fontWeight: '600' },
-  note: { fontSize: 12, color: '#9ca3af', marginBottom: 12 },
-  sectionLabel: { fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 8 },
-  sectionSpacer: { marginTop: 16 },
-  listRow: { marginBottom: 10 },
-  monthText: { fontSize: 13, fontWeight: '600', color: '#111827' },
-  dateText: { fontSize: 13, fontWeight: '600', color: '#111827' },
-  numsText: { fontSize: 13, color: '#4b5563', marginTop: 2 },
-  muted: { fontSize: 14, color: '#9ca3af' },
-  errText: { fontSize: 14, color: '#dc2626', marginBottom: 8 },
-  loader: { marginVertical: 16 },
-});

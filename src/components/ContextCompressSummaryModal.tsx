@@ -14,6 +14,7 @@ import { MarkdownContent } from './MarkdownContent';
 import { getCompressedRegionLastMessagePreview } from '../utils/contextCompress';
 import { shadowSheet } from '../theme/shadows';
 import { TASK_FONT_SIZE_BODY } from '../theme/typography';
+import { useAppTheme } from '../context/ThemeContext';
 
 type Props = {
   visible: boolean;
@@ -23,6 +24,7 @@ type Props = {
 };
 
 export function ContextCompressSummaryModal({ visible, onClose, activeSummary, rawMessages }: Props) {
+  const { colors } = useAppTheme();
   const modalRef = useRef<BottomSheetModal>(null);
 
   useEffect(() => {
@@ -41,13 +43,13 @@ export function ContextCompressSummaryModal({ visible, onClose, activeSummary, r
     (props: BottomSheetBackdropProps) => (
       <BottomSheetBackdrop
         {...props}
-        opacity={0.35}
+        opacity={colors.bottomSheetBackdropOpacity}
         pressBehavior="close"
         appearsOnIndex={0}
         disappearsOnIndex={-1}
       />
     ),
-    []
+    [colors.bottomSheetBackdropOpacity]
   );
 
   const e = activeSummary?.covers_exclusive_end;
@@ -78,7 +80,7 @@ export function ContextCompressSummaryModal({ visible, onClose, activeSummary, r
           <Text style={styles.cancelText}>取消</Text>
         </TouchableOpacity>
       </View>
-      <View style={styles.headerBorder} />
+      <View style={[styles.headerBorder, { height: colors.headerBarBottomBorderWidth }]} />
       <BottomSheetScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator

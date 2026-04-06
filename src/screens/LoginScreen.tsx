@@ -229,7 +229,7 @@ function createLoginStyles(c: AppColors) {
     },
     modalBackdrop: {
       flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.5)',
+      backgroundColor: c.modalBackdrop,
       justifyContent: 'flex-end',
     },
     modalBox: {
@@ -243,7 +243,7 @@ function createLoginStyles(c: AppColors) {
       alignItems: 'center',
       justifyContent: 'space-between',
       padding: 12,
-      borderBottomWidth: 1,
+      borderBottomWidth: c.headerBarBottomBorderWidth,
       borderBottomColor: c.border,
     },
     modalTitle: { fontSize: 16, fontWeight: '600', color: c.textHeader },

@@ -3,6 +3,7 @@
  * 改这里的数字即可全局生效，无需在各 screen/component 里散落修改。
  */
 import { Platform } from 'react-native';
+import type { AppColors } from './appColors';
 
 /** 浅色描边，用于 Android 圆形按钮、FAB 等（替代 elevation 避免方向不一致） */
 export const borderLight = {
@@ -23,44 +24,90 @@ export const shadowSheet = Platform.select({
   android: { elevation: 8 },
 });
 
+const shadowCardIos = {
+  shadowColor: '#000' as const,
+  shadowOffset: { width: 0, height: 1 },
+  shadowOpacity: 0.04,
+  shadowRadius: 6,
+};
+
 /** 白色卡片（筛选面板内卡片、任务详情卡片等）：iOS 轻阴影，Android 用 border */
 export const shadowCard = Platform.select({
-  ios: {
-    shadowColor: '#000' as const,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-  },
+  ios: shadowCardIos,
   android: {
     elevation: 0,
     ...borderLight,
   },
 });
 
-/** Header 圆形按钮：iOS 阴影，Android 仅描边 */
+/** 卡片阴影 + Android 描边随主题（任务详情、筛选 sheet 等） */
+export function shadowCardThemed(c: AppColors) {
+  return Platform.select({
+    ios: shadowCardIos,
+    android: {
+      elevation: 0,
+      borderWidth: 1 as const,
+      borderColor: c.androidCircleFabHairline,
+    },
+  });
+}
+
+const shadowCircleButtonIos = {
+  shadowColor: '#000' as const,
+  shadowOffset: { width: 0, height: 0 },
+  shadowOpacity: 0.08,
+  shadowRadius: 12,
+};
+
+/** Header 圆形按钮：iOS 阴影，Android 仅描边（固定浅灰边，无主题时请用此） */
 export const shadowCircleButton = Platform.select({
-  ios: {
-    shadowColor: '#000' as const,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-  },
+  ios: shadowCircleButtonIos,
   android: {
     elevation: 0,
     ...borderLight,
   },
 });
 
-/** 右下角 FAB：iOS 阴影，Android 仅描边（样式里已带 borderLight） */
+/**
+ * Header 圆形按钮（随主题）：Android 用 `androidCircleFabHairline`（浅色与 Tab 顶线解耦，避免亮模式下重边）。
+ */
+export function shadowCircleButtonThemed(c: AppColors) {
+  return Platform.select({
+    ios: shadowCircleButtonIos,
+    android: {
+      elevation: 0,
+      borderWidth: 1 as const,
+      borderColor: c.androidCircleFabHairline,
+    },
+  });
+}
+
+const shadowFabIos = {
+  shadowColor: '#000' as const,
+  shadowOffset: { width: 0, height: 1 },
+  shadowOpacity: 0.1,
+  shadowRadius: 6,
+};
+
+/** 右下角 FAB：iOS 阴影；Android 无描边（常与 borderLight 组合） */
 export const shadowFab = Platform.select({
-  ios: {
-    shadowColor: '#000' as const,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-  },
+  ios: shadowFabIos,
   android: { elevation: 0 },
 });
+
+/**
+ * FAB（随主题）：Android 用 `androidCircleFabHairline`；iOS 同 shadowFab。
+ */
+export function shadowFabThemed(c: AppColors) {
+  return Platform.select({
+    ios: shadowFabIos,
+    android: {
+      elevation: 0,
+      borderWidth: 1 as const,
+      borderColor: c.androidCircleFabHairline,
+    },
+  });
+}
 
 /** 下拉/浮层菜单 */
 export const shadowMenu = Platform.select({

@@ -2,7 +2,7 @@
  * 新建任务时选择归属项目，与 FlowTaskIOS ProjectSelectForCreateView 对齐。
  * 从底部弹出（与筛选 sheet 一致），白底、仅 header 下分割线，列表行为纯行无卡片无分割线。
  */
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import {
   BottomSheetModal,
@@ -11,9 +11,53 @@ import {
 } from '@gorhom/bottom-sheet';
 import type { BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import type { AppColors } from '../theme/appColors';
+import { useAppTheme } from '../context/ThemeContext';
 import { shadowSheet } from '../theme/shadows';
 import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL } from '../theme/typography';
 import type { Project } from '../taskApi';
+
+function createProjectSelectSheetStyles(c: AppColors) {
+  return StyleSheet.create({
+    sheetBg: {
+      backgroundColor: c.surface,
+      borderTopLeftRadius: 32,
+      borderTopRightRadius: 32,
+    },
+    sheetShadow: { ...shadowSheet },
+    handle: { backgroundColor: c.borderD5, width: 36 },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingTop: 8,
+      paddingBottom: 12,
+    },
+    headerBorder: {
+      height: c.headerBarBottomBorderWidth,
+      backgroundColor: c.border,
+    },
+    title: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: c.textPrimary },
+    cancelBtn: { paddingVertical: 8, paddingHorizontal: 4 },
+    cancelText: { fontSize: TASK_FONT_SIZE_BODY, color: c.textPrimary },
+    scrollContent: {
+      paddingBottom: 48,
+      paddingTop: 8,
+      backgroundColor: c.surface,
+    },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 12,
+      paddingHorizontal: 16,
+      gap: 12,
+    },
+    projectInfo: { flex: 1 },
+    projectName: { fontSize: 16, color: c.textPrimary },
+    projectDesc: { fontSize: TASK_FONT_SIZE_SMALL, color: c.textMuted, marginTop: 2 },
+  });
+}
 
 type Props = {
   visible: boolean;
@@ -29,6 +73,8 @@ export function ProjectSelectSheet({
   onSelectProject,
 }: Props) {
   const modalRef = useRef<BottomSheetModal>(null);
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createProjectSelectSheetStyles(colors), [colors]);
 
   useEffect(() => {
     if (visible) modalRef.current?.present();
@@ -46,13 +92,13 @@ export function ProjectSelectSheet({
     (props: BottomSheetBackdropProps) => (
       <BottomSheetBackdrop
         {...props}
-        opacity={0.35}
+        opacity={colors.bottomSheetBackdropOpacity}
         pressBehavior="close"
         appearsOnIndex={0}
         disappearsOnIndex={-1}
       />
     ),
-    []
+    [colors.bottomSheetBackdropOpacity]
   );
 
   return (
@@ -86,7 +132,7 @@ export function ProjectSelectSheet({
             onPress={() => onSelectProject(item)}
             activeOpacity={0.7}
           >
-            <Ionicons name="folder-outline" size={24} color="#111827" />
+            <Ionicons name="folder-outline" size={24} color={colors.textPrimary} />
             <View style={styles.projectInfo}>
               <Text style={styles.projectName}>{item.name ?? item.id}</Text>
               {item.description && item.description.trim() ? (
@@ -95,50 +141,10 @@ export function ProjectSelectSheet({
                 </Text>
               ) : null}
             </View>
-            <Ionicons name="chevron-forward" size={18} color="#9ca3af" />
+            <Ionicons name="chevron-forward" size={18} color={colors.placeholder} />
           </TouchableOpacity>
         ))}
       </BottomSheetScrollView>
     </BottomSheetModal>
   );
 }
-
-const styles = StyleSheet.create({
-  sheetBg: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-  },
-  sheetShadow: { ...shadowSheet },
-  handle: { backgroundColor: '#c7c7cc', width: 36 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 12,
-  },
-  headerBorder: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: '#e5e7eb',
-  },
-  title: { fontSize: TASK_FONT_SIZE_BODY, fontWeight: '600', color: '#111827' },
-  cancelBtn: { paddingVertical: 8, paddingHorizontal: 4 },
-  cancelText: { fontSize: TASK_FONT_SIZE_BODY, color: '#111827' },
-  scrollContent: {
-    paddingBottom: 48,
-    paddingTop: 8,
-    backgroundColor: '#fff',
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    gap: 12,
-  },
-  projectInfo: { flex: 1 },
-  projectName: { fontSize: 16, color: '#111827' },
-  projectDesc: { fontSize: TASK_FONT_SIZE_SMALL, color: '#6b7280', marginTop: 2 },
-});

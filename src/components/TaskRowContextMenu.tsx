@@ -2,7 +2,7 @@
  * 任务行长按菜单：与 FlowTaskIOS contextMenu 对齐
  * 完成质量/优先级 点击后弹出二级菜单（无背景变暗）
  */
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -19,8 +19,126 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import type { TaskItem } from '../taskApi';
 import { useTask } from '../context/TaskContext';
+import type { AppColors } from '../theme/appColors';
+import { useAppTheme } from '../context/ThemeContext';
 import { shadowMenu } from '../theme/shadows';
 import { TaskRowContent } from './TaskRowContent';
+
+function createTaskRowContextMenuStyles(c: AppColors) {
+  return StyleSheet.create({
+    backdrop: {
+      position: 'absolute',
+      left: 0,
+      top: 0,
+      backgroundColor: c.modalBackdrop,
+    },
+    rowHighlight: {
+      position: 'absolute',
+      backgroundColor: c.surfaceMuted,
+      borderRadius: 18,
+      overflow: 'hidden',
+    },
+    rowHighlightScaledWrap: {
+      position: 'absolute',
+    },
+    cardWrap: {
+      position: 'absolute',
+      alignSelf: 'flex-start',
+      maxWidth: 320,
+    },
+    card: {
+      backgroundColor: c.surface,
+      borderRadius: 25,
+      paddingVertical: Platform.select({ android: 6, default: 8 }),
+      paddingHorizontal: 4,
+      alignSelf: 'flex-start',
+      minWidth: 200,
+      ...shadowMenu,
+    },
+    cardDimmed: {
+      opacity: 0.94,
+    },
+    cardContentDimmed: {
+      opacity: 0.72,
+    },
+    sectionLabel: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: c.textMuted,
+      paddingHorizontal: 12,
+      paddingTop: 8,
+      paddingBottom: 4,
+    },
+    menuRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: Platform.select({ android: 10, default: 12 }),
+      paddingHorizontal: 12,
+      gap: 12,
+    },
+    menuRowText: {
+      flex: 1,
+      flexShrink: 0,
+      fontSize: 17,
+      color: c.textPrimary,
+    },
+    menuRowTextActive: {
+      color: c.link,
+      fontWeight: '600',
+    },
+    menuRowTextDanger: {
+      flex: 1,
+      flexShrink: 0,
+      fontSize: 17,
+      color: c.danger,
+      fontWeight: '500',
+    },
+    divider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: c.border,
+      marginVertical: Platform.select({ android: 6, default: 4 }),
+      marginHorizontal: 12,
+    },
+    submenuWrap: {
+      position: 'absolute',
+      alignSelf: 'flex-start',
+    },
+    submenuCard: {
+      backgroundColor: c.surface,
+      borderRadius: 25,
+      paddingVertical: Platform.select({ android: 8, default: 8 }),
+      paddingHorizontal: 4,
+      ...shadowMenu,
+    },
+    submenuHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: Platform.select({ android: 8, default: 12 }),
+      paddingHorizontal: 12,
+      gap: 12,
+    },
+    submenuHeaderText: {
+      flex: 1,
+      fontSize: 17,
+      fontWeight: '600',
+      color: c.textPrimary,
+    },
+    submenuRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: Platform.select({ android: 10, default: 12 }),
+      paddingHorizontal: 12,
+      gap: 12,
+      minHeight: Platform.select({ android: 40, default: 48 }),
+    },
+    submenuRowText: {
+      fontSize: 17,
+      color: c.textPrimary,
+      flex: 1,
+    },
+  });
+}
 
 const ROW_SIDE_MARGIN = 12;
 const MENU_GAP = 8;
@@ -74,6 +192,8 @@ export function TaskRowContextMenu({ task, visible, anchorLayout, rowPreview, on
     toggleTaskDoing,
     deleteTask,
   } = useTask() ?? {};
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createTaskRowContextMenuStyles(colors), [colors]);
 
   const [submenu, setSubmenu] = useState<'quality' | 'priority' | null>(null);
   const [mainCardWidth, setMainCardWidth] = useState(0);
@@ -191,9 +311,9 @@ export function TaskRowContextMenu({ task, visible, anchorLayout, rowPreview, on
                 onPress={() => setSubmenu((s) => (s === 'quality' ? null : 'quality'))}
                 activeOpacity={0.7}
               >
-                <Ionicons name="star-outline" size={20} color="#374151" />
+                <Ionicons name="star-outline" size={20} color={colors.textSecondary} />
                 <Text style={styles.menuRowText} numberOfLines={1}>完成质量</Text>
-                <Ionicons name="chevron-forward" size={16} color="#9ca3af" />
+                <Ionicons name="chevron-forward" size={16} color={colors.placeholder} />
               </TouchableOpacity>
             ) : (
               <TouchableOpacity
@@ -207,7 +327,7 @@ export function TaskRowContextMenu({ task, visible, anchorLayout, rowPreview, on
                 <Ionicons
                   name={task.doing ? 'pause-circle-outline' : 'construct-outline'}
                   size={20}
-                  color="#374151"
+                  color={colors.textSecondary}
                 />
                 <Text style={styles.menuRowText} numberOfLines={1}>
                   {task.doing ? '停止进行' : '开始进行'}
@@ -222,9 +342,9 @@ export function TaskRowContextMenu({ task, visible, anchorLayout, rowPreview, on
               onPress={() => setSubmenu((s) => (s === 'priority' ? null : 'priority'))}
               activeOpacity={0.7}
             >
-              <Ionicons name="flag-outline" size={20} color="#374151" />
+              <Ionicons name="flag-outline" size={20} color={colors.textSecondary} />
               <Text style={styles.menuRowText} numberOfLines={1}>优先级</Text>
-              <Ionicons name="chevron-forward" size={16} color="#9ca3af" />
+              <Ionicons name="chevron-forward" size={16} color={colors.placeholder} />
             </TouchableOpacity>
 
             <View style={styles.divider} />
@@ -234,7 +354,7 @@ export function TaskRowContextMenu({ task, visible, anchorLayout, rowPreview, on
               onPress={handleDelete}
               activeOpacity={0.7}
             >
-              <Ionicons name="trash-outline" size={20} color="#dc2626" />
+              <Ionicons name="trash-outline" size={20} color={colors.danger} />
               <Text style={styles.menuRowTextDanger} numberOfLines={1}>删除任务</Text>
             </TouchableOpacity>
             </View>
@@ -253,9 +373,9 @@ export function TaskRowContextMenu({ task, visible, anchorLayout, rowPreview, on
                 onPress={() => setSubmenu(null)}
                 activeOpacity={0.7}
               >
-                <Ionicons name="star-outline" size={20} color="#374151" />
+                <Ionicons name="star-outline" size={20} color={colors.textSecondary} />
                 <Text style={styles.submenuHeaderText} numberOfLines={1}>完成质量</Text>
-                <Ionicons name="chevron-down" size={16} color="#9ca3af" />
+                <Ionicons name="chevron-down" size={16} color={colors.placeholder} />
               </TouchableOpacity>
               <View style={styles.divider} />
               {QUALITY_OPTIONS.map((opt) => (
@@ -279,7 +399,7 @@ export function TaskRowContextMenu({ task, visible, anchorLayout, rowPreview, on
                     {opt.label}
                   </Text>
                   {currentQuality === opt.value ? (
-                    <Ionicons name="checkmark" size={18} color="#007AFF" />
+                    <Ionicons name="checkmark" size={18} color={colors.link} />
                   ) : null}
                 </TouchableOpacity>
               ))}
@@ -298,9 +418,9 @@ export function TaskRowContextMenu({ task, visible, anchorLayout, rowPreview, on
                 onPress={() => setSubmenu(null)}
                 activeOpacity={0.7}
               >
-                <Ionicons name="flag-outline" size={20} color="#374151" />
+                <Ionicons name="flag-outline" size={20} color={colors.textSecondary} />
                 <Text style={styles.submenuHeaderText} numberOfLines={1}>优先级</Text>
-                <Ionicons name="chevron-down" size={16} color="#9ca3af" />
+                <Ionicons name="chevron-down" size={16} color={colors.placeholder} />
               </TouchableOpacity>
               <View style={styles.divider} />
               {PRIORITY_OPTIONS.map((opt) => (
@@ -324,7 +444,7 @@ export function TaskRowContextMenu({ task, visible, anchorLayout, rowPreview, on
                     {opt.label}
                   </Text>
                   {currentPriority === opt.value ? (
-                    <Ionicons name="checkmark" size={18} color="#007AFF" />
+                    <Ionicons name="checkmark" size={18} color={colors.link} />
                   ) : null}
                 </TouchableOpacity>
               ))}
@@ -336,117 +456,3 @@ export function TaskRowContextMenu({ task, visible, anchorLayout, rowPreview, on
     </Modal>
   );
 }
-
-const styles = StyleSheet.create({
-  backdrop: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  rowHighlight: {
-    position: 'absolute',
-    backgroundColor: 'rgba(243,244,246,0.98)',
-    borderRadius: 18,
-    overflow: 'hidden',
-  },
-  rowHighlightScaledWrap: {
-    position: 'absolute',
-  },
-  cardWrap: {
-    position: 'absolute',
-    alignSelf: 'flex-start',
-    maxWidth: 320,
-  },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 25,
-    paddingVertical: Platform.select({ android: 6, default: 8 }),
-    paddingHorizontal: 4,
-    alignSelf: 'flex-start',
-    minWidth: 200,
-    ...shadowMenu,
-  },
-  cardDimmed: {
-    opacity: 0.94,
-  },
-  cardContentDimmed: {
-    opacity: 0.72,
-  },
-  sectionLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#6b7280',
-    paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 4,
-  },
-  menuRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: Platform.select({ android: 10, default: 12 }),
-    paddingHorizontal: 12,
-    gap: 12,
-  },
-  menuRowText: {
-    flex: 1,
-    flexShrink: 0,
-    fontSize: 17,
-    color: '#111827',
-  },
-  menuRowTextActive: {
-    color: '#007AFF',
-    fontWeight: '600',
-  },
-  menuRowTextDanger: {
-    flex: 1,
-    flexShrink: 0,
-    fontSize: 17,
-    color: '#dc2626',
-    fontWeight: '500',
-  },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: '#e5e7eb',
-    marginVertical: Platform.select({ android: 6, default: 4 }),
-    marginHorizontal: 12,
-  },
-  submenuWrap: {
-    position: 'absolute',
-    alignSelf: 'flex-start',
-  },
-  submenuCard: {
-    backgroundColor: '#fff',
-    borderRadius: 25,
-    paddingVertical: Platform.select({ android: 8, default: 8 }),
-    paddingHorizontal: 4,
-    ...shadowMenu,
-  },
-  submenuHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: Platform.select({ android: 8, default: 12 }),
-    paddingHorizontal: 12,
-    gap: 12,
-  },
-  submenuHeaderText: {
-    flex: 1,
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  submenuRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: Platform.select({ android: 10, default: 12 }),
-    paddingHorizontal: 12,
-    gap: 12,
-    minHeight: Platform.select({ android: 40, default: 48 }),
-  },
-  submenuRowText: {
-    fontSize: 17,
-    color: '#111827',
-    flex: 1,
-  },
-});

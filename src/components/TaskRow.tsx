@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, TouchableOpacity, StyleSheet, PanResponder, Platform, Vibration } from 'react-native';
+import { useAppTheme } from '../context/ThemeContext';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import type { TaskItem } from '../taskApi';
 import { TaskRowContextMenu, type RowPreview } from './TaskRowContextMenu';
@@ -96,6 +97,27 @@ export function TaskRow({
   onToggleCompletion,
   drag,
 }: TaskRowProps) {
+  const { colors } = useAppTheme();
+  const rowDragReadyStyle = useMemo(
+    () => ({
+      backgroundColor: colors.surface,
+      ...Platform.select({
+        ios: {
+          shadowColor: '#000' as const,
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.06,
+          shadowRadius: 6,
+        },
+        android: {
+          elevation: 0,
+          borderWidth: 1,
+          borderColor: colors.androidCircleFabHairline,
+        },
+        default: {},
+      }),
+    }),
+    [colors]
+  );
   const [visualDone, setVisualDone] = useState(task.done);
   const [dragReadyVisual, setDragReadyVisual] = useState(false);
   const [contextMenuVisible, setContextMenuVisible] = useState(false);
@@ -205,7 +227,7 @@ export function TaskRow({
         {...(drag ? panResponder.panHandlers : {})}
       >
         <TouchableOpacity
-          style={[styles.row, drag && dragReadyVisual && styles.rowDragReady]}
+          style={[styles.row, drag && dragReadyVisual && rowDragReadyStyle]}
           onPress={() => {
             if (openedMenuThisTouchRef.current) {
               openedMenuThisTouchRef.current = false;
@@ -284,23 +306,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
     alignSelf: 'stretch',
-  },
-  /** 按住 500ms 进入“可拖拽”时的视觉反馈：与页面同色背景 + 轻微阴影；安卓用淡边框替代强 elevation，避免阴影挡住卡片 */
-  rowDragReady: {
-    backgroundColor: '#fff',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.06,
-        shadowRadius: 6,
-      },
-      android: {
-        elevation: 0,
-        borderWidth: 1,
-        borderColor: 'rgba(0,0,0,0.08)',
-      },
-      default: {},
-    }),
   },
 });
