@@ -39,7 +39,9 @@ import { HEADER_CIRCLE_BTN_SIZE, LIST_TOP_EXTRA, LIST_PADDING_BOTTOM_DEFAULT } f
 import { TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { TaskFlowChartView } from '../components/TaskFlowChartView';
+import { RemoteCollabPresenceBar } from '../components/RemoteCollabPresenceBar';
 import { ScreenErrorBoundary } from '../components/ScreenErrorBoundary';
+import { useProjectCollabSocket } from '../hooks/useProjectCollabSocket';
 import { PullToRefreshRing } from '../components/PullToRefreshRing';
 import { MonthCalendarScroll } from '../components/MonthCalendar';
 import {
@@ -152,7 +154,6 @@ function getTabPadding(
   index: number,
   activeList: [boolean, boolean, boolean]
 ): { paddingLeft: number; paddingRight: number } {
-  const [a0, a1, a2] = activeList;
   const active = activeList[index];
   const isLeftOuter = index === 0;
   const isRightOuter = index === 2;
@@ -280,6 +281,16 @@ function createProjectDetailScreenStyles(c: AppColors) {
       ...shadowCircleButtonThemed(c),
     },
     topBarCenter: { alignItems: 'center', flex: 1 },
+    /** 叠在列表/Flow 画布之上，不占布局；pointerEvents 在 JSX 设为 none */
+    collabPresenceTopWrap: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      zIndex: 12,
+      alignItems: 'center',
+      paddingTop: 6,
+      paddingBottom: 6,
+    },
     refreshIndicatorFixed: {
       position: 'absolute',
       left: 0,
@@ -301,6 +312,10 @@ function createProjectDetailScreenStyles(c: AppColors) {
       left: 0,
       right: 0,
       bottom: 0,
+      flexDirection: 'column',
+      alignItems: 'stretch',
+    },
+    bottomBarRow: {
       flexDirection: 'row',
       alignItems: 'center',
       paddingHorizontal: 16,
@@ -333,7 +348,7 @@ export function ProjectDetailScreen() {
   const navigation = useNavigation<StackNavigationProp<TasksStackParamList, 'ProjectDetail'>>();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createProjectDetailScreenStyles(colors), [colors]);
-  const { projectId, projectName } = params;
+  const { projectId } = params;
   const {
     tasks,
     projects,
@@ -342,6 +357,7 @@ export function ProjectDetailScreen() {
     toggleTaskCompletion,
     isLoadingTasks,
     getAuth,
+    mergeProjectTasksSnapshot,
   } = useTask();
 
   /** Flow 图必须用项目全量任务（onlyMine 列表缺父/缺子会破坏 convertTasksToGraph） */
@@ -352,6 +368,34 @@ export function ProjectDetailScreen() {
     () => tasks.filter((t) => t.project_id === projectId),
     [tasks, projectId]
   );
+
+  const taskAuth = getAuth();
+
+  const handleRemoteProjectTasksRefresh = useCallback(async () => {
+    const a = getAuth();
+    if (!a) return;
+    try {
+      const list = await fetchTasks(a, { projectId, onlyMine: false });
+      const safe = Array.isArray(list) ? list : [];
+      mergeProjectTasksSnapshot(projectId, safe);
+      setFlowChartTasks(safe);
+      await loadProjects(true);
+    } catch {
+      /* ignore */
+    }
+  }, [getAuth, projectId, mergeProjectTasksSnapshot, loadProjects]);
+
+  const { visibleRemoteSessions } = useProjectCollabSocket({
+    projectId,
+    enabled: Boolean(taskAuth && projectId && !projectId.startsWith('__')),
+    auth: taskAuth,
+    onRemoteProjectTasksRefresh: handleRemoteProjectTasksRefresh,
+  });
+
+  const tasksForCollabPresence = useMemo(() => {
+    if (flowChartTasks.length > 0) return flowChartTasks;
+    return projectTasks;
+  }, [flowChartTasks, projectTasks]);
   const project = useMemo(
     () => projects.find((p) => p.id === projectId),
     [projects, projectId]
@@ -452,12 +496,12 @@ export function ProjectDetailScreen() {
     setFlowChartLoading(true);
     (async () => {
       try {
-        const auth = getAuth();
-        if (!auth) {
+        const flowFetchAuth = getAuth();
+        if (!flowFetchAuth) {
           if (!cancelled) setFlowChartTasks([]);
           return;
         }
-        const list = await fetchTasks(auth, { projectId, onlyMine: false });
+        const list = await fetchTasks(flowFetchAuth, { projectId, onlyMine: false });
         if (!cancelled) setFlowChartTasks(Array.isArray(list) ? list : []);
       } catch {
         if (!cancelled) setFlowChartTasks([]);
@@ -479,10 +523,10 @@ export function ProjectDetailScreen() {
     }
     const startedAt = Date.now();
     try {
-      const auth = getAuth();
+      const refreshFlowAuth = getAuth();
       const extra =
-        tab === 'flow' && auth
-          ? fetchTasks(auth, { projectId, onlyMine: false }).then((list) => {
+        tab === 'flow' && refreshFlowAuth
+          ? fetchTasks(refreshFlowAuth, { projectId, onlyMine: false }).then((list) => {
               setFlowChartTasks(Array.isArray(list) ? list : []);
             })
           : Promise.resolve();
@@ -555,6 +599,18 @@ export function ProjectDetailScreen() {
           <Ionicons name="filter-outline" size={22} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
+      {visibleRemoteSessions.length > 0 ? (
+        <View
+          style={[styles.collabPresenceTopWrap, { top: headerHeight }]}
+          pointerEvents="none"
+        >
+          <RemoteCollabPresenceBar
+            variant="floating"
+            sessions={visibleRemoteSessions}
+            tasks={tasksForCollabPresence}
+          />
+        </View>
+      ) : null}
       <ScreenErrorBoundary key={`project-detail-${projectId}-${tab}`} title="当前标签页加载异常">
         <View style={styles.mainContent}>
           {tab === 'list' && (
@@ -645,35 +701,37 @@ export function ProjectDetailScreen() {
       ) : null}
 
       <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 12) + 4 }]}>
-        <View style={styles.tabCapsule}>
-          {([
-            { tab: 'list' as Tab, label: '列表', icon: 'list' },
-            { tab: 'calendar' as Tab, label: '日历', icon: 'calendar' },
-            { tab: 'flow' as Tab, label: 'Flow', icon: 'git-network-outline' },
-          ] as const).map(({ tab: t, label, icon }, i) => {
-            const activeList: [boolean, boolean, boolean] = [
-              tab === 'list',
-              tab === 'calendar',
-              tab === 'flow',
-            ];
-            const { paddingLeft, paddingRight } = getTabPadding(i, activeList);
-            return (
-              <TabBtn
-                key={t}
-                label={label}
-                icon={icon}
-                active={tab === t}
-                onPress={() => setTab(t)}
-                paddingLeft={paddingLeft}
-                paddingRight={paddingRight}
-              />
-            );
-          })}
+        <View style={styles.bottomBarRow}>
+          <View style={styles.tabCapsule}>
+            {([
+              { tab: 'list' as Tab, label: '列表', icon: 'list' },
+              { tab: 'calendar' as Tab, label: '日历', icon: 'calendar' },
+              { tab: 'flow' as Tab, label: 'Flow', icon: 'git-network-outline' },
+            ] as const).map(({ tab: t, label, icon }, i) => {
+              const activeList: [boolean, boolean, boolean] = [
+                tab === 'list',
+                tab === 'calendar',
+                tab === 'flow',
+              ];
+              const { paddingLeft, paddingRight } = getTabPadding(i, activeList);
+              return (
+                <TabBtn
+                  key={t}
+                  label={label}
+                  icon={icon}
+                  active={tab === t}
+                  onPress={() => setTab(t)}
+                  paddingLeft={paddingLeft}
+                  paddingRight={paddingRight}
+                />
+              );
+            })}
+          </View>
+          <View style={{ flex: 1 }} />
+          <TouchableOpacity style={styles.fab} onPress={onCreateTask}>
+            <Ionicons name="add" size={26} color={colors.primary} />
+          </TouchableOpacity>
         </View>
-        <View style={{ flex: 1 }} />
-        <TouchableOpacity style={styles.fab} onPress={onCreateTask}>
-          <Ionicons name="add" size={26} color={colors.primary} />
-        </TouchableOpacity>
       </View>
       <TaskFilterSheet
         visible={filterVisible}

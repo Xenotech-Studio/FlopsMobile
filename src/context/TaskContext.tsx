@@ -158,6 +158,8 @@ type TaskContextValue = {
   shouldShowEndTodayButton: () => boolean;
   clearError: () => void;
   getAuth: () => taskApi.TaskApiAuth | null;
+  /** 用某项目的全量任务快照替换本地该项目的任务（用于 WS project_changed 等与 Web 对齐） */
+  mergeProjectTasksSnapshot: (projectId: string, projectTasks: TaskItem[]) => void;
 };
 
 const TaskContext = createContext<TaskContextValue | null>(null);
@@ -420,6 +422,16 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
 
   const getAuth = useCallback(() => auth, [auth]);
 
+  const mergeProjectTasksSnapshot = useCallback((projectId: string, projectTasks: TaskItem[]) => {
+    setTasks((prev) => {
+      const others = prev.filter((t) => t.project_id !== projectId);
+      const next = sortTasks([...others, ...projectTasks]);
+      AsyncStorage.setItem(CACHED_TASKS_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+    setLastTasksLoad(Date.now());
+  }, []);
+
   React.useEffect(() => {
     loadEndedToday();
   }, [loadEndedToday]);
@@ -447,6 +459,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     shouldShowEndTodayButton,
     clearError,
     getAuth,
+    mergeProjectTasksSnapshot,
   };
 
   return <TaskContext.Provider value={value}>{children}</TaskContext.Provider>;

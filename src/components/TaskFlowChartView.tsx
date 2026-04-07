@@ -21,6 +21,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import Svg, { Path, Defs, Pattern, Rect as SvgRect, Circle, Text as SvgText } from 'react-native-svg';
 import type { TaskItem } from '../taskApi';
+import { useAppTheme } from '../context/ThemeContext';
 import {
   convertTasksToGraph,
   getDescendantIds,
@@ -491,6 +492,7 @@ export type TaskFlowChartViewProps = {
 };
 
 export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProps) {
+  const { colors } = useAppTheme();
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
@@ -762,8 +764,13 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
 
   if (tasks.length === 0) {
     return (
-      <View style={[styles.empty, { paddingTop: topInset }]}>
-        <Text style={styles.emptyText}>该项目暂无任务</Text>
+      <View
+        style={[
+          styles.empty,
+          { paddingTop: topInset, backgroundColor: colors.chatScreenBackground },
+        ]}
+      >
+        <Text style={[styles.emptyText, { color: colors.textMuted }]}>该项目暂无任务</Text>
       </View>
     );
   }
@@ -771,9 +778,11 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
   /** 建图在 runAfterInteractions 中异步执行，避免与当前渲染帧/reconcile 叠在一起加重卡顿或异常路径 */
   if (isBuilding) {
     return (
-      <View style={[styles.root, { paddingTop: topInset }]}>
+      <View
+        style={[styles.root, { paddingTop: topInset, backgroundColor: colors.chatScreenBackground }]}
+      >
         <View style={styles.empty}>
-          <ActivityIndicator size="large" color={WEB.edge} />
+          <ActivityIndicator size="large" color={colors.primary} />
         </View>
       </View>
     );
@@ -781,17 +790,22 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
 
   if (chartError) {
     return (
-      <View style={[styles.root, { paddingTop: topInset }]}>
+      <View
+        style={[styles.root, { paddingTop: topInset, backgroundColor: colors.chatScreenBackground }]}
+      >
         <View style={styles.chartErrorBox}>
-          <Text style={styles.chartErrorTitle}>流程图数据异常</Text>
-          <Text style={styles.chartErrorDetail} numberOfLines={10}>
+          <Text style={[styles.chartErrorTitle, { color: colors.textPrimary }]}>流程图数据异常</Text>
+          <Text style={[styles.chartErrorDetail, { color: colors.textSecondary }]} numberOfLines={10}>
             {chartError}
           </Text>
-          <Text style={styles.chartErrorHint}>
+          <Text style={[styles.chartErrorHint, { color: colors.textMuted }]}>
             请切换到「列表」或「日历」后重试；若仅 Flow 异常，可稍后再试或到网页端查看。
           </Text>
         </View>
-        <Text style={styles.hint} numberOfLines={2}>
+        <Text
+          style={[styles.hint, { backgroundColor: colors.surfaceMuted, color: colors.textMuted }]}
+          numberOfLines={2}
+        >
           与网页版相同布局 · 单指拖动 · 双指捏合缩放
         </Text>
       </View>
@@ -803,7 +817,7 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
   const slotH = Math.max(1, viewport.h);
 
   return (
-    <View style={[styles.root, { paddingTop: topInset }]}>
+    <View style={[styles.root, { paddingTop: topInset, backgroundColor: colors.chatScreenBackground }]}>
       <GestureDetector gesture={flowGestures}>
         <View style={styles.panSlot} onLayout={onCanvasLayout}>
           <AnimatedSvg
@@ -827,7 +841,7 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
                 />
               </Pattern>
             </Defs>
-            <SvgRect x={0} y={0} width={svgW} height={svgH} fill={WEB.pane} />
+            <SvgRect x={0} y={0} width={svgW} height={svgH} fill={colors.chatScreenBackground} />
             <SvgRect x={0} y={0} width={svgW} height={svgH} fill={`url(#${patternId})`} />
             {visibleChoreRegions.map((r) => (
               <React.Fragment key={`chore-region-${r.parentId}`}>
@@ -911,7 +925,10 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
           </Animated.View>
         </View>
       </GestureDetector>
-      <Text style={styles.hint} numberOfLines={1}>
+      <Text
+        style={[styles.hint, { backgroundColor: colors.surfaceMuted, color: colors.textMuted }]}
+        numberOfLines={1}
+      >
         与网页版相同布局 · 单指拖动 · 双指捏合缩放
       </Text>
     </View>
@@ -919,7 +936,7 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: WEB.surface },
+  root: { flex: 1 },
   panSlot: { flex: 1, overflow: 'hidden', position: 'relative' },
   /** 与节点层对齐：仅占满视口，边线由 viewBox 映射世界坐标，避免整图光栅 */
   svgViewportLayer: {
@@ -932,7 +949,7 @@ const styles = StyleSheet.create({
     top: 0,
   },
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  emptyText: { fontSize: 15, color: '#888' },
+  emptyText: { fontSize: 15 },
   chartErrorBox: {
     flex: 1,
     justifyContent: 'center',
@@ -941,28 +958,23 @@ const styles = StyleSheet.create({
   chartErrorTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#333',
     textAlign: 'center',
     marginBottom: 10,
   },
   chartErrorDetail: {
     fontSize: 13,
-    color: '#666',
     textAlign: 'center',
     marginBottom: 14,
   },
   chartErrorHint: {
     fontSize: 13,
-    color: '#888',
     lineHeight: 20,
     textAlign: 'center',
   },
   hint: {
     fontSize: 11,
-    color: '#999',
     textAlign: 'center',
     paddingVertical: 6,
-    backgroundColor: '#f8f9fa',
   },
   nodeWrap: {
     position: 'absolute',

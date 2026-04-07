@@ -161,6 +161,20 @@ function buildUrl(path: string, params?: Record<string, string>): string {
   return url.toString();
 }
 
+/**
+ * 与 FlowTask Web `App.jsx` 一致：`wss://{host}/api/ws/project/{id}?user_id&client_instance_id`
+ */
+export function buildProjectWebSocketUrl(
+  projectId: string,
+  query: { userId?: string; clientInstanceId: string }
+): string {
+  const wsOrigin = TASK_API_BASE.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:').replace(/\/$/, '');
+  const url = new URL(`/api/ws/project/${encodeURIComponent(projectId)}`, `${wsOrigin}/`);
+  if (query.userId) url.searchParams.set('user_id', query.userId);
+  url.searchParams.set('client_instance_id', query.clientInstanceId);
+  return url.toString();
+}
+
 async function request<T>(
   url: string,
   options: RequestInit & { parseJson?: boolean } = {}
