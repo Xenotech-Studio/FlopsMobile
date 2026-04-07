@@ -31,12 +31,15 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useTask } from '../context/TaskContext';
 import type { TasksStackParamList } from '../navigation/types';
 import type { TaskItem } from '../taskApi';
+import { fetchTasks } from '../taskApi';
 import { TaskRow } from '../components/TaskRow';
 import { TaskFilterSheet, type StatusLevel } from '../components/TaskFilterSheet';
 import { shadowCircleButtonThemed, shadowFabThemed } from '../theme/shadows';
 import { HEADER_CIRCLE_BTN_SIZE, LIST_TOP_EXTRA, LIST_PADDING_BOTTOM_DEFAULT } from '../theme/layout';
 import { TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import { TaskFlowChartView } from '../components/TaskFlowChartView';
+import { ScreenErrorBoundary } from '../components/ScreenErrorBoundary';
 import { PullToRefreshRing } from '../components/PullToRefreshRing';
 import { MonthCalendarScroll } from '../components/MonthCalendar';
 import {
@@ -322,12 +325,6 @@ function createProjectDetailScreenStyles(c: AppColors) {
       alignItems: 'center',
       ...shadowFabThemed(c),
     },
-    flowPlaceholder: {
-      flex: 1,
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-    flowPlaceholderText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: c.placeholder },
   });
 }
 
@@ -344,7 +341,12 @@ export function ProjectDetailScreen() {
     loadProjects,
     toggleTaskCompletion,
     isLoadingTasks,
+    getAuth,
   } = useTask();
+
+  /** Flow 图必须用项目全量任务（onlyMine 列表缺父/缺子会破坏 convertTasksToGraph） */
+  const [flowChartTasks, setFlowChartTasks] = useState<TaskItem[]>([]);
+  const [flowChartLoading, setFlowChartLoading] = useState(false);
 
   const projectTasks = useMemo(
     () => tasks.filter((t) => t.project_id === projectId),
@@ -444,6 +446,30 @@ export function ProjectDetailScreen() {
     navigation.dispatch(StackActions.pop(1));
   }, [navigation]);
 
+  useEffect(() => {
+    if (tab !== 'flow') return;
+    let cancelled = false;
+    setFlowChartLoading(true);
+    (async () => {
+      try {
+        const auth = getAuth();
+        if (!auth) {
+          if (!cancelled) setFlowChartTasks([]);
+          return;
+        }
+        const list = await fetchTasks(auth, { projectId, onlyMine: false });
+        if (!cancelled) setFlowChartTasks(Array.isArray(list) ? list : []);
+      } catch {
+        if (!cancelled) setFlowChartTasks([]);
+      } finally {
+        if (!cancelled) setFlowChartLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, projectId, getAuth]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     if (Platform.OS === 'android') {
@@ -453,7 +479,14 @@ export function ProjectDetailScreen() {
     }
     const startedAt = Date.now();
     try {
-      await Promise.all([loadTasks(true), loadProjects(true)]);
+      const auth = getAuth();
+      const extra =
+        tab === 'flow' && auth
+          ? fetchTasks(auth, { projectId, onlyMine: false }).then((list) => {
+              setFlowChartTasks(Array.isArray(list) ? list : []);
+            })
+          : Promise.resolve();
+      await Promise.all([loadTasks(true), loadProjects(true), extra]);
     } finally {
       const elapsed = Date.now() - startedAt;
       const remain = MIN_REFRESH_DURATION_MS - elapsed;
@@ -466,7 +499,7 @@ export function ProjectDetailScreen() {
         setRefreshing(false);
       }
     }
-  }, [loadTasks, loadProjects]);
+  }, [loadTasks, loadProjects, tab, projectId, getAuth]);
 
   const onTaskPress = useCallback(
     (taskId: string) => {
@@ -522,75 +555,82 @@ export function ProjectDetailScreen() {
           <Ionicons name="filter-outline" size={22} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
-      <View style={styles.mainContent}>
-        {tab === 'list' && (
-          <>
-            {isLoadingTasks && projectTasks.length === 0 ? (
+      <ScreenErrorBoundary key={`project-detail-${projectId}-${tab}`} title="当前标签页加载异常">
+        <View style={styles.mainContent}>
+          {tab === 'list' && (
+            <>
+              {isLoadingTasks && projectTasks.length === 0 ? (
+                <View style={[styles.mainContent, { paddingTop: headerHeight }]}>
+                  <View style={styles.centered}>
+                    <ActivityIndicator size="large" color={colors.primary} />
+                    <Text style={styles.loadingText}>加载中...</Text>
+                  </View>
+                </View>
+              ) : (
+                <FlatList
+                  data={filteredProjectTasks}
+                  keyExtractor={(item) => item.id}
+                  renderItem={({ item }) => (
+                    <TaskRow
+                      task={item}
+                      showProjectName={showProjectName}
+                      showTimeLabel={showTimeLabels}
+                      onPress={() => onTaskPress(item.id)}
+                      onToggleCompletion={() => toggleTaskCompletion(item)}
+                    />
+                  )}
+                  onScroll={Platform.OS === 'ios' ? handleScroll : undefined}
+                  scrollEventThrottle={16}
+                  refreshControl={
+                    <RefreshControl
+                      refreshing={refreshing}
+                      onRefresh={onRefresh}
+                      colors={[colors.primary]}
+                      tintColor={colors.primary}
+                      progressViewOffset={Platform.OS === 'android' ? headerHeight + LIST_TOP_EXTRA : undefined}
+                    />
+                  }
+                  ListEmptyComponent={
+                    <View style={styles.empty}>
+                      <Ionicons name="checkbox-outline" size={56} color={colors.placeholder} />
+                      <Text style={styles.emptyText}>该项目暂无任务</Text>
+                    </View>
+                  }
+                  contentContainerStyle={[
+                    filteredProjectTasks.length === 0 ? styles.emptyList : styles.listContent,
+                    { paddingTop: headerHeight + LIST_TOP_EXTRA, paddingBottom: 100 },
+                  ]}
+                />
+              )}
+            </>
+          )}
+          {tab === 'calendar' && (
+            <ProjectCalendarTab
+              headerHeight={headerHeight}
+              selectedDate={selectedDate}
+              onDateChange={setSelectedDate}
+              calendarTasks={calendarTasks}
+              showTimeLabels={showTimeLabels}
+              showProjectName={showProjectName}
+              onTaskPress={onTaskPress}
+              onToggleCompletion={toggleTaskCompletion}
+              onRefresh={onRefresh}
+              refreshing={refreshing}
+            />
+          )}
+          {tab === 'flow' &&
+            (flowChartLoading && flowChartTasks.length === 0 ? (
               <View style={[styles.mainContent, { paddingTop: headerHeight }]}>
                 <View style={styles.centered}>
                   <ActivityIndicator size="large" color={colors.primary} />
-                  <Text style={styles.loadingText}>加载中...</Text>
+                  <Text style={styles.loadingText}>加载项目全量任务…</Text>
                 </View>
               </View>
             ) : (
-              <FlatList
-                data={filteredProjectTasks}
-                keyExtractor={(item) => item.id}
-                renderItem={({ item }) => (
-                  <TaskRow
-                    task={item}
-                    showProjectName={showProjectName}
-                    showTimeLabel={showTimeLabels}
-                    onPress={() => onTaskPress(item.id)}
-                    onToggleCompletion={() => toggleTaskCompletion(item)}
-                  />
-                )}
-                onScroll={Platform.OS === 'ios' ? handleScroll : undefined}
-                scrollEventThrottle={16}
-                refreshControl={
-                  <RefreshControl
-                    refreshing={refreshing}
-                    onRefresh={onRefresh}
-                    colors={[colors.primary]}
-                    tintColor={colors.primary}
-                    progressViewOffset={Platform.OS === 'android' ? headerHeight + LIST_TOP_EXTRA : undefined}
-                  />
-                }
-                ListEmptyComponent={
-                  <View style={styles.empty}>
-                    <Ionicons name="checkbox-outline" size={56} color={colors.placeholder} />
-                    <Text style={styles.emptyText}>该项目暂无任务</Text>
-                  </View>
-                }
-                contentContainerStyle={[
-                  filteredProjectTasks.length === 0 ? styles.emptyList : styles.listContent,
-                  { paddingTop: headerHeight + LIST_TOP_EXTRA, paddingBottom: 100 },
-                ]}
-              />
-            )}
-          </>
-        )}
-        {tab === 'calendar' && (
-          <ProjectCalendarTab
-            headerHeight={headerHeight}
-            selectedDate={selectedDate}
-            onDateChange={setSelectedDate}
-            calendarTasks={calendarTasks}
-            showTimeLabels={showTimeLabels}
-            showProjectName={showProjectName}
-            onTaskPress={onTaskPress}
-            onToggleCompletion={toggleTaskCompletion}
-            onRefresh={onRefresh}
-            refreshing={refreshing}
-          />
-        )}
-        {tab === 'flow' && (
-          <View style={[styles.flowPlaceholder, { paddingTop: headerHeight }]}>
-            <Ionicons name="git-network-outline" size={56} color={colors.placeholder} />
-            <Text style={styles.flowPlaceholderText}>FlowChart 暂不支持</Text>
-          </View>
-        )}
-      </View>
+              <TaskFlowChartView key={projectId} tasks={flowChartTasks} topInset={headerHeight} />
+            ))}
+        </View>
+      </ScreenErrorBoundary>
 
       {Platform.OS === 'ios' && tab === 'list' ? (
         <View style={[styles.refreshIndicatorFixed, { top: headerHeight }]} pointerEvents="none">

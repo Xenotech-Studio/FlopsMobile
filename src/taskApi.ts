@@ -43,6 +43,9 @@ export interface TaskItem {
   users?: string[] | null;
   lastediteddatetimeincludingmove?: string | null;
   deleted_datetime?: string | null;
+  /** 可折叠里程碑（与 Web FlowTask 一致） */
+  collapsible?: boolean | null;
+  collapsed?: boolean | null;
 }
 
 export interface Project {
@@ -81,6 +84,70 @@ export interface NewTaskPayload {
   doing?: boolean | null;
   done_quality?: string | null;
   users?: string[] | null;
+}
+
+/**
+ * 将接口/缓存中的异构字段规整为与 Web FlowTask 一致的 camelCase 与数值 relPos。
+ * 避免 children_id、rel_pos 丢失或 relPos 为字符串导致布局 NaN/全部堆叠。
+ */
+export function normalizeTaskFromApi(raw: unknown): TaskItem | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (r.id == null) return null;
+
+  const childrenId = normalizeChildrenIdField(r.childrenId ?? r.children_id);
+  const relPos = normalizeRelPosField(r.relPos ?? r.rel_pos, r);
+
+  const primary =
+    r.primaryParentId != null
+      ? String(r.primaryParentId)
+      : r.primary_parent_id != null
+        ? String(r.primary_parent_id)
+        : null;
+
+  const edgeState = r.childrenEdgeState ?? r.children_edge_state;
+  const base = { ...r } as unknown as TaskItem;
+  return {
+    ...base,
+    id: String(r.id),
+    project_id: String(r.project_id ?? ''),
+    childrenId,
+    relPos,
+    primaryParentId: primary,
+    ...(edgeState !== undefined
+      ? {
+          childrenEdgeState:
+            edgeState && typeof edgeState === 'object' && !Array.isArray(edgeState)
+              ? (edgeState as Record<string, unknown>)
+              : null,
+        }
+      : {}),
+  };
+}
+
+function normalizeChildrenIdField(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((x) => x != null && x !== '').map(String);
+}
+
+function normalizeRelPosField(relRaw: unknown, r: Record<string, unknown>): TaskPosition {
+  let x = 0;
+  let y = 0;
+  if (relRaw && typeof relRaw === 'object') {
+    const o = relRaw as Record<string, unknown>;
+    x = Number(o.x);
+    y = Number(o.y);
+  }
+  if (!Number.isFinite(x)) x = 0;
+  if (!Number.isFinite(y)) y = 0;
+  // 少数历史数据可能只有顶层 x/y
+  if (x === 0 && y === 0 && (r.x != null || r.y != null)) {
+    const tx = Number(r.x);
+    const ty = Number(r.y);
+    if (Number.isFinite(tx)) x = tx;
+    if (Number.isFinite(ty)) y = ty;
+  }
+  return { x, y };
 }
 
 function buildUrl(path: string, params?: Record<string, string>): string {
@@ -136,7 +203,12 @@ function ensureArray<T>(raw: unknown, keys: string[] = ['data', 'tasks', 'projec
 
 export type TaskApiAuth = { userId: string; accessToken: string };
 
-/** 获取任务列表（onlyMine 时需传 auth） */
+/**
+ * 获取任务列表。
+ * - `onlyMine !== false`（默认）：带 `user_id` + `access_token`，服务端只返回 `users` 含当前用户的任务（与 FlowTask Web 一致）。
+ * - `onlyMine: false`：不传 `user_id`，服务端返回查询范围内**全部**任务。构建流程图、父子链时必须对指定项目使用
+ *   `fetchTasks(auth, { projectId, onlyMine: false })`，否则父/子节点缺失会导致树错位。
+ */
 export async function fetchTasks(
   auth: TaskApiAuth | null,
   options?: { projectId?: string; onlyMine?: boolean }
@@ -149,7 +221,9 @@ export async function fetchTasks(
   }
   const url = buildUrl('/api/tasks', Object.keys(params).length ? params : undefined);
   const raw = await request<unknown>(url);
-  return ensureArray<TaskItem>(raw);
+  return ensureArray<unknown>(raw)
+    .map((row) => normalizeTaskFromApi(row))
+    .filter((t): t is TaskItem => t != null);
 }
 
 /** 获取项目列表 */
@@ -165,11 +239,12 @@ export async function fetchProjects(auth: TaskApiAuth): Promise<Project[]> {
 /** 新增任务 */
 export async function addTask(auth: TaskApiAuth | null, payload: NewTaskPayload): Promise<TaskItem> {
   const url = buildUrl('/api/add_task');
-  const res = await request<{ task: TaskItem; message?: string }>(url, {
+  const res = await request<{ task: unknown; message?: string }>(url, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
-  return (res as { task: TaskItem }).task;
+  const row = (res as { task: unknown }).task;
+  return normalizeTaskFromApi(row) ?? (row as TaskItem);
 }
 
 /** 更新任务 */
