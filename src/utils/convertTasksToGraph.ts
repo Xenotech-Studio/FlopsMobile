@@ -3,6 +3,7 @@
  * 若相对坐标塌缩（全堆在同一点），则套用 DAG 分层备用布局，避免移动端只看到一坨节点。
  */
 import type { TaskItem } from '../taskApi';
+import { applyChoreLayoutToFlowGraph } from './choreFlowLayout';
 
 /** 与 Web 节点卡片尺寸一致，用于备用分层间距 */
 const LAYOUT_W = 150;
@@ -234,6 +235,8 @@ export interface FlowGraphNode {
   children: string[];
   activePrimaryParentId: string | null;
   task: TaskItem;
+  /** chore 区筛选隐藏（与 Web Flow node.hidden 一致） */
+  hidden?: boolean;
 }
 
 export interface FlowGraphEdge {
@@ -334,6 +337,9 @@ export function convertTasksToGraph(tasks: TaskItem[]): {
   if (positionsCollapsed(nodes)) {
     applyDAGLayerLayout(nodes);
   }
+
+  const milestoneHidden = hiddenNodeIdsForCollapsedMilestones(tasks, nodes);
+  applyChoreLayoutToFlowGraph(nodes, taskMap, childToParents, milestoneHidden);
 
   return { nodes, edges };
 }

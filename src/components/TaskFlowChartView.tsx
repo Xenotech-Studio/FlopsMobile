@@ -30,6 +30,14 @@ import {
   isEdgeRemote,
 } from '../utils/convertTasksToGraph';
 import { displayTitleForDumpParent, TASK_TYPE_CHORE_AREA } from '../utils/taskChoreRegion';
+import {
+  CHORE_REGION_PAD as CHORE_REGION_PAD_WEB,
+  computeChoreRegionRect,
+  estimateFlowNodeBodyHeight,
+  computeChoreRegionOuterHeight,
+  getChoreDisplayOrderedItems,
+  getChoreRegionModeOffset,
+} from '../utils/choreFlowLayout';
 
 /** 与 Web `EditableNode.css` `.editable-node` width */
 export const FLOW_NODE_WIDTH = 150;
@@ -38,10 +46,6 @@ const MIN_CARD_HEIGHT = 40;
 const FONT_SIZE = 14;
 const LINE_HEIGHT = 21; // 1.5em
 const PAD_V = (40 - FONT_SIZE) / 2; // Web: calc((40px - 1em) / 2)
-const CHARS_PER_LINE = 18; // 约 150px 内中文/混排
-/** 超长标题避免行数爆炸撑爆画布尺寸导致 OOM / 原生层崩溃 */
-const MAX_ESTIMATE_LINES = 28;
-const MAX_ESTIMATE_CARD_HEIGHT = 560;
 const MILESTONE_ICON_SLOT = 28; // 与 Web milestone-icon top≈-25 + 余量
 /** Web `.milestone-collapse-btn`：marginTop 4 + 约 12px/1.4 行高 + padding */
 const MILESTONE_COLLAPSE_HINT_EXTRA = 4 + 4 + Math.ceil(12 * 1.4);
@@ -85,7 +89,6 @@ const WEB = {
   choreSurface: '#f8f9fa',
   choreBorder: '#9ca3af',
   choreLabel: '#888888',
-  choreRegionFill: 'rgba(248, 249, 250, 0.92)',
   choreEdge: '#94a3b8',
 };
 
@@ -134,22 +137,6 @@ function getWebNodeColors(task: TaskItem, byId: Map<string, TaskItem>): { fill: 
   }
   if (pr === 'now') return { fill: WEB.urgentFill, stroke: WEB.urgentStroke };
   return { fill: WEB.todoFill, stroke: WEB.todoStroke };
-}
-
-/** 估算卡片高度：换行 + padding，对齐 Web .display */
-function estimateCardHeight(title: string): number {
-  const raw = title || ' ';
-  const segments = raw.split('\n');
-  let lines = 0;
-  for (const seg of segments) {
-    if (seg.length === 0) lines += 1;
-    else lines += Math.max(1, Math.ceil(seg.length / CHARS_PER_LINE));
-  }
-  lines = Math.max(1, Math.min(MAX_ESTIMATE_LINES, lines));
-  return Math.min(
-    MAX_ESTIMATE_CARD_HEIGHT,
-    Math.max(MIN_CARD_HEIGHT, Math.ceil(lines * LINE_HEIGHT + PAD_V * 2))
-  );
 }
 
 function milestoneIconChar(task: TaskItem): string | null {
@@ -256,22 +243,6 @@ function bezierPathBounds(sx: number, sy: number, tx: number, ty: number): World
   };
 }
 
-function unionRect(
-  a: { minX: number; minY: number; maxX: number; maxY: number },
-  b: { minX: number; minY: number; maxX: number; maxY: number }
-) {
-  return {
-    minX: Math.min(a.minX, b.minX),
-    minY: Math.min(a.minY, b.minY),
-    maxX: Math.max(a.maxX, b.maxX),
-    maxY: Math.max(a.maxY, b.maxY),
-  };
-}
-
-const CHORE_REGION_PAD = 14;
-/** 标题画在虚线框内顶部（框即本体，无单独父卡片） */
-const CHORE_LABEL_INSET_Y = 14;
-
 type ChoreRegionDraw = {
   parentId: string;
   x: number;
@@ -283,33 +254,35 @@ type ChoreRegionDraw = {
   labelBaselineY: number;
 };
 
-function buildChoreRegionDraws(nodes: NodeDraw[], byId: Map<string, TaskItem>): ChoreRegionDraw[] {
-  const idToDraw = new Map(nodes.map((n) => [n.id, n]));
+/** 与 Web `computeChoreRegionRect` + `getChoreDisplayOrderedItems` 一致（按子节点估算高度，非子 bbox 反推） */
+function buildChoreRegionDraws(
+  nodes: NodeDraw[],
+  byId: Map<string, TaskItem>,
+  visibleNodeIds: Set<string>
+): ChoreRegionDraw[] {
   const out: ChoreRegionDraw[] = [];
   for (const n of nodes) {
     const task = byId.get(n.id);
     if (!task || task.type !== TASK_TYPE_CHORE_AREA) continue;
-    /** 围框只包无序子节点；无子时用父锚点占位（与 Web「框即本体」一致，无第二张卡片） */
-    let box: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
-    for (const cid of task.childrenId || []) {
-      if (!isEdgeChore(task, String(cid))) continue;
-      const ch = idToDraw.get(String(cid));
-      if (!ch) continue;
-      const b = nodeOuterBounds(ch);
-      box = box ? unionRect(box, b) : b;
-    }
-    if (!box) {
-      const b = nodeOuterBounds(n);
-      box = b;
-    }
-    const x = box.minX - CHORE_REGION_PAD;
-    const y = box.minY - CHORE_REGION_PAD;
-    const w = box.maxX - box.minX + CHORE_REGION_PAD * 2;
-    const h = box.maxY - box.minY + CHORE_REGION_PAD * 2;
+    const modeOffset = getChoreRegionModeOffset(task);
+    const { orderedVisible, hiddenIds } = getChoreDisplayOrderedItems(task, byId);
+    const choreTasks = orderedVisible
+      .filter((x) => visibleNodeIds.has(x.childId))
+      .map((x) => x.task);
+    const rect = computeChoreRegionRect({ x: n.x, y: n.y }, modeOffset, choreTasks, hiddenIds.length);
     const label = displayTitleForDumpParent(task);
-    const labelCx = x + w / 2;
-    const labelBaselineY = y + CHORE_LABEL_INSET_Y;
-    out.push({ parentId: n.id, x, y, w, h, label, labelCx, labelBaselineY });
+    const labelCx = rect.left + rect.width / 2;
+    const labelBaselineY = rect.top + CHORE_REGION_PAD_WEB + 20;
+    out.push({
+      parentId: n.id,
+      x: rect.left,
+      y: rect.top,
+      w: rect.width,
+      h: rect.height,
+      label,
+      labelCx,
+      labelBaselineY,
+    });
   }
   return out;
 }
@@ -373,15 +346,28 @@ function buildFlowChartPayload(tasks: TaskItem[]): FlowChartBuiltModel {
     const byIdInner = taskMapById(tasks);
     const { nodes: rawNodes, edges: rawEdges } = convertTasksToGraph(tasks);
     const hidden = hiddenNodeIdsForCollapsedMilestones(tasks, rawNodes);
-    const nodes = rawNodes.filter((n) => !hidden.has(n.id));
-    const edges = rawEdges.filter((e) => !hidden.has(e.source) && !hidden.has(e.target));
+    const choreFilteredHidden = new Set(rawNodes.filter((n) => n.hidden).map((n) => n.id));
+    const nodes = rawNodes.filter((n) => !hidden.has(n.id) && !n.hidden);
+    const visibleIdSet = new Set(nodes.map((n) => n.id));
+    const edges = rawEdges.filter(
+      (e) =>
+        !hidden.has(e.source) &&
+        !hidden.has(e.target) &&
+        !choreFilteredHidden.has(e.source) &&
+        !choreFilteredHidden.has(e.target)
+    );
 
     const heightById = new Map<string, number>();
     for (const n of nodes) {
-      if (n.task.type === TASK_TYPE_CHORE_AREA) {
-        heightById.set(n.id, MIN_CARD_HEIGHT);
+      const t = n.task;
+      if (t.type === TASK_TYPE_CHORE_AREA) {
+        const cd = getChoreDisplayOrderedItems(t, byIdInner);
+        const choreTasksVisible = cd.orderedVisible
+          .filter((x) => visibleIdSet.has(x.childId))
+          .map((x) => x.task);
+        heightById.set(n.id, computeChoreRegionOuterHeight(choreTasksVisible, cd.hiddenIds.length));
       } else {
-        heightById.set(n.id, estimateCardHeight(n.task.title || ' '));
+        heightById.set(n.id, estimateFlowNodeBodyHeight(t));
       }
     }
 
@@ -408,7 +394,7 @@ function buildFlowChartPayload(tasks: TaskItem[]): FlowChartBuiltModel {
       };
     });
 
-    const choreRegionsWorld = buildChoreRegionDraws(nodesDrawInner, byIdInner);
+    const choreRegionsWorld = buildChoreRegionDraws(nodesDrawInner, byIdInner, visibleIdSet);
     const nodeBox = boundsOfCanvas(nodesDrawInner);
     let minX = nodeBox.minX;
     let minY = nodeBox.minY;
@@ -491,8 +477,15 @@ export type TaskFlowChartViewProps = {
   topInset?: number;
 };
 
+/** 与 Web `FlowChart.css` --flow-chore-region-fill / `EditableNode.css` .chore-area-unified 一致 */
+const CHORE_REGION_FILL_LIGHT = 'rgba(120, 120, 130, 0.16)';
+const CHORE_REGION_FILL_DARK = 'rgba(100, 100, 110, 0.18)';
+
 export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProps) {
-  const { colors } = useAppTheme();
+  const { colors, isDark } = useAppTheme();
+  const choreRegionFill = isDark ? CHORE_REGION_FILL_DARK : CHORE_REGION_FILL_LIGHT;
+  /** 与 Web 画布边线浅色 #b1b1b7、深色 #3e3e3e 一致 */
+  const choreRegionStroke = isDark ? '#3e3e3e' : WEB.edge;
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
@@ -852,8 +845,8 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
                   height={r.h}
                   rx={5}
                   ry={5}
-                  fill={WEB.choreRegionFill}
-                  stroke={WEB.choreBorder}
+                  fill={choreRegionFill}
+                  stroke={choreRegionStroke}
                   strokeWidth={1}
                   strokeDasharray="6 4"
                 />
