@@ -6,8 +6,29 @@ import type { TaskItem } from '../taskApi';
 
 export const TASK_TYPE_CHORE_AREA = 'chore_area';
 
+/** 与 Web `TASK_TYPE_PERIODIC_GROUP` 一致 */
+export const TASK_TYPE_PERIODIC_GROUP = 'periodic_group';
+/** 旧版类型字符串，仅存库兼容 */
+export const TASK_TYPE_PERIODIC_AREA_LEGACY = 'periodic_area';
+
+export const DEFAULT_PERIODIC_ZONE_TITLE = '周期性任务组';
+
 /** 新建子任务挂到 chore 边时使用的默认 offset（与 Web DEFAULT_CHORE_OFFSET 一致） */
 export const DEFAULT_CHORE_OFFSET = { x: 75, y: 108 };
+
+export function taskTypeIsChoreArea(task: Pick<TaskItem, 'type'> | null | undefined): boolean {
+  return task?.type === TASK_TYPE_CHORE_AREA;
+}
+
+export function taskTypeIsPeriodicGroup(task: Pick<TaskItem, 'type'> | null | undefined): boolean {
+  const t = task?.type;
+  return t === TASK_TYPE_PERIODIC_GROUP || t === TASK_TYPE_PERIODIC_AREA_LEGACY;
+}
+
+/** Chore 区或周期性任务组（画布灰框容器，子边均为 chore） */
+export function taskTypeIsChoreLikeRegion(task: Pick<TaskItem, 'type'> | null | undefined): boolean {
+  return taskTypeIsChoreArea(task) || taskTypeIsPeriodicGroup(task);
+}
 
 export function taskTypeIsUnorderedDumpParent(type: string | undefined | null): boolean {
   if (!type) return false;
@@ -64,4 +85,15 @@ export function displayTitleForDumpParent(task: TaskItem): string {
   const fromZone = typeof z?.title === 'string' ? z.title.trim() : '';
   const fromTask = typeof task.title === 'string' ? task.title.trim() : '';
   return fromZone || fromTask || '杂项区域';
+}
+
+/** chore_area / periodic_group 灰区标题（与 Web normalizeChoreZonePrefs / normalizePeriodicZonePrefs 一致） */
+export function displayTitleForChoreLikeParent(task: TaskItem): string {
+  if (taskTypeIsPeriodicGroup(task)) {
+    const z = task.periodicZone as { title?: string } | undefined;
+    const fromZone = typeof z?.title === 'string' ? z.title.trim() : '';
+    const fromTask = typeof task.title === 'string' ? task.title.trim() : '';
+    return fromZone || fromTask || DEFAULT_PERIODIC_ZONE_TITLE;
+  }
+  return displayTitleForDumpParent(task);
 }

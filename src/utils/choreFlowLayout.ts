@@ -1,9 +1,16 @@
 /**
  * 与 FlowTask Web `src/apis/edgeStateUtils.js` + `taskUtils.jsx` applyChoreLayoutToNodes 对齐：
- * chore 子节点竖向堆叠高度、灰框外接矩形、排序与筛选。
+ * chore 子节点竖向堆叠高度、灰框外接矩形、排序与筛选；周期性任务组（periodic_group）同套几何、无左右交错。
  */
 import type { TaskItem } from '../taskApi';
-import { TASK_TYPE_CHORE_AREA } from './taskChoreRegion';
+import {
+  DEFAULT_PERIODIC_ZONE_TITLE,
+  TASK_TYPE_CHORE_AREA,
+  TASK_TYPE_PERIODIC_AREA_LEGACY,
+  TASK_TYPE_PERIODIC_GROUP,
+  taskTypeIsChoreArea,
+  taskTypeIsPeriodicGroup,
+} from './taskChoreRegion';
 
 export const FLOW_NODE_WIDTH = 150;
 
@@ -36,13 +43,14 @@ function parseIsoTs(s: unknown): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
-export function taskTypeIsChoreArea(task: TaskItem | null | undefined): boolean {
-  return task?.type === TASK_TYPE_CHORE_AREA;
-}
-
 export function taskTypeMilestoneLike(taskOrType: TaskItem | string | null | undefined): boolean {
   const type = typeof taskOrType === 'string' ? taskOrType : taskOrType?.type;
-  return type === 'milestone' || type === TASK_TYPE_CHORE_AREA;
+  return (
+    type === 'milestone' ||
+    type === TASK_TYPE_CHORE_AREA ||
+    type === TASK_TYPE_PERIODIC_GROUP ||
+    type === TASK_TYPE_PERIODIC_AREA_LEGACY
+  );
 }
 
 export function normalizeChoreZonePrefs(parentTask: TaskItem | null | undefined) {
@@ -66,6 +74,23 @@ export function normalizeChoreZonePrefs(parentTask: TaskItem | null | undefined)
     z.sortDirCreated === CHORE_SORT_DIR_ASC ? CHORE_SORT_DIR_ASC : CHORE_SORT_DIR_DESC;
   const sortDirDdl = z.sortDirDdl === CHORE_SORT_DIR_ASC ? CHORE_SORT_DIR_ASC : CHORE_SORT_DIR_DESC;
   return { title, sort, filter, sortDirCreated, sortDirDdl };
+}
+
+export function normalizePeriodicZonePrefs(parentTask: TaskItem | null | undefined): {
+  title: string;
+  recentLimit: number;
+} {
+  const z =
+    parentTask?.periodicZone && typeof parentTask.periodicZone === 'object'
+      ? (parentTask.periodicZone as Record<string, unknown>)
+      : {};
+  const fromZone = typeof z.title === 'string' && z.title.trim() ? z.title.trim() : '';
+  const fromTask =
+    typeof parentTask?.title === 'string' && parentTask.title.trim() ? parentTask.title.trim() : '';
+  const title = fromZone || fromTask || DEFAULT_PERIODIC_ZONE_TITLE;
+  const rawLimit = Number(z.recentLimit);
+  const recentLimit = Number.isFinite(rawLimit) ? Math.min(500, Math.max(1, Math.floor(rawLimit))) : 20;
+  return { title, recentLimit };
 }
 
 export function taskPassesChoreFilter(task: TaskItem, filter: string): boolean {
@@ -154,11 +179,24 @@ function pickModeOffset(samples: { x: number; y: number }[]): { x: number; y: nu
 }
 
 export function getChoreRegionModeOffset(parentTask: TaskItem): { x: number; y: number } {
-  const cz = parentTask.choreZone as { unifiedBody?: unknown; offset?: unknown } | undefined;
+  const pz = parentTask.periodicZone as { unifiedBody?: unknown } | undefined;
+  if (taskTypeIsPeriodicGroup(parentTask) && pz?.unifiedBody) {
+    const z =
+      parentTask.periodicZone && typeof parentTask.periodicZone === 'object' ? parentTask.periodicZone : {};
+    const fromZone = parseChoreZoneStoredOffset(z);
+    return fromZone ? { ...fromZone } : { x: 0, y: 0 };
+  }
+  const cz = parentTask.choreZone as { unifiedBody?: unknown } | undefined;
   if (taskTypeIsChoreArea(parentTask) && cz?.unifiedBody) {
     const z = parentTask.choreZone && typeof parentTask.choreZone === 'object' ? parentTask.choreZone : {};
     const fromZone = parseChoreZoneStoredOffset(z);
     return fromZone ? { ...fromZone } : { x: 0, y: 0 };
+  }
+  if (taskTypeIsPeriodicGroup(parentTask)) {
+    const z =
+      parentTask?.periodicZone && typeof parentTask.periodicZone === 'object' ? parentTask.periodicZone : {};
+    const fromZone = parseChoreZoneStoredOffset(z);
+    if (fromZone) return { ...fromZone };
   }
   const z = parentTask?.choreZone && typeof parentTask.choreZone === 'object' ? parentTask.choreZone : {};
   const fromZone = parseChoreZoneStoredOffset(z);
@@ -187,7 +225,7 @@ export function getChoreRegionModeOffset(parentTask: TaskItem): { x: number; y: 
  */
 export function estimateFlowNodeBodyHeight(task: TaskItem | Record<string, unknown>): number {
   const t = task as TaskItem;
-  if (taskTypeIsChoreArea(t)) {
+  if (taskTypeIsChoreArea(t) || taskTypeIsPeriodicGroup(t)) {
     return computeChoreRegionOuterHeight([], 0);
   }
   const fontSize = Number((t as { fontSize?: unknown }).fontSize) || 14;
@@ -233,8 +271,10 @@ export function sumChoreStackHeights(choreTasks: TaskItem[], gap = CHORE_VERTICA
   return heights.reduce((a, b) => a + b, 0) + Math.max(0, n - 1) * gap;
 }
 
-export function getChoreRegionOuterWidth(): number {
-  return FLOW_NODE_WIDTH + 2 * CHORE_REGION_PAD + 2 * CHORE_ALT_OFFSET + 2 * CHORE_REGION_HANDLE_STRIP;
+/** 杂项区含左右交错留白；周期性任务组 `includeHorizontalStagger=false`（与 Web 一致） */
+export function getChoreRegionOuterWidth(includeHorizontalStagger = true): number {
+  const alt = includeHorizontalStagger ? CHORE_ALT_OFFSET : 0;
+  return FLOW_NODE_WIDTH + 2 * CHORE_REGION_PAD + 2 * alt + 2 * CHORE_REGION_HANDLE_STRIP;
 }
 
 export function computeChoreRegionOuterHeight(
@@ -262,9 +302,10 @@ export function computeChoreRegionRect(
   parentPos: { x: number; y: number },
   modeOffset: { x: number; y: number },
   choreChildTasks: TaskItem[],
-  hiddenChoreCount = 0
+  hiddenChoreCount = 0,
+  includeHorizontalStagger = true
 ) {
-  const w = getChoreRegionOuterWidth();
+  const w = getChoreRegionOuterWidth(includeHorizontalStagger);
   const h = computeChoreRegionOuterHeight(choreChildTasks, hiddenChoreCount);
   const left = parentPos.x + modeOffset.x;
   const top = parentPos.y + modeOffset.y;
@@ -318,6 +359,49 @@ export function getChoreDisplayOrderedItems(parentTask: TaskItem, taskMap: Map<s
     else hiddenIds.push(it.childId);
   }
   return { orderedVisible, hiddenIds };
+}
+
+/**
+ * 周期性任务组子节点：创建时间降序，仅前 `recentLimit` 条可见（与 Web getPeriodicDisplayOrderedItems 一致）。
+ */
+export function getPeriodicDisplayOrderedItems(parentTask: TaskItem, taskMap: Map<string, TaskItem>) {
+  const es = parentTask?.childrenEdgeState || {};
+  const ids = (parentTask?.childrenId || [])
+    .map(String)
+    .filter((cid) => edgeStateIsChore((es as Record<string, unknown>)[cid]));
+
+  const prefs = normalizePeriodicZonePrefs(parentTask);
+  const items = ids.map((childId) => ({
+    childId,
+    order: extractChorePayload((es as Record<string, unknown>)[childId])?.order ?? 1e9,
+    task: taskMap.get(String(childId)),
+  }));
+
+  items.sort((a, b) => {
+    const ka = parseIsoTs(a.task?.createddatetime);
+    const kb = parseIsoTs(b.task?.createddatetime);
+    const sa = ka == null ? -Infinity : ka;
+    const sb = kb == null ? -Infinity : kb;
+    if (sa !== sb) return sb - sa;
+    return String(a.childId).localeCompare(String(b.childId), undefined, { numeric: true });
+  });
+
+  const orderedVisible: { childId: string; task: TaskItem }[] = [];
+  const hiddenIds: string[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (!it.task) continue;
+    if (i < prefs.recentLimit) orderedVisible.push({ childId: it.childId, task: it.task });
+    else hiddenIds.push(it.childId);
+  }
+  return { orderedVisible, hiddenIds };
+}
+
+export function getChoreLikeDisplayOrderedItems(parentTask: TaskItem, taskMap: Map<string, TaskItem>) {
+  if (taskTypeIsPeriodicGroup(parentTask)) {
+    return getPeriodicDisplayOrderedItems(parentTask, taskMap);
+  }
+  return getChoreDisplayOrderedItems(parentTask, taskMap);
 }
 
 function cmpUnicode(a: string, b: string, ignoreCase = true): number {
@@ -413,13 +497,14 @@ export function applyChoreLayoutToFlowGraph(
     if (!parentNode) continue;
     const parentTask = taskMap.get(String(parentId));
     if (!parentTask) continue;
+    const includeHStagger = !taskTypeIsPeriodicGroup(parentTask);
     const modeOffset = getChoreRegionModeOffset(parentTask);
-    const wOuter = getChoreRegionOuterWidth();
+    const wOuter = getChoreRegionOuterWidth(includeHStagger);
     const anchorX = parentNode.position.x + modeOffset.x + wOuter / 2;
     const anchorY = parentNode.position.y + modeOffset.y;
     let yCursor = anchorY + CHORE_REGION_PAD + CHORE_REGION_TOP_STRIP;
 
-    const { orderedVisible, hiddenIds } = getChoreDisplayOrderedItems(parentTask, taskMap);
+    const { orderedVisible, hiddenIds } = getChoreLikeDisplayOrderedItems(parentTask, taskMap);
 
     let layoutIndex = 0;
     let parkK = 0;
@@ -436,7 +521,11 @@ export function applyChoreLayoutToFlowGraph(
       }
       const tk = entry.task;
       const nodeH = estimateFlowNodeBodyHeight(tk || {});
-      const centerShift = layoutIndex % 2 === 0 ? -CHORE_ALT_OFFSET : CHORE_ALT_OFFSET;
+      const centerShift = includeHStagger
+        ? layoutIndex % 2 === 0
+          ? -CHORE_ALT_OFFSET
+          : CHORE_ALT_OFFSET
+        : 0;
       const topLeftX = anchorX + centerShift - FLOW_NODE_WIDTH / 2;
       const topLeftY = yCursor;
       childNode.hidden = false;

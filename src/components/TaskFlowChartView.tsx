@@ -29,13 +29,17 @@ import {
   isEdgeChore,
   isEdgeRemote,
 } from '../utils/convertTasksToGraph';
-import { displayTitleForDumpParent, TASK_TYPE_CHORE_AREA } from '../utils/taskChoreRegion';
+import {
+  displayTitleForChoreLikeParent,
+  taskTypeIsChoreLikeRegion,
+  taskTypeIsPeriodicGroup,
+} from '../utils/taskChoreRegion';
 import {
   CHORE_REGION_PAD as CHORE_REGION_PAD_WEB,
   computeChoreRegionRect,
   estimateFlowNodeBodyHeight,
   computeChoreRegionOuterHeight,
-  getChoreDisplayOrderedItems,
+  getChoreLikeDisplayOrderedItems,
   getChoreRegionModeOffset,
 } from '../utils/choreFlowLayout';
 
@@ -111,7 +115,7 @@ function getWebNodeColors(task: TaskItem, byId: Map<string, TaskItem>): { fill: 
   const dq = task.done_quality || 'reviewing';
   const pr = task.priority || 'default';
 
-  if (task.type === TASK_TYPE_CHORE_AREA) {
+  if (taskTypeIsChoreLikeRegion(task)) {
     return { fill: WEB.choreSurface, stroke: WEB.choreBorder };
   }
   if (task.type === 'milestone') {
@@ -254,7 +258,7 @@ type ChoreRegionDraw = {
   labelBaselineY: number;
 };
 
-/** 与 Web `computeChoreRegionRect` + `getChoreDisplayOrderedItems` 一致（按子节点估算高度，非子 bbox 反推） */
+/** 与 Web `computeChoreRegionRect` + `getChoreLikeDisplayOrderedItems` 一致（chore / periodic_group） */
 function buildChoreRegionDraws(
   nodes: NodeDraw[],
   byId: Map<string, TaskItem>,
@@ -263,14 +267,21 @@ function buildChoreRegionDraws(
   const out: ChoreRegionDraw[] = [];
   for (const n of nodes) {
     const task = byId.get(n.id);
-    if (!task || task.type !== TASK_TYPE_CHORE_AREA) continue;
+    if (!task || !taskTypeIsChoreLikeRegion(task)) continue;
     const modeOffset = getChoreRegionModeOffset(task);
-    const { orderedVisible, hiddenIds } = getChoreDisplayOrderedItems(task, byId);
+    const { orderedVisible, hiddenIds } = getChoreLikeDisplayOrderedItems(task, byId);
     const choreTasks = orderedVisible
       .filter((x) => visibleNodeIds.has(x.childId))
       .map((x) => x.task);
-    const rect = computeChoreRegionRect({ x: n.x, y: n.y }, modeOffset, choreTasks, hiddenIds.length);
-    const label = displayTitleForDumpParent(task);
+    const includeHStagger = !taskTypeIsPeriodicGroup(task);
+    const rect = computeChoreRegionRect(
+      { x: n.x, y: n.y },
+      modeOffset,
+      choreTasks,
+      hiddenIds.length,
+      includeHStagger
+    );
+    const label = displayTitleForChoreLikeParent(task);
     const labelCx = rect.left + rect.width / 2;
     const labelBaselineY = rect.top + CHORE_REGION_PAD_WEB + 20;
     out.push({
@@ -360,8 +371,8 @@ function buildFlowChartPayload(tasks: TaskItem[]): FlowChartBuiltModel {
     const heightById = new Map<string, number>();
     for (const n of nodes) {
       const t = n.task;
-      if (t.type === TASK_TYPE_CHORE_AREA) {
-        const cd = getChoreDisplayOrderedItems(t, byIdInner);
+      if (taskTypeIsChoreLikeRegion(t)) {
+        const cd = getChoreLikeDisplayOrderedItems(t, byIdInner);
         const choreTasksVisible = cd.orderedVisible
           .filter((x) => visibleIdSet.has(x.childId))
           .map((x) => x.task);
@@ -373,8 +384,8 @@ function buildFlowChartPayload(tasks: TaskItem[]): FlowChartBuiltModel {
 
     const nodesDrawInner: NodeDraw[] = nodes.map((n) => {
       const { fill, stroke } = getWebNodeColors(n.task, byIdInner);
-      const isChoreArea = n.task.type === TASK_TYPE_CHORE_AREA;
-      const title = isChoreArea ? displayTitleForDumpParent(n.task) : n.task.title || ' ';
+      const isChoreArea = taskTypeIsChoreLikeRegion(n.task);
+      const title = isChoreArea ? displayTitleForChoreLikeParent(n.task) : n.task.title || ' ';
       const t = n.task;
       const milestoneCollapsedDescendantCount =
         t.type === 'milestone' && t.collapsible && t.collapsed
@@ -428,7 +439,7 @@ function buildFlowChartPayload(tasks: TaskItem[]): FlowChartBuiltModel {
         const ch = idToDraw.get(e.target);
         if (!pa || !ch) return null;
         const parentTask = byIdInner.get(e.source);
-        if (parentTask?.type === TASK_TYPE_CHORE_AREA && isEdgeChore(parentTask, e.target)) {
+        if (parentTask && taskTypeIsChoreLikeRegion(parentTask) && isEdgeChore(parentTask, e.target)) {
           return null;
         }
         const srcRect = choreRectByParentId.get(e.source);

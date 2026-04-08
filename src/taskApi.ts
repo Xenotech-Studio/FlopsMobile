@@ -27,6 +27,8 @@ export interface TaskItem {
   unorganized?: boolean | null;
   /** chore_area 等节点的区域设置（与 Web choreZone 对齐） */
   choreZone?: Record<string, unknown> | null;
+  /** periodic_group 等区域设置（与 Web periodicZone 对齐） */
+  periodicZone?: Record<string, unknown> | null;
   done: boolean;
   ismine: boolean;
   relPos: TaskPosition;
