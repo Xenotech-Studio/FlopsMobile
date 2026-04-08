@@ -195,6 +195,27 @@ function clampFlowCanvasPanWorklet(
   return { x: nx, y: ny };
 }
 
+/** 进入流程图 / 画布或视口变化：按视口 fit 整张图（尽可能缩小至全图可见），并用 clamp 规则居中 */
+function fitFlowChartToViewport(
+  viewportW: number,
+  viewportH: number,
+  canvasW: number,
+  canvasH: number
+): { scale: number; translateX: number; translateY: number } {
+  if (viewportW <= 0 || viewportH <= 0 || canvasW <= 0 || canvasH <= 0) {
+    return { scale: 1, translateX: 0, translateY: 0 };
+  }
+  const inset = 12;
+  const vw = Math.max(1, viewportW - inset * 2);
+  const vh = Math.max(1, viewportH - inset * 2);
+  const sRaw = Math.min(vw / canvasW, vh / canvasH);
+  const scale = Math.min(MAX_FLOW_SCALE, Math.max(MIN_FLOW_SCALE, sRaw));
+  const cw = canvasW * scale;
+  const ch = canvasH * scale;
+  const c = clampFlowCanvasPan(0, 0, viewportW, viewportH, cw, ch);
+  return { scale, translateX: c.x, translateY: c.y };
+}
+
 type NodeDraw = {
   id: string;
   x: number;
@@ -520,6 +541,33 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
   const visibleRectQuantizedKeyRef = useRef('');
 
   const { svgW, svgH, edgesDraw, nodesDraw, choreRegionsDraw, chartError } = model;
+
+  /** 每次图构建完成且视口已量好：自动「缩小到能看见全图」并居中 */
+  useEffect(() => {
+    if (isBuilding || chartError || svgW <= 0 || svgH <= 0 || viewport.w <= 0 || viewport.h <= 0) {
+      return;
+    }
+    const { scale: s, translateX: tx, translateY: ty } = fitFlowChartToViewport(
+      viewport.w,
+      viewport.h,
+      svgW,
+      svgH
+    );
+    scale.value = s;
+    translateX.value = tx;
+    translateY.value = ty;
+    visibleRectQuantizedKeyRef.current = '';
+  }, [
+    isBuilding,
+    chartError,
+    svgW,
+    svgH,
+    viewport.w,
+    viewport.h,
+    scale,
+    translateX,
+    translateY,
+  ]);
 
   useEffect(() => {
     if (tasks.length === 0) {
