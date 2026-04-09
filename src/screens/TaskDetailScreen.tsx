@@ -48,10 +48,6 @@ import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from 
 
 type Route = RouteProp<TasksStackParamList, 'TaskDetail'>;
 
-function generateId(): string {
-  return `mobile-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-}
-
 function toISO(date: Date): string {
   return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
@@ -402,7 +398,6 @@ export function TaskDetailScreen() {
     }
     setSaving(true);
     try {
-      const newId = generateId();
       const placement = createPlacement;
       const unorganized = placement === 'unorganized';
       const choreParentId =
@@ -411,7 +406,6 @@ export function TaskDetailScreen() {
           : undefined;
 
       const payload: NewTaskPayload = {
-        id: newId,
         project_id: projectId,
         title: t,
         type: editedType,

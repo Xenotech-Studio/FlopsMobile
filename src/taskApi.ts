@@ -64,7 +64,8 @@ export interface Project {
 }
 
 export interface NewTaskPayload {
-  id: string;
+  /** 省略时由 FlowTaskServer /api/add_task 分配 UUID v4 */
+  id?: string;
   project_id: string;
   title: string;
   type: string;
@@ -252,12 +253,30 @@ export async function fetchProjects(auth: TaskApiAuth): Promise<Project[]> {
   return ensureArray<Project>(raw);
 }
 
+/** 向服务端申请任务 UUID（与 add_task 缺省 id 时规则一致） */
+export async function allocateTaskIds(auth: TaskApiAuth | null, count = 1): Promise<string[]> {
+  const n = Math.min(50, Math.max(1, Math.floor(count) || 1));
+  const params: Record<string, string> = { count: String(n) };
+  if (auth) {
+    params.user_id = auth.userId;
+    params.access_token = auth.accessToken;
+  }
+  const url = buildUrl('/api/allocate_task_ids', params);
+  const raw = await request<{ ids?: unknown }>(url);
+  const ids = raw && typeof raw === 'object' && raw !== null ? (raw as { ids?: unknown }).ids : undefined;
+  return Array.isArray(ids) ? ids.map((x) => String(x)) : [];
+}
+
 /** 新增任务 */
 export async function addTask(auth: TaskApiAuth | null, payload: NewTaskPayload): Promise<TaskItem> {
   const url = buildUrl('/api/add_task');
+  const body = { ...payload };
+  if (body.id === undefined || String(body.id).trim() === '') {
+    delete (body as { id?: string }).id;
+  }
   const res = await request<{ task: unknown; message?: string }>(url, {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
   const row = (res as { task: unknown }).task;
   return normalizeTaskFromApi(row) ?? (row as TaskItem);
