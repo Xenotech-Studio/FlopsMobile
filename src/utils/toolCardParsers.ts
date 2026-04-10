@@ -376,6 +376,45 @@ export function decodeUrlPctForDisplay(s: string): string {
 
 // ---------- 流式 llm_raw 解析（与 Web tryParsePartialReadingStream 对齐） ----------
 
+function consumePartialJsonStringEscape(src: string, i: number): { append: string; next: number } {
+  if (src[i] !== '\\') return { append: src[i] ?? '', next: i + 1 };
+  if (i + 1 >= src.length) return { append: '\\', next: i + 1 };
+  const n = src[i + 1];
+  if (n === 'n') return { append: '\n', next: i + 2 };
+  if (n === 'r') return { append: '\r', next: i + 2 };
+  if (n === 't') return { append: '\t', next: i + 2 };
+  if (n === '"') return { append: '"', next: i + 2 };
+  if (n === '\\') return { append: '\\', next: i + 2 };
+  if (n === '/') return { append: '/', next: i + 2 };
+  if (n === 'u') {
+    let j = i + 2;
+    let hex = '';
+    while (j < src.length && hex.length < 4 && /[0-9a-fA-F]/.test(src[j])) {
+      hex += src[j];
+      j++;
+    }
+    if (hex.length < 4) return { append: src.slice(i, j), next: j };
+    const code = parseInt(hex, 16);
+    if (code >= 0xd800 && code <= 0xdbff && j < src.length && src[j] === '\\' && src[j + 1] === 'u') {
+      let j2 = j + 2;
+      let hex2 = '';
+      while (j2 < src.length && hex2.length < 4 && /[0-9a-fA-F]/.test(src[j2])) {
+        hex2 += src[j2];
+        j2++;
+      }
+      if (hex2.length === 4) {
+        const low = parseInt(hex2, 16);
+        if (low >= 0xdc00 && low <= 0xdfff) {
+          const cp = 0x10000 + ((code - 0xd800) << 10) + (low - 0xdc00);
+          return { append: String.fromCodePoint(cp), next: j2 };
+        }
+      }
+    }
+    return { append: String.fromCodePoint(code), next: j };
+  }
+  return { append: n, next: i + 2 };
+}
+
 function tryParsePartialJson(rawStr: string, keys: string[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (const k of keys) out[k] = '';
@@ -392,15 +431,10 @@ function tryParsePartialJson(rawStr: string, keys: string[]): Record<string, str
     let value = '';
     while (i < afterKey.length) {
       const c = afterKey[i];
-      if (c === '\\' && i + 1 < afterKey.length) {
-        const next = afterKey[i + 1];
-        if (next === 'n') value += '\n';
-        else if (next === 'r') value += '\r';
-        else if (next === 't') value += '\t';
-        else if (next === '"') value += '"';
-        else if (next === '\\') value += '\\';
-        else value += next;
-        i += 2;
+      if (c === '\\') {
+        const { append, next } = consumePartialJsonStringEscape(afterKey, i);
+        value += append;
+        i = next;
         continue;
       }
       if (c === '"') break;
@@ -410,6 +444,212 @@ function tryParsePartialJson(rawStr: string, keys: string[]): Record<string, str
     out[key] = value;
   }
   return out;
+}
+
+/**
+ * 从 key 起始位置读取 "key" : " 后的字符串值（可未闭合），与 FlopsWeb ToolBlock/utils.js 一致。
+ */
+function readPartialJsonStringValueAtKey(
+  s: string,
+  keyPos: number,
+  key: string
+): { value: string; next: number } {
+  const quoted = `"${key}"`;
+  if (s.slice(keyPos, keyPos + quoted.length) !== quoted) {
+    return { value: '', next: keyPos };
+  }
+  const afterKey = s.slice(keyPos + quoted.length);
+  const colonMatch = afterKey.match(/^\s*:\s*"/);
+  if (!colonMatch) {
+    return { value: '', next: keyPos + quoted.length };
+  }
+  let i = keyPos + quoted.length + colonMatch[0].length;
+  let value = '';
+  while (i < s.length) {
+    const c = s[i];
+    if (c === '\\') {
+      const { append, next } = consumePartialJsonStringEscape(s, i);
+      value += append;
+      i = next;
+      continue;
+    }
+    if (c === '"') {
+      return { value, next: i + 1 };
+    }
+    value += c;
+    i += 1;
+  }
+  return { value, next: i };
+}
+
+export type FlowDocPatchEdit = { oldString: string; newString: string; replaceAll: boolean };
+
+/** patch_doc_as_md 流式：从 edits 数组中解析已出现的 old_string / new_string（可未闭合） */
+function tryParsePartialPatchDocEdits(rawStr: string): FlowDocPatchEdit[] {
+  const edits: FlowDocPatchEdit[] = [];
+  if (typeof rawStr !== 'string' || !rawStr.trim()) return edits;
+  const m = rawStr.match(/"edits"\s*:\s*\[/);
+  if (!m || m.index === undefined) return edits;
+  let pos = m.index + m[0].length;
+  while (pos < rawStr.length) {
+    const oldIdx = rawStr.indexOf('"old_string"', pos);
+    if (oldIdx === -1) break;
+    const oldRes = readPartialJsonStringValueAtKey(rawStr, oldIdx, 'old_string');
+    if (oldRes.next === oldIdx) break;
+    const newIdx = rawStr.indexOf('"new_string"', oldRes.next);
+    if (newIdx === -1) {
+      edits.push({
+        oldString: oldRes.value,
+        newString: '',
+        replaceAll: /"replace_all"\s*:\s*true/.test(rawStr.slice(oldRes.next)),
+      });
+      break;
+    }
+    const newRes = readPartialJsonStringValueAtKey(rawStr, newIdx, 'new_string');
+    const between = rawStr.slice(oldRes.next, newIdx);
+    edits.push({
+      oldString: oldRes.value,
+      newString: newRes.value,
+      replaceAll: /"replace_all"\s*:\s*true/.test(between),
+    });
+    pos = newRes.next;
+  }
+  return edits;
+}
+
+/** 工具卡顶栏：`真标题 (doc_id)`，无标题时仅 id（与 Web formatFlowDocCardHeaderTitle 一致） */
+export function formatFlowDocCardHeaderTitle(resolvedName: string | null, docId: string): string {
+  if (!docId || typeof docId !== 'string') return '';
+  const id = docId.trim();
+  if (!id) return '';
+  if (resolvedName && String(resolvedName).trim()) return `${String(resolvedName).trim()} (${id})`;
+  return id;
+}
+
+/** 带动作前缀的顶栏，如 `编辑：标题 (id)` */
+export function formatFlowDocCardHeaderWithVerb(verb: string, resolvedName: string | null, docId: string): string {
+  const base = formatFlowDocCardHeaderTitle(resolvedName, docId);
+  const v = typeof verb === 'string' ? verb.trim() : '';
+  if (!v) return base;
+  if (!base) return `${v}：`;
+  return `${v}：${base}`;
+}
+
+export type EditDocAsMdArgs = { docId: string; oldString: string; newString: string; replaceAll: boolean };
+
+/** FlowDoc edit_doc_as_md（与 Web parseEditDocAsMdArgs 一致） */
+export function parseEditDocAsMdArgs(block: { tool_name?: string; arguments?: unknown }): EditDocAsMdArgs {
+  const empty: EditDocAsMdArgs = { docId: '', oldString: '', newString: '', replaceAll: false };
+  if (!block || block.tool_name !== 'edit_doc_as_md') return empty;
+  const raw = block.arguments;
+  const rawStr = typeof raw === 'string' ? raw : '';
+  const keys = ['doc_id', 'old_string', 'new_string'];
+  try {
+    const obj =
+      typeof raw === 'string' ? (JSON.parse(raw || '{}') as Record<string, unknown>) : (raw || {}) as Record<string, unknown>;
+    return {
+      docId: String(obj.doc_id ?? '').trim(),
+      oldString: typeof obj.old_string === 'string' ? obj.old_string : '',
+      newString: typeof obj.new_string === 'string' ? obj.new_string : '',
+      replaceAll: Boolean(obj.replace_all),
+    };
+  } catch {
+    const partial = tryParsePartialJson(rawStr, keys);
+    return {
+      docId: (partial.doc_id ?? '').trim(),
+      oldString: partial.old_string ?? '',
+      newString: partial.new_string ?? '',
+      replaceAll: /"replace_all"\s*:\s*true/.test(rawStr),
+    };
+  }
+}
+
+export type PatchDocAsMdArgs = { docId: string; edits: FlowDocPatchEdit[] };
+
+/** FlowDoc patch_doc_as_md（与 Web parsePatchDocAsMdArgs 一致） */
+export function parsePatchDocAsMdArgs(block: { tool_name?: string; arguments?: unknown }): PatchDocAsMdArgs {
+  const empty: PatchDocAsMdArgs = { docId: '', edits: [] };
+  if (!block || block.tool_name !== 'patch_doc_as_md') return empty;
+  const raw = block.arguments;
+  try {
+    const obj =
+      typeof raw === 'string' ? (JSON.parse(raw || '{}') as Record<string, unknown>) : (raw || {}) as Record<string, unknown>;
+    const docId = String(obj.doc_id ?? '').trim();
+    const editsRaw = Array.isArray(obj.edits) ? obj.edits : [];
+    const edits: FlowDocPatchEdit[] = editsRaw.map((ed) => {
+      if (!ed || typeof ed !== 'object') {
+        return { oldString: '', newString: '', replaceAll: false };
+      }
+      const e = ed as Record<string, unknown>;
+      return {
+        oldString: typeof e.old_string === 'string' ? e.old_string : '',
+        newString: typeof e.new_string === 'string' ? e.new_string : '',
+        replaceAll: Boolean(e.replace_all),
+      };
+    });
+    return { docId, edits };
+  } catch {
+    const rawStr = typeof raw === 'string' ? raw : '';
+    const partial = tryParsePartialJson(rawStr, ['doc_id']);
+    const partialEdits = tryParsePartialPatchDocEdits(rawStr);
+    return { docId: (partial.doc_id ?? '').trim(), edits: partialEdits };
+  }
+}
+
+export type WriteDocAsMdArgs = { docId: string; markdown: string };
+
+/** FlowDoc write_doc_as_md（与 Web parseWriteDocAsMdArgs 一致） */
+export function parseWriteDocAsMdArgs(block: { tool_name?: string; arguments?: unknown }): WriteDocAsMdArgs {
+  const empty: WriteDocAsMdArgs = { docId: '', markdown: '' };
+  if (!block || block.tool_name !== 'write_doc_as_md') return empty;
+  const raw = block.arguments;
+  const rawStr = typeof raw === 'string' ? raw : '';
+  try {
+    const obj =
+      typeof raw === 'string' ? (JSON.parse(raw || '{}') as Record<string, unknown>) : (raw || {}) as Record<string, unknown>;
+    return {
+      docId: String(obj.doc_id ?? '').trim(),
+      markdown: typeof obj.markdown === 'string' ? obj.markdown : '',
+    };
+  } catch {
+    const partial = tryParsePartialJson(rawStr, ['doc_id', 'markdown']);
+    return {
+      docId: (partial.doc_id ?? '').trim(),
+      markdown: partial.markdown ?? '',
+    };
+  }
+}
+
+/** read_doc / get_doc_tree 等：从参数取 doc_id（含流式半成品） */
+export function parseFlowDocIdFromArgs(block: { arguments?: unknown }): string {
+  const raw = block.arguments;
+  if (raw == null || raw === '') return '';
+  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
+    return String((raw as Record<string, unknown>).doc_id ?? '').trim();
+  }
+  const rawStr = typeof raw === 'string' ? raw : '';
+  try {
+    const o = JSON.parse(rawStr) as { doc_id?: string };
+    return String(o?.doc_id ?? '').trim();
+  } catch {
+    return (tryParsePartialJson(rawStr, ['doc_id']).doc_id ?? '').trim();
+  }
+}
+
+/** get_doc_tree：root_id */
+export function parseGetDocTreeRootIdFromArgs(block: { arguments?: unknown }): string {
+  const raw = block.arguments;
+  if (raw == null || raw === '') return '';
+  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
+    return String((raw as Record<string, unknown>).root_id ?? '').trim();
+  }
+  const rawStr = typeof raw === 'string' ? raw : '';
+  try {
+    const o = JSON.parse(rawStr) as { root_id?: string };
+    return String(o?.root_id ?? '').trim();
+  } catch {
+    return (tryParsePartialJson(rawStr, ['root_id']).root_id ?? '').trim();
+  }
 }
 
 function tryParsePartialStringArrayJson(s: string, key: string): string[] {
@@ -430,15 +670,10 @@ function tryParsePartialStringArrayJson(s: string, key: string): string[] {
     let closed = false;
     while (i < rest.length) {
       const c = rest[i];
-      if (c === '\\' && i + 1 < rest.length) {
-        const n = rest[i + 1];
-        if (n === 'n') val += '\n';
-        else if (n === 'r') val += '\r';
-        else if (n === 't') val += '\t';
-        else if (n === '"') val += '"';
-        else if (n === '\\') val += '\\';
-        else val += n;
-        i += 2;
+      if (c === '\\') {
+        const { append, next } = consumePartialJsonStringEscape(rest, i);
+        val += append;
+        i = next;
         continue;
       }
       if (c === '"') {

@@ -97,6 +97,12 @@ import { ExecCommandCard } from './chat-cards/ExecCommandCard';
 import { DefaultToolCard } from './chat-cards/DefaultToolCard';
 import { CursorAgentCard } from './chat-cards/CursorAgentCard';
 import { ReadPagesCard } from './chat-cards/ReadPagesCard';
+import { FlowDocItemMetaProvider } from '../context/FlowDocItemMetaContext';
+import { FlowDocEditCard } from './chat-cards/FlowDocEditCard';
+import { FlowDocPatchCard } from './chat-cards/FlowDocPatchCard';
+import { FlowDocWriteCard } from './chat-cards/FlowDocWriteCard';
+import { FlowDocReadCard } from './chat-cards/FlowDocReadCard';
+import { FlowDocGetTreeCard } from './chat-cards/FlowDocGetTreeCard';
 
 type ToolBlock = Extract<StreamBlock, { type: 'tool' }>;
 
@@ -1565,15 +1571,20 @@ export function ChatScreen() {
     setToolCardViewMode((prev) => ({ ...prev, [cardKey]: mode }));
   }, []);
 
-  /** 与 Web/Desktop 一致：read_pages、文件卡片、exec 默认半展开；search_engine 等默认折叠 */
+  /** 与 Web/Desktop 一致：read_pages、文件卡片、exec、FlowDoc 写/编/树 默认半展开；read_doc、search_engine 等默认折叠 */
   function getDefaultToolCardViewMode(toolName: string): 'collapsed' | 'preview' {
     if (
       toolName === 'read_pages' ||
       toolName === 'local_write_file' ||
       toolName === 'local_edit_file' ||
-      toolName === 'local_exec_command'
+      toolName === 'local_exec_command' ||
+      toolName === 'get_doc_tree' ||
+      toolName === 'edit_doc_as_md' ||
+      toolName === 'patch_doc_as_md' ||
+      toolName === 'write_doc_as_md'
     )
       return 'preview';
+    if (toolName === 'read_doc') return 'collapsed';
     /* search_engine 等与 Desktop getDefaultToolCardViewMode 一致，默认 collapsed */
     return 'collapsed';
   }
@@ -1784,6 +1795,95 @@ export function ChatScreen() {
     );
   }
 
+  function renderFlowDocEditToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
+    return (
+      <FlowDocEditCard
+        block={block}
+        cardKey={key}
+        conversationId={conversationId || undefined}
+        viewMode={viewMode}
+        styles={styles as unknown as Record<string, object>}
+        getToolStatusLabel={getToolStatusLabel}
+        setToolCardMode={setToolCardMode}
+        renderToolCardSafetyActions={renderToolCardSafetyActions}
+        wrapFileToolPreviewBody={wrapFileToolPreviewBody}
+        isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
+      />
+    );
+  }
+
+  function renderFlowDocPatchToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
+    return (
+      <FlowDocPatchCard
+        block={block}
+        cardKey={key}
+        conversationId={conversationId || undefined}
+        viewMode={viewMode}
+        styles={styles as unknown as Record<string, object>}
+        getToolStatusLabel={getToolStatusLabel}
+        setToolCardMode={setToolCardMode}
+        renderToolCardSafetyActions={renderToolCardSafetyActions}
+        wrapFileToolPreviewBody={wrapFileToolPreviewBody}
+        isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
+      />
+    );
+  }
+
+  function renderFlowDocWriteToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
+    return (
+      <FlowDocWriteCard
+        block={block}
+        cardKey={key}
+        conversationId={conversationId || undefined}
+        viewMode={viewMode}
+        styles={styles as unknown as Record<string, object>}
+        getToolStatusLabel={getToolStatusLabel}
+        setToolCardMode={setToolCardMode}
+        renderToolCardSafetyActions={renderToolCardSafetyActions}
+        wrapFileToolPreviewBody={wrapFileToolPreviewBody}
+        isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
+      />
+    );
+  }
+
+  function renderFlowDocReadToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
+    return (
+      <FlowDocReadCard
+        block={block}
+        cardKey={key}
+        conversationId={conversationId || undefined}
+        viewMode={viewMode}
+        styles={styles as unknown as Record<string, object>}
+        getToolStatusLabel={getToolStatusLabel}
+        setToolCardMode={setToolCardMode}
+        renderToolCardSafetyActions={renderToolCardSafetyActions}
+        wrapFileToolPreviewBody={wrapFileToolPreviewBody}
+        isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
+      />
+    );
+  }
+
+  function renderFlowDocGetTreeToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
+    return (
+      <FlowDocGetTreeCard
+        block={block}
+        cardKey={key}
+        viewMode={viewMode}
+        styles={styles as unknown as Record<string, object>}
+        getToolStatusLabel={getToolStatusLabel}
+        setToolCardMode={setToolCardMode}
+        renderToolCardSafetyActions={renderToolCardSafetyActions}
+        wrapFileToolPreviewBody={wrapFileToolPreviewBody}
+        isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
+      />
+    );
+  }
+
   const canGoBack = navigation.canGoBack();
   const leftEdgePan = useRef(
     PanResponder.create({
@@ -1825,6 +1925,21 @@ export function ChatScreen() {
     }
     if (block.tool_name === 'search_engine') {
       return renderSearchEngineToolCard(block, key);
+    }
+    if (block.tool_name === 'edit_doc_as_md') {
+      return renderFlowDocEditToolCard(block, key);
+    }
+    if (block.tool_name === 'patch_doc_as_md') {
+      return renderFlowDocPatchToolCard(block, key);
+    }
+    if (block.tool_name === 'write_doc_as_md') {
+      return renderFlowDocWriteToolCard(block, key);
+    }
+    if (block.tool_name === 'read_doc') {
+      return renderFlowDocReadToolCard(block, key);
+    }
+    if (block.tool_name === 'get_doc_tree') {
+      return renderFlowDocGetTreeToolCard(block, key);
     }
 
     const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
@@ -2159,6 +2274,11 @@ export function ChatScreen() {
             keyboardShouldPersistTaps="handled"
           >
             <View ref={chatContentWrapRef} style={styles.chatContentWrap} collapsable={false}>
+            <FlowDocItemMetaProvider
+              conversationId={conversationId}
+              serverBaseUrl={session.server_base_url}
+              accessToken={session.access_token}
+            >
             {showEmpty ? (
               <View style={styles.emptyStage}>
                 <Text style={styles.welcomeTitle}>Hi, {session.user_id}</Text>
@@ -2240,6 +2360,7 @@ export function ChatScreen() {
                 </View>
               </View>
             ) : null}
+            </FlowDocItemMetaProvider>
             </View>
           </ScrollView>
           {conversationHistoryLoading ? (

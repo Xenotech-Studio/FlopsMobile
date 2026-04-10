@@ -59,17 +59,6 @@ export function FileEditCard({
   const oldTrim = isFull ? (oldStr.length > 8000 ? `${oldStr.slice(0, 8000)}\n…` : oldStr) : capPreview(oldStr);
   const newTrim = isFull ? (newStr.length > 8000 ? `${newStr.slice(0, 8000)}\n…` : newStr) : capPreview(newStr);
 
-  const editSummary =
-    hasOldNew && oldStr
-      ? oldStr.includes('\n')
-        ? `${oldStr.split('\n')[0].slice(0, 40)}…`
-        : oldStr.length > 40
-          ? `${oldStr.slice(0, 40)}…`
-          : oldStr
-      : hasOldNew
-        ? '(空)'
-        : null;
-
   return (
     <ToolCardFrame
       cardKey={cardKey}
@@ -90,11 +79,6 @@ export function FileEditCard({
             >
               {fileArgs.pathDisplay || '等待路径…'}
             </Text>
-            {editSummary !== null ? (
-              <Text style={styles.toolCardHeaderEditSummary} numberOfLines={1} ellipsizeMode="tail">
-                被替换: {editSummary}
-              </Text>
-            ) : null}
           </View>
           <View style={styles.toolCardBadgeWrap}>
             <Text style={[styles.toolCardBadge, block.status === 'completed' ? styles.toolCardBadgeSuccess : undefined]}>
