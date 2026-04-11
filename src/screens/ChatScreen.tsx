@@ -1386,40 +1386,21 @@ export function ChatScreen() {
     return () => sub.remove();
   }, [resumeV2Stream, applyConversationUsageState]);
 
-  // local_exec_command：运行中自动半展开(preview)、成功结束自动折叠；记录开始/结束时间供耗时显示
+  // local_exec_command / local_delete：运行中自动半展开(preview)、成功结束自动折叠；记录开始/结束时间供耗时显示
   useEffect(() => {
     const now = Date.now();
     const ref = execCardTimeRef.current;
     const keysToPreview: string[] = [];
     const keysToCollapse: string[] = [];
 
-    messages.forEach((msg, idx) => {
-      if (msg.role !== 'assistant') return;
-      const blocks = msg.blocks;
-      if (!blocks?.length) return;
-      blocks.forEach((block, bi) => {
-        if (block.type !== 'tool' || (block as ToolBlock).tool_name !== 'local_exec_command') return;
-        const key = `msg-tool-${idx}-${bi}`;
-        const status = (block as ToolBlock).status;
-        const result = (block as ToolBlock).result as ToolResult | undefined;
-        const exitCode = result?.exit_code ?? undefined;
-
-        if (status === 'running' || status === 'pending') {
-          if (!ref[key]) ref[key] = { startMs: now };
-          keysToPreview.push(key);
-        } else if (status === 'completed') {
-          if (ref[key] && ref[key].completedSec === undefined)
-            ref[key] = { ...ref[key], completedSec: Math.floor((now - ref[key].startMs) / 1000) };
-          if (exitCode === 0) keysToCollapse.push(key);
-        }
-      });
-    });
-    (currentAssistantBlocks || []).forEach((block, bi) => {
-      if (block.type !== 'tool' || (block as ToolBlock).tool_name !== 'local_exec_command') return;
-      const key = `stream-tool-${bi}`;
-      const status = (block as ToolBlock).status;
-      const result = (block as ToolBlock).result as ToolResult | undefined;
+    const handleExecLikeBlock = (block: StreamBlock, key: string) => {
+      if (block.type !== 'tool') return;
+      const tb = block as ToolBlock;
+      if (tb.tool_name !== 'local_exec_command' && tb.tool_name !== 'local_delete') return;
+      const status = tb.status;
+      const result = tb.result as ToolResult | undefined;
       const exitCode = result?.exit_code ?? undefined;
+      const r = result as { ok?: boolean; success?: boolean } | undefined;
 
       if (status === 'running' || status === 'pending') {
         if (!ref[key]) ref[key] = { startMs: now };
@@ -1427,8 +1408,24 @@ export function ChatScreen() {
       } else if (status === 'completed') {
         if (ref[key] && ref[key].completedSec === undefined)
           ref[key] = { ...ref[key], completedSec: Math.floor((now - ref[key].startMs) / 1000) };
-        if (exitCode === 0) keysToCollapse.push(key);
+        const okCollapse =
+          tb.tool_name === 'local_exec_command'
+            ? exitCode === 0
+            : Boolean(r?.ok === true || r?.success === true);
+        if (okCollapse) keysToCollapse.push(key);
       }
+    };
+
+    messages.forEach((msg, idx) => {
+      if (msg.role !== 'assistant') return;
+      const blocks = msg.blocks;
+      if (!blocks?.length) return;
+      blocks.forEach((block, bi) => {
+        handleExecLikeBlock(block, `msg-tool-${idx}-${bi}`);
+      });
+    });
+    (currentAssistantBlocks || []).forEach((block, bi) => {
+      handleExecLikeBlock(block, `stream-tool-${bi}`);
     });
 
     setToolCardViewMode((prev) => {
@@ -1462,7 +1459,10 @@ export function ChatScreen() {
   const hasRunningExec = (() => {
     const check = (blocks: StreamBlock[] | undefined) =>
       (blocks || []).some(
-        (b) => b.type === 'tool' && (b as ToolBlock).tool_name === 'local_exec_command' && ((b as ToolBlock).status === 'running' || (b as ToolBlock).status === 'pending')
+        (b) =>
+          b.type === 'tool' &&
+          ((b as ToolBlock).tool_name === 'local_exec_command' || (b as ToolBlock).tool_name === 'local_delete') &&
+          ((b as ToolBlock).status === 'running' || (b as ToolBlock).status === 'pending')
       );
     if (messages.some((m) => m.role === 'assistant' && check(m.blocks))) return true;
     return check(currentAssistantBlocks);
@@ -1578,6 +1578,7 @@ export function ChatScreen() {
       toolName === 'local_write_file' ||
       toolName === 'local_edit_file' ||
       toolName === 'local_exec_command' ||
+      toolName === 'local_delete' ||
       toolName === 'get_doc_tree' ||
       toolName === 'edit_doc_as_md' ||
       toolName === 'patch_doc_as_md' ||
