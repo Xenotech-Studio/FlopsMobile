@@ -106,6 +106,28 @@ import { FlowDocGetTreeCard } from './chat-cards/FlowDocGetTreeCard';
 
 type ToolBlock = Extract<StreamBlock, { type: 'tool' }>;
 
+function mergeToolBlockResultForSafetyEvent(
+  prevResult: unknown,
+  event: Extract<ChatStreamEvent, { type: 'safety_confirmation_required' }>,
+): unknown {
+  const dp = event.delete_pending;
+  if (!dp || typeof dp !== 'object') return prevResult;
+  const base =
+    prevResult && typeof prevResult === 'object' && !Array.isArray(prevResult)
+      ? { ...(prevResult as Record<string, unknown>) }
+      : {};
+  const out: Record<string, unknown> = {
+    ...base,
+    requires_double_check: true,
+  };
+  if (dp.delete_target != null) out.delete_target = dp.delete_target;
+  if (dp.preflight_stats != null) out.preflight_stats = dp.preflight_stats;
+  if (dp.description != null) out.description = dp.description;
+  const cwd = String(event.cwd || '').trim();
+  if (cwd) out.cwd = cwd;
+  return out;
+}
+
 const STREAM_TIMEOUT_MS = 300000;
 
 /** High-resolution time when available (e.g. Hermes), else `Date.now()`. Avoids bare `performance` (not in RN TS libs). */
@@ -907,6 +929,7 @@ export function ChatScreen() {
             for (let i = localBlocks.length - 1; i >= 0; i--) {
               const b = localBlocks[i];
               if (b.type === 'tool' && b.tool_name === name) {
+                const merged = mergeToolBlockResultForSafetyEvent(b.result, event);
                 localBlocks[i] = {
                   ...b,
                   status: 'awaiting_confirmation',
@@ -916,6 +939,7 @@ export function ChatScreen() {
                   review: event.review,
                   command: event.command,
                   cwd: event.cwd,
+                  result: merged as ToolBlock['result'],
                 };
                 updated = true;
                 break;
