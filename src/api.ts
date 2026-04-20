@@ -558,7 +558,7 @@ const CHAT_V2_RECONNECT_DELAY_MS = 300;
 
 export type ChatV2StreamStart =
   | { tag: 'new_message'; message: string }
-  | { tag: 'regenerate'; after_user_index: number }
+  | { tag: 'regenerate'; after_user_index: number; message?: string }
   | { tag: 'resume'; run_id: string };
 
 export type StreamChatV2LoopOptions = {
@@ -665,7 +665,11 @@ export async function streamChatV2Loop(
     } else if (start.tag === 'new_message') {
       body = { message: start.message };
     } else if (start.tag === 'regenerate') {
-      body = { regenerate: true, after_user_index: start.after_user_index };
+      body = {
+        regenerate: true,
+        after_user_index: start.after_user_index,
+        ...(typeof start.message === 'string' && start.message.length > 0 ? { message: start.message } : {}),
+      };
     } else {
       body = { subscribe_only: true, run_id: v2RunId, replay_from: 0 };
     }

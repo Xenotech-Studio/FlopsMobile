@@ -169,7 +169,7 @@ export function createChatStyles(c: AppColors) {
   },
   welcomeTitle: { fontSize: 22, fontWeight: '700', color: c.textHeader, marginBottom: 8 },
   welcomeSubtitle: { fontSize: 15, color: c.textMuted },
-  bubbleWrap: { marginBottom: 18 },
+  bubbleWrap: { marginBottom: 14 },
   userBubbleWrap: { alignItems: 'flex-end' },
   assistantBubbleWrap: { width: '100%' },
   bubble: {
@@ -188,14 +188,14 @@ export function createChatStyles(c: AppColors) {
     paddingVertical: 10,
     paddingHorizontal: 4,
   },
-  bubbleRole: { fontSize: 12, color: c.textMuted, marginBottom: 6 },
+  bubbleRole: { fontSize: 11, color: c.textMuted, marginBottom: 3, lineHeight: 16 },
   userText: { fontSize: 16, color: c.onUserBubble },
   assistantText: { fontSize: 16, color: c.textPrimary, lineHeight: 24 },
   streamStatus: { fontSize: 14, color: c.textMuted, fontStyle: 'italic' },
   errorWrap: { marginBottom: 18, padding: 14, backgroundColor: c.errorBg, borderRadius: 8 },
   errorText: { color: c.danger, fontSize: 14 },
-  assistantTextBlock: { marginTop: 10 },
-  assistantTextBlockCompactAbove: { marginTop: 8 },
+  assistantTextBlock: { marginTop: 7 },
+  assistantTextBlockCompactAbove: { marginTop: 6 },
   /** 与 Web .assistant-empty-reply-block .markdown-content 一致，仅弱化提示正文 */
   assistantEmptyReplyMarkdownContent: { opacity: 0.62 },
   toolPackageNavLine: {

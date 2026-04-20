@@ -9,6 +9,7 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Modal,
   PanResponder,
   Linking,
   ActivityIndicator,
@@ -66,6 +67,7 @@ import {
 import { resolveContextCompressDividerPlacement } from '../utils/contextCompress';
 import { normalizeUsageCurrencyMode, type UsageCurrencyMode } from '../constants/pricingDisplay';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import Clipboard from '@react-native-clipboard/clipboard';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { CHAT_COMPOSER_CONTROL_SIZE } from '../theme/layout';
@@ -266,6 +268,8 @@ export function ChatScreen() {
     agent_profile?: AgentProfile;
   } | null>(null);
   const [usageDetailModalBody, setUsageDetailModalBody] = useState<string | null>(null);
+  /** 编辑用户消息后重新生成（与 Web/Desktop 一致） */
+  const [userMessageEdit, setUserMessageEdit] = useState<{ afterIndex: number; draft: string } | null>(null);
   const [messageInput, setMessageInput] = useState('');
   /** 回到本页时强制重建输入框，避免多行/高度在其它页编辑后残留 */
   const [composerRemountKey, setComposerRemountKey] = useState(0);
@@ -317,6 +321,9 @@ export function ChatScreen() {
 
   useEffect(() => {
     conversationIdRef.current = conversationId;
+  }, [conversationId]);
+  useEffect(() => {
+    setUserMessageEdit(null);
   }, [conversationId]);
   useEffect(() => {
     sessionRef.current = session;
@@ -1116,11 +1123,46 @@ export function ChatScreen() {
     draftAgentId,
   ]);
 
+  const handleStop = useCallback(async () => {
+    setError('');
+    manualStopRef.current = true;
+    const snapshotBlocks = [...currentAssistantBlocks];
+    const snapshotText = streamingText;
+    if (snapshotBlocks.length > 0 || (snapshotText && snapshotText.trim())) {
+      shouldScrollToEndRef.current = true;
+      const stoppedPrefix = '[已停止]\n';
+      const text = (snapshotText || '').trim();
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: text ? `${stoppedPrefix}${text}` : '[已停止]',
+          blocks: [{ type: 'text', content: stoppedPrefix }, ...snapshotBlocks],
+        },
+      ]);
+    }
+    if (abortRef.current) abortRef.current.abort();
+    if (session && conversationId) {
+      try {
+        await cancelConversation(session, conversationId);
+      } catch {
+        // ignore
+      }
+    }
+    setLoading(false);
+    setStreamStatus('');
+    setStreamingText('');
+    setCurrentAssistantBlocks([]);
+  }, [session, conversationId, currentAssistantBlocks, streamingText]);
+
   /** 回退到第 (afterUserIndex+1) 条 user 消息处并重新生成该条 AI 回复 */
   const handleRegenerate = useCallback(
-    async (afterUserIndex: number) => {
-      if (!session || !conversationId || loading || conversationHistoryLoading || afterUserIndex == null)
-        return;
+    async (afterUserIndex: number, editedMessage?: string) => {
+      if (!session || !conversationId || conversationHistoryLoading || afterUserIndex == null) return;
+      if (editedMessage === undefined && loading) return;
+      if (editedMessage !== undefined && loading) {
+        await handleStop();
+      }
       setMessages((prev) => {
         let userCount = 0;
         let keepThroughIdx = -1;
@@ -1134,7 +1176,11 @@ export function ChatScreen() {
           }
         }
         if (keepThroughIdx < 0) return prev;
-        return prev.slice(0, keepThroughIdx + 1);
+        const sliced = prev.slice(0, keepThroughIdx + 1);
+        if (editedMessage === undefined) return sliced;
+        return sliced.map((m, i) =>
+          i === keepThroughIdx && m.role === 'user' ? { ...m, content: editedMessage } : m,
+        );
       });
     setError('');
     setLoading(true);
@@ -1152,9 +1198,13 @@ export function ChatScreen() {
     let silentBackgroundAbort = false;
 
     try {
+      const regenStart: ChatV2StreamStart =
+        editedMessage !== undefined
+          ? { tag: 'regenerate', after_user_index: afterUserIndex, message: editedMessage }
+          : { tag: 'regenerate', after_user_index: afterUserIndex };
       const { streamDone, finalText, localBlocks, lastConvId } = await runV2WithHandlers({
         convId: conversationId,
-        start: { tag: 'regenerate', after_user_index: afterUserIndex },
+        start: regenStart,
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -1230,40 +1280,16 @@ export function ChatScreen() {
       setStreamStatus('');
     }
   },
-    [session, conversationId, loading, conversationHistoryLoading, runV2WithHandlers, applyConversationUsageState]
+    [
+      session,
+      conversationId,
+      loading,
+      conversationHistoryLoading,
+      runV2WithHandlers,
+      applyConversationUsageState,
+      handleStop,
+    ]
   );
-
-  const handleStop = useCallback(async () => {
-    setError('');
-    manualStopRef.current = true;
-    const snapshotBlocks = [...currentAssistantBlocks];
-    const snapshotText = streamingText;
-    if (snapshotBlocks.length > 0 || (snapshotText && snapshotText.trim())) {
-      shouldScrollToEndRef.current = true;
-      const stoppedPrefix = '[已停止]\n';
-      const text = (snapshotText || '').trim();
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: text ? `${stoppedPrefix}${text}` : '[已停止]',
-          blocks: [{ type: 'text', content: stoppedPrefix }, ...snapshotBlocks],
-        },
-      ]);
-    }
-    if (abortRef.current) abortRef.current.abort();
-    if (session && conversationId) {
-      try {
-        await cancelConversation(session, conversationId);
-      } catch {
-        // ignore
-      }
-    }
-    setLoading(false);
-    setStreamStatus('');
-    setStreamingText('');
-    setCurrentAssistantBlocks([]);
-  }, [session, conversationId, currentAssistantBlocks, streamingText]);
 
   const handleNewConversation = useCallback(async () => {
     if (loading) return;
@@ -2001,6 +2027,9 @@ export function ChatScreen() {
       );
     }
     const isUser = msg.role === 'user';
+    const userOrdinalIndex = isUser
+      ? messages.slice(0, idx + 1).filter((m) => m.role === 'user').length - 1
+      : -1;
     const isLastAssistant = !isUser && msg.role === 'assistant' && idx === lastAssistantIdx;
     const afterUserIndex =
       !isUser && msg.role === 'assistant'
@@ -2174,6 +2203,45 @@ export function ChatScreen() {
             )
           )}
         </View>
+        {isUser ? (
+          <View
+            style={{
+              flexDirection: 'row',
+              marginTop: 3,
+              alignSelf: 'flex-end',
+              alignItems: 'center',
+            }}
+          >
+            <TouchableOpacity
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              onPress={() => Clipboard.setString(msg.content)}
+              accessibilityRole="button"
+              accessibilityLabel="复制用户消息"
+            >
+              <Ionicons name="copy-outline" size={20} color="#60a5fa" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={{ marginLeft: 6 }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              onPress={() =>
+                setUserMessageEdit({ afterIndex: userOrdinalIndex, draft: msg.content })
+              }
+              disabled={!conversationId || conversationHistoryLoading}
+              accessibilityRole="button"
+              accessibilityLabel="编辑并重新生成"
+            >
+              <Ionicons
+                name="create-outline"
+                size={20}
+                color={
+                  !conversationId || conversationHistoryLoading
+                    ? colors.textMuted
+                    : '#60a5fa'
+                }
+              />
+            </TouchableOpacity>
+          </View>
+        ) : null}
       </View>
     );
 
@@ -2571,6 +2639,84 @@ export function ChatScreen() {
       onClose={() => setUsageDetailModalBody(null)}
       body={usageDetailModalBody ?? ''}
     />
+    <Modal
+      visible={userMessageEdit != null}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setUserMessageEdit(null)}
+    >
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: colors.modalBackdrop,
+          justifyContent: 'center',
+          padding: 20,
+        }}
+      >
+        <View
+          style={{
+            width: '100%',
+            maxWidth: 520,
+            alignSelf: 'center',
+            backgroundColor: colors.surface,
+            borderRadius: 12,
+            padding: 16,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: colors.border,
+          }}
+        >
+          <Text style={{ fontSize: 16, fontWeight: '600', marginBottom: 8, color: colors.textPrimary }}>
+            编辑消息
+          </Text>
+          <TextInput
+            value={userMessageEdit?.draft ?? ''}
+            onChangeText={(t) => setUserMessageEdit((prev) => (prev ? { ...prev, draft: t } : null))}
+            multiline
+            style={{
+              alignSelf: 'stretch',
+              width: '100%',
+              minHeight: 120,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: colors.borderMuted,
+              borderRadius: 8,
+              padding: 10,
+              color: colors.textBody,
+              textAlignVertical: 'top',
+            }}
+          />
+          <View
+            style={{
+              flexDirection: 'row',
+              justifyContent: 'flex-end',
+              alignItems: 'center',
+              marginTop: 12,
+            }}
+          >
+            <TouchableOpacity onPress={() => setUserMessageEdit(null)} accessibilityRole="button">
+              <Text style={{ color: colors.textMuted, fontSize: 16, paddingVertical: 8, paddingHorizontal: 4 }}>
+                取消
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={{ marginLeft: 16 }}
+              onPress={() => {
+                const st = userMessageEdit;
+                if (!st?.draft.trim()) return;
+                const ai = st.afterIndex;
+                const d = st.draft.trim();
+                setUserMessageEdit(null);
+                void handleRegenerate(ai, d);
+              }}
+              accessibilityRole="button"
+            >
+              <Text style={{ color: colors.primary, fontWeight: '600', fontSize: 16, paddingVertical: 8, paddingHorizontal: 4 }}>
+                发送
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
     </>
   );
 }
