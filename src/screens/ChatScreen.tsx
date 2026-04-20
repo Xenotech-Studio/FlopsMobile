@@ -1080,7 +1080,7 @@ export function ChatScreen() {
         silentBackgroundAbort = true;
       } else if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
         shouldScrollToEndRef.current = true;
-        const stoppedPrefix = '[已停止]\n';
+        const stopNote = '[已停止]';
         const cap = streamCaptureRef.current;
         const text = (cap.text || '').trim();
         const bl = cap.blocks || [];
@@ -1088,8 +1088,8 @@ export function ChatScreen() {
           ...prev,
           {
             role: 'assistant',
-            content: text ? `${stoppedPrefix}${text}` : '[已停止]',
-            blocks: bl.length ? [{ type: 'text', content: stoppedPrefix }, ...bl] : undefined,
+            content: text ? `${text}\n\n${stopNote}` : stopNote,
+            blocks: bl.length ? [...bl, { type: 'text', content: stopNote }] : undefined,
           },
         ]);
       } else if (!silentBackgroundAbort) {
@@ -1130,14 +1130,14 @@ export function ChatScreen() {
     const snapshotText = streamingText;
     if (snapshotBlocks.length > 0 || (snapshotText && snapshotText.trim())) {
       shouldScrollToEndRef.current = true;
-      const stoppedPrefix = '[已停止]\n';
+      const stopNote = '[已停止]';
       const text = (snapshotText || '').trim();
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
-          content: text ? `${stoppedPrefix}${text}` : '[已停止]',
-          blocks: [{ type: 'text', content: stoppedPrefix }, ...snapshotBlocks],
+          content: text ? `${text}\n\n${stopNote}` : stopNote,
+          blocks: [...snapshotBlocks, { type: 'text', content: stopNote }],
         },
       ]);
     }
@@ -1247,7 +1247,7 @@ export function ChatScreen() {
         silentBackgroundAbort = true;
       } else if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
         shouldScrollToEndRef.current = true;
-        const stoppedPrefix = '[已停止]\n';
+        const stopNote = '[已停止]';
         const cap = streamCaptureRef.current;
         const text = (cap.text || '').trim();
         const bl = cap.blocks || [];
@@ -1255,8 +1255,8 @@ export function ChatScreen() {
           ...prev,
           {
             role: 'assistant',
-            content: text ? `${stoppedPrefix}${text}` : '[已停止]',
-            blocks: bl.length ? [{ type: 'text', content: stoppedPrefix }, ...bl] : undefined,
+            content: text ? `${text}\n\n${stopNote}` : stopNote,
+            blocks: bl.length ? [...bl, { type: 'text', content: stopNote }] : undefined,
           },
         ]);
       } else if (!silentBackgroundAbort) {
