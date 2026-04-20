@@ -1080,7 +1080,7 @@ export function ChatScreen() {
         silentBackgroundAbort = true;
       } else if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
         shouldScrollToEndRef.current = true;
-        const stopNote = '[已停止]';
+        const stopNote = '用户手动打断回复';
         const cap = streamCaptureRef.current;
         const text = (cap.text || '').trim();
         const bl = cap.blocks || [];
@@ -1130,7 +1130,7 @@ export function ChatScreen() {
     const snapshotText = streamingText;
     if (snapshotBlocks.length > 0 || (snapshotText && snapshotText.trim())) {
       shouldScrollToEndRef.current = true;
-      const stopNote = '[已停止]';
+      const stopNote = '用户手动打断回复';
       const text = (snapshotText || '').trim();
       setMessages((prev) => [
         ...prev,
@@ -1247,7 +1247,7 @@ export function ChatScreen() {
         silentBackgroundAbort = true;
       } else if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
         shouldScrollToEndRef.current = true;
-        const stopNote = '[已停止]';
+        const stopNote = '用户手动打断回复';
         const cap = streamCaptureRef.current;
         const text = (cap.text || '').trim();
         const bl = cap.blocks || [];
