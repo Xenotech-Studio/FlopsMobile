@@ -287,7 +287,7 @@ export function ChatScreen() {
   const [toolCardViewMode, setToolCardViewMode] = useState<Record<string, 'collapsed' | 'preview' | 'full'>>({});
   /** local_exec_command 执行中时每秒 +1，用于刷新耗时显示 */
   const [runningExecTick, setRunningExecTick] = useState(0);
-  /** read_pages 点击某条条目后打开的详情 Sheet（与 Task 页筛选同款 BottomSheetModal） */
+  /** read_page_subagent 点击某条条目后打开的详情 Sheet（与 Task 页筛选同款 BottomSheetModal） */
   const [readPagesModalEntry, setReadPagesModalEntry] = useState<{
     cardKey: string;
     entryKey: string;
@@ -879,6 +879,7 @@ export function ChatScreen() {
                 stdout_append: event.stdout_append,
                 set: event.set,
                 readings_by_url: event.readings_by_url,
+                pages_by_url: event.pages_by_url,
               });
               localBlocks[i] = { ...localBlocks[i], result };
               syncBlocks();
@@ -1621,10 +1622,11 @@ export function ChatScreen() {
     setToolCardViewMode((prev) => ({ ...prev, [cardKey]: mode }));
   }, []);
 
-  /** 与 Web/Desktop 一致：read_pages、文件卡片、exec、FlowDoc 写/编/树 默认半展开；read_doc、search_engine 等默认折叠 */
+  /** 与 Web/Desktop 一致：read_page_subagent、文件卡片、exec、FlowDoc 写/编/树 默认半展开；read_doc、search_engine 等默认折叠 */
   function getDefaultToolCardViewMode(toolName: string): 'collapsed' | 'preview' {
     if (
-      toolName === 'read_pages' ||
+      toolName === 'read_page_subagent' ||
+      toolName === 'read_page_raw' ||
       toolName === 'local_write_file' ||
       toolName === 'local_edit_file' ||
       toolName === 'local_exec_command' ||
@@ -1962,7 +1964,7 @@ export function ChatScreen() {
       );
     }
 
-    if (block.tool_name === 'read_pages') {
+    if (block.tool_name === 'read_page_subagent') {
       return renderReadPagesToolCard(block, key);
     }
     if (block.tool_name === 'local_write_file') {

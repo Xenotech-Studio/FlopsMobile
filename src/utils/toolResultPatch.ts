@@ -77,6 +77,7 @@ export function mergeToolResultChunk(
   chunk: {
     patches?: unknown;
     readings_by_url?: Record<string, unknown>;
+    pages_by_url?: Record<string, unknown>;
     stdout_append?: string;
     set?: Record<string, unknown>;
   }
@@ -110,6 +111,26 @@ export function mergeToolResultChunk(
       merged[k] = { ...prevObj, ...(v != null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}) };
     }
     result = { ...result, readings: merged };
+  }
+  if (chunk.pages_by_url != null && typeof chunk.pages_by_url === 'object') {
+    const prevP = result.pages;
+    const base: Record<string, unknown> =
+      prevP != null && typeof prevP === 'object' && !Array.isArray(prevP)
+        ? { ...(prevP as Record<string, unknown>) }
+        : {};
+    const merged: Record<string, unknown> = { ...base };
+    for (const [k, v] of Object.entries(chunk.pages_by_url)) {
+      const prevEntry = base[k];
+      const prevObj =
+        prevEntry != null && typeof prevEntry === 'object' && !Array.isArray(prevEntry)
+          ? (prevEntry as Record<string, unknown>)
+          : {};
+      merged[k] = {
+        ...prevObj,
+        ...(v != null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}),
+      };
+    }
+    result = { ...result, pages: merged };
   }
   return result;
 }

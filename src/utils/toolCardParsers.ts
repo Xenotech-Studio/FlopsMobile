@@ -1,7 +1,7 @@
 type ParseReadPagesArgs = { goal: string; urls: string[]; parseError: boolean };
 
 /**
- * 解析 read_pages 的 arguments（含 pending 阶段未闭合的 JSON 串）。
+ * 解析 read_page_subagent 的 arguments（含 pending 阶段未闭合的 JSON 串）。
  * 半成品 JSON 时从头部的有效字段解析 goal / URLs，不把原始 JSON 当作展示文案。
  */
 export function parseReadPagesBlockArgs(block: { arguments?: unknown }): ParseReadPagesArgs {
@@ -251,7 +251,7 @@ export function parseExecCommandArgs(block: { tool_name?: string; arguments?: un
   };
 }
 
-// ---------- read_pages result helpers (align with Desktop readPagesParseArgs + utils) ----------
+// ---------- read_page_subagent result helpers (align with Desktop readPagesParseArgs + utils) ----------
 
 export function readPagesResultEntryCount(result: unknown): number {
   if (!result || typeof result !== 'object') return 0;

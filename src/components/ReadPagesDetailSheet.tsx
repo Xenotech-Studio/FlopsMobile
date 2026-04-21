@@ -1,5 +1,5 @@
 /**
- * read_pages 点击小卡片后的详情：与 Task 页筛选同款 BottomSheetModal，
+ * read_page_subagent 点击小卡片后的详情：与 Task 页筛选同款 BottomSheetModal，
  * 排版和配色与 Web 版一致：顶部大缩略图、原文卡片、摘要/正文/要点/引用/链接。
  */
 import React, { useCallback, useEffect, useRef } from 'react';

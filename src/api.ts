@@ -45,7 +45,15 @@ export type ChatStreamEvent =
   | { type: 'tool_start'; tool_name: string; arguments?: string; index?: number }
   | { type: 'tool_stream'; tool_name: string; chunk: string }
   | { type: 'tool_result'; tool_name: string; result: unknown; index?: number }
-  | { type: 'tool_result_chunk'; index: number; stdout_append?: string; set?: Record<string, unknown>; patches?: unknown; readings_by_url?: Record<string, unknown> }
+  | {
+      type: 'tool_result_chunk';
+      index: number;
+      stdout_append?: string;
+      set?: Record<string, unknown>;
+      patches?: unknown;
+      readings_by_url?: Record<string, unknown>;
+      pages_by_url?: Record<string, unknown>;
+    }
   | {
       type: 'safety_confirmation_required';
       tool_name: string;
