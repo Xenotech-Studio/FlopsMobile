@@ -410,7 +410,7 @@ export async function createConversation(
   return { id: data.id };
 }
 
-/** GET /api/agentf/agent-ids — 与 FlopsWeb Chat.jsx 一致 */
+/** GET /api/agentf/agent-ids — 与 FlopsWeb Chat.jsx 一致（顺序：用户设置页保存的序，或默认字母序） */
 export async function getAgentIds(session: Session): Promise<string[]> {
   const base = session.server_base_url;
   const res = await fetchWithDebugLog(`${base}api/agentf/agent-ids`, {
@@ -420,6 +420,25 @@ export async function getAgentIds(session: Session): Promise<string[]> {
   if (!res.ok) return [];
   const data = (await res.json()) as { agent_ids?: unknown };
   return Array.isArray(data.agent_ids) ? data.agent_ids.map(String) : [];
+}
+
+/** PUT /api/agentf/agent-order — body { agent_ids } 全量排列；未在 App 内提供 UI 时可自用于自动化 */
+export async function putAgentIdOrder(
+  session: Session,
+  agentIds: string[]
+): Promise<string[]> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/agentf/agent-order`, {
+    method: 'PUT',
+    headers: { ...authHeaders(session.access_token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent_ids: agentIds }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `保存顺序失败: ${res.status}`);
+  }
+  const data = (await res.json()) as { agent_ids?: unknown };
+  return Array.isArray(data.agent_ids) ? data.agent_ids.map(String) : agentIds;
 }
 
 /** GET /api/agent/profile?agent_id= — 与 FlopsWeb 一致 */

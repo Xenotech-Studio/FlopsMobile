@@ -620,7 +620,7 @@ export function ChatScreen() {
     };
   }, [session, boundAgentIdForLabel, boundMetaDisplayName, boundCachedDisplayName]);
 
-  /** 草稿页默认选中首个 agent（字母序由服务端 agent_ids 决定） */
+  /** 草稿页默认选中列表首项（GET agent-ids 顺序，用户可在设置中调整） */
   useEffect(() => {
     if (messages.length > 0) return;
     if (!agentIds.length) return;
