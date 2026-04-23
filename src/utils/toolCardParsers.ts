@@ -251,6 +251,70 @@ export function parseExecCommandArgs(block: { tool_name?: string; arguments?: un
   };
 }
 
+const LOCAL_EXEC_ENV_KEYS = ['conda_env', 'conda_prefix', 'venv'];
+
+export type LocalExecEnvDisplay = {
+  badge: string | null;
+  detail: string;
+  source: string;
+};
+
+function truncateMiddle(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const keep = Math.max(4, max - 1);
+  const head = Math.ceil(keep / 2);
+  const tail = Math.floor(keep / 2);
+  return s.slice(0, head) + '…' + s.slice(-tail);
+}
+
+/** 与 FlopsWeb `getLocalExecEnvDisplay` 一致：仅 arguments 中 conda_env / conda_prefix / venv 算「使用 env 特性」 */
+export function getLocalExecEnvDisplay(block: {
+  tool_name?: string;
+  arguments?: unknown;
+  result?: unknown;
+}): LocalExecEnvDisplay {
+  const noEnv: LocalExecEnvDisplay = { badge: null, detail: '', source: 'none' };
+  if (!block || block.tool_name !== 'local_exec_command') {
+    return { ...noEnv };
+  }
+  const raw = block.arguments;
+  const rawStr = typeof raw === 'string' ? raw : '';
+  let obj: Record<string, unknown> = {};
+  try {
+    if (typeof raw === 'string') obj = JSON.parse(raw || '{}') as Record<string, unknown>;
+    else if (raw && typeof raw === 'object' && !Array.isArray(raw)) obj = raw as Record<string, unknown>;
+  } catch {
+    const partial = tryParsePartialJson(rawStr, LOCAL_EXEC_ENV_KEYS);
+    obj = partial as Record<string, unknown>;
+  }
+  const ce = String(obj.conda_env ?? '').trim();
+  const cp = String(obj.conda_prefix ?? '').trim();
+  const ve = String(obj.venv ?? '').trim();
+  if (ce) {
+    return {
+      badge: `conda · ${truncateMiddle(ce, 26)}`,
+      detail: `工具参数 conda_env：${ce}`,
+      source: 'arguments',
+    };
+  }
+  if (cp) {
+    return {
+      badge: `conda -p · ${truncateMiddle(cp, 24)}`,
+      detail: `工具参数 conda_prefix：${cp}`,
+      source: 'arguments',
+    };
+  }
+  if (ve) {
+    return {
+      badge: `venv · ${truncateMiddle(ve, 24)}`,
+      detail: `工具参数 venv：${ve}`,
+      source: 'arguments',
+    };
+  }
+
+  return { ...noEnv };
+}
+
 // ---------- read_page_subagent result helpers (align with Desktop readPagesParseArgs + utils) ----------
 
 export function readPagesResultEntryCount(result: unknown): number {

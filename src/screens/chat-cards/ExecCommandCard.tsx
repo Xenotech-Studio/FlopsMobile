@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { Text, View, ScrollView } from 'react-native';
-import { parseExecCommandArgs } from '../../utils/toolCardParsers';
+import { getLocalExecEnvDisplay, parseExecCommandArgs } from '../../utils/toolCardParsers';
 import { normalizeTerminalOutput } from '../../utils/terminalOutputNormalize';
 import { ToolCardFrame } from './ToolCardFrame';
 
@@ -47,6 +47,7 @@ export function ExecCommandCard({
 }: Props) {
   const previewScrollRef = useRef<ScrollView | null>(null);
   const execArgs = parseExecCommandArgs(block);
+  const envDisplay = getLocalExecEnvDisplay(block);
   const resultObj = block.result && typeof block.result === 'object' ? (block.result as Record<string, unknown>) : null;
   const rto = resultObj?.executor_timeout_seconds;
   const hasExecutorTimeout = typeof rto === 'number' && Number.isFinite(rto) && rto > 0;
@@ -179,18 +180,33 @@ export function ExecCommandCard({
       viewMode={viewMode}
       styles={styles}
       status={block.status}
-      collapsedName={`${headerLabel}${programTail}`}
+      collapsedName={
+        envDisplay.badge
+          ? `${headerLabel}${programTail} · ${envDisplay.badge}`
+          : `${headerLabel}${programTail}`
+      }
       collapsedTail={collapsedTail}
       collapsedSuccessStyle={exitCode === 0 ? 'success' : 'none'}
       getToolStatusLabel={getToolStatusLabel}
       setToolCardMode={setToolCardMode}
     >
-      <Text style={styles.toolCardHeader as object}>
-        {headerLabel}
-        {programTail}
-        {' · '}
-        {getToolStatusLabel(block.status)}
-      </Text>
+      <View style={{ marginBottom: 8 }}>
+        <Text style={styles.toolCardHeader as object}>
+          {headerLabel}
+          {programTail}
+          {' · '}
+          {getToolStatusLabel(block.status)}
+        </Text>
+        {envDisplay.badge ? (
+          <Text
+            style={styles.toolCardExecEnvBadge as object}
+            numberOfLines={2}
+            accessibilityHint={envDisplay.detail}
+          >
+            {envDisplay.badge}
+          </Text>
+        ) : null}
+      </View>
 
       {isFull ? (
         <>

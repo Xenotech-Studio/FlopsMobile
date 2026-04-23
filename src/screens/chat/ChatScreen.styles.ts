@@ -473,6 +473,22 @@ export function createChatStyles(c: AppColors) {
   },
   toolCardExecPromptPrefix: { color: c.textMutedSlate, fontWeight: '600' as const },
   toolCardExecCwd: { color: c.textTertiary },
+  toolCardExecEnvBadge: {
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '600' as const,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    color: c.link,
+    backgroundColor: c.toolInnerSurface6,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 4,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.toolBadgeBorder,
+  },
   /** 时间在滚动区外，避免输出更新时底栏随 scrollToEnd 抖动 */
   toolCardExecExit: {
     marginTop: 8,
