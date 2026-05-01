@@ -1,7 +1,7 @@
 /**
- * 默认服务端地址，与 FlopsDesktop 一致；可通过登录页或环境覆盖。
+ * 默认服务端地址，与 FlopsDesktop 一致（固定生产网关）。
  */
-export const DEFAULT_SERVER_URL = 'http://flops.xenotech.studio/';
+export const DEFAULT_SERVER_URL = 'https://flops.xenotech.studio';
 
 export function normalizeServerUrl(url: string): string {
   const u = (url || '').trim();
