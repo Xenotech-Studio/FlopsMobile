@@ -654,12 +654,32 @@ export async function streamChatV2Loop(
         if (!line.startsWith('data:')) continue;
         const jsonStr = line.slice(5).trim();
         if (!jsonStr) continue;
-        replayFrom += 1;
-        let data: ChatStreamEvent & { done?: boolean; type?: string };
+        let data: ChatStreamEvent & {
+          done?: boolean;
+          type?: string;
+          _replay_from?: number;
+          replay_from?: number;
+        };
         try {
-          data = JSON.parse(jsonStr) as ChatStreamEvent & { done?: boolean; type?: string };
+          data = JSON.parse(jsonStr) as ChatStreamEvent & {
+            done?: boolean;
+            type?: string;
+            _replay_from?: number;
+            replay_from?: number;
+          };
         } catch {
           continue;
+        }
+        if (typeof data._replay_from === 'number' && Number.isFinite(data._replay_from)) {
+          replayFrom = data._replay_from;
+        } else if (
+          data.type === 'v2_buffer_cursor' &&
+          typeof data.replay_from === 'number' &&
+          Number.isFinite(data.replay_from)
+        ) {
+          replayFrom = data.replay_from;
+        } else {
+          replayFrom += 1;
         }
         if (data.type === 'v2_run' && typeof (data as { run_id?: string }).run_id === 'string') {
           const rid = (data as { run_id: string }).run_id;
