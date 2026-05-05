@@ -12,6 +12,9 @@
  *
  * iOS testflight 模式说明：
  * - 强制 exportMethod=app-store（覆盖 FLOPS_IOS_EXPORT_METHOD）
+ * - marketing version（MARKETING_VERSION）默认取自 package.json 的 version；
+ *   可用环境变量 FLOPS_IOS_MARKETING_VERSION 覆盖（必须符合 CFBundleShortVersionString 格式：
+ *   只能是非空的「数字 + 小数点」，例如 0.0.11）；传给 Xcode 后 ASC/TestFlight 里的版本号与该字段对齐。
  * - 自动注入 build number = UTC 时间戳 (YYYYMMDDHHMM, 12 位数字)，
  *   保证同一 marketing version 下每次 build 都唯一（Apple 强制约束）
  * - archive/export 完成后调用 build-and-upload-ios.js，凭据来自 ios-upload-config.json
@@ -245,6 +248,22 @@ function getPackageVersion(projectRoot) {
   }
 }
 
+/**
+ * CFBundleShortVersionString（MARKETING_VERSION）在 App Store Connect / TestFlight 上展示的版本（括号前的数字）。
+ * Apple 要求由整数与小数点组成，例如「1.0」「0.0.11」；不支持 semver 后缀（如 1.0.0-rc）。
+ */
+function sanitizeIosMarketingVersion(rawVersion, fallbackHint) {
+  const v = (rawVersion || '').trim();
+  if (!v || !/^\d+(\.\d+)*$/.test(v)) {
+    fail(
+      `无效的 iOS marketing version「${v || '(empty)'}」${fallbackHint}\n` +
+        `须为非空的「整数与小数点」组合（示例：0.0.11）。请修正 package.json 的 version\n` +
+        `或设置环境变量 FLOPS_IOS_MARKETING_VERSION。`
+    );
+  }
+  return v;
+}
+
 function copyArtifactToBuildRoot(projectRoot, sourcePath, targetBasename) {
   const buildRoot = path.join(projectRoot, 'build');
   fs.mkdirSync(buildRoot, { recursive: true });
@@ -322,6 +341,13 @@ function runIosBuild(artifact, target) {
   writeIosExportOptionsPlist(plistPath, exportMethod);
 
   const buildNumber = isTestFlight ? computeBuildNumberUTC() : null;
+  const marketingVersionEnv = (process.env.FLOPS_IOS_MARKETING_VERSION || '').trim();
+  const marketingVersionForArchive =
+    isTestFlight &&
+    sanitizeIosMarketingVersion(
+      marketingVersionEnv || getPackageVersion(projectRoot),
+      marketingVersionEnv ? '（来自 FLOPS_IOS_MARKETING_VERSION）' : '（来自 package.json version）'
+    );
 
   console.log('[build] platform=ios');
   console.log('[build] artifact=ipa');
@@ -331,6 +357,9 @@ function runIosBuild(artifact, target) {
   console.log(`[build] exportMethod=${exportMethod}`);
   if (isTestFlight) {
     console.log(`[build] target=testflight`);
+    console.log(
+      `[build] marketingVersion=${marketingVersionForArchive} (MARKETING_VERSION)`
+    );
     console.log(`[build] buildNumber=${buildNumber} (CURRENT_PROJECT_VERSION)`);
   }
 
@@ -348,6 +377,7 @@ function runIosBuild(artifact, target) {
   ];
   if (isTestFlight) {
     // xcodebuild 接受 KEY=VALUE 形式的 build setting 覆盖（放在 action 之后）
+    archiveArgs.push(`MARKETING_VERSION=${marketingVersionForArchive}`);
     archiveArgs.push(`CURRENT_PROJECT_VERSION=${buildNumber}`);
   }
 
