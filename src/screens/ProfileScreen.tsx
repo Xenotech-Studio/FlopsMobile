@@ -15,6 +15,7 @@ import {
   Linking,
   ActivityIndicator,
   Image,
+  Alert,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -37,6 +38,12 @@ import {
 } from '../api/androidUpdateApi';
 import { downloadApk, installApk } from '../utils/androidUpdate';
 import KeepAwake from 'react-native-keep-awake';
+import {
+  isApnsSupported,
+  requestApnsPermission,
+  getCachedDeviceToken,
+} from '../notifications/apnsClient';
+import { registerApnsToken, requestDebugApnsPush } from '../api/push';
 
 const EDGE_WIDTH = 24;
 const SWIPE_THRESHOLD = 60;
@@ -190,6 +197,60 @@ export function ProfileScreen() {
     }
   }, [serverBaseUrl]);
 
+  /** APNs 登记：申请权限 → 等 device token → 上报服务端 */
+  const handleRegisterApns = useCallback(async () => {
+    if (!session) return;
+    if (!isApnsSupported()) {
+      Alert.alert('暂不支持', '此设备未识别到 APNs 模块（需 iOS 真机 / 已重新构建）');
+      return;
+    }
+    try {
+      const perm = await requestApnsPermission();
+      if (!perm.granted) {
+        Alert.alert('未授权', '请在「系统设置 → 通知 → FlopsMobile」打开通知权限');
+        return;
+      }
+      // 等 AppDelegate 把 token 缓存进来；通常 1~2s 内
+      let cached: { token: string; env: 'sandbox' | 'production' } | null = null;
+      for (let i = 0; i < 20; i++) {
+        cached = await getCachedDeviceToken();
+        if (cached) break;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      if (!cached) {
+        Alert.alert('获取失败', 'APNs 未在 5 秒内回流 device token；请检查网络与 entitlements');
+        return;
+      }
+      await registerApnsToken(serverBaseUrl, session.access_token, {
+        device_token: cached.token,
+        env: cached.env,
+      });
+      Alert.alert(
+        '已登记 APNs',
+        `env=${cached.env}\ntoken=${cached.token.slice(0, 8)}…${cached.token.slice(-6)}\n现可在「调试：服务端推送」按钮发测试。`
+      );
+    } catch (e) {
+      Alert.alert('登记失败', e instanceof Error ? e.message : String(e));
+    }
+  }, [serverBaseUrl, session]);
+
+  const handleDebugApnsPush = useCallback(async () => {
+    if (!session) return;
+    try {
+      const r = await requestDebugApnsPush(serverBaseUrl, session.access_token);
+      if (!r.results.length) {
+        Alert.alert('暂无可下发 token', `服务端未持有任何 token（${r.reason || 'NoTokenRegistered'}）；请先「登记推送令牌」`);
+        return;
+      }
+      const lines = r.results.map((row) =>
+        `${row.token_short} · ${row.env || '?'} · ${row.ok ? 'OK' : `FAIL ${row.status} ${row.reason || ''}`}`
+      );
+      Alert.alert(r.ok ? '已发送（看通知栏）' : '部分/全部失败', lines.join('\n'));
+    } catch (e) {
+      Alert.alert('请求失败', e instanceof Error ? e.message : String(e));
+    }
+  }, [serverBaseUrl, session]);
+
   if (!session) return null;
 
   const isAndroid = Platform.OS === 'android';
@@ -273,6 +334,28 @@ export function ProfileScreen() {
             <Text style={styles.rowLabel}>关于 / 检查更新</Text>
             <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
           </TouchableOpacity>
+          {Platform.OS === 'ios' && __DEV__ && (
+            <>
+              <TouchableOpacity
+                style={[styles.row, styles.rowBorder]}
+                activeOpacity={0.7}
+                onPress={handleRegisterApns}
+              >
+                <Ionicons name="cloud-upload-outline" size={22} color={colors.textMuted} />
+                <Text style={styles.rowLabel}>登记推送令牌（APNs）</Text>
+                <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.row, styles.rowBorder]}
+                activeOpacity={0.7}
+                onPress={handleDebugApnsPush}
+              >
+                <Ionicons name="notifications-outline" size={22} color={colors.textMuted} />
+                <Text style={styles.rowLabel}>调试：服务端推送（APNs）</Text>
+                <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       </ScrollView>
 

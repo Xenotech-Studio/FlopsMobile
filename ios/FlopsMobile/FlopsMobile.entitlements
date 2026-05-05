@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Debug 真机/模拟器使用 development（→ 必须发往 api.sandbox.push.apple.com）。
+	  发布到 TestFlight / App Store 时，签名工具会按 provisioning profile
+	  自动改为 production（→ 走 api.push.apple.com）。这里写 development 是 debug 默认值。
+	  iOS 模拟器（iOS 16+）也能拿到模拟 token，但只能用 .apns drag-into-simulator 测试。
+	-->
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>

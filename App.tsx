@@ -21,6 +21,7 @@ import { LoginScreen } from './src/screens/LoginScreen';
 import { VersionWelcomeScreen } from './src/screens/VersionWelcomeScreen';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import type { RootStackParamList } from './src/navigation/types';
+import { PushTokenLifecycle } from './src/notifications/PushTokenLifecycle';
 
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
@@ -88,6 +89,7 @@ export default function App() {
       <SafeAreaProvider>
         <ThemeProvider>
           <SessionProvider>
+            <PushTokenLifecycle />
             <AppContent />
           </SessionProvider>
         </ThemeProvider>
