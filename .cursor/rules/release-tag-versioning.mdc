@@ -1,0 +1,41 @@
+---
+description: 正式发布 Git tag、语义化版本号与可安装产物（TestFlight/APK 等）的约定；与 FlopsDesktop changelog-style.mdc 并列。
+globs:
+  - "**/package.json"
+  - "**/android/app/build.gradle"
+  - "**/project.pbxproj"
+alwaysApply: false
+---
+
+# Release tag 与版本号
+
+## 历史边界（不翻旧账）
+
+- **某一正式发布对应的源代码快照以当时的 Git tag 为准**。不因早年未及时 bump `package.json`、Xcode `MARKETING_VERSION`、Android `versionName` 等否定该 tag。
+- 本条以下的约束均为 **自采纳之日起向前生效**，不要求重写历史 commit。
+
+## 正式 tag 之后的开发线
+
+- **正式发布打 tag 之后**，若目的是 **下一版本新功能** 的验证（含 TestFlight、对外 APK/AAB、上架构建等），在进入产出 **可安装产物** 的流程之前，**必须先 bump 对外语义版本号**。
+  - 至少：`package.json` 的 `version`。
+  - **FlopsMobile**：须同步 Android `versionName` 与 `versionCode`（单调递增）；iOS `yarn build ios testflight` 从 `package.json` 注入 `MARKETING_VERSION`，须与之对齐。
+- 语义：**tag 之后不再是「同一对外版本的补丁叙事」**，而是下一发行线的测试 / 开发；版本号文件应与该语义一致。
+- **理想对应关系（团队任选其一，首次发版前钉死）**：例如 tag `vX.Y.Z` 指向「对外宣称版本号为 X.Y.Z 的最后一次提交」。
+
+## 遗忘补救
+
+- 忘记 bump 时：**不要用 amend 改写已推送历史**。补一笔正常 bump commit 即可。
+- **发包前自检**：跑 TestFlight / 上传 Release 等动作前，确认版本号已高于上一对外发布。
+
+## FlopsMobile / iOS 备注
+
+- **`package.json` `version` 为营销版本的 canonical source**（与 README、`build.js` testflight 行为一致）。
+- App Store / TestFlight 的 **build**（时间戳注入的 `CURRENT_PROJECT_VERSION`）可与营销版本独立递增；须满足商店唯一性规则。
+
+## Flops 主仓库与子模块
+
+- 本仓库为 Flops 的 **git submodule**：推送后须在 **Flops 主仓库**更新 submodule 指针 **并推送**，避免他人 `git clone --recursive` 得到悬空 SHA。
+
+## 与 changelog 的关系
+
+- 桌面端用户可见 `changelog.json` 文风见 `FlopsDesktop/.cursor/rules/changelog-style.mdc`。版本 bump 与 changelog 条目应在同一发行批次内对齐。
