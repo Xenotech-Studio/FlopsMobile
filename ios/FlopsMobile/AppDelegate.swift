@@ -49,17 +49,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
   ) {
     let tokenHex = deviceToken.map { String(format: "%02x", $0) }.joined()
-    let env: String = {
-      // entitlement aps-environment：开发证书 → "development"，发布 → "production"
-      // 由 Info.plist 不可知；改读 entitlements 路径同样不直接，故用编译条件 + provisioning 推断
-      #if DEBUG
-      return "sandbox"
-      #else
-      // Release 构建可能仍是 TestFlight (production) 或 ad-hoc，统一按 production 上报
-      // 这与 entitlements 中 aps-environment=production 对应。
-      return "production"
-      #endif
-    }()
+    let env = Self.inferApnsEnv()
     NSLog("[FlopsPush] APNs token len=%d env=%@", tokenHex.count, env)
     FlopsPushModule.cacheToken(tokenHex, env: env)
   }
@@ -71,6 +61,31 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     let msg = error.localizedDescription
     NSLog("[FlopsPush] APNs register failed: %@", msg)
     FlopsPushModule.cacheError(msg)
+  }
+
+  /// 推断当前 build 的 APNs 环境，**不依赖** `#if DEBUG`。
+  ///
+  /// 真机：读 `embedded.mobileprovision` 里 `Entitlements.aps-environment`。
+  /// 该值由 provisioning profile 决定（development / production），
+  /// 与 build configuration（Debug / Release）正交：
+  ///   - Development profile（Run / sideload）→ aps-environment=development → sandbox token
+  ///   - Distribution profile（TestFlight / App Store / Ad-Hoc）→ production → production token
+  /// 一旦搞错，APNs 服务端会回 `BadDeviceToken (400)`。
+  ///
+  /// `embedded.mobileprovision` 是 CMS 签名容器，但内部 plist payload 是明文 ASCII，
+  /// 直接子串匹配即可，无需解 CMS。
+  ///
+  /// 模拟器没有 embedded.mobileprovision（adhoc 签名），fallback 到 sandbox：
+  /// 模拟器 build 只可能是 development 场景。
+  private static func inferApnsEnv() -> String {
+    guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+          let data = try? Data(contentsOf: url),
+          let text = String(data: data, encoding: .ascii) else {
+      return "sandbox"
+    }
+    guard let r = text.range(of: "<key>aps-environment</key>") else { return "sandbox" }
+    let after = text[r.upperBound...].prefix(200)
+    return after.contains("production") ? "production" : "sandbox"
   }
 
   // MARK: - 前台展示
