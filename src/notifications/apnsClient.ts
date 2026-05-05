@@ -42,12 +42,24 @@ export async function getApnsAuthorizationStatus(): Promise<string> {
   return r.status;
 }
 
-export async function getCachedDeviceToken(): Promise<ApnsTokenEvent | null> {
-  if (!FlopsPushModule) return null;
+export type DeviceTokenResult =
+  /** 已拿到 token */
+  | { ok: true; token: string; env: 'sandbox' | 'production' }
+  /** 原生 didFailToRegisterForRemoteNotificationsWithError 的真实原因 */
+  | { ok: false; kind: 'register_failed'; error: string }
+  /** 还未注册或注册中（再等一下） */
+  | { ok: false; kind: 'pending' };
+
+export async function getCachedDeviceToken(): Promise<DeviceTokenResult> {
+  if (!FlopsPushModule) return { ok: false, kind: 'register_failed', error: 'unsupported_platform' };
   try {
-    return await FlopsPushModule.getDeviceToken();
-  } catch {
-    return null;
+    const r = await FlopsPushModule.getDeviceToken();
+    return { ok: true, token: r.token, env: r.env };
+  } catch (e: any) {
+    const code: string = e?.code || 'unknown';
+    const msg: string = e?.message || String(e);
+    if (code === 'no_token') return { ok: false, kind: 'pending' };
+    return { ok: false, kind: 'register_failed', error: `${code}: ${msg}` };
   }
 }
 

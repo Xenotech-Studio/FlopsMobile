@@ -45,8 +45,8 @@ export function PushTokenLifecycle(): null {
     };
 
     void getCachedDeviceToken().then((cached) => {
-      if (!cached || cancelled) return;
-      void syncToken(cached.token, cached.env);
+      if (cancelled) return;
+      if (cached.ok) void syncToken(cached.token, cached.env);
     });
 
     const unsub = addApnsTokenListener((e) => {
