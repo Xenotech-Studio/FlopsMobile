@@ -11,9 +11,19 @@
 
 import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
 
+export type ApnsAuthStatus =
+  | 'notDetermined'
+  | 'denied'
+  | 'authorized'
+  | 'provisional'
+  | 'ephemeral'
+  | 'unknown'
+  | 'unsupported';
+
 type FlopsPushModuleType = {
   requestPermission(): Promise<{ granted: boolean; registered: boolean }>;
   getAuthorizationStatus(): Promise<{ status: string }>;
+  registerSilently(): Promise<{ status: string; registered: boolean }>;
   getDeviceToken(): Promise<{ token: string; env: 'sandbox' | 'production' }>;
 };
 
@@ -36,10 +46,21 @@ export async function requestApnsPermission(): Promise<{ granted: boolean; regis
   return FlopsPushModule.requestPermission();
 }
 
-export async function getApnsAuthorizationStatus(): Promise<string> {
+export async function getApnsAuthorizationStatus(): Promise<ApnsAuthStatus> {
   if (!FlopsPushModule) return 'unsupported';
   const r = await FlopsPushModule.getAuthorizationStatus();
-  return r.status;
+  return r.status as ApnsAuthStatus;
+}
+
+/**
+ * 已授权时静默调用 `registerForRemoteNotifications`（不弹权限框）。
+ * - 用于 app 启动 / 回前台时根据「本地 toggle + iOS 权限」的自动续注册。
+ * - 未授权时不弹任何 UI，仅返回当前状态，由调用方（如设置页 toggle）决定下一步。
+ */
+export async function registerApnsSilently(): Promise<{ status: ApnsAuthStatus; registered: boolean }> {
+  if (!FlopsPushModule) return { status: 'unsupported', registered: false };
+  const r = await FlopsPushModule.registerSilently();
+  return { status: r.status as ApnsAuthStatus, registered: !!r.registered };
 }
 
 export type DeviceTokenResult =

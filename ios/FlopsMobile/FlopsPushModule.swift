@@ -100,16 +100,44 @@ class FlopsPushModule: RCTEventEmitter {
   func getAuthorizationStatus(_ resolve: @escaping RCTPromiseResolveBlock,
                               rejecter reject: @escaping RCTPromiseRejectBlock) {
     UNUserNotificationCenter.current().getNotificationSettings { settings in
-      let status: String
+      resolve(["status": Self.statusString(settings.authorizationStatus)])
+    }
+  }
+
+  /// 已授权场景下静默调用 registerForRemoteNotifications，不弹权限框；
+  /// 用于 app 启动 / 回前台时的自动同步。未授权直接返回当前状态，
+  /// 由 JS 侧决定是否引导用户去系统设置。
+  @objc(registerSilently:rejecter:)
+  func registerSilently(_ resolve: @escaping RCTPromiseResolveBlock,
+                        rejecter reject: @escaping RCTPromiseRejectBlock) {
+    UNUserNotificationCenter.current().getNotificationSettings { settings in
+      let status = Self.statusString(settings.authorizationStatus)
+      let canRegister: Bool
       switch settings.authorizationStatus {
-      case .notDetermined: status = "notDetermined"
-      case .denied: status = "denied"
-      case .authorized: status = "authorized"
-      case .provisional: status = "provisional"
-      case .ephemeral: status = "ephemeral"
-      @unknown default: status = "unknown"
+      case .authorized, .provisional, .ephemeral:
+        canRegister = true
+      default:
+        canRegister = false
       }
-      resolve(["status": status])
+      if canRegister {
+        DispatchQueue.main.async {
+          UIApplication.shared.registerForRemoteNotifications()
+          resolve(["status": status, "registered": true])
+        }
+      } else {
+        resolve(["status": status, "registered": false])
+      }
+    }
+  }
+
+  private static func statusString(_ s: UNAuthorizationStatus) -> String {
+    switch s {
+    case .notDetermined: return "notDetermined"
+    case .denied: return "denied"
+    case .authorized: return "authorized"
+    case .provisional: return "provisional"
+    case .ephemeral: return "ephemeral"
+    @unknown default: return "unknown"
     }
   }
 

@@ -9,6 +9,7 @@ import { AccountActionsScreen } from '../screens/AccountActionsScreen';
 import { ChangePasswordScreen } from '../screens/ChangePasswordScreen';
 import { SoulSettingsScreen } from '../screens/SoulSettingsScreen';
 import { AppearanceSettingsScreen } from '../screens/AppearanceSettingsScreen';
+import { NotificationSettingsScreen } from '../screens/NotificationSettingsScreen';
 import type { RootStackParamList } from './types';
 import { useAppTheme } from '../context/ThemeContext';
 
@@ -110,6 +111,15 @@ export function RootNavigator() {
       <Stack.Screen
         name="AppearanceSettings"
         component={AppearanceSettingsScreen}
+        options={{
+          headerShown: false,
+          gestureEnabled: true,
+          cardStyleInterpolator: rightCardStyleInterpolator,
+        }}
+      />
+      <Stack.Screen
+        name="NotificationSettings"
+        component={NotificationSettingsScreen}
         options={{
           headerShown: false,
           gestureEnabled: true,

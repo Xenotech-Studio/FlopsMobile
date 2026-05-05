@@ -15,7 +15,6 @@ import {
   Linking,
   ActivityIndicator,
   Image,
-  Alert,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -38,14 +37,7 @@ import {
 } from '../api/androidUpdateApi';
 import { downloadApk, installApk } from '../utils/androidUpdate';
 import KeepAwake from 'react-native-keep-awake';
-import {
-  isApnsSupported,
-  requestApnsPermission,
-  getCachedDeviceToken,
-  addApnsTokenListener,
-  addApnsErrorListener,
-} from '../notifications/apnsClient';
-import { registerApnsToken, requestDebugApnsPush } from '../api/push';
+import { isApnsSupported } from '../notifications/apnsClient';
 
 const EDGE_WIDTH = 24;
 const SWIPE_THRESHOLD = 60;
@@ -199,110 +191,6 @@ export function ProfileScreen() {
     }
   }, [serverBaseUrl]);
 
-  /** APNs 登记：申请权限 → 等 device token（最多 15s）→ 上报服务端。
-   *
-   * 通过事件监听器 + 超时 race，能在第一时间拿到 didFail... 的真实错误（如
-   * "no valid 'aps-environment' entitlement string found in profile"），
-   * 不再吞错只显示「超时」。 */
-  const handleRegisterApns = useCallback(async () => {
-    if (!session) return;
-    if (!isApnsSupported()) {
-      Alert.alert('暂不支持', '此设备未识别到 APNs 模块（需 iOS 真机或模拟器，且已重新构建）');
-      return;
-    }
-    try {
-      const perm = await requestApnsPermission();
-      if (!perm.granted) {
-        Alert.alert('未授权', '请在「系统设置 → 通知 → FlopsMobile」打开通知权限');
-        return;
-      }
-
-      // 1) 先看 AppDelegate 是否已经缓存（之前注册过）
-      const initial = await getCachedDeviceToken();
-      let token: string | null = null;
-      let env: 'sandbox' | 'production' | null = null;
-      if (initial.ok) {
-        token = initial.token;
-        env = initial.env;
-      } else if (initial.kind === 'register_failed') {
-        Alert.alert(
-          '注册失败（原生）',
-          `${initial.error}\n\n常见原因：\n• Apple 后台 App ID 未开 Push Notifications\n• provisioning profile 没含 aps-environment 字段\n• 模拟器版本过旧（需 iOS 16+ 且 Apple Silicon）`
-        );
-        return;
-      } else {
-        // 2) pending：等事件 race（token / error / 15s 超时）
-        const result = await new Promise<
-          | { kind: 'token'; token: string; env: 'sandbox' | 'production' }
-          | { kind: 'error'; error: string }
-          | { kind: 'timeout' }
-        >((resolve) => {
-          let settled = false;
-          const finish = (v: any) => {
-            if (settled) return;
-            settled = true;
-            unsubToken();
-            unsubErr();
-            clearTimeout(timer);
-            resolve(v);
-          };
-          const unsubToken = addApnsTokenListener((e) =>
-            finish({ kind: 'token', token: e.token, env: e.env }),
-          );
-          const unsubErr = addApnsErrorListener((e) =>
-            finish({ kind: 'error', error: e.error }),
-          );
-          const timer = setTimeout(() => finish({ kind: 'timeout' }), 15000);
-        });
-
-        if (result.kind === 'error') {
-          Alert.alert(
-            '注册失败（原生）',
-            `${result.error}\n\n常见原因：\n• Apple 后台 App ID 未开 Push Notifications\n• provisioning profile 没含 aps-environment\n• 模拟器版本过旧或非 Apple Silicon`,
-          );
-          return;
-        }
-        if (result.kind === 'timeout') {
-          Alert.alert(
-            '超时',
-            'APNs 在 15 秒内既没回 token、也没回失败。\n\n请用 USB 连 Mac → Xcode → Window → Devices and Simulators → 选设备 → Open Console → 过滤「FlopsPush」，看原生日志告诉我；常见是 entitlements 没真正进 build（重 Clean Build Folder）。',
-          );
-          return;
-        }
-        token = result.token;
-        env = result.env;
-      }
-
-      // 3) 上报服务端
-      await registerApnsToken(serverBaseUrl, session.access_token, {
-        device_token: token!,
-        env: env!,
-      });
-      Alert.alert(
-        '已登记 APNs',
-        `env=${env}\ntoken=${token!.slice(0, 8)}…${token!.slice(-6)}\n现可点「调试：服务端推送」发测试。`,
-      );
-    } catch (e) {
-      Alert.alert('登记失败', e instanceof Error ? e.message : String(e));
-    }
-  }, [serverBaseUrl, session]);
-
-  const handleDebugApnsPush = useCallback(async () => {
-    if (!session) return;
-    try {
-      const r = await requestDebugApnsPush(serverBaseUrl, session.access_token);
-      if (!r.results.length) {
-        Alert.alert('暂无可下发 token', `服务端未持有任何 token（${r.reason || 'NoTokenRegistered'}）；请先「登记推送令牌」`);
-        return;
-      }
-      const lines = r.results.map((row) =>
-        `${row.token_short} · ${row.env || '?'} · ${row.ok ? 'OK' : `FAIL ${row.status} ${row.reason || ''}`}`
-      );
-      Alert.alert(r.ok ? '已发送（看通知栏）' : '部分/全部失败', lines.join('\n'));
-    } catch (e) {
-      Alert.alert('请求失败', e instanceof Error ? e.message : String(e));
-    }
-  }, [serverBaseUrl, session]);
 
   if (!session) return null;
 
@@ -387,27 +275,16 @@ export function ProfileScreen() {
             <Text style={styles.rowLabel}>关于 / 检查更新</Text>
             <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
           </TouchableOpacity>
-          {Platform.OS === 'ios' && (
-            <>
-              <TouchableOpacity
-                style={[styles.row, styles.rowBorder]}
-                activeOpacity={0.7}
-                onPress={handleRegisterApns}
-              >
-                <Ionicons name="cloud-upload-outline" size={22} color={colors.textMuted} />
-                <Text style={styles.rowLabel}>登记推送令牌（APNs）</Text>
-                <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.row, styles.rowBorder]}
-                activeOpacity={0.7}
-                onPress={handleDebugApnsPush}
-              >
-                <Ionicons name="notifications-outline" size={22} color={colors.textMuted} />
-                <Text style={styles.rowLabel}>调试：服务端推送（APNs）</Text>
-                <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
-              </TouchableOpacity>
-            </>
+          {Platform.OS === 'ios' && isApnsSupported() && (
+            <TouchableOpacity
+              style={[styles.row, styles.rowBorder]}
+              activeOpacity={0.7}
+              onPress={() => navigation.navigate('NotificationSettings')}
+            >
+              <Ionicons name="notifications-outline" size={22} color={colors.textMuted} />
+              <Text style={styles.rowLabel}>通知</Text>
+              <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
+            </TouchableOpacity>
           )}
         </View>
       </ScrollView>

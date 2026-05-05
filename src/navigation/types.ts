@@ -11,6 +11,7 @@ export type RootStackParamList = {
   ChangePassword: undefined;
   SoulSettings: undefined;
   AppearanceSettings: undefined;
+  NotificationSettings: undefined;
 };
 
 export type MainTabParamList = {

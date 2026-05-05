@@ -16,6 +16,9 @@ RCT_EXTERN_METHOD(requestPermission:(RCTPromiseResolveBlock)resolve
 RCT_EXTERN_METHOD(getAuthorizationStatus:(RCTPromiseResolveBlock)resolve
                                 rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(registerSilently:(RCTPromiseResolveBlock)resolve
+                          rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(getDeviceToken:(RCTPromiseResolveBlock)resolve
                        rejecter:(RCTPromiseRejectBlock)reject)
 
