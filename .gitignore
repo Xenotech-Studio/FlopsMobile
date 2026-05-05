@@ -66,8 +66,11 @@ yarn-error.log
 # testing
 /coverage
 
-# Upload config (contains FLOPS_ACCESS_TOKEN)
+# Upload config (Android: contains FLOPS_ACCESS_TOKEN)
 upload-config.json
+
+# iOS TestFlight upload config (contains ASC API Key Issuer ID + .p8 path)
+ios-upload-config.json
 
 # Yarn
 .yarn/*

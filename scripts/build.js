@@ -1,12 +1,20 @@
 #!/usr/bin/env node
 /**
  * Unified build entry:
- * - yarn build                    -> android apk
- * - yarn build android            -> android apk
- * - yarn build android apk        -> android apk
- * - yarn build android aab        -> android aab
- * - yarn build ios                -> ios ipa
- * - yarn build ios ipa            -> ios ipa
+ * - yarn build                       -> android apk
+ * - yarn build android               -> android apk
+ * - yarn build android apk           -> android apk
+ * - yarn build android aab           -> android aab
+ * - yarn build android upload        -> android apk + 上传 Flops 后端
+ * - yarn build ios                   -> ios ipa (development export，sideload 自用)
+ * - yarn build ios ipa               -> 同上
+ * - yarn build ios testflight        -> ios ipa (app-store export) + 上传 App Store Connect → TestFlight
+ *
+ * iOS testflight 模式说明：
+ * - 强制 exportMethod=app-store（覆盖 FLOPS_IOS_EXPORT_METHOD）
+ * - 自动注入 build number = UTC 时间戳 (YYYYMMDDHHMM, 12 位数字)，
+ *   保证同一 marketing version 下每次 build 都唯一（Apple 强制约束）
+ * - archive/export 完成后调用 build-and-upload-ios.js，凭据来自 ios-upload-config.json
  *
  * Also accepts common typos for android:
  * - anrdoid / anrdoi
@@ -64,14 +72,21 @@ function normalizeArtifact(token) {
 }
 
 function parseArgs(argv) {
-  // Defaults: android + apk. 末尾可加 upload（仅 android 构建后上传）
+  // Defaults: android + apk. 末尾可加：
+  // - upload     -> android 上传 Flops 后端
+  // - testflight -> iOS 上传 App Store Connect (TestFlight)
   let platform = 'android';
   let artifact = 'apk';
   let doUpload = false;
+  let target = null;
   let index = 0;
 
-  if (argv[argv.length - 1] === 'upload') {
+  const last = argv[argv.length - 1];
+  if (last === 'upload') {
     doUpload = true;
+    argv = argv.slice(0, -1);
+  } else if (last === 'testflight') {
+    target = 'testflight';
     argv = argv.slice(0, -1);
   }
 
@@ -93,7 +108,13 @@ function parseArgs(argv) {
   }
 
   if (argv[index]) {
-    fail(`无法识别的参数：${argv[index]}。用法：yarn build [android|ios] [apk|aab|ipa] [upload]`);
+    fail(`无法识别的参数：${argv[index]}。用法：yarn build [android|ios] [apk|aab|ipa] [upload|testflight]`);
+  }
+
+  // testflight 暗示 iOS（即使没写 ios 也兜底到 ios）
+  if (target === 'testflight' && platform === 'android' && !maybePlatform) {
+    platform = 'ios';
+    artifact = 'ipa';
   }
 
   if (platform === 'ios' && artifact === 'apk') {
@@ -101,14 +122,18 @@ function parseArgs(argv) {
   }
 
   if (platform === 'ios' && artifact !== 'ipa') {
-    fail('iOS 目前仅支持 ipa。用法：yarn build ios [ipa]');
+    fail('iOS 目前仅支持 ipa。用法：yarn build ios [ipa] [testflight]');
   }
 
   if (doUpload && platform !== 'android') {
-    fail('目前仅支持 yarn build android [apk] upload');
+    fail('upload 仅支持 yarn build android [apk] upload。iOS 上传请用 yarn build ios testflight');
   }
 
-  return { platform, artifact, doUpload };
+  if (target === 'testflight' && platform !== 'ios') {
+    fail('testflight 仅支持 yarn build ios testflight');
+  }
+
+  return { platform, artifact, doUpload, target };
 }
 
 function runAndroidBuild(artifact) {
@@ -248,7 +273,20 @@ function writeIosExportOptionsPlist(plistPath, method) {
   fs.writeFileSync(plistPath, content, 'utf8');
 }
 
-function runIosBuild(artifact) {
+function computeBuildNumberUTC() {
+  // CFBundleVersion 必须在同 CFBundleShortVersionString 下唯一。
+  // UTC YYYYMMDDHHMM (12 位数字) 永远递增，永远不撞，且短于 Apple 18 位上限。
+  const now = new Date();
+  return [
+    now.getUTCFullYear(),
+    String(now.getUTCMonth() + 1).padStart(2, '0'),
+    String(now.getUTCDate()).padStart(2, '0'),
+    String(now.getUTCHours()).padStart(2, '0'),
+    String(now.getUTCMinutes()).padStart(2, '0'),
+  ].join('');
+}
+
+function runIosBuild(artifact, target) {
   if (process.platform !== 'darwin') {
     fail('iOS 打包仅支持在 macOS 执行。');
   }
@@ -261,7 +299,11 @@ function runIosBuild(artifact) {
   const workspace = process.env.FLOPS_IOS_WORKSPACE || 'FlopsMobile.xcworkspace';
   const scheme = process.env.FLOPS_IOS_SCHEME || 'FlopsMobile';
   const configuration = process.env.FLOPS_IOS_CONFIGURATION || 'Release';
-  const exportMethod = process.env.FLOPS_IOS_EXPORT_METHOD || 'development';
+  const isTestFlight = target === 'testflight';
+  // testflight 强制 app-store export，因为只有 app-store profile 才能上 ASC。
+  const exportMethod = isTestFlight
+    ? 'app-store'
+    : (process.env.FLOPS_IOS_EXPORT_METHOD || 'development');
   const pbxprojPath = path.join(iosDir, 'FlopsMobile.xcodeproj', 'project.pbxproj');
   const archivePath = path.join(projectRoot, 'build', 'ios', `${scheme}.xcarchive`);
   const exportPath = path.join(projectRoot, 'build', 'ios', 'export');
@@ -279,29 +321,37 @@ function runIosBuild(artifact) {
   fs.mkdirSync(exportPath, { recursive: true });
   writeIosExportOptionsPlist(plistPath, exportMethod);
 
+  const buildNumber = isTestFlight ? computeBuildNumberUTC() : null;
+
   console.log('[build] platform=ios');
   console.log('[build] artifact=ipa');
   console.log(`[build] workspace=${workspace}`);
   console.log(`[build] scheme=${scheme}`);
   console.log(`[build] configuration=${configuration}`);
   console.log(`[build] exportMethod=${exportMethod}`);
+  if (isTestFlight) {
+    console.log(`[build] target=testflight`);
+    console.log(`[build] buildNumber=${buildNumber} (CURRENT_PROJECT_VERSION)`);
+  }
 
-  const archiveStatus = runCommand(
-    'xcodebuild',
-    [
-      '-workspace',
-      workspace,
-      '-scheme',
-      scheme,
-      '-configuration',
-      configuration,
-      '-archivePath',
-      archivePath,
-      '-allowProvisioningUpdates',
-      'archive',
-    ],
-    iosDir
-  );
+  const archiveArgs = [
+    '-workspace',
+    workspace,
+    '-scheme',
+    scheme,
+    '-configuration',
+    configuration,
+    '-archivePath',
+    archivePath,
+    '-allowProvisioningUpdates',
+    'archive',
+  ];
+  if (isTestFlight) {
+    // xcodebuild 接受 KEY=VALUE 形式的 build setting 覆盖（放在 action 之后）
+    archiveArgs.push(`CURRENT_PROJECT_VERSION=${buildNumber}`);
+  }
+
+  const archiveStatus = runCommand('xcodebuild', archiveArgs, iosDir);
   if (archiveStatus !== 0) {
     process.exit(archiveStatus);
   }
@@ -330,27 +380,41 @@ function runIosBuild(artifact) {
     fail('未找到导出的 IPA 文件。');
   }
   const version = getPackageVersion(projectRoot);
-  const copied = copyArtifactToBuildRoot(projectRoot, ipaPath, `FlopsMobile-${version}.ipa`);
+  const ipaName = isTestFlight
+    ? `FlopsMobile-${version}-${buildNumber}.ipa`
+    : `FlopsMobile-${version}.ipa`;
+  const copied = copyArtifactToBuildRoot(projectRoot, ipaPath, ipaName);
   console.log(`[build] IPA: ${ipaPath}`);
   console.log(`[build] 已复制到: ${copied}`);
+  return { ipaPath: copied, buildNumber };
 }
 
-const { platform, artifact, doUpload } = parseArgs(process.argv.slice(2));
+const { platform, artifact, doUpload, target } = parseArgs(process.argv.slice(2));
 
 if (platform === 'ios') {
-  runIosBuild(artifact);
-  process.exit(0);
-}
-
-const builtPath = runAndroidBuild(artifact);
-if (doUpload && builtPath) {
-  require('./build-and-upload-android.js')
-    .run(builtPath)
-    .then(() => process.exit(0))
-    .catch((err) => {
-      if (err && err.message) console.error(err.message);
-      process.exit(1);
-    });
+  const result = runIosBuild(artifact, target);
+  if (target === 'testflight') {
+    require('./build-and-upload-ios.js')
+      .run(result.ipaPath)
+      .then(() => process.exit(0))
+      .catch((err) => {
+        if (err && err.message) console.error(err.message);
+        process.exit(1);
+      });
+  } else {
+    process.exit(0);
+  }
 } else {
-  process.exit(0);
+  const builtPath = runAndroidBuild(artifact);
+  if (doUpload && builtPath) {
+    require('./build-and-upload-android.js')
+      .run(builtPath)
+      .then(() => process.exit(0))
+      .catch((err) => {
+        if (err && err.message) console.error(err.message);
+        process.exit(1);
+      });
+  } else {
+    process.exit(0);
+  }
 }

@@ -65,27 +65,38 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
 
   /// 推断当前 build 的 APNs 环境，**不依赖** `#if DEBUG`。
   ///
-  /// 真机：读 `embedded.mobileprovision` 里 `Entitlements.aps-environment`。
-  /// 该值由 provisioning profile 决定（development / production），
-  /// 与 build configuration（Debug / Release）正交：
-  ///   - Development profile（Run / sideload）→ aps-environment=development → sandbox token
-  ///   - Distribution profile（TestFlight / App Store / Ad-Hoc）→ production → production token
-  /// 一旦搞错，APNs 服务端会回 `BadDeviceToken (400)`。
+  /// APNs token 池子由 entitlement 里的 `aps-environment` 决定：
+  ///   - `development` → sandbox token，发 `api.sandbox.push.apple.com`
+  ///   - `production`  → production token，发 `api.push.apple.com`
+  /// 一旦客户端上报的 env 与 token 实际所属池子不一致，Apple 回 `BadDeviceToken (400)`。
   ///
-  /// `embedded.mobileprovision` 是 CMS 签名容器，但内部 plist payload 是明文 ASCII，
-  /// 直接子串匹配即可，无需解 CMS。
+  /// 三种部署形态如何判断：
   ///
-  /// 模拟器没有 embedded.mobileprovision（adhoc 签名），fallback 到 sandbox：
-  /// 模拟器 build 只可能是 development 场景。
+  /// 1. **Sideload (development / ad-hoc / enterprise)**：IPA 内部带 `embedded.mobileprovision`，
+  ///    profile 的明文 plist payload 里有 `<key>aps-environment</key><string>...</string>`。
+  ///    直接子串匹配读出，最准。
+  ///
+  /// 2. **TestFlight / App Store**：IPA 上传到 ASC 后被 Apple 重签 (App Store distribution
+  ///    certificate)，**移除** `embedded.mobileprovision`（store 分发不需要 device list 概念）。
+  ///    所以 Bundle 里**找不到** mobileprovision —— 但 entitlement 里的 `aps-environment`
+  ///    仍然是 `production`（archive 阶段就已经烧进 binary）。这种情况强制 production。
+  ///
+  /// 3. **Simulator**：没有 mobileprovision，APNs 也不真工作；保守标 sandbox。
+  ///
+  /// 关键：先查 mobileprovision（最准），再按 simulator vs device 兜底。
   private static func inferApnsEnv() -> String {
-    guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
-          let data = try? Data(contentsOf: url),
-          let text = String(data: data, encoding: .ascii) else {
-      return "sandbox"
+    if let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+       let data = try? Data(contentsOf: url),
+       let text = String(data: data, encoding: .ascii),
+       let r = text.range(of: "<key>aps-environment</key>") {
+      let after = text[r.upperBound...].prefix(200)
+      return after.contains("production") ? "production" : "sandbox"
     }
-    guard let r = text.range(of: "<key>aps-environment</key>") else { return "sandbox" }
-    let after = text[r.upperBound...].prefix(200)
-    return after.contains("production") ? "production" : "sandbox"
+    #if targetEnvironment(simulator)
+    return "sandbox"
+    #else
+    return "production"
+    #endif
   }
 
   // MARK: - 前台展示
