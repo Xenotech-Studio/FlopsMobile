@@ -72,6 +72,9 @@ upload-config.json
 # iOS TestFlight upload config (contains ASC API Key Issuer ID + .p8 path)
 ios-upload-config.json
 
+# Apple API keys / certificates
+secrets/
+
 # Yarn
 .yarn/*
 !.yarn/patches
