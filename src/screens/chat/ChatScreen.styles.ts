@@ -31,6 +31,25 @@ export function createChatStyles(c: AppColors) {
     backgroundColor: c.chatScreenBackground,
     zIndex: 20,
   },
+  /** server SIGTERM 期间的临时 banner：贴在消息流末尾（与 FlopsWeb 的 chat-reload-pending-banner 对齐） */
+  reloadPendingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    gap: 8,
+    marginTop: 12,
+    marginBottom: 4,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 999,
+    backgroundColor: c.toolCardBg,
+  },
+  reloadPendingText: {
+    color: c.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
+  },
   bottomOverlay: {
     position: 'absolute',
     bottom: 0,

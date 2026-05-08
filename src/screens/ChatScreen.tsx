@@ -280,6 +280,9 @@ export function ChatScreen() {
   const [v2ResumeUiActive, setV2ResumeUiActive] = useState(false);
   const [streamingText, setStreamingText] = useState('');
   const [streamStatus, setStreamStatus] = useState('');
+  /** server SIGTERM 期间收到 v2_reload_pending：消息流末尾显示「服务器热更新中」banner，
+   *  下一次 fetch 收到任意非 reload_pending 事件时清掉。 */
+  const [reloadPending, setReloadPending] = useState(false);
   const [currentAssistantBlocks, setCurrentAssistantBlocks] = useState<StreamBlock[]>([]);
   const [error, setError] = useState('');
   const [submittingReviewId, setSubmittingReviewId] = useState('');
@@ -766,6 +769,14 @@ export function ChatScreen() {
         }
         if ('error' in event && event.error) throw new Error(String(event.error));
         if ('type' in event) {
+          /* Phase 4 reload-pending：server SIGTERM 时主动通知；UI 显示「服务器热更新中」banner，
+             API 层自动断开 reader 进入 reconnect 等 server 起来。任何后续 chunk（包括 v2_step_rollback
+             或新内容）来时把 banner 清掉。 */
+          if (event.type === 'v2_reload_pending') {
+            setReloadPending(true);
+            return;
+          }
+          if (reloadPending) setReloadPending(false);
           if (event.type === 'thinking') setStreamStatus('thinking');
           if (event.type === 'checking_tools') setStreamStatus('checking_tools');
           if (event.type === 'tool_call_start') {
@@ -2456,6 +2467,12 @@ export function ChatScreen() {
               </View>
             ) : null}
             </FlowDocItemMetaProvider>
+            {reloadPending ? (
+              <View style={styles.reloadPendingBanner}>
+                <ActivityIndicator size="small" color={colors.textSecondary} />
+                <Text style={styles.reloadPendingText}>服务器热更新中，稍后将继续…</Text>
+              </View>
+            ) : null}
             </View>
           </ScrollView>
           {conversationHistoryLoading ? (
