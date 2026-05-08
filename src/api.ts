@@ -654,6 +654,17 @@ export async function streamChatV2Loop(
         }
         // eslint-disable-next-line no-console
         console.warn('[chat_v2 mobile] reader interrupted, will reconnect:', (err as Error)?.message || err);
+        /* 兜底：server 在 SIGKILL 之前把 v2_reload_pending chunk 送出失败时，client 收不到。
+           reader 抛错时主动给上层一个 synthetic 事件让 banner 能显示。reload-pending 是 application
+           层契约——网络断开通常意味着 server 在 reload，这个推断对绝大多数场景适用。 */
+        try {
+          onEvent({
+            type: 'v2_reload_pending',
+            message: '服务器热更新中，稍后将继续',
+          } as unknown as ChatStreamEvent);
+        } catch {
+          /* ignore */
+        }
         return;
       }
       const { value, done } = readResult;

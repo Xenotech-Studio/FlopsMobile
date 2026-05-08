@@ -743,6 +743,14 @@ export function ChatScreen() {
       };
 
       const onEvent = (event: ChatStreamEvent) => {
+        /* Phase 4 reload-pending：必须在所有 early return（v2_run / 错误 / etc）之前处理。
+           reload reconnect 后 buffer replay 第一条往往是 v2_run，会被下面 early return 吞掉，
+           如果 setReloadPending(false) 放后面就永远清不掉 banner。 */
+        if ('type' in event && event.type === 'v2_reload_pending') {
+          setReloadPending(true);
+          return;
+        }
+        setReloadPending(false);
         if ('type' in event && event.type === 'v2_run') return;
         if ('conversation_id' in event && event.conversation_id) {
           streamTargetRef.current = event.conversation_id;
