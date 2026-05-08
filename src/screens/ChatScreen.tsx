@@ -747,8 +747,14 @@ export function ChatScreen() {
            reload reconnect 后 buffer replay 第一条往往是 v2_run，会被下面 early return 吞掉，
            如果 setReloadPending(false) 放后面就永远清不掉 banner。 */
         if ('type' in event && event.type === 'v2_reload_pending') {
+          // eslint-disable-next-line no-console
+          console.warn('[chat_v2 mobile onEvent] v2_reload_pending → setReloadPending(true)');
           setReloadPending(true);
           return;
+        }
+        if ('type' in event && (event.type === 'v2_run' || event.type === 'v2_step_rollback')) {
+          // eslint-disable-next-line no-console
+          console.warn(`[chat_v2 mobile onEvent] ${event.type} → setReloadPending(false)`);
         }
         setReloadPending(false);
         if ('type' in event && event.type === 'v2_run') return;
