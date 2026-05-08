@@ -580,8 +580,9 @@ export async function streamChat(
   }
 }
 
-const CHAT_V2_RECONNECT_MAX = 8;
-const CHAT_V2_RECONNECT_DELAY_MS = 300;
+/* server reload 实测：3s shutdown + ~1-3s startup + recovery sweep ≈ 5-8s。20×500=10s 兜底。 */
+const CHAT_V2_RECONNECT_MAX = 20;
+const CHAT_V2_RECONNECT_DELAY_MS = 500;
 
 export type ChatV2StreamStart =
   | { tag: 'new_message'; message: string }
@@ -642,7 +643,20 @@ export async function streamChatV2Loop(
   ): Promise<void> => {
     let buffer = '';
     while (alive() && !signal?.aborted) {
-      const { value, done } = await reader.read();
+      let readResult: { value?: Uint8Array; done: boolean };
+      try {
+        readResult = await reader.read();
+      } catch (err: unknown) {
+        /* server reload / 网络断开：reader.read() 抛 NetworkError。AbortError 让外层处理；
+           其他错误静默 return，让外层 while 检查 streamCompleted=false 走 reconnect 分支。 */
+        if (typeof err === 'object' && err !== null && 'name' in err && (err as { name?: string }).name === 'AbortError') {
+          throw err;
+        }
+        // eslint-disable-next-line no-console
+        console.warn('[chat_v2 mobile] reader interrupted, will reconnect:', (err as Error)?.message || err);
+        return;
+      }
+      const { value, done } = readResult;
       if (done) break;
       if (!value) continue;
       buffer += decoder.decode(value, { stream: true });
@@ -685,6 +699,20 @@ export async function streamChatV2Loop(
           const rid = (data as { run_id: string }).run_id;
           if (rid) v2RunId = rid;
         }
+        if (data.type === 'v2_reload_pending') {
+          /* server SIGTERM 前主动通知：靠应用层事件让 client 立刻退出本次 reader 走 reconnect。
+             把事件透传给上层 UI 显示「服务器热更新中…」（onEvent 处理者负责 UI）。 */
+          // eslint-disable-next-line no-console
+          console.warn('[chat_v2 mobile] server reload pending, will reconnect');
+          onEvent(data as ChatStreamEvent);
+          return;
+        }
+        if (data.type === 'v2_step_rollback') {
+          /* server reload 后 resume worker 重跑当前 step 前发此事件——上层 UI 应清掉本 step
+             已显示的 partial blocks，避免 LLM 重生成内容与旧 partial 重复。 */
+          onEvent(data as ChatStreamEvent);
+          continue;
+        }
         if ('error' in data && data.error) {
           throw new Error(String(data.error));
         }
@@ -721,13 +749,28 @@ export async function streamChatV2Loop(
       body = { subscribe_only: true, run_id: v2RunId, replay_from: 0 };
     }
 
-    const res = await fetchWithDebugLog(`${base}api/conversations/${conversationId}/chat_v2`, {
-      method: 'POST',
-      headers: authHeaders(session.access_token),
-      body: JSON.stringify(body),
-      signal,
-      reactNative: { textStreaming: true },
-    } as RequestInit);
+    let res: Response;
+    try {
+      res = await fetchWithDebugLog(`${base}api/conversations/${conversationId}/chat_v2`, {
+        method: 'POST',
+        headers: authHeaders(session.access_token),
+        body: JSON.stringify(body),
+        signal,
+        reactNative: { textStreaming: true },
+      } as RequestInit);
+    } catch (fetchErr: unknown) {
+      if (typeof fetchErr === 'object' && fetchErr !== null && 'name' in fetchErr && (fetchErr as { name?: string }).name === 'AbortError') {
+        throw fetchErr;
+      }
+      /* reconnect 时 server 还在重启，fetch 直接抛 NetworkError；当作"重试一次" */
+      if (!isReconnect) throw fetchErr;
+      // eslint-disable-next-line no-console
+      console.warn(`[chat_v2 mobile] reconnect fetch failed (attempt ${reconnectAttempt}):`, (fetchErr as Error)?.message || fetchErr);
+      reconnectAttempt += 1;
+      if (reconnectAttempt > CHAT_V2_RECONNECT_MAX) throw new Error('流重连次数已达上限（fetch）');
+      await new Promise<void>((r) => setTimeout(r, CHAT_V2_RECONNECT_DELAY_MS));
+      continue;
+    }
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
