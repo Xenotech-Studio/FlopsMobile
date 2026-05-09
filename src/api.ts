@@ -57,6 +57,7 @@ export type ChatStreamEvent =
   | {
       type: 'safety_confirmation_required';
       tool_name: string;
+      index?: number;
       review_id: string;
       command?: string;
       cwd?: string;
@@ -69,7 +70,7 @@ export type ChatStreamEvent =
         description?: string;
       };
     }
-  | { type: 'safety_review'; tool_name: string; review: Record<string, unknown> }
+  | { type: 'safety_review'; tool_name: string; index?: number; review: Record<string, unknown> }
   | { type: 'step_complete' }
   | {
       type: 'history_revision';

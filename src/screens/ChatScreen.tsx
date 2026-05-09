@@ -959,11 +959,26 @@ export function ChatScreen() {
             setStreamStatus('awaiting_safety_confirmation');
             const name = event.tool_name;
             let updated = false;
-            for (let i = localBlocks.length - 1; i >= 0; i--) {
-              const b = localBlocks[i];
-              if (b.type === 'tool' && b.tool_name === name) {
+            // 优先按 index 精准命中，避免并行多工具时落到错的卡上；老服务端不带 index 时回退按 tool_name 找
+            let attachedIdx = -1;
+            if (typeof event.index === 'number') {
+              const ix = findLastToolBlockByIndex(event.index);
+              if (ix >= 0) attachedIdx = ix;
+            }
+            if (attachedIdx < 0) {
+              for (let i = localBlocks.length - 1; i >= 0; i--) {
+                const b = localBlocks[i];
+                if (b.type === 'tool' && b.tool_name === name) {
+                  attachedIdx = i;
+                  break;
+                }
+              }
+            }
+            if (attachedIdx >= 0) {
+              const b = localBlocks[attachedIdx];
+              if (b.type === 'tool') {
                 const merged = mergeToolBlockResultForSafetyEvent(b.result, event);
-                localBlocks[i] = {
+                localBlocks[attachedIdx] = {
                   ...b,
                   status: 'awaiting_confirmation',
                   arguments: event.command ?? (event as { arguments?: string }).arguments,
@@ -975,7 +990,6 @@ export function ChatScreen() {
                   result: merged as ToolBlock['result'],
                 };
                 updated = true;
-                break;
               }
             }
             if (!updated) {
@@ -1615,20 +1629,51 @@ export function ChatScreen() {
     };
   }, [params?.conversationId, session, resumeV2Stream, applyConversationUsageState]);
 
+  /** 按 review_id 在 currentAssistantBlocks 与 messages 中同步打补丁，避免点完按钮要等命令跑完才有反馈 */
+  const patchToolBlocksByReviewId = useCallback(
+    (reviewId: string, patch: Partial<ToolBlock>) => {
+      if (!reviewId) return;
+      setCurrentAssistantBlocks((prev) =>
+        prev.map((b) =>
+          b?.type === 'tool' && (b as ToolBlock).review_id === reviewId ? { ...(b as ToolBlock), ...patch } : b,
+        ),
+      );
+      setMessages((prev) =>
+        prev.map((msg) => {
+          if (!msg?.blocks || !Array.isArray(msg.blocks)) return msg;
+          return {
+            ...msg,
+            blocks: msg.blocks.map((b) =>
+              b?.type === 'tool' && (b as ToolBlock).review_id === reviewId
+                ? { ...(b as ToolBlock), ...patch }
+                : b,
+            ),
+          };
+        }),
+      );
+    },
+    []
+  );
+
   const handleSafetyDecision = useCallback(
     async (reviewId: string, decision: 'approve' | 'reject') => {
       if (!session || !conversationId) return;
+      const optimisticStatus: ToolBlock['status'] =
+        decision === 'approve' ? 'confirming' : 'rejected_by_user';
       setSubmittingReviewId(reviewId);
+      patchToolBlocksByReviewId(reviewId, { status: optimisticStatus });
       try {
         await submitSafetyDecision(session, conversationId, reviewId, decision);
         if (decision === 'approve') setStreamStatus('tool_running');
       } catch (e) {
+        // 回滚乐观更新，让安全卡片再出现一次让用户重试
+        patchToolBlocksByReviewId(reviewId, { status: 'awaiting_confirmation' });
         setError(e instanceof Error ? e.message : '提交确认失败');
       } finally {
         setSubmittingReviewId('');
       }
     },
-    [session, conversationId]
+    [session, conversationId, patchToolBlocksByReviewId]
   );
 
   function renderCursorAgentBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
