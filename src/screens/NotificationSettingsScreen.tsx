@@ -43,6 +43,9 @@ import {
   registerApnsToken,
   removeApnsToken,
   requestDebugApnsPush,
+  getApnsPrefs,
+  updateApnsPrefs,
+  type ApnsPushPrefs,
 } from '../api/push';
 import { getPushEnabled, setPushEnabled } from '../notifications/pushSettings';
 
@@ -65,6 +68,9 @@ export function NotificationSettingsScreen() {
   const [currentToken, setCurrentToken] = useState<string | null>(null);
   const [currentEnv, setCurrentEnv] = useState<'sandbox' | 'production' | null>(null);
   const [supported, setSupported] = useState(false);
+  // 服务端持久化的提醒偏好；首次拉取前先用 null，避免 toggle 闪烁
+  const [prefs, setPrefs] = useState<ApnsPushPrefs | null>(null);
+  const [prefBusy, setPrefBusy] = useState<keyof ApnsPushPrefs | null>(null);
 
   const refreshState = useCallback(async () => {
     if (Platform.OS !== 'ios') {
@@ -88,7 +94,35 @@ export function NotificationSettingsScreen() {
       setCurrentToken(null);
       setCurrentEnv(null);
     }
-  }, []);
+    // 偏好只在 push toggle on 时拉一次；服务端默认全 true
+    if (enabled && session) {
+      try {
+        const r = await getApnsPrefs(serverBaseUrl, session.access_token);
+        setPrefs(r.prefs);
+      } catch {
+        // 拉失败保持上一次状态；用户切回前台会重试
+      }
+    }
+  }, [serverBaseUrl, session]);
+
+  const handleTogglePref = useCallback(
+    async (key: keyof ApnsPushPrefs, next: boolean) => {
+      if (!session || !prefs || prefBusy) return;
+      const optimistic: ApnsPushPrefs = { ...prefs, [key]: next };
+      setPrefs(optimistic);
+      setPrefBusy(key);
+      try {
+        const r = await updateApnsPrefs(serverBaseUrl, session.access_token, { [key]: next });
+        setPrefs(r.prefs);
+      } catch (e) {
+        setPrefs(prefs);  // 失败回滚
+        Alert.alert('保存失败', e instanceof Error ? e.message : String(e));
+      } finally {
+        setPrefBusy(null);
+      }
+    },
+    [prefBusy, prefs, serverBaseUrl, session],
+  );
 
   useEffect(() => {
     void refreshState();
@@ -340,6 +374,40 @@ export function NotificationSettingsScreen() {
           )}
         </View>
 
+        {pushEnabled && !!currentToken && prefs && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>提醒类型</Text>
+            <Text style={styles.cardDesc}>
+              选择哪些事件会通过推送提醒你；都关闭则只发送日程提醒等基础通知。Flops app 处于前台时不会推送。
+            </Text>
+            {(
+              [
+                { key: 'need_confirm' as const, label: '高危操作待确认', sub: '本地命令需要你回应时' },
+                { key: 'turn_done' as const, label: '本轮完成', sub: '耗时较长的对话跑完时' },
+                { key: 'turn_failed' as const, label: '本轮中断', sub: '出错或被打断时' },
+              ]
+            ).map((row, idx, arr) => (
+              <View
+                key={row.key}
+                style={[styles.prefRow, idx < arr.length - 1 && styles.prefRowDivider]}
+              >
+                <View style={styles.prefTextCol}>
+                  <Text style={styles.prefLabel}>{row.label}</Text>
+                  <Text style={styles.prefSub}>{row.sub}</Text>
+                </View>
+                {prefBusy === row.key ? (
+                  <ActivityIndicator color={colors.textMuted} />
+                ) : (
+                  <IOSStyleSwitch
+                    value={prefs[row.key]}
+                    onValueChange={(next) => handleTogglePref(row.key, next)}
+                  />
+                )}
+              </View>
+            ))}
+          </View>
+        )}
+
         {pushEnabled && !!currentToken && (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>测试通道</Text>
@@ -451,5 +519,19 @@ function createNotificationSettingsStyles(c: AppColors) {
     primaryBtnDisabled: { opacity: 0.7 },
     primaryBtnText: { fontSize: 15, fontWeight: '600', color: c.onPrimary },
     note: { marginTop: 10, fontSize: 12, color: c.textMuted, lineHeight: 18 },
+    prefRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 10,
+      gap: 12,
+    },
+    prefRowDivider: {
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderMuted,
+    },
+    prefTextCol: { flex: 1 },
+    prefLabel: { fontSize: 15, color: c.textPrimary },
+    prefSub: { fontSize: 12, color: c.textMuted, marginTop: 2 },
   });
 }

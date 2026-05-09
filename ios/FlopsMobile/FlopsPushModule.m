@@ -22,4 +22,7 @@ RCT_EXTERN_METHOD(registerSilently:(RCTPromiseResolveBlock)resolve
 RCT_EXTERN_METHOD(getDeviceToken:(RCTPromiseResolveBlock)resolve
                        rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(getPendingDeepLink:(RCTPromiseResolveBlock)resolve
+                            rejecter:(RCTPromiseRejectBlock)reject)
+
 @end

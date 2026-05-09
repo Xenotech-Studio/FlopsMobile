@@ -24,6 +24,9 @@ class FlopsPushModule: RCTEventEmitter {
   fileprivate static var sharedCachedEnv: String?
   fileprivate static var sharedLastError: String?
   fileprivate static var sharedInstance: FlopsPushModule?
+  // 用户点开通知时 AppDelegate 调 cacheDeepLink 写入；
+  // 冷启动场景下 RN bridge 还没起来，先缓存，待 JS 主动 getPendingDeepLink 时一次性消费
+  fileprivate static var sharedPendingDeepLink: [String: Any]?
 
   override init() {
     super.init()
@@ -40,6 +43,12 @@ class FlopsPushModule: RCTEventEmitter {
       name: NSNotification.Name("FlopsAPNsRegisterError"),
       object: nil
     )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(onDeepLinkNotification(_:)),
+      name: NSNotification.Name("FlopsAPNsDeepLink"),
+      object: nil
+    )
   }
 
   deinit {
@@ -51,7 +60,7 @@ class FlopsPushModule: RCTEventEmitter {
   }
 
   override func supportedEvents() -> [String]! {
-    return ["onAPNsToken", "onAPNsRegisterError"]
+    return ["onAPNsToken", "onAPNsRegisterError", "onAPNsDeepLink"]
   }
 
   // MARK: - 事件回流
@@ -66,6 +75,12 @@ class FlopsPushModule: RCTEventEmitter {
   @objc private func onErrorNotification(_ note: Notification) {
     let msg = (note.userInfo?["error"] as? String) ?? "unknown"
     sendEvent(withName: "onAPNsRegisterError", body: ["error": msg])
+  }
+
+  @objc private func onDeepLinkNotification(_ note: Notification) {
+    if let payload = note.userInfo as? [String: Any] {
+      sendEvent(withName: "onAPNsDeepLink", body: payload)
+    }
   }
 
   // MARK: - JS 调用：请求权限 + registerForRemoteNotifications
@@ -180,5 +195,27 @@ class FlopsPushModule: RCTEventEmitter {
       object: nil,
       userInfo: ["error": message]
     )
+  }
+
+  /// 用户点开通知时由 AppDelegate 调用：广播 + 缓存（冷启动 RN 还没起来时让 JS 之后能拉走）
+  static func cacheDeepLink(_ payload: [String: Any]) {
+    sharedPendingDeepLink = payload
+    NotificationCenter.default.post(
+      name: NSNotification.Name("FlopsAPNsDeepLink"),
+      object: nil,
+      userInfo: payload
+    )
+  }
+
+  /// JS 启动时主动拉一次冷启动期间错过的 deep link；返回后清空缓存。
+  @objc(getPendingDeepLink:rejecter:)
+  func getPendingDeepLink(_ resolve: @escaping RCTPromiseResolveBlock,
+                          rejecter reject: @escaping RCTPromiseRejectBlock) {
+    if let payload = FlopsPushModule.sharedPendingDeepLink {
+      FlopsPushModule.sharedPendingDeepLink = nil
+      resolve(["payload": payload])
+    } else {
+      resolve(["payload": NSNull()])
+    }
   }
 }

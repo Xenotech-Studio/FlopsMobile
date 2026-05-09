@@ -25,6 +25,20 @@ type FlopsPushModuleType = {
   getAuthorizationStatus(): Promise<{ status: string }>;
   registerSilently(): Promise<{ status: string; registered: boolean }>;
   getDeviceToken(): Promise<{ token: string; env: 'sandbox' | 'production' }>;
+  getPendingDeepLink(): Promise<{ payload: ApnsDeepLinkPayload | null }>;
+};
+
+/** push_event 注入到 APNs payload 里的字段（除 aps 之外）。 */
+export type ApnsDeepLinkKind = 'need_confirm' | 'turn_done' | 'turn_failed';
+export type ApnsDeepLinkPayload = {
+  kind: ApnsDeepLinkKind | string;
+  conversation_id?: string;
+  review_id?: string;
+  tool_name?: string;
+  decision?: string;
+  duration_ms?: number;
+  ts?: number;
+  [k: string]: unknown;
 };
 
 const FlopsPushModule: FlopsPushModuleType | undefined = (NativeModules as any).FlopsPushModule;
@@ -94,4 +108,26 @@ export function addApnsErrorListener(cb: (e: ApnsErrorEvent) => void): () => voi
   if (!emitter) return () => {};
   const sub = emitter.addListener('onAPNsRegisterError', (e: ApnsErrorEvent) => cb(e));
   return () => sub.remove();
+}
+
+/** 用户点开通知（热启动 / 后台→前台）时回流；冷启动场景见 getPendingApnsDeepLink。 */
+export function addApnsDeepLinkListener(
+  cb: (payload: ApnsDeepLinkPayload) => void,
+): () => void {
+  if (!emitter) return () => {};
+  const sub = emitter.addListener('onAPNsDeepLink', (payload: ApnsDeepLinkPayload) => {
+    if (payload && typeof payload === 'object') cb(payload);
+  });
+  return () => sub.remove();
+}
+
+/** 冷启动时调用一次：把 RN bridge 起来之前的通知点击事件拉走（拉走后原生侧清空缓存）。 */
+export async function getPendingApnsDeepLink(): Promise<ApnsDeepLinkPayload | null> {
+  if (!FlopsPushModule) return null;
+  try {
+    const r = await FlopsPushModule.getPendingDeepLink();
+    return r?.payload ?? null;
+  } catch {
+    return null;
+  }
 }

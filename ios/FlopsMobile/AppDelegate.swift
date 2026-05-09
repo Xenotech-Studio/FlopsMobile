@@ -113,6 +113,28 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
       completionHandler([.alert, .sound, .badge])
     }
   }
+
+  // 用户点开通知（或锁屏滑开）时进入；从 userInfo 提取 push_event 写入的
+  // {kind, conversation_id, review_id, ...}，转给 RN 侧路由跳转。
+  // 冷启动场景：RN bridge 此时可能还没起来，FlopsPushModule 会把 payload 缓存为
+  // pendingDeepLink，待 JS 侧主动调 getPendingDeepLink() 拉走。
+  func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    let userInfo = response.notification.request.content.userInfo
+    var payload: [String: Any] = [:]
+    for (k, v) in userInfo {
+      if let key = k as? String, key != "aps" {
+        payload[key] = v
+      }
+    }
+    if !payload.isEmpty {
+      FlopsPushModule.cacheDeepLink(payload)
+    }
+    completionHandler()
+  }
 }
 
 class ReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {

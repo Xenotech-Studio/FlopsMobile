@@ -101,3 +101,54 @@ export async function requestDebugApnsPush(
   }
   return res.json();
 }
+
+export type ApnsPresenceState = 'foreground' | 'background';
+
+/** AppState 切换时上报；服务端依此判断要不要推（前台不打扰）。 */
+export async function reportApnsPresence(
+  baseUrl: string,
+  accessToken: string,
+  state: ApnsPresenceState,
+): Promise<void> {
+  await fetchWithDebugLog(buildUrl(baseUrl, '/api/push/apns/presence'), {
+    method: 'POST',
+    headers: authHeaders(accessToken),
+    body: JSON.stringify({ state }),
+  }).catch(() => {
+    // presence 上报失败不致命：超时后服务端 key 自动回落 unknown，最差就是会推一条不该推的
+  });
+}
+
+export type ApnsPushPrefs = {
+  need_confirm: boolean;
+  turn_done: boolean;
+  turn_failed: boolean;
+};
+
+export async function getApnsPrefs(
+  baseUrl: string,
+  accessToken: string,
+): Promise<{ prefs: ApnsPushPrefs }> {
+  const res = await fetchWithDebugLog(buildUrl(baseUrl, '/api/push/apns/prefs'), {
+    headers: authHeaders(accessToken),
+  });
+  if (!res.ok) throw new Error(`get prefs failed: ${res.status}`);
+  return res.json();
+}
+
+export async function updateApnsPrefs(
+  baseUrl: string,
+  accessToken: string,
+  prefs: Partial<ApnsPushPrefs>,
+): Promise<{ prefs: ApnsPushPrefs }> {
+  const res = await fetchWithDebugLog(buildUrl(baseUrl, '/api/push/apns/prefs'), {
+    method: 'PUT',
+    headers: authHeaders(accessToken),
+    body: JSON.stringify({ prefs }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`update prefs failed: ${res.status} ${text}`);
+  }
+  return res.json();
+}

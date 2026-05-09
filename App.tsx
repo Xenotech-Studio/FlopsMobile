@@ -8,7 +8,6 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import {
   NavigationContainer,
-  createNavigationContainerRef,
   DarkTheme,
   DefaultTheme,
 } from '@react-navigation/native';
@@ -20,10 +19,10 @@ import { VersionWelcomeProvider } from './src/context/VersionWelcomeContext';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { VersionWelcomeScreen } from './src/screens/VersionWelcomeScreen';
 import { RootNavigator } from './src/navigation/RootNavigator';
-import type { RootStackParamList } from './src/navigation/types';
+import { navigationRef } from './src/navigation/navigationRef';
 import { PushTokenLifecycle } from './src/notifications/PushTokenLifecycle';
-
-const navigationRef = createNavigationContainerRef<RootStackParamList>();
+import { PresenceReporter } from './src/notifications/PresenceReporter';
+import { DeepLinkRouter } from './src/notifications/DeepLinkRouter';
 
 // 参考 FlopsIOS：首帧就是聊天页，无跳转动画；返回手势可回到主页面
 const initialNavState = {
@@ -71,6 +70,7 @@ function AppContent() {
             <BottomSheetModalProvider>
               <TaskProvider>
                 <RootNavigator />
+                <DeepLinkRouter />
               </TaskProvider>
             </BottomSheetModalProvider>
           </NavigationContainer>
@@ -90,6 +90,7 @@ export default function App() {
         <ThemeProvider>
           <SessionProvider>
             <PushTokenLifecycle />
+            <PresenceReporter />
             <AppContent />
           </SessionProvider>
         </ThemeProvider>
