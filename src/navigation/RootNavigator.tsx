@@ -7,6 +7,7 @@ import { ProfileScreen } from '../screens/ProfileScreen';
 import { UsageSettingsScreen } from '../screens/UsageSettingsScreen';
 import { AccountActionsScreen } from '../screens/AccountActionsScreen';
 import { ChangePasswordScreen } from '../screens/ChangePasswordScreen';
+import { BindEmailScreen } from '../screens/BindEmailScreen';
 import { SoulSettingsScreen } from '../screens/SoulSettingsScreen';
 import { AppearanceSettingsScreen } from '../screens/AppearanceSettingsScreen';
 import { NotificationSettingsScreen } from '../screens/NotificationSettingsScreen';
@@ -97,6 +98,11 @@ export function RootNavigator() {
       <Stack.Screen
         name="ChangePassword"
         component={ChangePasswordScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="BindEmail"
+        component={BindEmailScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen

@@ -9,6 +9,7 @@ export type RootStackParamList = {
   UsageSettings: undefined;
   AccountActions: undefined;
   ChangePassword: undefined;
+  BindEmail: undefined;
   SoulSettings: undefined;
   AppearanceSettings: undefined;
   NotificationSettings: undefined;

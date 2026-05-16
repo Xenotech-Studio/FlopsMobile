@@ -36,6 +36,7 @@ export type UsageRun = {
 export type ChatStreamEvent =
   | { type: 'v2_run'; run_id?: string }
   | { type: 'thinking' }
+  | { type: 'thinking_delta'; content?: string }
   | { type: 'checking_tools' }
   | { type: 'tool_call_start'; index: number; name: string }
   | { type: 'tool_call_delta'; index: number; arguments_delta: string }
@@ -174,13 +175,133 @@ export async function changePassword(
   return { message: data.message ?? 'Password changed successfully' };
 }
 
-/** 当前用户信息（含头像、昵称），来自 GET /api/user/{user_id} */
+/** 当前用户信息（含头像、昵称、邮箱），来自 GET /api/user/{user_id} */
 export type CurrentUserInfo = {
   id?: string;
   nickname?: string;
   avatarUrl?: string;
+  email?: string;
   [key: string]: unknown;
 };
+
+/** /api/auth/config 返回：captcha 是否启用 */
+export type AuthConfig = {
+  captcha_enabled: boolean;
+  captcha_app_id?: string | null;
+};
+
+/** GET /api/auth/config —— 前端启动 / 进入注册页时拉一次 */
+export async function getAuthConfig(serverBaseUrl: string): Promise<AuthConfig> {
+  const base = ensureSlash(serverBaseUrl);
+  const res = await fetchWithDebugLog(`${base}api/auth/config`, { method: 'GET' });
+  if (!res.ok) return { captcha_enabled: false };
+  const data = (await res.json()) as Partial<AuthConfig>;
+  return {
+    captcha_enabled: Boolean(data.captcha_enabled),
+    captcha_app_id: data.captcha_app_id ?? null,
+  };
+}
+
+/** POST /api/auth/send_email_code */
+export async function sendEmailCode(
+  serverBaseUrl: string,
+  email: string,
+  accessToken?: string
+): Promise<{ cooldown: number; code_ttl: number }> {
+  const base = ensureSlash(serverBaseUrl);
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  const res = await fetchWithDebugLog(
+    `${base}api/auth/send_email_code`,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ email }),
+    },
+    { log4xxAsInfo: true }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `发送验证码失败: ${res.status}`);
+  }
+  const data = (await res.json()) as { cooldown?: number; code_ttl?: number };
+  return { cooldown: data.cooldown ?? 60, code_ttl: data.code_ttl ?? 600 };
+}
+
+/** POST /api/auth/verify_email_code */
+export async function verifyEmailCode(
+  serverBaseUrl: string,
+  email: string,
+  code: string
+): Promise<{ verify_token: string; token_ttl: number }> {
+  const base = ensureSlash(serverBaseUrl);
+  const res = await fetchWithDebugLog(
+    `${base}api/auth/verify_email_code`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, code }),
+    },
+    { log4xxAsInfo: true }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `验证码校验失败: ${res.status}`);
+  }
+  const data = (await res.json()) as { verify_token?: string; token_ttl?: number };
+  if (!data.verify_token) throw new Error('服务端未返回 verify_token');
+  return { verify_token: data.verify_token, token_ttl: data.token_ttl ?? 1800 };
+}
+
+/** POST /api/auth/register —— 注册新账号；email + verify_token 已通过验证码流程拿到 */
+export async function registerUser(
+  serverBaseUrl: string,
+  params: { user_id: string; password: string; email: string; verify_token: string }
+): Promise<void> {
+  const base = ensureSlash(serverBaseUrl);
+  const res = await fetchWithDebugLog(
+    `${base}api/auth/register`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: params.user_id,
+        password: params.password,
+        email: params.email,
+        verify_token: params.verify_token,
+      }),
+    },
+    { log4xxAsInfo: true }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `注册失败: ${res.status}`);
+  }
+}
+
+/** POST /api/auth/bind_email —— 老用户补绑 / 改绑邮箱（需 Bearer token） */
+export async function bindEmail(
+  session: Session,
+  email: string,
+  verifyToken: string
+): Promise<{ email: string; previous_email?: string | null }> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(
+    `${base}api/auth/bind_email`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({ email, verify_token: verifyToken }),
+    },
+    { log4xxAsInfo: true }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `绑定邮箱失败: ${res.status}`);
+  }
+  const data = (await res.json()) as { email?: string; previous_email?: string | null };
+  return { email: data.email ?? email, previous_email: data.previous_email ?? null };
+}
 
 /**
  * 获取当前用户信息（含 avatarUrl、nickname），用于账户页展示头像等

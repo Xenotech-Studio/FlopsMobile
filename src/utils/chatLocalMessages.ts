@@ -14,6 +14,16 @@ export type ToolResult = {
 export type StreamBlock =
   | { type: 'text'; content: string }
   | {
+      type: 'thinking';
+      content: string;
+      /** false：当前还在流式接收；true：已收口（后续 text/tool 已开始或流结束） */
+      closed: boolean;
+      /** 服务端记录的推理耗时；恢复历史时可能携带，流式中常为空 */
+      seconds?: number;
+      /** 流式开始时间（ms epoch），用于"短思考默认隐藏"判断 */
+      startedAt?: number;
+    }
+  | {
       type: 'tool';
       index?: number;
       tool_name: string;
@@ -53,6 +63,26 @@ export function coalesceAssistantTurn(messages: ConversationMessage[]): ChatMess
   while (i < messages.length) {
     const msg = messages[i];
     if (msg.role === 'assistant') {
+      // 思考字段（多别名兼容服务端 reasoning_wire）：若存在，先于正文渲染为可折叠思考块
+      const rawAny = msg as unknown as Record<string, unknown>;
+      const reasoningRaw =
+        (typeof rawAny.reasoning_content === 'string' && rawAny.reasoning_content) ||
+        (typeof rawAny.thinking === 'string' && rawAny.thinking) ||
+        (typeof rawAny.reasoning === 'string' && rawAny.reasoning) ||
+        '';
+      if (typeof reasoningRaw === 'string' && reasoningRaw.trim()) {
+        const rsRaw =
+          typeof rawAny.reasoning_seconds === 'number'
+            ? (rawAny.reasoning_seconds as number)
+            : Number(rawAny.reasoning_seconds);
+        const seconds = Number.isFinite(rsRaw) && rsRaw > 0 ? rsRaw : undefined;
+        blocks.push({
+          type: 'thinking',
+          content: reasoningRaw,
+          closed: true,
+          ...(seconds !== undefined ? { seconds } : {}),
+        });
+      }
       const text = (msg.content != null ? String(msg.content) : '').trim();
       if (text) {
         blocks.push({ type: 'text', content: text });

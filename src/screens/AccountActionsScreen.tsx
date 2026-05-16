@@ -1,14 +1,15 @@
 /**
- * 账户操作子页：退出登录等，从 Profile 进入。
+ * 账户操作子页：修改密码、绑定邮箱、退出登录，从 Profile 进入。
  */
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
+import { getCurrentUserInfo } from '../api';
 
 function createAccountActionsStyles(c: AppColors) {
   return StyleSheet.create({
@@ -44,6 +45,12 @@ function createAccountActionsStyles(c: AppColors) {
       gap: 12,
     },
     rowLabel: { flex: 1, fontSize: 16, color: c.textPrimary },
+    rowValue: { fontSize: 14, color: c.textMuted, maxWidth: 180 },
+    rowDivider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: c.borderMuted,
+      marginLeft: 16,
+    },
     logoutBtn: {
       backgroundColor: c.surface,
       paddingVertical: 14,
@@ -61,7 +68,33 @@ export function AccountActionsScreen() {
   const insets = useSafeAreaInsets();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createAccountActionsStyles(colors), [colors]);
-  const { logout } = useSession();
+  const { session, serverBaseUrl, logout } = useSession();
+  const [email, setEmail] = useState<string | null>(null);
+
+  const refreshUserInfo = useCallback(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      const info = await getCurrentUserInfo(serverBaseUrl, session.user_id, session.access_token);
+      if (cancelled) return;
+      const e = typeof info?.email === 'string' ? info.email.trim() : '';
+      setEmail(e || null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session, serverBaseUrl]);
+
+  useEffect(() => {
+    refreshUserInfo();
+  }, [refreshUserInfo]);
+
+  // 从 BindEmailScreen 返回时刷新一次邮箱展示
+  useFocusEffect(
+    useCallback(() => {
+      refreshUserInfo();
+    }, [refreshUserInfo])
+  );
 
   const handleLogout = useCallback(() => {
     Alert.alert('退出登录', '确定要退出当前账号吗？', [
@@ -99,6 +132,21 @@ export function AccountActionsScreen() {
           >
             <Ionicons name="key-outline" size={22} color={colors.textMuted} />
             <Text style={styles.rowLabel}>修改密码</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
+          </TouchableOpacity>
+          <View style={styles.rowDivider} />
+          <TouchableOpacity
+            style={styles.row}
+            activeOpacity={0.7}
+            onPress={() => navigation.navigate('BindEmail')}
+          >
+            <Ionicons name="mail-outline" size={22} color={colors.textMuted} />
+            <Text style={styles.rowLabel}>{email ? '改绑邮箱' : '绑定邮箱'}</Text>
+            {email ? (
+              <Text style={styles.rowValue} numberOfLines={1} ellipsizeMode="middle">
+                {email}
+              </Text>
+            ) : null}
             <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
           </TouchableOpacity>
         </View>

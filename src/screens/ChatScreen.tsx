@@ -74,6 +74,7 @@ import { CHAT_COMPOSER_CONTROL_SIZE } from '../theme/layout';
 import { chatInputOverlayGradient, toolPreviewFadeGradient } from '../theme/appColors';
 import { useAppTheme } from '../context/ThemeContext';
 import { createChatStyles } from './chat/ChatScreen.styles';
+import { ThinkingBlockView } from './chat/ThinkingBlockView';
 import { mergeToolResultChunk } from '../utils/toolResultPatch';
 import { ansiToSegments } from '../utils/ansiToSegments';
 import {
@@ -742,6 +743,30 @@ export function ChatScreen() {
         return -1;
       };
 
+      const appendThinkingChunk = (chunk: string) => {
+        if (!chunk) return;
+        const last = localBlocks[localBlocks.length - 1];
+        if (last && last.type === 'thinking' && !last.closed) {
+          last.content += chunk;
+        } else {
+          localBlocks.push({
+            type: 'thinking',
+            content: chunk,
+            closed: false,
+            startedAt: Date.now(),
+          });
+        }
+        syncBlocks();
+      };
+
+      const closeOpenThinking = () => {
+        const last = localBlocks[localBlocks.length - 1];
+        if (last && last.type === 'thinking' && !last.closed) {
+          last.closed = true;
+          syncBlocks();
+        }
+      };
+
       const onEvent = (event: ChatStreamEvent) => {
         /* Phase 4 reload-pending：必须在所有 early return（v2_run / 错误 / etc）之前处理。
            reload reconnect 后 buffer replay 第一条往往是 v2_run，会被下面 early return 吞掉，
@@ -792,8 +817,14 @@ export function ChatScreen() {
           }
           if (reloadPending) setReloadPending(false);
           if (event.type === 'thinking') setStreamStatus('thinking');
+          if (event.type === 'thinking_delta') {
+            setStreamStatus('thinking');
+            const ev = event as { content?: string };
+            appendThinkingChunk(typeof ev.content === 'string' ? ev.content : '');
+          }
           if (event.type === 'checking_tools') setStreamStatus('checking_tools');
           if (event.type === 'tool_call_start') {
+            closeOpenThinking();
             const idx = event.index ?? 0;
             const name = String(event.name || '');
             const i = findLastToolBlockByIndex(idx);
@@ -1009,6 +1040,7 @@ export function ChatScreen() {
         }
         if ('content' in event && typeof event.content === 'string' && event.content.length > 0) {
           setStreamStatus('streaming_text');
+          closeOpenThinking();
           const last = localBlocks[localBlocks.length - 1];
           if (last && last.type === 'text') {
             last.content += event.content;
@@ -1017,7 +1049,10 @@ export function ChatScreen() {
           }
           syncBlocks();
         }
-        if ('done' in event && event.done === true) streamDone = true;
+        if ('done' in event && event.done === true) {
+          streamDone = true;
+          closeOpenThinking();
+        }
       };
 
       /** 与 FlopsWeb Chat.jsx 一致：用本轮固定的 convId 判断存活；勿与 streamTargetRef 比（首包前 ref 可能尚未随 setState 同步） */
@@ -2158,6 +2193,9 @@ export function ChatScreen() {
                 const blocks = assistantBlocks;
                 const prevBlock = blocks[bi - 1];
                 const compactAbove = prevBlock != null && isToolPackageNavBlock(prevBlock);
+                if (block.type === 'thinking') {
+                  return <ThinkingBlockView block={block} key={`msg-think-${idx}-${bi}`} />;
+                }
                 return block.type === 'text' ? (
                   <React.Fragment key={bi}>
                     {ccInside && ccBlockInsert === bi && bi < blocks.length ? (
@@ -2503,6 +2541,9 @@ export function ChatScreen() {
                     currentAssistantBlocks.map((block, bi) => {
                       const prevBlock = currentAssistantBlocks[bi - 1];
                       const compactAbove = prevBlock != null && isToolPackageNavBlock(prevBlock);
+                      if (block.type === 'thinking') {
+                        return <ThinkingBlockView block={block} key={`stream-think-${bi}`} />;
+                      }
                       return block.type === 'text' ? (
                         <View
                           key={bi}
