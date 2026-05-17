@@ -12,7 +12,7 @@ import type { AppColors } from '../theme/appColors';
 
 function buildMarkdownStyles(c: AppColors) {
   return {
-    body: { color: c.textPrimary, fontSize: 16, lineHeight: 26 },
+    body: { color: c.textPrimary, fontSize: 14, lineHeight: 20 },
     paragraph: { marginTop: 0, marginBottom: 12 },
     text: { color: c.textPrimary },
     code_inline: {
