@@ -57,6 +57,11 @@ class FlowDocInputViewManager : SimpleViewManager<FlowDocInputView>(),
     view.setFontSizeSp(value.toFloat())
   }
 
+  @ReactProp(name = "fontFamily")
+  override fun setFontFamily(view: FlowDocInputView, value: String?) {
+    view.setFontFamilyName(value)
+  }
+
   @ReactProp(name = "lineHeight", defaultDouble = 0.0)
   override fun setLineHeight(view: FlowDocInputView, value: Double) {
     view.setCustomLineHeight(value.toFloat())

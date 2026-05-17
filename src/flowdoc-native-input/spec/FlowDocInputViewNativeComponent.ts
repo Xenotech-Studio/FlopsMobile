@@ -38,6 +38,13 @@ type PillPressEvent = Readonly<{
   refKey: string;
 }>;
 
+/** Native → JS：内容尺寸变化（pt）。JS 拿来给 style.height 做内容自适应。
+ *  iOS：UITextView.contentSize；Android：EditText 测量后的 height。 */
+type ContentSizeEvent = Readonly<{
+  width: Double;
+  height: Double;
+}>;
+
 interface NativeProps extends ViewProps {
   /** JSON 形式的初始内容，格式：
    *  [
@@ -53,6 +60,8 @@ interface NativeProps extends ViewProps {
   fontSize?: WithDefault<Double, 16>;
   /** 字体行高（pt）。<=0 使用系统默认（fontSize × 1.2 左右） */
   lineHeight?: WithDefault<Double, 0>;
+  /** 字体族（如 "Menlo" 代表 code 块）。空字符串 / 缺省 = 系统字体 */
+  fontFamily?: WithDefault<string, ''>;
   placeholder?: string;
   placeholderColor?: ColorValue;
   editable?: WithDefault<boolean, true>;
@@ -61,6 +70,7 @@ interface NativeProps extends ViewProps {
   onPillPress?: BubblingEventHandler<PillPressEvent>;
   onFocusNative?: BubblingEventHandler<Readonly<{}>>;
   onBlurNative?: BubblingEventHandler<Readonly<{}>>;
+  onContentSizeChange?: BubblingEventHandler<ContentSizeEvent>;
 }
 
 type FlowDocInputViewType = HostComponent<NativeProps>;

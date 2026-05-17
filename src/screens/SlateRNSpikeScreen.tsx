@@ -17,33 +17,102 @@ import { useNavigation } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import {
   FlowDocSlateAdapter,
+  FlowDocBlocks,
   type FlowDocInputHandle,
+  type SlateDocument,
+  type FlowDocDocument,
 } from '../flowdoc-native-input';
 import type { Descendant } from 'slate';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 
-/* 初始 Slate paragraph 内容：一段普通文字 + 1 个 ref-pill + 一段后续文字 + marks 演示 */
-const INITIAL_CHILDREN: Descendant[] = [
-  { text: '这是一段中间带 pill 的：' },
+/* 多 paragraph 初始内容：3 段 —— pill 段 / marks 段 / 纯收尾段。回车在段内 → 新 paragraph。 */
+const INITIAL_DOCUMENT: SlateDocument = [
   {
-    type: 'ref-pill',
-    refKey: 'demo:1',
-    mention: '@文档A (12-34)',
-    title: '示例文档 A',
-    isPointer: true,
-    children: [{ text: '' }],
-  } as unknown as Descendant,
-  { text: ' —— 试着对 pill 用退格。Marks：' },
-  { text: '加粗', bold: true } as unknown as Descendant,
-  { text: ' / ' },
-  { text: '斜体', italic: true } as unknown as Descendant,
-  { text: ' / ' },
-  { text: '加粗斜体', bold: true, italic: true } as unknown as Descendant,
-  { text: ' / ' },
-  { text: 'inline code', code: true } as unknown as Descendant,
-  { text: ' / ' },
-  { text: '红字', color: '#EF4444' } as unknown as Descendant,
+    type: 'paragraph',
+    children: [
+      { text: '这是第 1 段中间带 pill 的：' },
+      {
+        type: 'ref-pill',
+        refKey: 'demo:1',
+        mention: '@文档A (12-34)',
+        title: '示例文档 A',
+        isPointer: true,
+        children: [{ text: '' }],
+      } as unknown as Descendant,
+      { text: ' —— 试着对 pill 用退格。' },
+    ],
+  },
+  {
+    type: 'paragraph',
+    children: [
+      { text: '第 2 段 Marks：' },
+      { text: '加粗', bold: true } as unknown as Descendant,
+      { text: ' / ' },
+      { text: '斜体', italic: true } as unknown as Descendant,
+      { text: ' / ' },
+      { text: '加粗斜体', bold: true, italic: true } as unknown as Descendant,
+      { text: ' / ' },
+      { text: 'inline code', code: true } as unknown as Descendant,
+      { text: ' / ' },
+      { text: '红字', color: '#EF4444' } as unknown as Descendant,
+    ],
+  },
+  {
+    type: 'paragraph',
+    children: [{ text: '第 3 段：随便打字试试 Enter 拆段、跨段选区、跨段退格合并。' }],
+  },
+];
+
+/* FlowDocBlocks viewer 测试文档：覆盖所有 v1 支持的 block 类型 */
+const VIEWER_DOCUMENT: FlowDocDocument = [
+  { type: 'heading-two', children: [{ text: '示例 FlowDoc 文档' }] },
+  {
+    type: 'paragraph',
+    children: [
+      { text: '这是一个段落，里面带 ' },
+      { text: '加粗', bold: true } as unknown as Descendant,
+      { text: '、' },
+      { text: '斜体', italic: true } as unknown as Descendant,
+      { text: '、' },
+      { text: '代码', code: true } as unknown as Descendant,
+      { text: '、' },
+      { text: '红字', color: '#EF4444' } as unknown as Descendant,
+      { text: '，以及一个引用 ' },
+      {
+        type: 'ref-pill',
+        refKey: 'demo:doc1',
+        mention: '@飞流文档 A',
+        title: '飞流文档 A',
+        isPointer: true,
+        children: [{ text: '' }],
+      } as unknown as Descendant,
+      { text: '。' },
+    ],
+  },
+  { type: 'heading-three', children: [{ text: '一个小节标题' }] },
+  {
+    type: 'paragraph',
+    children: [{ text: '小节内的正文，验证 heading 与 paragraph 之间的间距。' }],
+  },
+  {
+    type: 'quote',
+    children: [
+      {
+        type: 'paragraph',
+        children: [{ text: '这是一段引用块，左竖线 + 内缩，可以嵌套其他 block。' }],
+      } as unknown as Descendant,
+    ],
+  },
+  {
+    type: 'code',
+    children: [{ text: 'function hello() {\n  return "world";\n}' }],
+  },
+  { type: 'divider', children: [{ text: '' }] },
+  {
+    type: 'paragraph',
+    children: [{ text: '分割线之后是收尾段。' }],
+  },
 ];
 
 export function SlateRNSpikeScreen() {
@@ -90,7 +159,7 @@ export function SlateRNSpikeScreen() {
         <View style={styles.inputContainer}>
           <FlowDocSlateAdapter
             ref={editorRef}
-            initialChildren={INITIAL_CHILDREN}
+            initialDocument={INITIAL_DOCUMENT}
             textColor={colors.textPrimary}
             pillBackgroundColor={colors.surfaceMuted}
             pillTextColor={colors.textMuted}
@@ -98,8 +167,8 @@ export function SlateRNSpikeScreen() {
             placeholder="输入文字…可以中间插入 pill"
             placeholderColor={colors.placeholder}
             style={styles.input}
-            onChange={(children) => {
-              setLastJsonPreview(JSON.stringify(children, null, 2));
+            onChange={(doc) => {
+              setLastJsonPreview(JSON.stringify(doc, null, 2));
             }}
           />
         </View>
@@ -109,6 +178,16 @@ export function SlateRNSpikeScreen() {
           <Text style={styles.debugJson} selectable>
             {lastJsonPreview}
           </Text>
+        </View>
+
+        <Text style={[styles.label, { marginTop: 18 }]}>FlowDocBlocks（read-only 文档渲染）</Text>
+        <View style={styles.viewerContainer}>
+          <FlowDocBlocks
+            document={VIEWER_DOCUMENT}
+            onPillPress={(refKey) => {
+              setLastJsonPreview(`pill clicked: ${refKey}`);
+            }}
+          />
         </View>
       </ScrollView>
 
@@ -182,6 +261,12 @@ function createStyles(c: AppColors) {
       minHeight: 120,
     },
     input: { minHeight: 100 },
+    viewerContainer: {
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.borderMuted,
+      borderRadius: 8,
+      padding: 12,
+    },
     debugBox: {
       marginTop: 16,
       padding: 8,

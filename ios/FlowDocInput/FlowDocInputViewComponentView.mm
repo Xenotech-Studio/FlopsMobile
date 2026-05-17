@@ -39,9 +39,9 @@ using namespace facebook::react;
   const auto &oldViewProps = *std::static_pointer_cast<const FlowDocInputViewProps>(_props);
   const auto &newViewProps = *std::static_pointer_cast<const FlowDocInputViewProps>(props);
 
-  if (oldViewProps.initialContent != newViewProps.initialContent) {
-    [_inputView setInitialContentJson:RCTNSStringFromString(newViewProps.initialContent)];
-  }
+  /* 重要：color / fontSize 等"会影响 attributesForMarks 计算结果"的 prop 必须在
+     initialContent 之前应用——否则 setInitialContentJson 走的还是默认的 fg / fontSize，
+     等到后续 prop 设新值时再去刷已存在文本就要打补丁。 */
   if (oldViewProps.textColor != newViewProps.textColor) {
     UIColor *c = RCTUIColorFromSharedColor(newViewProps.textColor);
     if (c) [_inputView setTextColor:c];
@@ -56,6 +56,12 @@ using namespace facebook::react;
   }
   if (oldViewProps.fontSize != newViewProps.fontSize) {
     [_inputView setFontSize:newViewProps.fontSize];
+  }
+  if (oldViewProps.fontFamily != newViewProps.fontFamily) {
+    [_inputView setFontFamily:RCTNSStringFromString(newViewProps.fontFamily)];
+  }
+  if (oldViewProps.initialContent != newViewProps.initialContent) {
+    [_inputView setInitialContentJson:RCTNSStringFromString(newViewProps.initialContent)];
   }
   if (oldViewProps.lineHeight != newViewProps.lineHeight) {
     [_inputView setCustomLineHeight:newViewProps.lineHeight];
@@ -155,6 +161,16 @@ using namespace facebook::react;
   if (auto eventEmitter =
           std::static_pointer_cast<const FlowDocInputViewEventEmitter>(_eventEmitter)) {
     eventEmitter->onBlurNative({});
+  }
+}
+
+- (void)flowDocInputView:(FlowDocInputView *)v didChangeContentSize:(CGSize)size {
+  if (auto eventEmitter =
+          std::static_pointer_cast<const FlowDocInputViewEventEmitter>(_eventEmitter)) {
+    eventEmitter->onContentSizeChange({
+        .width = static_cast<double>(size.width),
+        .height = static_cast<double>(size.height),
+    });
   }
 }
 

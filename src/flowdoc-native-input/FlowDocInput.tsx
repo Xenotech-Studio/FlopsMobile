@@ -13,6 +13,7 @@ import React, {
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
 } from 'react';
 import type { ViewStyle, NativeSyntheticEvent } from 'react-native';
 import FlowDocInputNative, {
@@ -58,11 +59,16 @@ export type FlowDocInputHandle = {
 };
 
 export type FlowDocInputProps = {
+  /** 自适应内容高度（默认 true）。开启时 JS 监听 native 的 onContentSizeChange，
+   *  动态设 height。关闭时必须由 caller 自己给 style 设 height/minHeight。 */
+  autoHeight?: boolean;
   initialContent?: FlowDocContent;
   textColor?: string;
   pillBackgroundColor?: string;
   pillTextColor?: string;
   fontSize?: number;
+  /** 字体族，例如 "Menlo" 表示代码块。空 / 缺省 = 系统字体 */
+  fontFamily?: string;
   lineHeight?: number;
   placeholder?: string;
   placeholderColor?: string;
@@ -89,6 +95,10 @@ function safeParseContent(json: string): FlowDocContent {
 export const FlowDocInput = forwardRef(
   (props: FlowDocInputProps, ref: React.ForwardedRef<FlowDocInputHandle>) => {
     const nativeRef = useRef<React.ElementRef<typeof FlowDocInputNative> | null>(null);
+    const autoHeight = props.autoHeight ?? true;
+    /* 内容高度（pt），由 native 测量后 emit。初始一行字号高度做兜底，避免首帧塌成 0 */
+    const fallbackMinHeight = (props.fontSize ?? 16) * 1.6;
+    const [contentHeight, setContentHeight] = useState<number>(fallbackMinHeight);
 
     const initialContentJson = useMemo(() => {
       return JSON.stringify(props.initialContent ?? []);
@@ -155,15 +165,29 @@ export const FlowDocInput = forwardRef(
       props.onBlur?.();
     }, [props.onBlur]);
 
+    const handleContentSize = useCallback(
+      (e: NativeSyntheticEvent<{ width: number; height: number }>) => {
+        const h = e.nativeEvent.height;
+        if (h > 0) setContentHeight((prev) => (Math.abs(prev - h) < 0.5 ? prev : h));
+      },
+      [],
+    );
+
+    const composedStyle = autoHeight
+      ? [props.style, { height: Math.max(contentHeight, fallbackMinHeight) }]
+      : props.style;
+
     return (
       <FlowDocInputNative
         ref={nativeRef}
-        style={props.style}
+        style={composedStyle}
+        onContentSizeChange={autoHeight ? handleContentSize : undefined}
         initialContent={initialContentJson}
         textColor={props.textColor}
         pillBackgroundColor={props.pillBackgroundColor}
         pillTextColor={props.pillTextColor}
         fontSize={props.fontSize}
+        fontFamily={props.fontFamily}
         lineHeight={props.lineHeight}
         placeholder={props.placeholder}
         placeholderColor={props.placeholderColor}

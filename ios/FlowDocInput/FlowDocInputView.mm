@@ -8,7 +8,10 @@
 @property (nonatomic, assign) BOOL initialContentApplied;
 @end
 
-@implementation FlowDocInputView
+@implementation FlowDocInputView {
+  /** 上次上报给 JS 的内容尺寸；避免每帧都重复 emit 同样的值 */
+  CGSize _lastReportedContentSize;
+}
 
 - (instancetype)initWithFrame:(CGRect)frame {
   if ((self = [super initWithFrame:frame])) {
@@ -21,6 +24,11 @@
     _pillTextColor = [UIColor colorWithWhite:0.35 alpha:1.0];
 
     _textView = [[UITextView alloc] initWithFrame:self.bounds];
+    /* iOS 16+ UITextView 默认 TextKit 2，对 NSObliquenessAttributeName 等 legacy
+       attribute 处理不一致；访问 .layoutManager 一次会触发 fallback 到 TextKit 1，
+       让所有 NSAttributedString attribute 都按经典语义生效。这是官方文档的
+       "use TextKit 1" 推荐做法（不显式调 API 切换，靠访问触发）。 */
+    (void)_textView.layoutManager;
     _textView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _textView.delegate = self;
     _textView.backgroundColor = [UIColor clearColor];
@@ -48,6 +56,22 @@
 - (void)layoutSubviews {
   [super layoutSubviews];
   [self refreshPlaceholderLayout];
+  [self maybeEmitContentSizeChange];
+}
+
+/** 算 textView 真实 content size 并向 delegate 上报；size 没变就不 emit，避免抖动 */
+- (void)maybeEmitContentSizeChange {
+  /* 关键：scrollEnabled=NO 的 UITextView 把 contentSize 维护得不靠谱（常返回 frame 大小）。
+     用 sizeThatFits: 在当前宽度下重新测量，对应到内容自然 wrap 后所需高度。 */
+  CGFloat width = self.bounds.size.width;
+  if (width <= 0) return;
+  CGSize fitting = [self.textView sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
+  CGSize newSize = CGSizeMake(width, ceil(fitting.height));
+  if (CGSizeEqualToSize(newSize, _lastReportedContentSize)) return;
+  _lastReportedContentSize = newSize;
+  if ([self.delegate respondsToSelector:@selector(flowDocInputView:didChangeContentSize:)]) {
+    [self.delegate flowDocInputView:self didChangeContentSize:newSize];
+  }
 }
 
 - (void)refreshPlaceholderLayout {
@@ -74,20 +98,45 @@
 
 - (void)setTextColor:(UIColor *)c {
   _textColor = c;
-  self.textView.textColor = c;
-  // 故意不覆盖 textStorage 里已存在的颜色——color mark（如 "红字"）应当保留；
-  // textColor 只影响"未显式设置颜色"的新文本（通过 attributesForMarks 的 fg fallback）
+  /* 故意 *不* 设 self.textView.textColor —— UITextView 的 textColor setter 是破坏性的：
+     调用时会把 textStorage 里**所有** NSForegroundColorAttributeName 强制覆盖成 c，
+     抹掉我们 attributesForMarks 显式设的 color mark（"红字" 之类）。
+     我们的方案：attributesForMarks 始终给每一段文本显式写 fg（用户 color mark 或 fallback fg），
+     UITextView 自身的 textColor 属性永远用不到，所以可以忽略不设。 */
 }
 
 - (void)setFontSize:(CGFloat)fontSize {
   _fontSize = fontSize;
-  UIFont *font = [UIFont systemFontOfSize:fontSize];
+  UIFont *font = [self baseFontOfSize:fontSize];
   self.textView.font = font;
   self.placeholderLabel.font = font;
   [self.textView.textStorage addAttribute:NSFontAttributeName
                                      value:font
                                      range:NSMakeRange(0, self.textView.textStorage.length)];
   [self refreshAllPillStyles];
+}
+
+- (void)setFontFamily:(NSString *)fontFamily {
+  _fontFamily = [fontFamily copy];
+  UIFont *font = [self baseFontOfSize:self.fontSize];
+  self.textView.font = font;
+  self.placeholderLabel.font = font;
+  /* 已有内容里"显式带 code mark"的段保持 Menlo；其它段按新 family 重设。
+     这里偷懒走一刀切：所有段都改成新 family；如果 code mark 的段被影响了，
+     下次 emit/重渲染会通过 attributesForMarks 修回 Menlo。 */
+  [self.textView.textStorage addAttribute:NSFontAttributeName
+                                     value:font
+                                     range:NSMakeRange(0, self.textView.textStorage.length)];
+}
+
+/** 根据当前 _fontFamily 拿"基准字体"（无 bold/italic/code 等 trait）。
+    用法：1) attributesForMarks 的 baseFont 起点；2) 整个 view 的默认 font。 */
+- (UIFont *)baseFontOfSize:(CGFloat)size {
+  if (self.fontFamily.length > 0) {
+    UIFont *f = [UIFont fontWithName:self.fontFamily size:size];
+    if (f) return f;
+  }
+  return [UIFont systemFontOfSize:size];
 }
 
 - (void)setPillBackgroundColor:(UIColor *)c {
@@ -207,7 +256,7 @@
   att.fontSize = MAX(10.0, self.fontSize - 2);
   [att refreshImage];
 
-  UIFont *font = [UIFont systemFontOfSize:self.fontSize];
+  UIFont *font = [self baseFontOfSize:self.fontSize];
   NSDictionary *textAttrs = @{NSFontAttributeName: font,
                               NSForegroundColorAttributeName: self.textColor ?: [UIColor labelColor]};
 
@@ -358,7 +407,7 @@
  *  - color：覆盖 foregroundColor */
 - (NSDictionary<NSAttributedStringKey, id> *)attributesForMarks:(nullable id)marksDict {
   UIColor *fg = self.textColor ?: [UIColor labelColor];
-  UIFont *baseFont = [UIFont systemFontOfSize:self.fontSize];
+  UIFont *baseFont = [self baseFontOfSize:self.fontSize];
   if (![marksDict isKindOfClass:[NSDictionary class]]) {
     return @{NSFontAttributeName: baseFont, NSForegroundColorAttributeName: fg};
   }
@@ -536,6 +585,10 @@
 - (void)textViewDidChange:(UITextView *)textView {
   [self refreshPlaceholderLayout];
   [self emitContentChange];
+  /* textViewDidChange 不一定触发 layoutSubviews，但内容变了往往高度也会变；
+     主动 invalidate + 重测，让 didChangeContentSize 及时上报 */
+  [self setNeedsLayout];
+  [self layoutIfNeeded];
 }
 
 - (void)textViewDidChangeSelection:(UITextView *)textView {

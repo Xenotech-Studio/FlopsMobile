@@ -25,6 +25,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)flowDocInputView:(FlowDocInputView *)v didPressPillWithRefKey:(NSString *)refKey;
 - (void)flowDocInputViewDidFocus:(FlowDocInputView *)v;
 - (void)flowDocInputViewDidBlur:(FlowDocInputView *)v;
+/** 内容尺寸变化（用于 JS 端做 height 自适应）。仅在 size 真变了才回调，避免抖动。 */
+- (void)flowDocInputView:(FlowDocInputView *)v didChangeContentSize:(CGSize)size;
 @end
 
 @interface FlowDocInputView : UIView
@@ -38,6 +40,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, strong) UIColor *pillBackgroundColor;
 @property (nonatomic, strong) UIColor *pillTextColor;
 @property (nonatomic, assign) CGFloat fontSize;
+@property (nonatomic, copy, nullable) NSString *fontFamily;  // nil / 空串 = 系统字体
 @property (nonatomic, assign) CGFloat customLineHeight;  // 0 = system default
 @property (nonatomic, assign) BOOL editable;
 

@@ -74,11 +74,56 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
     emitSelectionEvent(selStart, selEnd)
   }
 
+  private var lastReportedContentHeight = 0
+  private var lastReportedContentWidth = 0
+
+  override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+    super.onSizeChanged(w, h, oldw, oldh)
+    maybeEmitContentSize()
+  }
+
+  override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+    super.onLayout(changed, left, top, right, bottom)
+    if (changed) maybeEmitContentSize()
+  }
+
+  private fun maybeEmitContentSize() {
+    /* EditText 的 measure 拿出来的 height 反映当前内容 wrap 之后所需高度。
+       size 没变就不 emit，避免抖动。 */
+    val w = measuredWidth
+    val h = measuredHeight
+    if (w <= 0 || h <= 0) return
+    if (w == lastReportedContentWidth && h == lastReportedContentHeight) return
+    lastReportedContentWidth = w
+    lastReportedContentHeight = h
+    val payload = Arguments.createMap().apply {
+      putDouble("width", w.toDouble() / resources.displayMetrics.density)
+      putDouble("height", h.toDouble() / resources.displayMetrics.density)
+    }
+    dispatchEvent("topContentSizeChange", payload)
+  }
+
   // MARK: - Property setters called by ViewManager
 
   fun setFontSizeSp(size: Float) {
     setTextSize(TypedValue.COMPLEX_UNIT_SP, size)
     refreshAllPillSpans()
+  }
+
+  /** 字体族（如 "Menlo" → "monospace"）。空 = 系统默认 */
+  fun setFontFamilyName(family: String?) {
+    val tf = when {
+      family.isNullOrBlank() -> Typeface.DEFAULT
+      family.equals("Menlo", ignoreCase = true) ||
+        family.equals("Courier", ignoreCase = true) ||
+        family.equals("monospace", ignoreCase = true) -> Typeface.MONOSPACE
+      family.equals("serif", ignoreCase = true) -> Typeface.SERIF
+      family.equals("sans-serif", ignoreCase = true) -> Typeface.SANS_SERIF
+      else -> {
+        runCatching { Typeface.create(family, Typeface.NORMAL) }.getOrNull() ?: Typeface.DEFAULT
+      }
+    }
+    typeface = tf
   }
 
   fun setCustomLineHeight(lineHeight: Float) {

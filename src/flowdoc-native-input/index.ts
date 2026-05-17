@@ -6,4 +6,10 @@ export {
   type FlowDocContentPart,
   type FlowDocMarks,
 } from './FlowDocInput';
-export { FlowDocSlateAdapter } from './FlowDocSlateAdapter';
+export { FlowDocSlateAdapter, type SlateDocument } from './FlowDocSlateAdapter';
+export {
+  FlowDocBlocks,
+  type FlowDocBlock,
+  type FlowDocDocument,
+  type FlowDocBlocksProps,
+} from './FlowDocBlocks';
