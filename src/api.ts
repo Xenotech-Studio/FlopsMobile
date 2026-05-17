@@ -101,7 +101,8 @@ function authHeaders(accessToken: string): Record<string, string> {
 }
 
 /**
- * 登录：POST /api/login
+ * 登录：SRP-6a 两步握手 + 互验证（POST /api/srp/login/{challenge,proof}）。
+ * 明文密码不出本进程；与 backend/user_system/srp_apis.py + FlopsWeb 的 SDK 字节级互通。
  */
 export async function login(
   serverBaseUrl: string,
@@ -110,27 +111,59 @@ export async function login(
   deviceName: string = 'FlopsMobile'
 ): Promise<{ session: Session }> {
   const base = ensureSlash(serverBaseUrl);
-  const res = await fetchWithDebugLog(
-    `${base}api/login`,
+  const { SrpClientSession, deriveSrpPassword } = await import('./lib/srp');
+
+  // 1) challenge: 服务端拿 verifier 算 B，回 salt + B + session_id
+  const r1 = await fetchWithDebugLog(
+    `${base}api/srp/login/challenge`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: userId }),
+    },
+    { log4xxAsInfo: true }
+  );
+  if (!r1.ok) {
+    const err = await r1.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `登录失败: ${r1.status}`);
+  }
+  const ch = (await r1.json()) as { session_id: string; salt: string; B: string };
+
+  // 2) 客户端 argon2 预哈希 + SRP 计算 A、M1
+  const srpPw = await deriveSrpPassword(password, ch.salt);
+  const sess = new SrpClientSession(userId, srpPw);
+  const { A_hex, M1_hex } = sess.computeProof(ch.salt, ch.B);
+
+  // 3) proof
+  const r2 = await fetchWithDebugLog(
+    `${base}api/srp/login/proof`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        id: userId,
-        password,
+        session_id: ch.session_id,
+        A: A_hex,
+        M1: M1_hex,
         device_name: deviceName,
       }),
     },
     { log4xxAsInfo: true }
   );
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { detail?: string }).detail || `登录失败: ${res.status}`);
+  if (!r2.ok) {
+    const err = await r2.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `登录失败: ${r2.status}`);
   }
-  const data = (await res.json()) as {
+  const data = (await r2.json()) as {
     user?: { id?: string };
     access_token?: string;
+    M2?: string;
   };
+
+  // 4) mutual auth：验证服务端的 M2，防 fake-server 中间人
+  if (!data.M2 || !sess.verifyServerProof(data.M2)) {
+    throw new Error('服务端身份校验失败');
+  }
+
   const token = data.access_token;
   const uid = (data.user && data.user.id) || userId;
   if (!token) throw new Error('服务端未返回 access_token');

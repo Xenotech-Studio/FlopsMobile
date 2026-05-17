@@ -16,6 +16,7 @@
   "dependencies": {
     "@gorhom/bottom-sheet": "^5.0.2",
     "@isudaji/react-native-install-apk": "^1.0.5",
+    "@noble/hashes": "^2.2.0",
     "@react-native-async-storage/async-storage": "^2.1.2",
     "@react-native-clipboard/clipboard": "^1.16.3",
     "@react-native-community/datetimepicker": "^8.6.0",
