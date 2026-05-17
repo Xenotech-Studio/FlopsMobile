@@ -286,6 +286,18 @@ export function ProfileScreen() {
               <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
             </TouchableOpacity>
           )}
+          {/* dev 入口：Slate-on-RN spike，feat/slate-rn-spike 分支验证 per-leaf TextInput 路线 */}
+          {__DEV__ ? (
+            <TouchableOpacity
+              style={[styles.row, styles.rowBorder]}
+              activeOpacity={0.7}
+              onPress={() => navigation.navigate('SlateRNSpike')}
+            >
+              <Ionicons name="flask-outline" size={22} color={colors.textMuted} />
+              <Text style={styles.rowLabel}>Slate-RN Spike (dev)</Text>
+              <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
+            </TouchableOpacity>
+          ) : null}
         </View>
       </ScrollView>
 

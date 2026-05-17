@@ -13,6 +13,7 @@ export type RootStackParamList = {
   SoulSettings: undefined;
   AppearanceSettings: undefined;
   NotificationSettings: undefined;
+  SlateRNSpike: undefined;
 };
 
 export type MainTabParamList = {
