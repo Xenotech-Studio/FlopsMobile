@@ -67,6 +67,7 @@ import {
 import { resolveContextCompressDividerPlacement } from '../utils/contextCompress';
 import { normalizeUsageCurrencyMode, type UsageCurrencyMode } from '../constants/pricingDisplay';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import Svg, { Path } from 'react-native-svg';
 import Clipboard from '@react-native-clipboard/clipboard';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
@@ -160,6 +161,36 @@ function getToolPackageNavLabel(name: string, argsStr: string | undefined): stri
 
 function isToolPackageNavBlock(b: { type: string; tool_name?: string }): boolean {
   return b.type === 'tool' && b.tool_name != null && TOOL_PACKAGE_NAV_NAMES.includes(b.tool_name);
+}
+
+/* 闭合思考块作为前驱：下一段 markdown 文本应贴紧（对齐 FlopsWeb
+   .tool-cards-wrap > .thinking-block.closed + .assistant-text-block 的紧凑处理） */
+function isClosedThinkingBlock(b: {
+  type: string;
+  closed?: boolean;
+}): boolean {
+  return b.type === 'thinking' && b.closed === true;
+}
+
+/** lucide Package icon path（与 FlopsWeb ToolPackageNav 用的同一组路径） */
+function PackageIcon({ size, color }: { size: number; color: string }) {
+  return (
+    <Svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={color}
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <Path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z" />
+      <Path d="M12 22V12" />
+      <Path d="m3.3 7 7.703 4.734a2 2 0 0 0 2 0L20.7 7" />
+      <Path d="m7.5 4.27 9 5.15" />
+    </Svg>
+  );
 }
 
 /** 与 FlopsWeb ModelPicker 下拉价展示一致（开启「对话内用量」时显示） */
@@ -772,14 +803,8 @@ export function ChatScreen() {
            reload reconnect 后 buffer replay 第一条往往是 v2_run，会被下面 early return 吞掉，
            如果 setReloadPending(false) 放后面就永远清不掉 banner。 */
         if ('type' in event && event.type === 'v2_reload_pending') {
-          // eslint-disable-next-line no-console
-          console.warn('[chat_v2 mobile onEvent] v2_reload_pending → setReloadPending(true)');
           setReloadPending(true);
           return;
-        }
-        if ('type' in event && (event.type === 'v2_run' || event.type === 'v2_step_rollback')) {
-          // eslint-disable-next-line no-console
-          console.warn(`[chat_v2 mobile onEvent] ${event.type} → setReloadPending(false)`);
         }
         setReloadPending(false);
         if ('type' in event && event.type === 'v2_run') return;
@@ -1038,7 +1063,11 @@ export function ChatScreen() {
             syncBlocks();
           }
         }
-        if ('content' in event && typeof event.content === 'string' && event.content.length > 0) {
+        /* 兜底「OpenAI 风格无 type 字段的原始 chunk = 正文 text」路径；
+           有 type 的事件（thinking_delta / tool_* / 等）已在上面的 if ('type' in event) 分支处理完，
+           不能落到这里——否则 thinking_delta 会被当成正文，正文流被 closeOpenThinking 打散成
+           每个 delta 一段的鬼畜版式（且 thinking 块立刻被关闭 → 短思考默认隐藏 → 看不见）。 */
+        if (!('type' in event) && 'content' in event && typeof event.content === 'string' && event.content.length > 0) {
           setStreamStatus('streaming_text');
           closeOpenThinking();
           const last = localBlocks[localBlocks.length - 1];
@@ -2062,6 +2091,7 @@ export function ChatScreen() {
     if (block.tool_name === 'open_tool_packages' || block.tool_name === 'close_tool_packages') {
       return (
         <View key={key} style={styles.toolPackageNavLine}>
+          <PackageIcon size={13} color={colors.textMuted} />
           <Text style={styles.toolPackageNavLineText}>
             {getToolPackageNavLabel(block.tool_name, block.arguments)}
           </Text>
@@ -2192,9 +2222,18 @@ export function ChatScreen() {
               {assistantBlocks.map((block, bi) => {
                 const blocks = assistantBlocks;
                 const prevBlock = blocks[bi - 1];
+                const nextBlock = blocks[bi + 1];
                 const compactAbove = prevBlock != null && isToolPackageNavBlock(prevBlock);
+                const tightAfterThinking = prevBlock != null && isClosedThinkingBlock(prevBlock);
                 if (block.type === 'thinking') {
-                  return <ThinkingBlockView block={block} key={`msg-think-${idx}-${bi}`} />;
+                  return (
+                    <ThinkingBlockView
+                      block={block}
+                      key={`msg-think-${idx}-${bi}`}
+                      prevIsToolPackage={prevBlock != null && isToolPackageNavBlock(prevBlock)}
+                      nextIsToolPackage={nextBlock != null && isToolPackageNavBlock(nextBlock)}
+                    />
+                  );
                 }
                 return block.type === 'text' ? (
                   <React.Fragment key={bi}>
@@ -2206,7 +2245,11 @@ export function ChatScreen() {
                       />
                     ) : null}
                     <View
-                      style={[styles.assistantTextBlock, compactAbove && styles.assistantTextBlockCompactAbove]}
+                      style={[
+                        styles.assistantTextBlock,
+                        compactAbove && styles.assistantTextBlockCompactAbove,
+                        tightAfterThinking && styles.assistantTextBlockTightAfterThinking,
+                      ]}
                     >
                       <MarkdownContent
                         text={block.content}
@@ -2540,14 +2583,27 @@ export function ChatScreen() {
                   {currentAssistantBlocks.length > 0 ? (
                     currentAssistantBlocks.map((block, bi) => {
                       const prevBlock = currentAssistantBlocks[bi - 1];
+                      const nextBlock = currentAssistantBlocks[bi + 1];
                       const compactAbove = prevBlock != null && isToolPackageNavBlock(prevBlock);
+                      const tightAfterThinking = prevBlock != null && isClosedThinkingBlock(prevBlock);
                       if (block.type === 'thinking') {
-                        return <ThinkingBlockView block={block} key={`stream-think-${bi}`} />;
+                        return (
+                          <ThinkingBlockView
+                            block={block}
+                            key={`stream-think-${bi}`}
+                            prevIsToolPackage={prevBlock != null && isToolPackageNavBlock(prevBlock)}
+                            nextIsToolPackage={nextBlock != null && isToolPackageNavBlock(nextBlock)}
+                          />
+                        );
                       }
                       return block.type === 'text' ? (
                         <View
                           key={bi}
-                          style={[styles.assistantTextBlock, compactAbove && styles.assistantTextBlockCompactAbove]}
+                          style={[
+                        styles.assistantTextBlock,
+                        compactAbove && styles.assistantTextBlockCompactAbove,
+                        tightAfterThinking && styles.assistantTextBlockTightAfterThinking,
+                      ]}
                         >
                           <MarkdownContent text={block.content} />
                         </View>

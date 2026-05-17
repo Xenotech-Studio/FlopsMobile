@@ -215,16 +215,25 @@ export function createChatStyles(c: AppColors) {
   errorText: { color: c.danger, fontSize: 14 },
   assistantTextBlock: { marginTop: 7 },
   assistantTextBlockCompactAbove: { marginTop: 6 },
+  /** 闭合思考块下方紧贴 markdown 正文：对齐 FlopsWeb 把首段 margin-top 砍到 0 的处理 */
+  assistantTextBlockTightAfterThinking: { marginTop: 0 },
   /** 与 Web .assistant-empty-reply-block .markdown-content 一致，仅弱化提示正文 */
   assistantEmptyReplyMarkdownContent: { opacity: 0.62 },
+  /** 对齐 FlopsWeb .tool-package-nav-line：icon + 灰字一行，字号对齐思考块（13）。
+      上下不再额外负向拽（旧 marginTop:-4 会让 thinking-toolNav-thinking 这种连排上下不等距）。
+      marginLeft:1 跟思考行整体右挪同一档，icon 水平中线左右对齐。 */
   toolPackageNavLine: {
-    marginTop: -4,
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingVertical: 2,
+    marginLeft: 1,
   },
   toolPackageNavLineText: {
-    fontSize: 12,
-    color: c.placeholder,
-    lineHeight: 18,
+    fontSize: 13,
+    color: c.textMuted,
+    lineHeight: 19,
+    marginLeft: 6,
+    flexShrink: 1,
   },
   toolCard: {
     marginTop: 4,
