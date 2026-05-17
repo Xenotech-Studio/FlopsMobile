@@ -177,25 +177,64 @@ export async function login(
 }
 
 /**
- * 修改密码：POST /api/change_user_password
- * 需要当前密码验证，成功后仅服务端更新密码，本地 session 不变（下次登录用新密码）。
+ * 修改密码：SRP-6a 走 /api/srp/change_password
+ *   - 用旧密码先做一次 challenge + M1 证明持有
+ *   - 新密码本地算 verifier + envelope，把三件套发上去
+ * 需要 Bearer token；服务端验证 old-pwd proof 后才换 SRP credentials。
  */
 export async function changePassword(
   serverBaseUrl: string,
+  accessToken: string,
   userId: string,
   oldPassword: string,
   newPassword: string
 ): Promise<{ message: string }> {
   const base = ensureSlash(serverBaseUrl);
-  const res = await fetchWithDebugLog(
-    `${base}api/change_user_password`,
+  const { SrpClientSession, deriveSrpPassword, generateSaltHex, computeVerifier, encryptEnvelope } =
+    await import('./lib/srp');
+
+  // 1) 用旧密码完成一次 SRP 挑战 / 证明，准备 old_session_id / old_A / old_M1
+  const r1 = await fetchWithDebugLog(
+    `${base}api/srp/login/challenge`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: userId }),
+    },
+    { log4xxAsInfo: true }
+  );
+  if (!r1.ok) {
+    const err = await r1.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `修改密码失败: ${r1.status}`);
+  }
+  const ch = (await r1.json()) as { session_id: string; salt: string; B: string };
+  const oldSrpPw = await deriveSrpPassword(oldPassword, ch.salt);
+  const oldSess = new SrpClientSession(userId, oldSrpPw);
+  const { A_hex: oldA, M1_hex: oldM1 } = oldSess.computeProof(ch.salt, ch.B);
+
+  // 2) 拉公钥 + 新密码算 SRP 三件套
+  const pkRes = await fetchWithDebugLog(`${base}api/srp/pubkey`, { method: 'GET' });
+  if (!pkRes.ok) throw new Error(`无法获取 recovery 公钥: ${pkRes.status}`);
+  const { pubkey_pem } = (await pkRes.json()) as { pubkey_pem: string };
+
+  const newSalt = generateSaltHex();
+  const newSrpPw = await deriveSrpPassword(newPassword, newSalt);
+  const newVerifier = computeVerifier(userId, newSrpPw, newSalt);
+  const newEnvelope = encryptEnvelope(newPassword, pubkey_pem);
+
+  // 3) POST /api/srp/change_password
+  const res = await fetchWithDebugLog(
+    `${base}api/srp/change_password`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify({
-        id: userId,
-        old_password: oldPassword,
-        password: newPassword,
+        old_session_id: ch.session_id,
+        old_A: oldA,
+        old_M1: oldM1,
+        salt: newSalt,
+        verifier: newVerifier,
+        envelope: newEnvelope,
       }),
     },
     { log4xxAsInfo: true }
@@ -286,12 +325,30 @@ export async function verifyEmailCode(
   return { verify_token: data.verify_token, token_ttl: data.token_ttl ?? 1800 };
 }
 
-/** POST /api/auth/register —— 注册新账号；email + verify_token 已通过验证码流程拿到 */
+/**
+ * POST /api/auth/register —— 注册新账号；email + verify_token 已通过验证码流程拿到。
+ * 客户端就把明文密码 → SRP 三件套，服务端不接触明文。
+ */
 export async function registerUser(
   serverBaseUrl: string,
   params: { user_id: string; password: string; email: string; verify_token: string }
 ): Promise<void> {
   const base = ensureSlash(serverBaseUrl);
+  const { deriveSrpPassword, generateSaltHex, computeVerifier, encryptEnvelope } =
+    await import('./lib/srp');
+
+  // 1) 拉公钥
+  const pkRes = await fetchWithDebugLog(`${base}api/srp/pubkey`, { method: 'GET' });
+  if (!pkRes.ok) throw new Error(`无法获取 recovery 公钥: ${pkRes.status}`);
+  const { pubkey_pem } = (await pkRes.json()) as { pubkey_pem: string };
+
+  // 2) 本地算 SRP 三件套
+  const salt = generateSaltHex();
+  const srpPw = await deriveSrpPassword(params.password, salt);
+  const verifier = computeVerifier(params.user_id, srpPw, salt);
+  const envelope = encryptEnvelope(params.password, pubkey_pem);
+
+  // 3) POST 注册 —— 后端的 /api/auth/register 已支持 srp_salt/srp_verifier/password_envelope
   const res = await fetchWithDebugLog(
     `${base}api/auth/register`,
     {
@@ -299,7 +356,9 @@ export async function registerUser(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         id: params.user_id,
-        password: params.password,
+        srp_salt: salt,
+        srp_verifier: verifier,
+        password_envelope: envelope,
         email: params.email,
         verify_token: params.verify_token,
       }),

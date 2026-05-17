@@ -128,7 +128,7 @@ export function ChangePasswordScreen() {
 
     setLoading(true);
     try {
-      await changePassword(serverBaseUrl, session.user_id, cur, newPwd);
+      await changePassword(serverBaseUrl, session.access_token, session.user_id, cur, newPwd);
       Alert.alert('修改成功', '密码已更新，下次登录请使用新密码。', [
         { text: '确定', onPress: () => navigation.goBack() },
       ]);

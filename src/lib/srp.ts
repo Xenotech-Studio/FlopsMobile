@@ -16,6 +16,7 @@
 
 import { sha256 } from '@noble/hashes/sha2.js';
 import { argon2idAsync } from '@noble/hashes/argon2.js';
+import forge from 'node-forge';
 
 declare const global: { crypto?: { getRandomValues?: (a: Uint8Array) => Uint8Array } };
 declare class TextEncoder { encode(s: string): Uint8Array }
@@ -217,4 +218,21 @@ export class SrpClientSession {
     for (let i = 0; i < got.length; i++) diff |= got[i] ^ this._expectedM2[i];
     return diff === 0;
   }
+}
+
+// --- RSA-OAEP envelope（boss recovery 后门）---
+//
+// 与 backend/user_system/envelope.py + Web SDK 互通：RSA-4096 OAEP，
+// MGF1=SHA-256, hash=SHA-256, label=None。
+// 每次加密结果不同（OAEP 内置随机），所以拖库者看不出密码碰撞。
+
+export function encryptEnvelope(plaintextPassword: string, pubkeyPem: string): string {
+  const pubkey = forge.pki.publicKeyFromPem(pubkeyPem);
+  // forge encrypt 的 plaintext 形态是 binary string，不是 Uint8Array
+  const binary = forge.util.encodeUtf8(plaintextPassword);
+  const ct = pubkey.encrypt(binary, 'RSA-OAEP', {
+    md: forge.md.sha256.create(),
+    mgf1: { md: forge.md.sha256.create() },
+  });
+  return forge.util.encode64(ct);
 }
