@@ -17,6 +17,7 @@ import {
   Animated,
   AppState,
   Alert,
+  ActionSheetIOS,
   InteractionManager,
   Dimensions,
   type StyleProp,
@@ -1260,6 +1261,33 @@ export function ChatScreen() {
   }, [session, conversationId, currentAssistantBlocks, streamingText]);
 
   /** 回退到第 (afterUserIndex+1) 条 user 消息处并重新生成该条 AI 回复 */
+  /** 用户气泡长按 → 弹出系统 ActionSheet（iOS 原生 / Android Alert 化）：复制 / 编辑并重新生成 */
+  const presentUserMessageActions = useCallback(
+    (content: string, userOrdinalIndex: number) => {
+      const canEdit = !!conversationId && !conversationHistoryLoading;
+      const onCopy = () => Clipboard.setString(content);
+      const onEdit = () => setUserMessageEdit({ afterIndex: userOrdinalIndex, draft: content });
+      if (Platform.OS === 'ios') {
+        const options = canEdit ? ['取消', '复制', '编辑消息'] : ['取消', '复制'];
+        ActionSheetIOS.showActionSheetWithOptions(
+          { options, cancelButtonIndex: 0 },
+          (i) => {
+            if (i === 1) onCopy();
+            else if (i === 2 && canEdit) onEdit();
+          }
+        );
+      } else {
+        const buttons: { text: string; onPress?: () => void; style?: 'cancel' | 'default' }[] = [
+          { text: '取消', style: 'cancel' },
+          { text: '复制', onPress: onCopy },
+        ];
+        if (canEdit) buttons.push({ text: '编辑消息', onPress: onEdit });
+        Alert.alert('消息操作', undefined, buttons);
+      }
+    },
+    [conversationId, conversationHistoryLoading]
+  );
+
   const handleRegenerate = useCallback(
     async (afterUserIndex: number, editedMessage?: string) => {
       if (!session || !conversationId || conversationHistoryLoading || afterUserIndex == null) return;
@@ -2326,9 +2354,12 @@ export function ChatScreen() {
             </>
           ) : (
             isUser ? (
-              <Text style={styles.userText} selectable>
-                {msg.content}
-              </Text>
+              <Pressable
+                onLongPress={() => presentUserMessageActions(msg.content, userOrdinalIndex)}
+                delayLongPress={320}
+              >
+                <Text style={styles.userText}>{msg.content}</Text>
+              </Pressable>
             ) : (
               <>
                 {ccInside && ccPl.insertBeforeBlockIndex <= 0 ? (
@@ -2356,45 +2387,7 @@ export function ChatScreen() {
             )
           )}
         </View>
-        {isUser ? (
-          <View
-            style={{
-              flexDirection: 'row',
-              marginTop: 3,
-              alignSelf: 'flex-end',
-              alignItems: 'center',
-            }}
-          >
-            <TouchableOpacity
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              onPress={() => Clipboard.setString(msg.content)}
-              accessibilityRole="button"
-              accessibilityLabel="复制用户消息"
-            >
-              <Ionicons name="copy-outline" size={20} color="#60a5fa" />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={{ marginLeft: 6 }}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              onPress={() =>
-                setUserMessageEdit({ afterIndex: userOrdinalIndex, draft: msg.content })
-              }
-              disabled={!conversationId || conversationHistoryLoading}
-              accessibilityRole="button"
-              accessibilityLabel="编辑并重新生成"
-            >
-              <Ionicons
-                name="create-outline"
-                size={20}
-                color={
-                  !conversationId || conversationHistoryLoading
-                    ? colors.textMuted
-                    : '#60a5fa'
-                }
-              />
-            </TouchableOpacity>
-          </View>
-        ) : null}
+        {/* 用户气泡操作改为长按弹 ActionSheet（参见 presentUserMessageActions），不再常态显示按钮行 */}
       </View>
     );
 
@@ -2857,6 +2850,7 @@ export function ChatScreen() {
               padding: 10,
               color: colors.textBody,
               textAlignVertical: 'top',
+              fontSize: 16,
             }}
           />
           <View
