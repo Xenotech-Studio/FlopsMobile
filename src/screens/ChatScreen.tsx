@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   Pressable,
   StyleSheet,
@@ -11,9 +10,7 @@ import {
   Platform,
   Modal,
   PanResponder,
-  Linking,
   ActivityIndicator,
-  Image,
   Animated,
   AppState,
   Alert,
@@ -103,6 +100,16 @@ import { DefaultToolCard } from './chat-cards/DefaultToolCard';
 import { CursorAgentCard } from './chat-cards/CursorAgentCard';
 import { ReadPagesCard } from './chat-cards/ReadPagesCard';
 import { FlowDocItemMetaProvider } from '../context/FlowDocItemMetaContext';
+import { FlowDocSlateAdapter, type SlateDocument } from '../flowdoc-native-input';
+import type { FlowDocInputHandle } from '../flowdoc-native-input';
+import {
+  hydrateUserMessageToSlateDocument,
+  serializeSlateDocumentToUserMessage,
+  buildFlowDocFullRef,
+  type FlopsRef,
+} from '../chat/flopsRefs';
+import { UserMessageContent } from '../chat/UserMessageContent';
+import { FlowDocPickerModal } from '../chat/FlowDocPickerModal';
 import { FlowDocEditCard } from './chat-cards/FlowDocEditCard';
 import { FlowDocPatchCard } from './chat-cards/FlowDocPatchCard';
 import { FlowDocWriteCard } from './chat-cards/FlowDocWriteCard';
@@ -302,8 +309,26 @@ export function ChatScreen() {
   } | null>(null);
   const [usageDetailModalBody, setUsageDetailModalBody] = useState<string | null>(null);
   /** 编辑用户消息后重新生成（与 Web/Desktop 一致） */
-  const [userMessageEdit, setUserMessageEdit] = useState<{ afterIndex: number; draft: string } | null>(null);
-  const [messageInput, setMessageInput] = useState('');
+  const [userMessageEdit, setUserMessageEdit] = useState<{
+    afterIndex: number;
+    /** 用 SlateDocument 而不是 string，让 pill 编辑可行 */
+    initialDoc: SlateDocument;
+    /** 编辑过程中维护的 ref key → 完整记录映射；发送时按此重组 flops_refs */
+    refDataByKey: Map<string, FlopsRef>;
+  } | null>(null);
+  /** 编辑 Modal 内 FlowDocSlateAdapter 的当前 SlateDocument，发送时序列化用 */
+  const userMessageEditDocRef = useRef<SlateDocument | null>(null);
+  /** 编辑 Modal 内 FlowDocSlateAdapter 的 imperative handle（focus / insertPill 等） */
+  const userMessageEditAdapterRef = useRef<FlowDocInputHandle | null>(null);
+  /** 主 composer：SlateDocument 状态 + flops_refs 表 */
+  const [composerDoc, setComposerDoc] = useState<SlateDocument>([
+    { type: 'paragraph', children: [{ text: '' }] },
+  ]);
+  const composerRefDataByKeyRef = useRef<Map<string, FlopsRef>>(new Map());
+  const composerAdapterRef = useRef<FlowDocInputHandle | null>(null);
+  const [composerPickerOpen, setComposerPickerOpen] = useState(false);
+  /** 编辑 Modal 内是否打开 picker（与主 composer 用同一个 modal 不同 ref 表） */
+  const [editPickerOpen, setEditPickerOpen] = useState(false);
   /** 回到本页时强制重建输入框，避免多行/高度在其它页编辑后残留 */
   const [composerRemountKey, setComposerRemountKey] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -735,8 +760,20 @@ export function ChatScreen() {
     setAgentPickerOpen(false);
   }, []);
 
+  /** 主 composer 是否有可发送内容：任一段有非空文本，或任一段含 pill */
+  const composerHasContent = useMemo(() => {
+    for (const para of composerDoc) {
+      for (const node of para.children) {
+        const anyN = node as Record<string, unknown>;
+        if (anyN.type === 'ref-pill') return true;
+        if (typeof anyN.text === 'string' && anyN.text.trim().length > 0) return true;
+      }
+    }
+    return false;
+  }, [composerDoc]);
+
   const canSend = Boolean(
-    session && messageInput.trim() && !loading && !conversationHistoryLoading
+    session && composerHasContent && !loading && !conversationHistoryLoading
   );
 
   const runV2WithHandlers = useCallback(
@@ -1097,15 +1134,29 @@ export function ChatScreen() {
   );
 
   const handleSendMessage = useCallback(async () => {
-    if (!session || !messageInput.trim() || loading || conversationHistoryLoading) return;
-    const nextMessage = messageInput.trim();
-    setMessageInput('');
+    if (!session || !composerHasContent || loading || conversationHistoryLoading) return;
+    /* 序列化 composerDoc → content（pill 还原为 mention_text）+ flops_refs（按 pill 出现顺序） */
+    const { content: rawContent, flops_refs } = serializeSlateDocumentToUserMessage(
+      composerDoc,
+      composerRefDataByKeyRef.current,
+    );
+    const nextMessage = rawContent.trim();
+    if (!nextMessage && flops_refs.length === 0) return;
+    /* 清空 composer：把 SlateDocument 重置为单段空 paragraph，refDataByKey 清空，再 bump key 强制 remount native */
+    setComposerDoc([{ type: 'paragraph', children: [{ text: '' }] }]);
+    composerRefDataByKeyRef.current = new Map();
+    setComposerRemountKey((n) => n + 1);
     setError('');
     setLoading(true);
     setStreamingText('');
     setCurrentAssistantBlocks([]);
     setStreamStatus('thinking');
-    setMessages((prev) => [...prev, { role: 'user', content: nextMessage }]);
+    setMessages((prev) => [
+      ...prev,
+      flops_refs.length > 0
+        ? { role: 'user', content: nextMessage, flops_refs }
+        : { role: 'user', content: nextMessage },
+    ]);
     shouldScrollToEndRef.current = true;
 
     let convId = conversationId;
@@ -1142,7 +1193,7 @@ export function ChatScreen() {
     try {
       const { streamDone, finalText, localBlocks, lastConvId } = await runV2WithHandlers({
         convId,
-        start: { tag: 'new_message', message: nextMessage },
+        start: { tag: 'new_message', message: nextMessage, flops_refs },
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -1220,7 +1271,8 @@ export function ChatScreen() {
   }, [
     session,
     conversationId,
-    messageInput,
+    composerDoc,
+    composerHasContent,
     loading,
     conversationHistoryLoading,
     runV2WithHandlers,
@@ -1263,10 +1315,20 @@ export function ChatScreen() {
   /** 回退到第 (afterUserIndex+1) 条 user 消息处并重新生成该条 AI 回复 */
   /** 用户气泡长按 → 弹出系统 ActionSheet（iOS 原生 / Android Alert 化）：复制 / 编辑并重新生成 */
   const presentUserMessageActions = useCallback(
-    (content: string, userOrdinalIndex: number) => {
+    (content: string, userOrdinalIndex: number, refs?: FlopsRef[]) => {
       const canEdit = !!conversationId && !conversationHistoryLoading;
       const onCopy = () => Clipboard.setString(content);
-      const onEdit = () => setUserMessageEdit({ afterIndex: userOrdinalIndex, draft: content });
+      const onEdit = () => {
+        const refList = refs ?? [];
+        const refMap = new Map<string, FlopsRef>();
+        for (const r of refList) refMap.set(r.key, r);
+        setUserMessageEdit({
+          afterIndex: userOrdinalIndex,
+          initialDoc: hydrateUserMessageToSlateDocument(content, refList),
+          refDataByKey: refMap,
+        });
+        userMessageEditDocRef.current = null;
+      };
       if (Platform.OS === 'ios') {
         const options = canEdit ? ['取消', '复制', '编辑消息'] : ['取消', '复制'];
         ActionSheetIOS.showActionSheetWithOptions(
@@ -1289,7 +1351,11 @@ export function ChatScreen() {
   );
 
   const handleRegenerate = useCallback(
-    async (afterUserIndex: number, editedMessage?: string) => {
+    async (
+      afterUserIndex: number,
+      editedMessage?: string,
+      editedFlopsRefs?: FlopsRef[],
+    ) => {
       if (!session || !conversationId || conversationHistoryLoading || afterUserIndex == null) return;
       if (editedMessage === undefined && loading) return;
       if (editedMessage !== undefined && loading) {
@@ -1310,9 +1376,14 @@ export function ChatScreen() {
         if (keepThroughIdx < 0) return prev;
         const sliced = prev.slice(0, keepThroughIdx + 1);
         if (editedMessage === undefined) return sliced;
-        return sliced.map((m, i) =>
-          i === keepThroughIdx && m.role === 'user' ? { ...m, content: editedMessage } : m,
-        );
+        return sliced.map((m, i) => {
+          if (i !== keepThroughIdx || m.role !== 'user') return m;
+          const next: typeof m = { role: 'user', content: editedMessage };
+          if (editedFlopsRefs && editedFlopsRefs.length > 0) {
+            next.flops_refs = editedFlopsRefs;
+          }
+          return next;
+        });
       });
     setError('');
     setLoading(true);
@@ -1332,7 +1403,14 @@ export function ChatScreen() {
     try {
       const regenStart: ChatV2StreamStart =
         editedMessage !== undefined
-          ? { tag: 'regenerate', after_user_index: afterUserIndex, message: editedMessage }
+          ? {
+              tag: 'regenerate',
+              after_user_index: afterUserIndex,
+              message: editedMessage,
+              ...(editedFlopsRefs && editedFlopsRefs.length > 0
+                ? { flops_refs: editedFlopsRefs }
+                : {}),
+            }
           : { tag: 'regenerate', after_user_index: afterUserIndex };
       const { streamDone, finalText, localBlocks, lastConvId } = await runV2WithHandlers({
         convId: conversationId,
@@ -2355,10 +2433,20 @@ export function ChatScreen() {
           ) : (
             isUser ? (
               <Pressable
-                onLongPress={() => presentUserMessageActions(msg.content, userOrdinalIndex)}
+                onLongPress={() =>
+                  presentUserMessageActions(
+                    msg.content,
+                    userOrdinalIndex,
+                    msg.role === 'user' ? msg.flops_refs : undefined,
+                  )
+                }
                 delayLongPress={320}
               >
-                <Text style={styles.userText}>{msg.content}</Text>
+                <UserMessageContent
+                  content={msg.content}
+                  flopsRefs={msg.role === 'user' ? msg.flops_refs : undefined}
+                  textStyle={styles.userText}
+                />
               </Pressable>
             ) : (
               <>
@@ -2647,17 +2735,30 @@ export function ChatScreen() {
             />
             <View style={styles.bottomOverlayInner} pointerEvents="box-none">
               <View style={styles.inputRowInOverlay} pointerEvents="box-none">
-                <TextInput
-                  key={composerRemountKey}
-                  style={styles.composerInput}
-                  value={messageInput}
-                  onChangeText={setMessageInput}
-                  placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
-                  placeholderTextColor={colors.placeholder}
-                  editable={!loading && !conversationHistoryLoading}
-                  onSubmitEditing={handleSendMessage}
-                  returnKeyType="send"
-                />
+                <TouchableOpacity
+                  style={styles.composerAttachBtn}
+                  onPress={() => setComposerPickerOpen(true)}
+                  disabled={loading || conversationHistoryLoading}
+                  accessibilityLabel="引用 FlowDoc 文档"
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="add" size={22} color={colors.textSecondary} />
+                </TouchableOpacity>
+                <View style={styles.composerInput}>
+                  <FlowDocSlateAdapter
+                    key={composerRemountKey}
+                    ref={composerAdapterRef}
+                    initialDocument={composerDoc}
+                    onChange={setComposerDoc}
+                    placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
+                    placeholderColor={colors.placeholder}
+                    textColor={colors.textPrimary}
+                    pillBackgroundColor={colors.surfaceMuted}
+                    pillTextColor={colors.textMuted}
+                    fontSize={16}
+                    editable={!loading && !conversationHistoryLoading}
+                  />
+                </View>
                 <Pressable
                   style={[styles.sendBtn, loading && styles.sendBtnStop]}
                   onPress={loading ? handleStop : handleSendMessage}
@@ -2833,13 +2934,19 @@ export function ChatScreen() {
             borderColor: colors.border,
           }}
         >
-          <Text style={{ fontSize: 16, fontWeight: '600', marginBottom: 8, color: colors.textPrimary }}>
-            编辑消息
-          </Text>
-          <TextInput
-            value={userMessageEdit?.draft ?? ''}
-            onChangeText={(t) => setUserMessageEdit((prev) => (prev ? { ...prev, draft: t } : null))}
-            multiline
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+            <Text style={{ flex: 1, fontSize: 16, fontWeight: '600', color: colors.textPrimary }}>
+              编辑消息
+            </Text>
+            <TouchableOpacity
+              onPress={() => setEditPickerOpen(true)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel="引用 FlowDoc 文档"
+            >
+              <Ionicons name="add-circle-outline" size={22} color={colors.textPrimary} />
+            </TouchableOpacity>
+          </View>
+          <View
             style={{
               alignSelf: 'stretch',
               width: '100%',
@@ -2847,12 +2954,25 @@ export function ChatScreen() {
               borderWidth: StyleSheet.hairlineWidth,
               borderColor: colors.borderMuted,
               borderRadius: 8,
-              padding: 10,
-              color: colors.textBody,
-              textAlignVertical: 'top',
-              fontSize: 16,
+              paddingHorizontal: 10,
+              paddingVertical: 8,
             }}
-          />
+          >
+            {userMessageEdit ? (
+              <FlowDocSlateAdapter
+                ref={userMessageEditAdapterRef}
+                initialDocument={userMessageEdit.initialDoc}
+                onChange={(doc) => {
+                  userMessageEditDocRef.current = doc;
+                }}
+                textColor={colors.textBody}
+                pillBackgroundColor={colors.surfaceMuted}
+                pillTextColor={colors.textMuted}
+                fontSize={16}
+                editable
+              />
+            ) : null}
+          </View>
           <View
             style={{
               flexDirection: 'row',
@@ -2870,11 +2990,18 @@ export function ChatScreen() {
               style={{ marginLeft: 16 }}
               onPress={() => {
                 const st = userMessageEdit;
-                if (!st?.draft.trim()) return;
+                if (!st) return;
+                const finalDoc = userMessageEditDocRef.current ?? st.initialDoc;
+                const { content, flops_refs } = serializeSlateDocumentToUserMessage(
+                  finalDoc,
+                  st.refDataByKey,
+                );
+                const trimmed = content.trim();
+                if (!trimmed && flops_refs.length === 0) return;
                 const ai = st.afterIndex;
-                const d = st.draft.trim();
                 setUserMessageEdit(null);
-                void handleRegenerate(ai, d);
+                userMessageEditDocRef.current = null;
+                void handleRegenerate(ai, trimmed, flops_refs);
               }}
               accessibilityRole="button"
             >
@@ -2886,6 +3013,31 @@ export function ChatScreen() {
         </View>
       </View>
     </Modal>
+    <FlowDocPickerModal
+      visible={composerPickerOpen}
+      onClose={() => setComposerPickerOpen(false)}
+      onPickDoc={(docId, name) => {
+        const ref = buildFlowDocFullRef(docId, name);
+        composerRefDataByKeyRef.current.set(ref.key, ref);
+        const mention = ref.mention_text || `@${ref.title || ''}`;
+        composerAdapterRef.current?.insertPill(ref.key, mention, ref.title || '', true);
+      }}
+    />
+    <FlowDocPickerModal
+      visible={editPickerOpen}
+      onClose={() => setEditPickerOpen(false)}
+      onPickDoc={(docId, name) => {
+        const ref = buildFlowDocFullRef(docId, name);
+        setUserMessageEdit((prev) => {
+          if (!prev) return prev;
+          const next = new Map(prev.refDataByKey);
+          next.set(ref.key, ref);
+          return { ...prev, refDataByKey: next };
+        });
+        const mention = ref.mention_text || `@${ref.title || ''}`;
+        userMessageEditAdapterRef.current?.insertPill(ref.key, mention, ref.title || '', true);
+      }}
+    />
     </>
   );
 }

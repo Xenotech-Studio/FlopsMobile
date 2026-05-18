@@ -2,6 +2,7 @@
  * 服务端 OpenAI 式 messages → 本地气泡列表；与用量 run 的 raw 下标对齐。
  */
 import type { ConversationMessage } from '../api';
+import { normalizeFlopsRefs, type FlopsRef } from '../chat/flopsRefs';
 
 export type ToolResult = {
   stdout?: string;
@@ -39,7 +40,7 @@ export type StreamBlock =
     };
 
 export type ChatMessage =
-  | { role: 'user'; content: string }
+  | { role: 'user'; content: string; flops_refs?: FlopsRef[] }
   | { role: 'assistant'; content: string; blocks?: StreamBlock[] }
   | { role: 'error'; content: string };
 
@@ -175,7 +176,14 @@ export function rawMessagesToLocalWithUsageMap(raw: ConversationMessage[]): RawM
       if (rawUserMessageIsMetaOnly(msg)) continue;
       flushAssistant();
       const content = typeof msg.content === 'string' ? msg.content : '';
-      messages.push({ role: 'user', content });
+      const refs = normalizeFlopsRefs(
+        (msg.metadata && (msg.metadata as Record<string, unknown>).flops_refs) || null,
+      );
+      messages.push(
+        refs.length > 0
+          ? { role: 'user', content, flops_refs: refs }
+          : { role: 'user', content },
+      );
       continue;
     }
     if (msg.role === 'assistant' || msg.role === 'tool') {

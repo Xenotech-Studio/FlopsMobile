@@ -745,5 +745,16 @@ export function createChatStyles(c: AppColors) {
     overflow: 'hidden',
   },
   sendBtnStop: { backgroundColor: c.danger },
+  /** 左侧 "+" 引用按钮：尺寸跟 sendBtn 接近，但底色用 surface 弱化（不抢戏） */
+  composerAttachBtn: {
+    width: CHAT_COMPOSER_SEND_BTN_SIZE,
+    height: CHAT_COMPOSER_SEND_BTN_SIZE,
+    borderRadius: CHAT_COMPOSER_SEND_BTN_SIZE / 2,
+    backgroundColor: c.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.borderMuted,
+  },
   });
 }

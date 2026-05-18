@@ -799,8 +799,8 @@ const CHAT_V2_RECONNECT_MAX = 20;
 const CHAT_V2_RECONNECT_DELAY_MS = 500;
 
 export type ChatV2StreamStart =
-  | { tag: 'new_message'; message: string }
-  | { tag: 'regenerate'; after_user_index: number; message?: string }
+  | { tag: 'new_message'; message: string; flops_refs?: unknown[] }
+  | { tag: 'regenerate'; after_user_index: number; message?: string; flops_refs?: unknown[] }
   | { tag: 'resume'; run_id: string };
 
 export type StreamChatV2LoopOptions = {
@@ -963,12 +963,20 @@ export async function streamChatV2Loop(
     if (isReconnect) {
       body = { subscribe_only: true, run_id: v2RunId, replay_from: replayFrom };
     } else if (start.tag === 'new_message') {
-      body = { message: start.message };
+      body = {
+        message: start.message,
+        ...(Array.isArray(start.flops_refs) && start.flops_refs.length > 0
+          ? { flops_refs: start.flops_refs }
+          : {}),
+      };
     } else if (start.tag === 'regenerate') {
       body = {
         regenerate: true,
         after_user_index: start.after_user_index,
         ...(typeof start.message === 'string' && start.message.length > 0 ? { message: start.message } : {}),
+        ...(Array.isArray(start.flops_refs) && start.flops_refs.length > 0
+          ? { flops_refs: start.flops_refs }
+          : {}),
       };
     } else {
       body = { subscribe_only: true, run_id: v2RunId, replay_from: 0 };
