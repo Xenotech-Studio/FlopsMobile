@@ -17,7 +17,12 @@ import android.text.Editable
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.TextWatcher
+import android.text.InputType
 import android.text.style.BackgroundColorSpan
+import android.view.KeyEvent
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputConnectionWrapper
 import android.text.style.CharacterStyle
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
@@ -38,6 +43,7 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
 
   private var initialContentApplied = false
   private var suppressTextWatcher = false
+  var enterCreatesBlock: Boolean = true
 
   var pillBackgroundColor: Int = Color.parseColor("#EBEBEB")
     set(value) {
@@ -60,6 +66,21 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
       override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
       override fun afterTextChanged(s: Editable?) {
         if (suppressTextWatcher) return
+        /* enterCreatesBlock=true 时，把刚出现的 '\n' 撤掉 + 发 split 事件给 JS。
+           soft keyboard 的 Enter 走的是 commitText("\n") 路径，OnKeyListener 兜不住，
+           只能 TextWatcher 检测。*/
+        if (enterCreatesBlock && s != null) {
+          val nlIndex = s.toString().indexOf('\n')
+          if (nlIndex >= 0) {
+            val combined = s.toString().substring(0, nlIndex) + s.toString().substring(nlIndex + 1)
+            suppressTextWatcher = true
+            s.replace(0, s.length, combined)
+            setSelection(minOf(nlIndex, combined.length))
+            suppressTextWatcher = false
+            emitSplitRequest(nlIndex)
+            return
+          }
+        }
         emitContentChange()
       }
     })
@@ -285,6 +306,14 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
     requestFocus()
   }
 
+  fun focusInputAtOffset(offset: Int) {
+    requestFocus()
+    if (offset < 0) return
+    val len = text?.length ?: 0
+    val pos = offset.coerceIn(0, len)
+    setSelection(pos)
+  }
+
   fun blurInput() {
     clearFocus()
   }
@@ -486,6 +515,48 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
       putInt("pillCount", currentPillCount())
     }
     dispatchEvent("topChangeContent", payload)
+  }
+
+  private fun emitSplitRequest(offset: Int) {
+    val payload: WritableMap = Arguments.createMap().apply {
+      putString("contentJson", currentContentJson())
+      putInt("offset", offset)
+    }
+    dispatchEvent("topSplitRequest", payload)
+  }
+
+  private fun emitMergeBackwardRequest() {
+    val payload: WritableMap = Arguments.createMap().apply {
+      putString("contentJson", currentContentJson())
+    }
+    dispatchEvent("topMergeBackwardRequest", payload)
+  }
+
+  /* 块首退格无法在 TextWatcher 或 onKeyDown 里靠谱拦到（soft keyboard 走 InputConnection
+     的 deleteSurroundingText，不一定走 KEYCODE_DEL）。包一层 InputConnection wrapper，
+     在 selection={0,0} 且要删时改成发 mergeBackward 事件 + 返 false 让默认逻辑不删。 */
+  override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
+    val base = super.onCreateInputConnection(outAttrs) ?: return null
+    return object : InputConnectionWrapper(base, true) {
+      override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+        if (beforeLength > 0 && selectionStart == 0 && selectionEnd == 0) {
+          emitMergeBackwardRequest()
+          return false
+        }
+        return super.deleteSurroundingText(beforeLength, afterLength)
+      }
+      override fun sendKeyEvent(event: KeyEvent?): Boolean {
+        if (event != null
+          && event.action == KeyEvent.ACTION_DOWN
+          && event.keyCode == KeyEvent.KEYCODE_DEL
+          && selectionStart == 0
+          && selectionEnd == 0) {
+          emitMergeBackwardRequest()
+          return false
+        }
+        return super.sendKeyEvent(event)
+      }
+    }
   }
 
   private fun emitSelectionEvent(start: Int, end: Int) {

@@ -27,6 +27,13 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)flowDocInputViewDidBlur:(FlowDocInputView *)v;
 /** 内容尺寸变化（用于 JS 端做 height 自适应）。仅在 size 真变了才回调，避免抖动。 */
 - (void)flowDocInputView:(FlowDocInputView *)v didChangeContentSize:(CGSize)size;
+/** 用户按 Enter（且 enterCreatesBlock=YES）；JS 端按 offset 把 contentJson 拆成两半 */
+- (void)flowDocInputView:(FlowDocInputView *)v
+   didRequestSplitWithContentJson:(NSString *)contentJson
+                           offset:(NSInteger)offset;
+/** 用户在块首（光标 offset=0）按退格；JS 端把当前 contentJson 合并到上一块 */
+- (void)flowDocInputView:(FlowDocInputView *)v
+   didRequestMergeBackwardWithContentJson:(NSString *)contentJson;
 @end
 
 @interface FlowDocInputView : UIView
@@ -43,6 +50,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) NSString *fontFamily;  // nil / 空串 = 系统字体
 @property (nonatomic, assign) CGFloat customLineHeight;  // 0 = system default
 @property (nonatomic, assign) BOOL editable;
+/** Enter 当作"拆 block"语义：默认 YES；code 块设 NO 以保留多行 */
+@property (nonatomic, assign) BOOL enterCreatesBlock;
 
 // MARK: imperative commands
 - (void)setInitialContentJson:(NSString *)json;
@@ -58,12 +67,17 @@ NS_ASSUME_NONNULL_BEGIN
 /** 移除当前选区上对应 mark 的全部痕迹 */
 - (void)removeMark:(NSString *)mark;
 - (void)focusInput;
+/** 编程式聚焦 + 把光标摆到指定逻辑字符 offset；offset < 0 表示放末尾 */
+- (void)focusInputAtOffset:(NSInteger)offset;
 - (void)blurInput;
 
 // MARK: state introspection
 - (NSString *)currentContentJson;
 - (NSInteger)currentPillCount;
 - (NSRange)currentSelection;
+
+/** Fabric 实例复用准备：清掉所有内部状态，下次 mount 可以重新应用 initialContent */
+- (void)resetForRecycle;
 
 @end
 

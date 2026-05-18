@@ -45,6 +45,20 @@ type ContentSizeEvent = Readonly<{
   height: Double;
 }>;
 
+/** Native → JS：用户按 Enter（且 enterCreatesBlock=true）；native 已经吃掉了换行，
+ *  把当前 block 内容（contentJson）和拆点 offset 给 JS，JS 决定怎么拆 / 插新块 */
+type SplitRequestEvent = Readonly<{
+  contentJson: string;
+  /** 拆点：基于"逻辑字符数"（pill 算 1 个），= 拆完后前段长度 */
+  offset: Int32;
+}>;
+
+/** Native → JS：用户在块首（光标 offset=0）按退格；JS 端把当前 contentJson 合并到上一块。
+ *  本地 native 不删字符——JS 端做 merge + remove，再通过 remount 让 native 重读。 */
+type MergeBackwardRequestEvent = Readonly<{
+  contentJson: string;
+}>;
+
 interface NativeProps extends ViewProps {
   /** JSON 形式的初始内容，格式：
    *  [
@@ -65,12 +79,16 @@ interface NativeProps extends ViewProps {
   placeholder?: string;
   placeholderColor?: ColorValue;
   editable?: WithDefault<boolean, true>;
+  /** Enter 是否当作"拆 block"语义：默认 true（paragraph/heading 等），code 块设 false */
+  enterCreatesBlock?: WithDefault<boolean, true>;
   onChangeContent?: BubblingEventHandler<ChangeContentEvent>;
   onChangeSelection?: BubblingEventHandler<ChangeSelectionEvent>;
   onPillPress?: BubblingEventHandler<PillPressEvent>;
   onFocusNative?: BubblingEventHandler<Readonly<{}>>;
   onBlurNative?: BubblingEventHandler<Readonly<{}>>;
   onContentSizeChange?: BubblingEventHandler<ContentSizeEvent>;
+  onSplitRequest?: BubblingEventHandler<SplitRequestEvent>;
+  onMergeBackwardRequest?: BubblingEventHandler<MergeBackwardRequestEvent>;
 }
 
 type FlowDocInputViewType = HostComponent<NativeProps>;
@@ -109,6 +127,12 @@ interface NativeCommands {
   ) => void;
   /** 编程式聚焦 */
   focus: (viewRef: React.ElementRef<FlowDocInputViewType>) => void;
+  /** 编程式聚焦 + 把 cursor 摆到指定逻辑字符 offset（pill 算 1 个字符）。
+   *  offset < 0 等同于 focus()（cursor 跑末尾，iOS 默认行为） */
+  focusAtOffset: (
+    viewRef: React.ElementRef<FlowDocInputViewType>,
+    offset: Int32,
+  ) => void;
   /** 编程式失焦 */
   blur: (viewRef: React.ElementRef<FlowDocInputViewType>) => void;
 }
@@ -121,6 +145,7 @@ export const Commands: NativeCommands = codegenNativeCommands<NativeCommands>({
     'applyMark',
     'removeMark',
     'focus',
+    'focusAtOffset',
     'blur',
   ],
 });

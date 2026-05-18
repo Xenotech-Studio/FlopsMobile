@@ -20,6 +20,16 @@ using namespace facebook::react;
   return concreteComponentDescriptorProvider<FlowDocInputViewComponentDescriptor>();
 }
 
+/* Fabric 把 host component 实例回池时调用。下次它被分配给新 React 节点前，
+   清空 inputView 内部状态 + 把 _props 重置成 defaultProps，让后续 updateProps
+   把 initialContent / fontSize 等 prop 视为"变化"重新应用。 */
+- (void)prepareForRecycle {
+  [super prepareForRecycle];
+  [_inputView resetForRecycle];
+  static const auto defaultProps = std::make_shared<const FlowDocInputViewProps>();
+  _props = defaultProps;
+}
+
 - (instancetype)initWithFrame:(CGRect)frame {
   if ((self = [super initWithFrame:frame])) {
     static const auto defaultProps = std::make_shared<const FlowDocInputViewProps>();
@@ -76,6 +86,9 @@ using namespace facebook::react;
   if (oldViewProps.editable != newViewProps.editable) {
     [_inputView setEditable:newViewProps.editable];
   }
+  if (oldViewProps.enterCreatesBlock != newViewProps.enterCreatesBlock) {
+    [_inputView setEnterCreatesBlock:newViewProps.enterCreatesBlock];
+  }
 
   [super updateProps:props oldProps:oldProps];
 }
@@ -107,6 +120,10 @@ using namespace facebook::react;
 
 - (void)focus {
   [_inputView focusInput];
+}
+
+- (void)focusAtOffset:(NSInteger)offset {
+  [_inputView focusInputAtOffset:offset];
 }
 
 - (void)blur {
@@ -170,6 +187,28 @@ using namespace facebook::react;
     eventEmitter->onContentSizeChange({
         .width = static_cast<double>(size.width),
         .height = static_cast<double>(size.height),
+    });
+  }
+}
+
+- (void)flowDocInputView:(FlowDocInputView *)v
+   didRequestSplitWithContentJson:(NSString *)contentJson
+                           offset:(NSInteger)offset {
+  if (auto eventEmitter =
+          std::static_pointer_cast<const FlowDocInputViewEventEmitter>(_eventEmitter)) {
+    eventEmitter->onSplitRequest({
+        .contentJson = std::string([contentJson UTF8String]),
+        .offset = static_cast<int>(offset),
+    });
+  }
+}
+
+- (void)flowDocInputView:(FlowDocInputView *)v
+   didRequestMergeBackwardWithContentJson:(NSString *)contentJson {
+  if (auto eventEmitter =
+          std::static_pointer_cast<const FlowDocInputViewEventEmitter>(_eventEmitter)) {
+    eventEmitter->onMergeBackwardRequest({
+        .contentJson = std::string([contentJson UTF8String]),
     });
   }
 }

@@ -1,6 +1,25 @@
 #import "FlowDocInputView.h"
 #import "RefPillAttachment.h"
 
+/* UITextView 子类，专门用来 override -deleteBackward。
+   iOS 系统在 textView 偏移 0 处按退格时 *不会* 触发 shouldChangeTextInRange:replacementText:
+   （因为没有"左边的字符"可以删），所以无法在那里拦。-deleteBackward 是 UITextInput 协议方法，
+   不管偏移位置都被调用，是块首退格的唯一可靠 hook。 */
+@interface FlowDocInputTextView : UITextView
+@property (nonatomic, copy, nullable) BOOL (^onDeleteBackwardAtStart)(void);
+@end
+
+@implementation FlowDocInputTextView
+- (void)deleteBackward {
+  NSRange sel = self.selectedRange;
+  if (sel.location == 0 && sel.length == 0 && self.onDeleteBackwardAtStart) {
+    BOOL consumed = self.onDeleteBackwardAtStart();
+    if (consumed) return;
+  }
+  [super deleteBackward];
+}
+@end
+
 @interface FlowDocInputView () <UITextViewDelegate>
 @property (nonatomic, strong) UITextView *textView;
 @property (nonatomic, strong) UILabel *placeholderLabel;
@@ -18,12 +37,24 @@
     _fontSize = 16.0;
     _customLineHeight = 0;
     _editable = YES;
+    _enterCreatesBlock = YES;
     _textColor = [UIColor labelColor];
     _placeholderColor = [UIColor placeholderTextColor];
     _pillBackgroundColor = [UIColor colorWithWhite:0.92 alpha:1.0];
     _pillTextColor = [UIColor colorWithWhite:0.35 alpha:1.0];
 
-    _textView = [[UITextView alloc] initWithFrame:self.bounds];
+    _textView = [[FlowDocInputTextView alloc] initWithFrame:self.bounds];
+    __weak __typeof(self) weakSelf = self;
+    ((FlowDocInputTextView *)_textView).onDeleteBackwardAtStart = ^BOOL{
+      __strong __typeof(weakSelf) strong = weakSelf;
+      if (!strong) return NO;
+      if ([strong.delegate respondsToSelector:@selector(flowDocInputView:didRequestMergeBackwardWithContentJson:)]) {
+        [strong.delegate flowDocInputView:strong
+            didRequestMergeBackwardWithContentJson:[strong currentContentJson]];
+        return YES;  // 由 JS 端处理合并，本地不删
+      }
+      return NO;
+    };
     /* iOS 16+ UITextView 默认 TextKit 2，对 NSObliquenessAttributeName 等 legacy
        attribute 处理不一致；访问 .layoutManager 一次会触发 fallback 到 TextKit 1，
        让所有 NSAttributedString attribute 都按经典语义生效。这是官方文档的
@@ -391,8 +422,45 @@
   }
 }
 
+- (void)resetForRecycle {
+  /* Fabric 把 ComponentView 实例放回池子时调；下次它被分配给一个"新"的 React 节点前，
+     必须把 inputView 内部 *标志位* 清空（initialContentApplied 等），否则
+     setInitialContent 会被跳过、新内容显示不出来。
+     同时所有 styling state 也得跟 codegen 的 defaultProps 对齐——否则 updateProps 用
+     "old == new" 判断时跳过 setter，inputView 真实状态还停在上次 mount 的值上，导致
+     字号 / 颜色 / 字体族错位。
+     注意：故意 *不* 清 textStorage——清空会让 UITextView 在被复用挂载的下一帧短暂
+     呈现"空"状态（旧节点已 unmount → 新节点的 setInitialContent 还没落到这一帧上），
+     视觉上就是后半段"闪一下"。保留旧内容则用户最多看到一瞬间的"旧文本"，
+     当 setInitialContent 应用之后会被新内容覆盖，体感比闪更轻。 */
+  self.initialContentApplied = NO;
+  _lastReportedContentSize = CGSizeZero;
+
+  // 跟 spec 里 `WithDefault<Double, 16>` 等保持一致
+  self.fontSize = 16.0;
+  self.fontFamily = nil;
+  self.customLineHeight = 0;
+  self.textColor = [UIColor labelColor];
+  self.placeholderColor = [UIColor placeholderTextColor];
+  self.pillBackgroundColor = [UIColor colorWithWhite:0.92 alpha:1.0];
+  self.pillTextColor = [UIColor colorWithWhite:0.35 alpha:1.0];
+  self.placeholder = nil;
+  self.editable = YES;
+  self.enterCreatesBlock = YES;
+
+  self.textView.selectedRange = NSMakeRange(0, 0);
+}
+
 - (void)focusInput {
   [self.textView becomeFirstResponder];
+}
+
+- (void)focusInputAtOffset:(NSInteger)offset {
+  [self.textView becomeFirstResponder];
+  if (offset < 0) return;
+  NSUInteger len = self.textView.textStorage.length;
+  NSUInteger pos = (NSUInteger)MAX((NSInteger)0, MIN((NSInteger)len, offset));
+  self.textView.selectedRange = NSMakeRange(pos, 0);
 }
 
 - (void)blurInput {
@@ -613,10 +681,21 @@
 }
 
 /* attachment 自带的 U+FFFC 字符可以被普通 backspace 干掉（删 char = 删 attachment），
-   不需要特殊拦截。IME composition × pill 边界的问题先放着，等真测到再特化。 */
+   不需要特殊拦截。IME composition × pill 边界的问题先放着，等真测到再特化。
+
+   只拦 Enter：如果 enterCreatesBlock=YES，把 "\n" 转成 onSplitRequest 事件，
+   让上层 JS 拆 block；本地不真插换行。 */
 - (BOOL)textView:(UITextView *)textView
 shouldChangeTextInRange:(NSRange)range
  replacementText:(NSString *)text {
+  if (self.enterCreatesBlock && [text isEqualToString:@"\n"]) {
+    if ([self.delegate respondsToSelector:@selector(flowDocInputView:didRequestSplitWithContentJson:offset:)]) {
+      [self.delegate flowDocInputView:self
+        didRequestSplitWithContentJson:[self currentContentJson]
+                                offset:(NSInteger)range.location];
+    }
+    return NO;
+  }
   return YES;
 }
 

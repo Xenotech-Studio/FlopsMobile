@@ -82,6 +82,11 @@ class FlowDocInputViewManager : SimpleViewManager<FlowDocInputView>(),
     view.setEditableInput(value)
   }
 
+  @ReactProp(name = "enterCreatesBlock", defaultBoolean = true)
+  override fun setEnterCreatesBlock(view: FlowDocInputView, value: Boolean) {
+    view.enterCreatesBlock = value
+  }
+
   // MARK: - Commands (codegen interface methods)
 
   override fun insertPill(
@@ -112,6 +117,10 @@ class FlowDocInputViewManager : SimpleViewManager<FlowDocInputView>(),
 
   override fun focus(view: FlowDocInputView) {
     view.focusInput()
+  }
+
+  override fun focusAtOffset(view: FlowDocInputView, offset: Int) {
+    view.focusInputAtOffset(offset)
   }
 
   override fun blur(view: FlowDocInputView) {

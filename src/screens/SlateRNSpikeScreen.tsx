@@ -18,9 +18,12 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import {
   FlowDocSlateAdapter,
   FlowDocBlocks,
+  documentToMarkdown,
   type FlowDocInputHandle,
   type SlateDocument,
   type FlowDocDocument,
+  type FlowDocBlocksHandle,
+  type FlowDocConvertibleBlockType,
 } from '../flowdoc-native-input';
 import type { Descendant } from 'slate';
 import { useAppTheme } from '../context/ThemeContext';
@@ -109,10 +112,111 @@ const VIEWER_DOCUMENT: FlowDocDocument = [
     children: [{ text: 'function hello() {\n  return "world";\n}' }],
   },
   { type: 'divider', children: [{ text: '' }] },
+  { type: 'heading-three', children: [{ text: '列表演示' }] },
+  {
+    type: 'bulletlistblock',
+    children: [{ text: '第一个无序项' }],
+  } as unknown as FlowDocDocument[number],
+  {
+    type: 'bulletlistblock',
+    children: [
+      { text: '第二项带' },
+      { text: '加粗', bold: true } as unknown as Descendant,
+      { text: '与' },
+      {
+        type: 'ref-pill',
+        refKey: 'demo:list1',
+        mention: '@嵌入式 pill',
+        title: '嵌入式 pill',
+        isPointer: true,
+        children: [{ text: '' }],
+      } as unknown as Descendant,
+      // 嵌套子项（同级一个 bulletlistblock 当 children 里的 nested 块）
+      {
+        type: 'bulletlistblock',
+        children: [{ text: '嵌套子项 a（depth=1，圆圈）' }],
+      } as unknown as Descendant,
+      {
+        type: 'bulletlistblock',
+        children: [
+          { text: '嵌套子项 b' },
+          {
+            type: 'bulletlistblock',
+            children: [{ text: '更深一层（depth=2，又实心）' }],
+          } as unknown as Descendant,
+        ],
+      } as unknown as Descendant,
+    ],
+  } as unknown as FlowDocDocument[number],
+  {
+    type: 'bulletlistblock',
+    children: [{ text: '第三个无序项（顶层）' }],
+  } as unknown as FlowDocDocument[number],
+  {
+    type: 'numberedlistblock',
+    order_in_list: 1,
+    children: [{ text: '编号项 1（顶层 → decimal）' }],
+  } as unknown as FlowDocDocument[number],
+  {
+    type: 'numberedlistblock',
+    order_in_list: 2,
+    children: [
+      { text: '编号项 2，嵌套子项走 lower-alpha：' },
+      {
+        type: 'numberedlistblock',
+        order_in_list: 1,
+        children: [{ text: '子 a' }],
+      } as unknown as Descendant,
+      {
+        type: 'numberedlistblock',
+        order_in_list: 2,
+        children: [
+          { text: '子 b，更深一层走 lower-roman：' },
+          {
+            type: 'numberedlistblock',
+            order_in_list: 1,
+            children: [{ text: '孙 i' }],
+          } as unknown as Descendant,
+          {
+            type: 'numberedlistblock',
+            order_in_list: 2,
+            children: [{ text: '孙 ii' }],
+          } as unknown as Descendant,
+        ],
+      } as unknown as Descendant,
+    ],
+  } as unknown as FlowDocDocument[number],
+  {
+    type: 'numberedlistblock',
+    order_in_list: 3,
+    children: [{ text: '编号项 3' }],
+  } as unknown as FlowDocDocument[number],
   {
     type: 'paragraph',
     children: [{ text: '分割线之后是收尾段。' }],
   },
+  { type: 'heading-three', children: [{ text: '图片 / 附件演示' }] },
+  {
+    type: 'image',
+    url: 'https://picsum.photos/640/360',
+    alt: '随机示例图',
+    width: 640,
+    height: 360,
+    children: [{ text: '' }],
+  } as unknown as FlowDocDocument[number],
+  {
+    type: 'file_attachment',
+    url: 'https://example.com/demo.pdf',
+    filename: '示例附件.pdf',
+    size: 524288,
+    children: [{ text: '' }],
+  } as unknown as FlowDocDocument[number],
+  {
+    type: 'file_attachment',
+    filename: '没有 url 的附件示意.zip',
+    size: 12 * 1024 * 1024,
+    children: [{ text: '' }],
+  } as unknown as FlowDocDocument[number],
 ];
 
 export function SlateRNSpikeScreen() {
@@ -121,8 +225,18 @@ export function SlateRNSpikeScreen() {
   const { colors } = useAppTheme();
   const styles = createStyles(colors);
   const editorRef = useRef<FlowDocInputHandle | null>(null);
+  const blocksRef = useRef<FlowDocBlocksHandle | null>(null);
   const [pillCount, setPillCount] = useState(0);
   const [lastJsonPreview, setLastJsonPreview] = useState<string>('(尚未改动)');
+  /* FlowDocBlocks viewer/editor 切换 + 当前 doc 状态 */
+  const [viewerEditable, setViewerEditable] = useState(false);
+  const [viewerDoc, setViewerDoc] = useState<FlowDocDocument>(VIEWER_DOCUMENT);
+  /* 底部工具栏当前操作目标：'top'=独立 FlowDocInput（adapter），'blocks'=FlowDocBlocks focused block */
+  const toolbarTarget: 'top' | 'blocks' = viewerEditable ? 'blocks' : 'top';
+  const applyMarkOnCurrent = (mark: 'bold' | 'italic' | 'code' | 'color', value?: string) => {
+    if (toolbarTarget === 'blocks') blocksRef.current?.applyMark(mark, value);
+    else editorRef.current?.applyMark(mark, value);
+  };
 
   const handleInsertPill = () => {
     const n = pillCount + 1;
@@ -173,21 +287,46 @@ export function SlateRNSpikeScreen() {
           />
         </View>
 
-        <View style={styles.debugBox}>
-          <Text style={styles.debugLabel}>Slate children（最近一次 onChange）:</Text>
-          <Text style={styles.debugJson} selectable>
-            {lastJsonPreview}
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 18 }}>
+          <Text style={[styles.label, { marginTop: 0, flex: 1 }]}>
+            FlowDocBlocks（{viewerEditable ? 'edit' : 'read-only'}）
           </Text>
+          <TouchableOpacity
+            style={[styles.toggleBtn, { marginRight: 6 }]}
+            onPress={() => setLastJsonPreview(`markdown:\n${documentToMarkdown(viewerDoc)}`)}
+          >
+            <Text style={styles.toggleBtnText}>→md</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.toggleBtn}
+            onPress={() => setViewerEditable((v) => !v)}
+          >
+            <Text style={styles.toggleBtnText}>
+              {viewerEditable ? '切到 read-only' : '切到 edit'}
+            </Text>
+          </TouchableOpacity>
         </View>
-
-        <Text style={[styles.label, { marginTop: 18 }]}>FlowDocBlocks（read-only 文档渲染）</Text>
         <View style={styles.viewerContainer}>
           <FlowDocBlocks
-            document={VIEWER_DOCUMENT}
+            ref={blocksRef}
+            document={viewerDoc}
+            editable={viewerEditable}
+            onChange={(next) => {
+              setViewerDoc(next);
+              setLastJsonPreview(`onChange doc:\n${JSON.stringify(next, null, 2)}`);
+            }}
             onPillPress={(refKey) => {
               setLastJsonPreview(`pill clicked: ${refKey}`);
             }}
           />
+        </View>
+
+        {/* debug JSON 放最后；上面任何操作都不会撑动文档区滚动位置 */}
+        <View style={[styles.debugBox, { marginTop: 18 }]}>
+          <Text style={styles.debugLabel}>Slate children（最近一次 onChange）:</Text>
+          <Text style={styles.debugJson} selectable>
+            {lastJsonPreview}
+          </Text>
         </View>
       </ScrollView>
 
@@ -200,29 +339,56 @@ export function SlateRNSpikeScreen() {
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.btn}
-          onPress={() => editorRef.current?.applyMark('bold')}
+          onPress={() => applyMarkOnCurrent('bold')}
         >
           <Text style={[styles.btnText, { fontWeight: '700' }]}>B</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.btn}
-          onPress={() => editorRef.current?.applyMark('italic')}
+          onPress={() => applyMarkOnCurrent('italic')}
         >
           <Text style={[styles.btnText, { fontStyle: 'italic' }]}>I</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.btn}
-          onPress={() => editorRef.current?.applyMark('code')}
+          onPress={() => applyMarkOnCurrent('code')}
         >
           <Text style={[styles.btnText, { fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }]}>{'</>'}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.btn}
-          onPress={() => editorRef.current?.applyMark('color', '#EF4444')}
+          onPress={() => applyMarkOnCurrent('color', '#EF4444')}
         >
           <Text style={[styles.btnText, { color: '#EF4444' }]}>红</Text>
         </TouchableOpacity>
       </View>
+      {viewerEditable ? (
+        <View style={styles.bottomBar}>
+          {(['paragraph', 'heading-two', 'heading-three', 'quote', 'code', 'bulletlistblock', 'numberedlistblock'] as FlowDocConvertibleBlockType[]).map((t) => (
+            <TouchableOpacity
+              key={t}
+              style={styles.btn}
+              onPress={() => blocksRef.current?.changeBlockType(t)}
+            >
+              <Text style={styles.btnText}>{
+                t === 'paragraph' ? 'P'
+                  : t === 'heading-two' ? 'H2'
+                  : t === 'heading-three' ? 'H3'
+                  : t === 'quote' ? '"'
+                  : t === 'code' ? 'Code'
+                  : t === 'bulletlistblock' ? '•'
+                  : '1.'
+              }</Text>
+            </TouchableOpacity>
+          ))}
+          <TouchableOpacity
+            style={styles.btn}
+            onPress={() => blocksRef.current?.insertBlockAfter('paragraph')}
+          >
+            <Text style={styles.btnText}>+blk</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -266,6 +432,16 @@ function createStyles(c: AppColors) {
       borderColor: c.borderMuted,
       borderRadius: 8,
       padding: 12,
+    },
+    toggleBtn: {
+      paddingVertical: 4,
+      paddingHorizontal: 10,
+      borderRadius: 4,
+      backgroundColor: c.surfaceMuted,
+    },
+    toggleBtnText: {
+      fontSize: 11,
+      color: c.textPrimary,
     },
     debugBox: {
       marginTop: 16,

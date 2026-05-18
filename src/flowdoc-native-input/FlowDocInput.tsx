@@ -55,6 +55,8 @@ export type FlowDocInputHandle = {
   applyMark: (mark: FlowDocMarkName, value?: string) => void;
   removeMark: (mark: FlowDocMarkName) => void;
   focus: () => void;
+  /** 聚焦并把光标放到指定逻辑字符 offset（pill 算 1 个字符）；offset<0 表示放末尾 */
+  focusAtOffset: (offset: number) => void;
   blur: () => void;
 };
 
@@ -73,12 +75,18 @@ export type FlowDocInputProps = {
   placeholder?: string;
   placeholderColor?: string;
   editable?: boolean;
+  /** Enter 拆 block 语义：默认 true。code 块设 false 以保留多行 */
+  enterCreatesBlock?: boolean;
   style?: ViewStyle;
   onChangeContent?: (content: FlowDocContent, pillCount: number) => void;
   onChangeSelection?: (start: number, end: number) => void;
   onPillPress?: (refKey: string) => void;
   onFocus?: () => void;
   onBlur?: () => void;
+  /** 用户按 Enter（且 enterCreatesBlock=true）：参数是当前 block 拆点前的内容 + 拆点 offset */
+  onSplitRequest?: (content: FlowDocContent, offset: number) => void;
+  /** 用户在块首按退格：caller 把 content 合并到上一块、然后删除本块 */
+  onMergeBackwardRequest?: (content: FlowDocContent) => void;
 };
 
 function safeParseContent(json: string): FlowDocContent {
@@ -129,6 +137,10 @@ export const FlowDocInput = forwardRef(
         if (!nativeRef.current) return;
         NativeCommands.focus(nativeRef.current);
       },
+      focusAtOffset: (offset) => {
+        if (!nativeRef.current) return;
+        NativeCommands.focusAtOffset(nativeRef.current, offset);
+      },
       blur: () => {
         if (!nativeRef.current) return;
         NativeCommands.blur(nativeRef.current);
@@ -165,6 +177,22 @@ export const FlowDocInput = forwardRef(
       props.onBlur?.();
     }, [props.onBlur]);
 
+    const handleSplitRequest = useCallback(
+      (e: NativeSyntheticEvent<{ contentJson: string; offset: number }>) => {
+        const content = safeParseContent(e.nativeEvent.contentJson);
+        props.onSplitRequest?.(content, e.nativeEvent.offset);
+      },
+      [props.onSplitRequest],
+    );
+
+    const handleMergeBackwardRequest = useCallback(
+      (e: NativeSyntheticEvent<{ contentJson: string }>) => {
+        const content = safeParseContent(e.nativeEvent.contentJson);
+        props.onMergeBackwardRequest?.(content);
+      },
+      [props.onMergeBackwardRequest],
+    );
+
     const handleContentSize = useCallback(
       (e: NativeSyntheticEvent<{ width: number; height: number }>) => {
         const h = e.nativeEvent.height;
@@ -192,7 +220,10 @@ export const FlowDocInput = forwardRef(
         placeholder={props.placeholder}
         placeholderColor={props.placeholderColor}
         editable={props.editable}
+        enterCreatesBlock={props.enterCreatesBlock}
         onChangeContent={handleContent}
+        onSplitRequest={handleSplitRequest}
+        onMergeBackwardRequest={handleMergeBackwardRequest}
         onChangeSelection={handleSelection}
         onPillPress={handlePillPress}
         onFocusNative={handleFocus}

@@ -12,4 +12,7 @@ export {
   type FlowDocBlock,
   type FlowDocDocument,
   type FlowDocBlocksProps,
+  type FlowDocBlocksHandle,
+  type FlowDocConvertibleBlockType,
 } from './FlowDocBlocks';
+export { documentToMarkdown, markdownToDocument } from './markdown';
