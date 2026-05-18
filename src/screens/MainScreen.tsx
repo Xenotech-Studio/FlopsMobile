@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { ConversationListScreen } from './ConversationListScreen';
 import { TasksNavigator } from './TasksNavigator';
-import { DocsNavigator } from './DocsNavigator';
+import { DocsHomeScreen } from './DocsHomeScreen';
 import type { MainTabParamList } from '../navigation/types';
 import { useAppTheme } from '../context/ThemeContext';
 
@@ -90,7 +90,7 @@ export function MainScreen() {
       />
       <Tab.Screen
         name="Docs"
-        component={DocsNavigator}
+        component={DocsHomeScreen}
         options={{
           headerShown: false,
           title: 'Docs',

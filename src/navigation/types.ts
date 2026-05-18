@@ -22,12 +22,6 @@ export type MainTabParamList = {
   Docs: undefined;
 };
 
-/** Docs 标签页内栈：列表 → 单文档查看 */
-export type DocsStackParamList = {
-  DocsList: undefined;
-  DocViewer: { docId: string; docName?: string };
-};
-
 /** Tasks 标签页内栈：今日 -> 项目列表(左滑入) -> 项目详情 -> 任务详情；今日左下角可进日历 */
 /** 今日首页新建：无无序区时传 unorganized；有无序区时在 sheet 里选 */
 export type TaskCreatePlacement =
