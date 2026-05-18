@@ -74,6 +74,10 @@ interface NativeProps extends ViewProps {
   fontSize?: WithDefault<Double, 16>;
   /** 字体行高（pt）。<=0 使用系统默认（fontSize × 1.2 左右） */
   lineHeight?: WithDefault<Double, 0>;
+  /** Pill 视觉截短上限（iOS pt / Android dp）。pill 内 "icon + 两空格 + label" 的渲染
+   *  宽度超过这个上限就在 label 尾部换 "…"。仅影响视觉，不动 mention_text 数据。
+   *  设 <=0 视为关闭视觉截短（按文本自然宽渲染）。 */
+  pillMaxLabelTextWidth?: WithDefault<Double, 140>;
   /** 字体族（如 "Menlo" 代表 code 块）。空字符串 / 缺省 = 系统字体 */
   fontFamily?: WithDefault<string, ''>;
   placeholder?: string;

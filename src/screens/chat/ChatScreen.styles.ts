@@ -745,16 +745,99 @@ export function createChatStyles(c: AppColors) {
     overflow: 'hidden',
   },
   sendBtnStop: { backgroundColor: c.danger },
-  /** 左侧 "+" 引用按钮：尺寸跟 sendBtn 接近，但底色用 surface 弱化（不抢戏） */
-  composerAttachBtn: {
-    width: CHAT_COMPOSER_SEND_BTN_SIZE,
-    height: CHAT_COMPOSER_SEND_BTN_SIZE,
-    borderRadius: CHAT_COMPOSER_SEND_BTN_SIZE / 2,
-    backgroundColor: c.surface,
+  /* ============================================================
+   * composer 重设计：发送靠键盘 Return（无 send 按钮）；+ 内嵌
+   *   - short：胶囊单行 [+ icon] [input]，仍走 inputRowInOverlay 的 padding
+   *   - tall：圆角卡片两行，[input full-width] / [+ icon 单独一行]，模型 chips 仍在底部 absolute meta row
+   * ============================================================ */
+  composerCardShort: {
+    position: 'relative',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: c.inputBg,
+    borderRadius: CHAT_COMPOSER_CONTROL_SIZE / 2,
+    minHeight: CHAT_COMPOSER_CONTROL_SIZE,
+    marginHorizontal: COMPOSER_ROW_PADDING_H,
+    marginTop: 12,
+    marginBottom: 26,
+    paddingHorizontal: 8,
+    /** iOS 微阴影 + Android 描边，跟原 composerInput 视觉对齐 */
+    ...(Platform.OS === 'ios'
+      ? {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 0 },
+          shadowOpacity: 0.07,
+          shadowRadius: 14,
+        }
+      : Platform.OS === 'android'
+        ? androidCircleFabOutline(c)
+        : {}),
+  },
+  composerCardTall: {
+    position: 'relative',
+    flexDirection: 'column',
+    backgroundColor: c.inputBg,
+    /** 与 short 胶囊两端的半圆同半径，视觉一致 */
+    borderRadius: CHAT_COMPOSER_CONTROL_SIZE / 2,
+    marginHorizontal: COMPOSER_ROW_PADDING_H,
+    marginTop: 12,
+    marginBottom: 12,
+    paddingTop: 10,
+    paddingBottom: 4,
+    /** 左右 padding 跟 short 一样小，让 + 不会比单行模式更靠右 */
+    paddingHorizontal: 8,
+    ...(Platform.OS === 'ios'
+      ? {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 0 },
+          shadowOpacity: 0.07,
+          shadowRadius: 14,
+        }
+      : Platform.OS === 'android'
+        ? androidCircleFabOutline(c)
+        : {}),
+  },
+  composerInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  composerInputShort: {
+    flex: 1,
+    paddingHorizontal: 8,
+    paddingVertical: Platform.OS === 'ios' ? 8 : 4,
+    minHeight: CHAT_COMPOSER_CONTROL_SIZE - 12,
+  },
+  composerInputTall: {
+    /* tall 模式下输入区填满卡片宽度；高度由 native autoHeight 决定 */
+    minHeight: CHAT_COMPOSER_CONTROL_SIZE - 8,
+    paddingHorizontal: 12,
+  },
+  composerTallActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    marginTop: 4,
+    /** 不再加 padding：+ 直接对齐 card 的左 padding（8pt），跟 short 一致 */
+    paddingHorizontal: 0,
+    gap: 10,
+  },
+  /** Tall 模式下右侧 chips 区域（model / agent） */
+  composerTallChips: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'nowrap',
+    gap: 10,
+  },
+  /** 内嵌的 + / ⏹ 圆钮：尺寸比 sendBtn 小一圈，不显眼 */
+  composerInlineBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: c.borderMuted,
   },
   });
 }

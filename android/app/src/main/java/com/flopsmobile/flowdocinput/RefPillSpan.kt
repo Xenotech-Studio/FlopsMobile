@@ -33,6 +33,14 @@ class RefPillSpan(
 
   private val pillFont: Typeface = Typeface.DEFAULT
 
+  /**
+   * 视觉截短：pill 内"icon + 两空格 + label"的渲染宽度上限（px）。超出就在 label 末尾换 "…"。
+   * 只动显示文本，不动 mention / refKey；ReplacementSpan 占位字符始终是 1 个 U+FFFC，
+   * round-trip 不破。
+   * caller（FlowDocInputView）按 density 把 dp 值转 px 再赋值，跟 iOS 的 220pt 视觉等价。
+   */
+  var maxLabelTextWidthPx: Float = 220f
+
   /** 显示文本：mention 去掉首字符 "@"；fallback title */
   private fun displayLabel(): String {
     val m = mention
@@ -40,7 +48,35 @@ class RefPillSpan(
     return if (stripped.isNotEmpty()) stripped else title
   }
 
-  private fun composedText(): String = "📄  ${displayLabel()}"
+  /** label 按 paint 测自然宽，超 budget 就尾部换 "…"。emoji 用 codepoint 边界切，不会切代理对中间 */
+  private fun truncateLabelToBudget(label: String, p: Paint, budget: Float): String {
+    if (p.measureText(label) <= budget) return label
+    val ellipsis = "…"
+    val ellipsisW = p.measureText(ellipsis)
+    val shrinkTo = (budget - ellipsisW).coerceAtLeast(0f)
+    val sb = StringBuilder()
+    var accW = 0f
+    var i = 0
+    while (i < label.length) {
+      val cp = label.codePointAt(i)
+      val ch = String(Character.toChars(cp))
+      val w = p.measureText(ch)
+      if (accW + w > shrinkTo) break
+      sb.append(ch)
+      accW += w
+      i += Character.charCount(cp)
+    }
+    sb.append(ellipsis)
+    return sb.toString()
+  }
+
+  private fun composedText(p: Paint): String {
+    val prefix = "📄  "
+    val prefixW = p.measureText(prefix)
+    val budget = (maxLabelTextWidthPx - prefixW).coerceAtLeast(20f)
+    val label = truncateLabelToBudget(displayLabel(), p, budget)
+    return prefix + label
+  }
 
   override fun getSize(
     paint: Paint,
@@ -53,7 +89,7 @@ class RefPillSpan(
       typeface = pillFont
       textSize = pillFontSize
     }
-    val textWidth = p.measureText(composedText())
+    val textWidth = p.measureText(composedText(p))
     val pillFm = p.fontMetricsInt
     val pillHeight = (pillFm.descent - pillFm.ascent) + paddingV.toInt() * 2
 
@@ -85,7 +121,7 @@ class RefPillSpan(
       typeface = pillFont
       textSize = pillFontSize
     }
-    val display = composedText()
+    val display = composedText(p)
     val textWidth = p.measureText(display)
     val pillFm = p.fontMetricsInt
     val textHeight = pillFm.descent - pillFm.ascent

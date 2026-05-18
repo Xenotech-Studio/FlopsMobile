@@ -760,20 +760,37 @@ export function ChatScreen() {
     setAgentPickerOpen(false);
   }, []);
 
-  /** 主 composer 是否有可发送内容：任一段有非空文本，或任一段含 pill */
-  const composerHasContent = useMemo(() => {
+  /** 主 composer 状态：可发送 / 是否含 pill / 文本总长度。
+   *  发送靠键盘 Return，没有发送按钮；这些 flags 给布局切换用。 */
+  const composerStats = useMemo(() => {
+    let hasContent = false;
+    let hasPill = false;
+    let textLen = 0;
     for (const para of composerDoc) {
       for (const node of para.children) {
         const anyN = node as Record<string, unknown>;
-        if (anyN.type === 'ref-pill') return true;
-        if (typeof anyN.text === 'string' && anyN.text.trim().length > 0) return true;
+        if (anyN.type === 'ref-pill') {
+          hasPill = true;
+          hasContent = true;
+          continue;
+        }
+        if (typeof anyN.text === 'string') {
+          textLen += anyN.text.length;
+          if (anyN.text.trim().length > 0) hasContent = true;
+        }
       }
     }
-    return false;
+    return { hasContent, hasPill, textLen };
   }, [composerDoc]);
 
+  /** 切两行布局：有 pill / 多段 / 文本长度过 24。介乎"严格"和"宽松"之间的折中。 */
+  const composerTall =
+    composerStats.hasPill ||
+    composerDoc.length > 1 ||
+    composerStats.textLen > 24;
+
   const canSend = Boolean(
-    session && composerHasContent && !loading && !conversationHistoryLoading
+    session && composerStats.hasContent && !loading && !conversationHistoryLoading
   );
 
   const runV2WithHandlers = useCallback(
@@ -1134,7 +1151,7 @@ export function ChatScreen() {
   );
 
   const handleSendMessage = useCallback(async () => {
-    if (!session || !composerHasContent || loading || conversationHistoryLoading) return;
+    if (!session || !composerStats.hasContent || loading || conversationHistoryLoading) return;
     /* 序列化 composerDoc → content（pill 还原为 mention_text）+ flops_refs（按 pill 出现顺序） */
     const { content: rawContent, flops_refs } = serializeSlateDocumentToUserMessage(
       composerDoc,
@@ -1272,7 +1289,7 @@ export function ChatScreen() {
     session,
     conversationId,
     composerDoc,
-    composerHasContent,
+    composerStats.hasContent,
     loading,
     conversationHistoryLoading,
     runV2WithHandlers,
@@ -2734,138 +2751,174 @@ export function ChatScreen() {
               accessibilityLabel="滚动到对话底部"
             />
             <View style={styles.bottomOverlayInner} pointerEvents="box-none">
-              <View style={styles.inputRowInOverlay} pointerEvents="box-none">
-                <TouchableOpacity
-                  style={styles.composerAttachBtn}
-                  onPress={() => setComposerPickerOpen(true)}
-                  disabled={loading || conversationHistoryLoading}
-                  accessibilityLabel="引用 FlowDoc 文档"
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="add" size={22} color={colors.textSecondary} />
-                </TouchableOpacity>
-                <View style={styles.composerInput}>
-                  <FlowDocSlateAdapter
-                    key={composerRemountKey}
-                    ref={composerAdapterRef}
-                    initialDocument={composerDoc}
-                    onChange={setComposerDoc}
-                    placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
-                    placeholderColor={colors.placeholder}
-                    textColor={colors.textPrimary}
-                    pillBackgroundColor={colors.surfaceMuted}
-                    pillTextColor={colors.textMuted}
-                    fontSize={16}
-                    editable={!loading && !conversationHistoryLoading}
-                  />
-                </View>
-                <Pressable
-                  style={[styles.sendBtn, loading && styles.sendBtnStop]}
-                  onPress={loading ? handleStop : handleSendMessage}
-                  disabled={!loading && !canSend}
-                >
-                  {loading ? (
-                    <Ionicons name="stop" size={22} color={colors.onPrimary} />
-                  ) : (
+              {/* 输入区。short 模式：圆角胶囊一行，+ 内嵌左侧 + 输入填满；模型 / 助手 chips
+                  走绝对定位的 meta row 贴在 composer 下面留白里。
+                  tall 模式：圆角卡片两行，上面纯输入区，下面一行 [+ 按钮][model][agent]
+                  全部 inline 在卡片底部 — 不再走绝对 meta row（避免位置错位）。
+                  发送统一靠键盘 Return（FlowDocSlateAdapter.onSubmitOnEnter） — 没有发送按钮。
+                  loading 时把 + 换成 ⏹ 停止键。 */}
+              {(() => {
+                const renderPlusBtn = (
+                  <TouchableOpacity
+                    style={styles.composerInlineBtn}
+                    onPress={loading ? handleStop : () => setComposerPickerOpen(true)}
+                    disabled={!loading && (!session || conversationHistoryLoading)}
+                    accessibilityLabel={loading ? '停止' : '引用 FlowDoc 文档'}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
                     <Ionicons
-                      name="send"
-                      size={20}
-                      color={
-                        !canSend
-                          ? isDark
-                            ? colors.textMuted
-                            : colors.border
-                          : isDark
-                            ? colors.onUserBubble
-                            : colors.chatScreenBackground
-                      }
+                      name={loading ? 'stop' : 'add'}
+                      size={22}
+                      color={loading ? colors.danger : colors.textSecondary}
                     />
-                  )}
-                </Pressable>
-                {session ? (
-                  <View style={styles.composerMetaRowAbsolute}>
-                    <View style={styles.composerMetaPills}>
-                      <TouchableOpacity
-                        style={styles.composerMetaChip}
-                        onPress={() => setModelPickerOpen(true)}
-                        activeOpacity={0.7}
-                        accessibilityLabel="选择模型"
-                        hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                  </TouchableOpacity>
+                );
+                const renderChips = session ? (
+                  <>
+                    <TouchableOpacity
+                      style={styles.composerMetaChip}
+                      onPress={() => setModelPickerOpen(true)}
+                      activeOpacity={0.7}
+                      accessibilityLabel="选择模型"
+                      hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                    >
+                      <Text
+                        style={styles.composerModelTriggerText}
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
                       >
-                        <Text
-                          style={styles.composerModelTriggerText}
-                          numberOfLines={1}
-                          ellipsizeMode="tail"
+                        {composerModelTriggerLabel}
+                      </Text>
+                      <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
+                    </TouchableOpacity>
+                    {showAgentComposerColumn ? (
+                      agentComposerInteractive ? (
+                        <TouchableOpacity
+                          style={styles.composerMetaChip}
+                          onPress={() => setAgentPickerOpen(true)}
+                          activeOpacity={0.7}
+                          accessibilityLabel="选择助手"
+                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
                         >
-                          {composerModelTriggerLabel}
-                        </Text>
-                        <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
-                      </TouchableOpacity>
-                      {showAgentComposerColumn ? (
-                        agentComposerInteractive ? (
-                          <TouchableOpacity
-                            style={styles.composerMetaChip}
-                            onPress={() => setAgentPickerOpen(true)}
-                            activeOpacity={0.7}
-                            accessibilityLabel="选择助手"
-                            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                          <Text
+                            style={styles.composerModelTriggerText}
+                            numberOfLines={1}
+                            ellipsizeMode="tail"
                           >
-                            <Text
-                              style={styles.composerModelTriggerText}
-                              numberOfLines={1}
-                              ellipsizeMode="tail"
-                            >
-                              {composerAgentLabel}
-                            </Text>
-                            <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
-                          </TouchableOpacity>
-                        ) : (
-                          <View style={styles.composerMetaChipReadonly}>
-                            <Text
-                              style={styles.composerAgentReadonlyText}
-                              numberOfLines={1}
-                              ellipsizeMode="tail"
-                            >
-                              {composerAgentLabel}
-                            </Text>
-                          </View>
-                        )
-                      ) : null}
-                    </View>
-                    {showTokenUsageInChat &&
-                    usageStats &&
-                    conversationId &&
-                    !conversationHistoryLoading ? (
-                      <TouchableOpacity
-                        style={styles.composerUsageInMetaRow}
-                        onPress={() =>
-                          setUsageDetailModalBody(
-                            formatUsageHoverDetail(usageStats, {
-                              currencyMode: usageCurrencyDisplay,
-                              modelPriceReference,
-                              selectedModelId,
-                              scope: 'conversation',
-                            })
-                          )
-                        }
-                        activeOpacity={0.7}
-                        accessibilityLabel="本对话用量详情"
-                        hitSlop={{ top: 4, bottom: 4, left: 8, right: 8 }}
-                      >
-                        <Text
-                          style={styles.composerUsageText}
-                          numberOfLines={1}
-                          ellipsizeMode="tail"
-                        >
-                          {formatConversationUsageHeaderLine(usageStats, {
-                            currencyMode: usageCurrencyDisplay,
-                          })}
-                        </Text>
-                      </TouchableOpacity>
+                            {composerAgentLabel}
+                          </Text>
+                          <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
+                        </TouchableOpacity>
+                      ) : (
+                        <View style={styles.composerMetaChipReadonly}>
+                          <Text
+                            style={styles.composerAgentReadonlyText}
+                            numberOfLines={1}
+                            ellipsizeMode="tail"
+                          >
+                            {composerAgentLabel}
+                          </Text>
+                        </View>
+                      )
                     ) : null}
-                  </View>
-                ) : null}
-              </View>
+                  </>
+                ) : null;
+                const renderUsage =
+                  showTokenUsageInChat &&
+                  usageStats &&
+                  conversationId &&
+                  !conversationHistoryLoading ? (
+                    <TouchableOpacity
+                      style={styles.composerUsageInMetaRow}
+                      onPress={() =>
+                        setUsageDetailModalBody(
+                          formatUsageHoverDetail(usageStats, {
+                            currencyMode: usageCurrencyDisplay,
+                            modelPriceReference,
+                            selectedModelId,
+                            scope: 'conversation',
+                          })
+                        )
+                      }
+                      activeOpacity={0.7}
+                      accessibilityLabel="本对话用量详情"
+                      hitSlop={{ top: 4, bottom: 4, left: 8, right: 8 }}
+                    >
+                      <Text
+                        style={styles.composerUsageText}
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
+                      >
+                        {formatConversationUsageHeaderLine(usageStats, {
+                          currencyMode: usageCurrencyDisplay,
+                        })}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null;
+                return (
+                  <>
+                    <View
+                      style={composerTall ? styles.composerCardTall : styles.composerCardShort}
+                      pointerEvents="box-none"
+                    >
+                      {composerTall ? (
+                        <>
+                          <View style={styles.composerInputTall} pointerEvents="box-none">
+                            <FlowDocSlateAdapter
+                              key={composerRemountKey}
+                              ref={composerAdapterRef}
+                              initialDocument={composerDoc}
+                              onChange={setComposerDoc}
+                              onSubmitOnEnter={handleSendMessage}
+                              placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
+                              placeholderColor={colors.placeholder}
+                              textColor={colors.textPrimary}
+                              pillBackgroundColor={colors.surfaceMuted}
+                              pillTextColor={colors.textMuted}
+                              fontSize={16}
+                              editable={!loading && !conversationHistoryLoading}
+                            />
+                          </View>
+                          <View style={styles.composerTallActions} pointerEvents="box-none">
+                            {renderPlusBtn}
+                            <View style={styles.composerTallChips}>{renderChips}</View>
+                            {renderUsage}
+                          </View>
+                        </>
+                      ) : (
+                        <View style={styles.composerInputRow} pointerEvents="box-none">
+                          {renderPlusBtn}
+                          <View style={styles.composerInputShort} pointerEvents="box-none">
+                            <FlowDocSlateAdapter
+                              key={composerRemountKey}
+                              ref={composerAdapterRef}
+                              initialDocument={composerDoc}
+                              onChange={setComposerDoc}
+                              onSubmitOnEnter={handleSendMessage}
+                              placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
+                              placeholderColor={colors.placeholder}
+                              textColor={colors.textPrimary}
+                              pillBackgroundColor={colors.surfaceMuted}
+                              pillTextColor={colors.textMuted}
+                              fontSize={16}
+                              editable={!loading && !conversationHistoryLoading}
+                            />
+                          </View>
+                        </View>
+                      )}
+                    </View>
+                    {/* short 模式：模型 / 助手 chips 走绝对 meta row（贴在 composer 下面留白里）。
+                        tall 模式：chips 已经在卡片底部 inline，这里不再渲染。 */}
+                    {!composerTall && session ? (
+                      <View style={styles.composerMetaRowAbsolute}>
+                        <View style={styles.composerMetaPills}>{renderChips}</View>
+                        {renderUsage}
+                      </View>
+                    ) : null}
+                  </>
+                );
+              })()}
             </View>
           </View>
         </View>

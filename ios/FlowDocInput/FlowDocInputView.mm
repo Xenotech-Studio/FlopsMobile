@@ -38,6 +38,7 @@
     _customLineHeight = 0;
     _editable = YES;
     _enterCreatesBlock = YES;
+    _pillMaxLabelTextWidth = 140.0;
     _textColor = [UIColor labelColor];
     _placeholderColor = [UIColor placeholderTextColor];
     _pillBackgroundColor = [UIColor colorWithWhite:0.92 alpha:1.0];
@@ -180,6 +181,11 @@
   [self refreshAllPillStyles];
 }
 
+- (void)setPillMaxLabelTextWidth:(CGFloat)w {
+  _pillMaxLabelTextWidth = w;
+  [self refreshAllPillStyles];
+}
+
 - (void)setEditable:(BOOL)editable {
   _editable = editable;
   self.textView.editable = editable;
@@ -197,6 +203,7 @@
       att.backgroundColor = self.pillBackgroundColor;
       att.textColor = self.pillTextColor;
       att.fontSize = MAX(10.0, self.fontSize - 2);
+      att.maxLabelTextWidth = self.pillMaxLabelTextWidth;
       [att refreshImage];
     }
   }];
@@ -248,6 +255,7 @@
       att.backgroundColor = self.pillBackgroundColor;
       att.textColor = self.pillTextColor;
       att.fontSize = MAX(10.0, self.fontSize - 2);
+      att.maxLabelTextWidth = self.pillMaxLabelTextWidth;
       [att refreshImage];
       [attr appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
     }
@@ -285,6 +293,7 @@
   att.backgroundColor = self.pillBackgroundColor;
   att.textColor = self.pillTextColor;
   att.fontSize = MAX(10.0, self.fontSize - 2);
+  att.maxLabelTextWidth = self.pillMaxLabelTextWidth;
   [att refreshImage];
 
   UIFont *font = [self baseFontOfSize:self.fontSize];
@@ -444,6 +453,7 @@
   self.placeholderColor = [UIColor placeholderTextColor];
   self.pillBackgroundColor = [UIColor colorWithWhite:0.92 alpha:1.0];
   self.pillTextColor = [UIColor colorWithWhite:0.35 alpha:1.0];
+  self.pillMaxLabelTextWidth = 140.0;
   self.placeholder = nil;
   self.editable = YES;
   self.enterCreatesBlock = YES;

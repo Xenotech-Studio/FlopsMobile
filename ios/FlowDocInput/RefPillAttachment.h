@@ -21,6 +21,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, strong) UIColor *backgroundColor;
 @property (nonatomic, strong) UIColor *textColor;
 @property (nonatomic, assign) CGFloat fontSize;
+/** 视觉截短上限（pt）：pill 文本（icon + 两空格 + label）渲染宽度超过这个就尾部换 "…"。
+ *  设 <=0 关闭视觉截短。caller 由 FlowDocInputView.pillMaxLabelTextWidth 注入。 */
+@property (nonatomic, assign) CGFloat maxLabelTextWidth;
 
 - (instancetype)initWithRefKey:(NSString *)refKey
                        mention:(NSString *)mention

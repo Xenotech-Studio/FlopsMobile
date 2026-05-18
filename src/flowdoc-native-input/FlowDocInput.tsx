@@ -72,6 +72,8 @@ export type FlowDocInputProps = {
   /** 字体族，例如 "Menlo" 表示代码块。空 / 缺省 = 系统字体 */
   fontFamily?: string;
   lineHeight?: number;
+  /** Pill 视觉截短上限（iOS pt / Android dp）；默认 140，<=0 关视觉截短 */
+  pillMaxLabelTextWidth?: number;
   placeholder?: string;
   placeholderColor?: string;
   editable?: boolean;
@@ -217,6 +219,7 @@ export const FlowDocInput = forwardRef(
         fontSize={props.fontSize}
         fontFamily={props.fontFamily}
         lineHeight={props.lineHeight}
+        pillMaxLabelTextWidth={props.pillMaxLabelTextWidth}
         placeholder={props.placeholder}
         placeholderColor={props.placeholderColor}
         editable={props.editable}

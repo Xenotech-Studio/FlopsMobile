@@ -67,6 +67,11 @@ class FlowDocInputViewManager : SimpleViewManager<FlowDocInputView>(),
     view.setCustomLineHeight(value.toFloat())
   }
 
+  @ReactProp(name = "pillMaxLabelTextWidth", defaultDouble = 140.0)
+  override fun setPillMaxLabelTextWidth(view: FlowDocInputView, value: Double) {
+    view.setPillMaxLabelTextWidthDp(value.toFloat())
+  }
+
   @ReactProp(name = "placeholder")
   override fun setPlaceholder(view: FlowDocInputView, value: String?) {
     view.setPlaceholderText(value)

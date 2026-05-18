@@ -55,6 +55,14 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
       field = value
       refreshAllPillSpans()
     }
+  /** Pill 视觉截短上限（dp）；view 把 dp 转 px 注入到每条 RefPillSpan。<=0 关视觉截短。 */
+  private var pillMaxLabelTextWidthDp: Float = 140f
+  fun setPillMaxLabelTextWidthDp(dp: Float) {
+    pillMaxLabelTextWidthDp = dp
+    refreshAllPillSpans()
+  }
+  private fun pillMaxLabelTextWidthPx(): Float =
+    pillMaxLabelTextWidthDp * resources.displayMetrics.density
 
   init {
     background = null
@@ -193,6 +201,7 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
       it.pillBackgroundColor = pillBackgroundColor
       it.pillTextColor = pillTextColorInt
       it.pillFontSize = textSize * 0.875f // 小一档（iOS 同款比例）
+      it.maxLabelTextWidthPx = pillMaxLabelTextWidthPx()
     }
 
     val pillPiece = SpannableStringBuilder().apply {
@@ -349,6 +358,7 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
             it.pillBackgroundColor = pillBackgroundColor
             it.pillTextColor = pillTextColorInt
             it.pillFontSize = textSize * 0.875f
+            it.maxLabelTextWidthPx = pillMaxLabelTextWidthPx()
           }
           val startPos = builder.length
           builder.append(OBJ_REPL_CHAR)
@@ -440,6 +450,7 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
       s.pillBackgroundColor = pillBackgroundColor
       s.pillTextColor = pillTextColorInt
       s.pillFontSize = textSize * 0.875f
+      s.maxLabelTextWidthPx = pillMaxLabelTextWidthPx()
     }
     invalidate()
   }

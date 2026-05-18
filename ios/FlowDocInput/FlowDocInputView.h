@@ -49,6 +49,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) CGFloat fontSize;
 @property (nonatomic, copy, nullable) NSString *fontFamily;  // nil / 空串 = 系统字体
 @property (nonatomic, assign) CGFloat customLineHeight;  // 0 = system default
+/** Pill 视觉截短上限（pt）。每条 RefPillAttachment 通过 view 拿到这个值，
+ *  自然渲染宽超出时尾部换 "…"。<=0 关闭视觉截短。 */
+@property (nonatomic, assign) CGFloat pillMaxLabelTextWidth;
 @property (nonatomic, assign) BOOL editable;
 /** Enter 当作"拆 block"语义：默认 YES；code 块设 NO 以保留多行 */
 @property (nonatomic, assign) BOOL enterCreatesBlock;

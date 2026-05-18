@@ -76,6 +76,9 @@ using namespace facebook::react;
   if (oldViewProps.lineHeight != newViewProps.lineHeight) {
     [_inputView setCustomLineHeight:newViewProps.lineHeight];
   }
+  if (oldViewProps.pillMaxLabelTextWidth != newViewProps.pillMaxLabelTextWidth) {
+    [_inputView setPillMaxLabelTextWidth:newViewProps.pillMaxLabelTextWidth];
+  }
   if (oldViewProps.placeholder != newViewProps.placeholder) {
     [_inputView setPlaceholder:RCTNSStringFromString(newViewProps.placeholder)];
   }

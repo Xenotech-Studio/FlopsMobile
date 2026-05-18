@@ -276,7 +276,14 @@ export function refToPillArgs(ref: FlopsRef): {
   };
 }
 
-/** 截短 mention 标题（与 Web `truncateMentionTitle` 对齐：12 个 Unicode 字符上限） */
+/**
+ * 截短 mention_text 标题（数据层 / 持久化值）：按 Unicode 字符数截短，跟 Web / Desktop
+ * 端 truncateMentionTitle 保持一致 — 是持久化 metadata.flops_refs[].mention_text 字段
+ * 的内容，多端都按这同一个规则截。
+ *
+ * mobile 端 *视觉上* 的进一步收紧（按 pill 真实像素宽截短显示）放在 native 渲染层做，
+ * 不动这里 — 见 ios/FlowDocInput/RefPillAttachment.mm 和 android RefPillSpan.kt。
+ */
 export function truncateMentionTitle(s: string, maxChars = 12): string {
   const str = String(s || '').trim();
   if (!str) return '';

@@ -161,11 +161,17 @@ export type FlowDocSlateAdapterProps = {
   initialDocument: SlateDocument;
   onChange?: (document: SlateDocument) => void;
   onChangeSelection?: (start: number, end: number) => void;
+  /** Native 把 Enter 拆段事件交给我们时 → 调用 onSubmitOnEnter 视为"发送本条消息"。
+   *  设了这个 prop 之后用户就 *不能* 用 Enter 输入换行（多段必须通过别的方式凑齐，
+   *  比如粘贴）。chat composer 场景下这是用户期望的行为。 */
+  onSubmitOnEnter?: () => void;
   textColor?: string;
   pillBackgroundColor?: string;
   pillTextColor?: string;
   fontSize?: number;
   lineHeight?: number;
+  /** Pill 视觉截短上限（iOS pt / Android dp）；默认 140，<=0 关视觉截短 */
+  pillMaxLabelTextWidth?: number;
   placeholder?: string;
   placeholderColor?: string;
   editable?: boolean;
@@ -187,6 +193,13 @@ export const FlowDocSlateAdapter = forwardRef(
       [props.onChange],
     );
 
+    /* Native 拆段事件 = "用户按了 Enter"。caller 给了 onSubmitOnEnter 就当发送，
+       不实际拆段；没给就 swallow（行为跟原 adapter 一致：Enter 当前不会插入 \n）。 */
+    const onSubmit = props.onSubmitOnEnter;
+    const handleSplit = useCallback(() => {
+      if (onSubmit) onSubmit();
+    }, [onSubmit]);
+
     return (
       <FlowDocInput
         ref={ref}
@@ -197,11 +210,13 @@ export const FlowDocSlateAdapter = forwardRef(
         pillTextColor={props.pillTextColor}
         fontSize={props.fontSize}
         lineHeight={props.lineHeight}
+        pillMaxLabelTextWidth={props.pillMaxLabelTextWidth}
         placeholder={props.placeholder}
         placeholderColor={props.placeholderColor}
         editable={props.editable}
         onChangeContent={handleContent}
         onChangeSelection={props.onChangeSelection}
+        onSplitRequest={handleSplit}
       />
     );
   },
