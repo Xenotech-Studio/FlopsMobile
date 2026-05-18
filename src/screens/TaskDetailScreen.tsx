@@ -27,7 +27,7 @@ import { StackActions } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useTask } from '../context/TaskContext';
-import type { TasksStackParamList, TaskCreatePlacement } from '../navigation/types';
+import type { RootStackParamList, TaskCreatePlacement } from '../navigation/types';
 import type { TaskItem, NewTaskPayload } from '../taskApi';
 import {
   getDoneQualityWhenToggling,
@@ -46,7 +46,7 @@ import { useAppTheme } from '../context/ThemeContext';
 import { shadowCircleButtonThemed, shadowCardThemed } from '../theme/shadows';
 import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 
-type Route = RouteProp<TasksStackParamList, 'TaskDetail'>;
+type Route = RouteProp<RootStackParamList, 'TaskDetail'>;
 
 function toISO(date: Date): string {
   return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -138,7 +138,7 @@ export function TaskDetailScreen() {
   const insets = useSafeAreaInsets();
   const { tasks, projects, updateTask, addTask, getAuth, todayDate } = useTask();
 
-  const routeParams = params as TasksStackParamList['TaskDetail'];
+  const routeParams = params as RootStackParamList['TaskDetail'];
   const { colors } = useAppTheme();
   const styles = useMemo(() => createTaskDetailStyles(colors), [colors]);
 

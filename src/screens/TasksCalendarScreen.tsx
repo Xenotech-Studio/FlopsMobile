@@ -16,7 +16,7 @@ import { StackActions } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useTask } from '../context/TaskContext';
-import type { TasksStackParamList } from '../navigation/types';
+import type { RootStackParamList } from '../navigation/types';
 import type { TaskItem } from '../taskApi';
 import { TaskRow } from '../components/TaskRow';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
@@ -28,7 +28,7 @@ import { shadowCircleButtonThemed } from '../theme/shadows';
 import { TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { isTaskBelongToDay } from '../utils/taskFilters';
 
-type Nav = StackNavigationProp<TasksStackParamList, 'TasksCalendar'>;
+type Nav = StackNavigationProp<RootStackParamList, 'TasksCalendar'>;
 
 function createTasksCalendarStyles(c: AppColors) {
   return StyleSheet.create({

@@ -1,9 +1,19 @@
+/**
+ * RootNavigator —— 单一 Stack，承载 DrawerShell 顶层、Chat / TaskDetail / TasksCalendar 子页与各设置子页。
+ *
+ * Profile 不再是 stack screen：由 [[ProfileSheet]] 通过 BottomSheetModalRef 唤起（DrawerShell host）。
+ * 顶层页 Today / Project / Docs 不是 React Navigation 的路由，而是 DrawerShell 内部 active 状态。
+ */
 import React from 'react';
 import { Platform } from 'react-native';
-import { createStackNavigator } from '@react-navigation/stack';
-import { MainScreen } from '../screens/MainScreen';
+import {
+  createStackNavigator,
+  type StackCardInterpolationProps,
+} from '@react-navigation/stack';
+import { DrawerShell } from '../screens/shell/DrawerShell';
 import { ChatScreen } from '../screens/ChatScreen';
-import { ProfileScreen } from '../screens/ProfileScreen';
+import { TaskDetailScreen } from '../screens/TaskDetailScreen';
+import { TasksCalendarScreen } from '../screens/TasksCalendarScreen';
 import { UsageSettingsScreen } from '../screens/UsageSettingsScreen';
 import { AccountActionsScreen } from '../screens/AccountActionsScreen';
 import { ChangePasswordScreen } from '../screens/ChangePasswordScreen';
@@ -17,24 +27,8 @@ import { useAppTheme } from '../context/ThemeContext';
 
 const Stack = createStackNavigator<RootStackParamList>();
 
-/** Profile 从左侧滑入 */
-function profileCardStyleInterpolator({ current, layouts }: { current: { progress: number }; layouts: { screen: { width: number } } }) {
-  return {
-    cardStyle: {
-      transform: [
-        {
-          translateX: current.progress.interpolate({
-            inputRange: [0, 1],
-            outputRange: [-layouts.screen.width, 0],
-          }),
-        },
-      ],
-    },
-  };
-}
-
 /** 右侧滑入（与账户操作页体验一致） */
-function rightCardStyleInterpolator({ current, layouts }: { current: { progress: number }; layouts: { screen: { width: number } } }) {
+function rightCardStyleInterpolator({ current, layouts }: StackCardInterpolationProps) {
   return {
     cardStyle: {
       transform: [
@@ -62,9 +56,9 @@ export function RootNavigator() {
     >
       <Stack.Screen
         name="Main"
-        component={MainScreen}
+        component={DrawerShell}
         options={{
-          /** Android：避免与对话列表左缘「右滑开 Profile」争系统返回手势 */
+          /** Android：让 DrawerShell 自己接管左缘手势，不走 RN Navigation 的边缘返回 */
           gestureEnabled: Platform.OS === 'ios',
         }}
       />
@@ -74,13 +68,14 @@ export function RootNavigator() {
         options={{ headerShown: false }}
       />
       <Stack.Screen
-        name="Profile"
-        component={ProfileScreen}
-        options={{
-          headerShown: false,
-          gestureEnabled: true,
-          cardStyleInterpolator: profileCardStyleInterpolator,
-        }}
+        name="TaskDetail"
+        component={TaskDetailScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="TasksCalendar"
+        component={TasksCalendarScreen}
+        options={{ headerShown: false }}
       />
       <Stack.Screen
         name="UsageSettings"
