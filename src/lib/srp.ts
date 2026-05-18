@@ -2,9 +2,11 @@
  * SRP-6a 客户端 + argon2id 客户端预哈希。Mobile (Hermes) 版，与后端
  * backend/user_system/srp_helper.py 字节级互通。
  *
- * 全纯 JS（无 native module）：
+ * 混合实现：
+ *   - argon2id: react-native-argon2（iOS Argon2Swift / Android argon2kt，
+ *     都包的是 Argon2 官方 reference C 实现，与 Python argon2-cffi 字节对齐）
+ *     —— 纯 JS @noble/hashes 版在 Hermes 上同参数要跑 ~170s，不可用
  *   - SHA-256: @noble/hashes/sha2
- *   - argon2id: @noble/hashes/argon2 （已与 Python argon2-cffi 字节对齐验证）
  *   - getRandomValues: 由 react-native-get-random-values polyfill 提供
  *   - BigInt: Hermes 原生
  *
@@ -15,7 +17,7 @@
  */
 
 import { sha256 } from '@noble/hashes/sha2.js';
-import { argon2idAsync } from '@noble/hashes/argon2.js';
+import argon2 from 'react-native-argon2';
 import forge from 'node-forge';
 
 declare const global: { crypto?: { getRandomValues?: (a: Uint8Array) => Uint8Array } };
@@ -133,11 +135,18 @@ function getK(): bigint {
 
 /**
  * srp_password = argon2id(plaintext, salt) hex 输出。
- * 在手机上耗时 ~3-5 秒（纯 JS），用 async 变体让出主线程。
+ * 走 native（react-native-argon2 → Argon2Swift / argon2kt），~几百毫秒。
  */
 export async function deriveSrpPassword(plaintext: string, saltHex: string): Promise<string> {
-  const out = await argon2idAsync(plaintext, hexToBytes(saltHex), ARGON2_OPTS);
-  return bytesToHex(out);
+  const { rawHash } = await argon2(plaintext, saltHex, {
+    iterations: ARGON2_OPTS.t,
+    memory: ARGON2_OPTS.m,
+    parallelism: ARGON2_OPTS.p,
+    hashLength: ARGON2_OPTS.dkLen,
+    mode: 'argon2id',
+    saltEncoding: 'hex',
+  });
+  return rawHash;
 }
 
 export function generateSaltHex(): string {
