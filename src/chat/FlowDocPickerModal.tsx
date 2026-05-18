@@ -5,8 +5,16 @@
  * 的折叠树渲染；选中 document 类型时 onPickDoc(docId, name) 回调（其它类型只能展开
  * 折叠，不选）。
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  InteractionManager,
+  Modal,
+  Platform,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
@@ -19,6 +27,10 @@ export type FlowDocPickerModalProps = {
   visible: boolean;
   onClose: () => void;
   onPickDoc: (docId: string, name: string) => void;
+  /** Modal dismiss 动画走完之后才 fire；iOS 走 Modal.onDismiss，Android 在 visible
+   *  从 true → false 时用 useEffect 触发（无原生 dismiss 回调）。
+   *  caller 用来"等模态彻底消失之后再 focus underlying input"。 */
+  onAfterDismiss?: () => void;
 };
 
 const SELECTABLE_DOC_TYPES = new Set([
@@ -33,6 +45,7 @@ export function FlowDocPickerModal({
   visible,
   onClose,
   onPickDoc,
+  onAfterDismiss,
 }: FlowDocPickerModalProps) {
   const insets = useSafeAreaInsets();
   const { session } = useSession();
@@ -68,6 +81,22 @@ export function FlowDocPickerModal({
     if (visible && tree.length === 0) load(false);
   }, [visible, tree.length, load]);
 
+  /* Android 没有 Modal.onDismiss 回调；用 visible 状态从 true → false 的 useEffect
+     模拟"动画结束后再 fire onAfterDismiss"。InteractionManager 帮忙等一帧。 */
+  const prevVisibleRef = useRef(visible);
+  useEffect(() => {
+    if (Platform.OS === 'ios') {
+      prevVisibleRef.current = visible;
+      return;
+    }
+    if (prevVisibleRef.current && !visible) {
+      InteractionManager.runAfterInteractions(() => {
+        onAfterDismiss?.();
+      });
+    }
+    prevVisibleRef.current = visible;
+  }, [visible, onAfterDismiss]);
+
   const onSelect = useCallback(
     (item: FlowDocTreeItem) => {
       if (SELECTABLE_DOC_TYPES.has(item.type)) {
@@ -84,6 +113,7 @@ export function FlowDocPickerModal({
       visible={visible}
       animationType="slide"
       onRequestClose={onClose}
+      onDismiss={onAfterDismiss}
       transparent={false}
     >
       <View style={[styles.container, { paddingTop: insets.top }]}>

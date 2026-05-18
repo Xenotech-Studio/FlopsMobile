@@ -4,8 +4,42 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, type ViewStyle } from 'react-native';
 import Markdown from 'react-native-markdown-display';
+import FitImage from 'react-native-fit-image';
 import Clipboard from '@react-native-clipboard/clipboard';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+
+/* 默认 image 规则的实现里 imageProps 包含 key 然后做 spread，React 18+ 会 warn。
+   我们这里自己实现一份等价规则、把 key 单独传，避免 console 噪声。
+   规则签名跟 react-native-markdown-display 的 RenderRule 一致：
+   (node, children, parent, styles, allowedImageHandlers, defaultImageHandler) */
+const MD_RENDER_RULES = {
+  image: (
+    node: { key: string; attributes: { src?: string; alt?: string } },
+    _children: unknown,
+    _parent: unknown,
+    styles: Record<string, unknown>,
+    allowedImageHandlers: string[],
+    defaultImageHandler: string | null,
+  ) => {
+    const src = String(node.attributes?.src ?? '');
+    const alt = node.attributes?.alt;
+    const show =
+      allowedImageHandlers.some((v) => src.toLowerCase().startsWith(String(v).toLowerCase()));
+    if (!show && defaultImageHandler == null) return null;
+    const uri = show ? src : `${defaultImageHandler}${src}`;
+    /* key 必须直接传 JSX 不能 spread；剩下 props 走 spread */
+    const props: Record<string, unknown> = {
+      indicator: true,
+      style: (styles as { _VIEW_SAFE_image?: unknown })._VIEW_SAFE_image,
+      source: { uri },
+    };
+    if (alt) {
+      props.accessible = true;
+      props.accessibilityLabel = alt;
+    }
+    return <FitImage key={node.key} {...props} />;
+  },
+};
 import { UsageDetailModal } from './UsageDetailModal';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
@@ -230,7 +264,9 @@ export function MarkdownContent({
     <View style={styles.wrap}>
       <View style={[styles.content, contentWrapperStyle]}>
         {source ? (
-          <Markdown style={markdownStyles}>{source}</Markdown>
+          <Markdown style={markdownStyles} rules={MD_RENDER_RULES}>
+            {source}
+          </Markdown>
         ) : showToolbar ? null : (
           <Text style={styles.placeholder}>（无内容）</Text>
         )}

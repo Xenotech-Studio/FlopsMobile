@@ -20,9 +20,20 @@ type Props = {
   onClose: () => void;
   title?: string;
   body: string;
+  /** 可选附加按钮：传了就在 body 下方显示一行，按下触发 onAction 后自动 close。
+   *  比如"跳转到压缩截断位置"等附带跳转动作。 */
+  actionLabel?: string;
+  onAction?: () => void;
 };
 
-export function UsageDetailModal({ visible, onClose, title = '用量详情', body }: Props) {
+export function UsageDetailModal({
+  visible,
+  onClose,
+  title = '用量详情',
+  body,
+  actionLabel,
+  onAction,
+}: Props) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createUsageDetailStyles(colors), [colors]);
   const modalRef = useRef<BottomSheetModal>(null);
@@ -80,6 +91,18 @@ export function UsageDetailModal({ visible, onClose, title = '用量详情', bod
         <Text style={styles.body} selectable>
           {body}
         </Text>
+        {actionLabel && onAction ? (
+          <TouchableOpacity
+            style={styles.actionBtn}
+            activeOpacity={0.7}
+            onPress={() => {
+              onAction();
+              onClose();
+            }}
+          >
+            <Text style={styles.actionBtnText}>{actionLabel}</Text>
+          </TouchableOpacity>
+        ) : null}
       </BottomSheetScrollView>
     </BottomSheetModal>
   );
@@ -119,6 +142,19 @@ function createUsageDetailStyles(c: AppColors) {
       fontSize: TASK_FONT_SIZE_BODY,
       lineHeight: 24,
       color: c.textSecondary,
+    },
+    actionBtn: {
+      marginTop: 16,
+      alignSelf: 'flex-start',
+      paddingVertical: 10,
+      paddingHorizontal: 16,
+      borderRadius: 12,
+      backgroundColor: c.surfaceMuted,
+    },
+    actionBtnText: {
+      fontSize: TASK_FONT_SIZE_BODY,
+      color: c.textPrimary,
+      fontWeight: '500',
     },
   });
 }

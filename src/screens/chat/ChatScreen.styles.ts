@@ -1,6 +1,6 @@
 import { Platform, StyleSheet } from 'react-native';
 import { androidCircleFabOutline, shadowCircleButtonThemed } from '../../theme/shadows';
-import { CHAT_COMPOSER_CONTROL_SIZE, CHAT_COMPOSER_SEND_BTN_SIZE } from '../../theme/layout';
+import { HEADER_CIRCLE_BTN_SIZE, CHAT_COMPOSER_SEND_BTN_SIZE } from '../../theme/layout';
 import { TASK_FONT_SIZE_TITLE } from '../../theme/typography';
 import type { AppColors } from '../../theme/appColors';
 
@@ -13,8 +13,45 @@ const COMPOSER_ROW_PADDING_H = 16;
 /**
  * 底部模型/助手/用量选择条的水平内边距（与输入行独立，可单独调）
  */
-const COMPOSER_META_ROW_PADDING_LEFT = 25;
-const COMPOSER_META_ROW_PADDING_RIGHT = 25;
+const COMPOSER_META_ROW_PADDING_LEFT = 32;
+const COMPOSER_META_ROW_PADDING_RIGHT = 32;
+
+/* ============================================================
+ * Composer 设计语言：所有跟单行胶囊高度（COMPOSER_PILL_SIZE）相关的
+ * padding / inset 都从这里派生，改了主值其它自动跟。
+ * ============================================================ */
+/** 主胶囊高度 = 顶栏圆钮直径，全局视觉锚点。改这个值会带动 + 内嵌、padding 等。 */
+const COMPOSER_PILL_SIZE = HEADER_CIRCLE_BTN_SIZE + 0;
+/** 内嵌 + / ⏹ 圆钮尺寸 */
+const COMPOSER_PLUS_BTN_SIZE = 32;
+/** + center 到 card 上 / 下 / 左 三边的距离 = COMPOSER_PILL_SIZE / 2；
+ *  对应 + 边沿到 card 边沿的 inset。绝对定位的 `bottom` / `left` 都用这个。 */
+const COMPOSER_PLUS_BTN_INSET =
+  (COMPOSER_PILL_SIZE - COMPOSER_PLUS_BTN_SIZE) / 2;
+/** + 右沿到输入区 cursor 左边缘的视觉间距 */
+const COMPOSER_PLUS_TO_INPUT_GAP = 6;
+/** Card 整体水平 padding（short / tall 同值）；inputShort 内部还有自己的 paddingH = 同值 */
+const COMPOSER_CARD_PADDING_H = 8;
+/** Tall 模式 card 顶部空白（让输入区跟胶囊顶有呼吸） */
+const COMPOSER_TALL_PAD_TOP = 18;
+/** Tall 模式 card 底部 padding（独立于 + 的 inset） */
+const COMPOSER_TALL_PAD_BOTTOM = 4;
+/** Short 模式 inputArea 左 padding：让 cursor 落在 + 右沿 + GAP。
+ *  card paddingLeft + inputArea paddingLeft + inputShort paddingHorizontal = + 右沿 + GAP
+ *  → inputArea paddingLeft = inset + plusSize + gap - 2 × cardPadH = 10+32+6-16 = 32 */
+const COMPOSER_INPUT_PAD_LEFT_SHORT =
+  COMPOSER_PLUS_BTN_INSET +
+  COMPOSER_PLUS_BTN_SIZE +
+  COMPOSER_PLUS_TO_INPUT_GAP -
+  COMPOSER_CARD_PADDING_H * 2;
+/** Tall 模式 inputArea 底 padding：让 input 内容底跟 + 顶留 GAP。
+ *  + 顶到 card 底 = inset + plusSize；inputArea 底到 card 底 = card.paddingBottom + paddingBottom
+ *  → paddingBottom = inset + plusSize + gap - card.paddingBottom = 10+32+6-4 = 44 */
+const COMPOSER_INPUT_PAD_BOTTOM_TALL =
+  COMPOSER_PLUS_BTN_INSET +
+  COMPOSER_PLUS_BTN_SIZE +
+  COMPOSER_PLUS_TO_INPUT_GAP -
+  COMPOSER_TALL_PAD_BOTTOM;
 
 export function createChatStyles(c: AppColors) {
   return StyleSheet.create({
@@ -82,7 +119,7 @@ export function createChatStyles(c: AppColors) {
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 6,
+    bottom: -5,
     flexDirection: 'row',
     alignItems: 'center',
     paddingLeft: COMPOSER_META_ROW_PADDING_LEFT,
@@ -111,12 +148,18 @@ export function createChatStyles(c: AppColors) {
   },
   composerAgentReadonlyText: {
     fontSize: 11,
-    color: c.textMuted,
+    color: c.placeholder,
   },
+  /** 右下角：环形上下文进度 + 统计图 icon 两个小元素并排 */
   composerUsageInMetaRow: {
     flexShrink: 0,
-    maxWidth: '42%',
-    alignItems: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  composerUsageIconBtn: {
+    paddingVertical: 1,
+    paddingHorizontal: 1,
   },
   topBar: {
     position: 'absolute',
@@ -132,9 +175,9 @@ export function createChatStyles(c: AppColors) {
     paddingBottom: 12,
   },
   circleBtn: {
-    width: CHAT_COMPOSER_CONTROL_SIZE,
-    height: CHAT_COMPOSER_CONTROL_SIZE,
-    borderRadius: CHAT_COMPOSER_CONTROL_SIZE / 2,
+    width: HEADER_CIRCLE_BTN_SIZE,
+    height: HEADER_CIRCLE_BTN_SIZE,
+    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: c.surface,
@@ -154,18 +197,20 @@ export function createChatStyles(c: AppColors) {
     minWidth: 0,
     justifyContent: 'center',
     alignItems: 'flex-start',
-    paddingHorizontal: 8,
+    /** 跟左侧返回圆钮拉开距离：左 14、右 8 不对称，给标题更多呼吸 */
+    paddingLeft: 14,
+    paddingRight: 8,
   },
   headerTitle: { fontSize: TASK_FONT_SIZE_TITLE, fontWeight: '700', color: c.textHeader },
-  /** 与 composerUsageText 同档：小号、灰色、常规字重 */
+  /** 与 composerUsageText 同档：小号、placeholder 同色（跟输入框 placeholder 一致弱化），常规字重 */
   composerModelTriggerText: {
     flexShrink: 1,
     fontSize: 11,
-    color: c.textMuted,
+    color: c.placeholder,
   },
   composerUsageText: {
     fontSize: 11,
-    color: c.textMuted,
+    color: c.placeholder,
     textAlign: 'right',
     maxWidth: '100%',
   },
@@ -715,8 +760,8 @@ export function createChatStyles(c: AppColors) {
   composerInput: {
     flex: 1,
     backgroundColor: c.inputBg,
-    borderRadius: CHAT_COMPOSER_CONTROL_SIZE / 2,
-    minHeight: CHAT_COMPOSER_CONTROL_SIZE,
+    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
+    minHeight: HEADER_CIRCLE_BTN_SIZE,
     paddingHorizontal: 20,
     paddingVertical: 14,
     fontSize: 16,
@@ -755,12 +800,12 @@ export function createChatStyles(c: AppColors) {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: c.inputBg,
-    borderRadius: CHAT_COMPOSER_CONTROL_SIZE / 2,
-    minHeight: CHAT_COMPOSER_CONTROL_SIZE,
+    borderRadius: COMPOSER_PILL_SIZE / 2,
+    minHeight: COMPOSER_PILL_SIZE,
     marginHorizontal: COMPOSER_ROW_PADDING_H,
     marginTop: 12,
-    marginBottom: 26,
-    paddingHorizontal: 8,
+    marginBottom: 18,
+    paddingHorizontal: COMPOSER_CARD_PADDING_H,
     /** iOS 微阴影 + Android 描边，跟原 composerInput 视觉对齐 */
     ...(Platform.OS === 'ios'
       ? {
@@ -778,14 +823,16 @@ export function createChatStyles(c: AppColors) {
     flexDirection: 'column',
     backgroundColor: c.inputBg,
     /** 与 short 胶囊两端的半圆同半径，视觉一致 */
-    borderRadius: CHAT_COMPOSER_CONTROL_SIZE / 2,
+    borderRadius: COMPOSER_PILL_SIZE / 2,
     marginHorizontal: COMPOSER_ROW_PADDING_H,
     marginTop: 12,
-    marginBottom: 12,
-    paddingTop: 10,
-    paddingBottom: 4,
+    /** 跟 short 同 marginBottom：保证 short ↔ tall 切换时卡片底边线 y 完全不变。
+     *  绝对定位的 + 按钮 / chips meta row 都跟卡片底对齐，所以也跟着不动。 */
+    marginBottom: 18,
+    paddingTop: COMPOSER_TALL_PAD_TOP,
+    paddingBottom: COMPOSER_TALL_PAD_BOTTOM,
     /** 左右 padding 跟 short 一样小，让 + 不会比单行模式更靠右 */
-    paddingHorizontal: 8,
+    paddingHorizontal: COMPOSER_CARD_PADDING_H,
     ...(Platform.OS === 'ios'
       ? {
           shadowColor: '#000',
@@ -797,47 +844,53 @@ export function createChatStyles(c: AppColors) {
         ? androidCircleFabOutline(c)
         : {}),
   },
-  composerInputRow: {
+  /** Input-area：所有模式下都包住 inputWrapper（FlowDocSlateAdapter 的父级），保证
+   *  adapter 跨 short/tall 切换时 React 节点位置一致 — 不卸载、firstResponder 不丢。
+   *  Short：单行 flex row，左侧 paddingLeft 给绝对 + 让位（+ 是 card 的 absolute child）。
+   *  Tall：column，输入填满宽度；底部 paddingBottom 给绝对 + 让位。 */
+  composerInputAreaShort: {
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
+    /** 派生自 + 内嵌位 + 间距 + 卡片 padding（推导见顶部 COMPOSER_INPUT_PAD_LEFT_SHORT）。
+     *  COMPOSER_PILL_SIZE 变小时自动跟着小，cursor 始终落在 + 右沿 + GAP。 */
+    paddingLeft: COMPOSER_INPUT_PAD_LEFT_SHORT,
+  },
+  composerInputAreaTall: {
+    /** 默认 flexDirection column；不限制 minHeight，单行起步。
+     *  paddingBottom 让 input 底跟 + 顶留 GAP 间距，公式见顶部 COMPOSER_INPUT_PAD_BOTTOM_TALL。 */
+    paddingBottom: COMPOSER_INPUT_PAD_BOTTOM_TALL,
   },
   composerInputShort: {
     flex: 1,
-    paddingHorizontal: 8,
-    paddingVertical: Platform.OS === 'ios' ? 8 : 4,
-    minHeight: CHAT_COMPOSER_CONTROL_SIZE - 12,
+    paddingHorizontal: COMPOSER_CARD_PADDING_H,
+    /* iOS UITextView 把文本贴顶部渲染（不像 RN TextInput 单行自动居中），
+     *  胶囊内的 1.6× fontSize 高度上半部分被文本占满，下半部分空着，整体视觉偏上。
+     *  用不对称 padding（top > bottom）把文本下推一点；
+     *  历史值：8/8 偏上、12/4 偏下，取中间 10/6 让视觉中心更接近胶囊几何中心。
+     *  Android EditText 单行自动居中，保留对称 padding。 */
+    paddingTop: Platform.OS === 'ios' ? 10 : 4,
+    paddingBottom: Platform.OS === 'ios' ? 6 : 4,
+    minHeight: COMPOSER_PILL_SIZE - 12,
   },
   composerInputTall: {
-    /* tall 模式下输入区填满卡片宽度；高度由 native autoHeight 决定 */
-    minHeight: CHAT_COMPOSER_CONTROL_SIZE - 8,
+    /* tall 模式下输入区填满卡片宽度；高度完全由 native autoHeight 决定，
+     *  刚切到 tall 模式时单行内容 ≈ 1 行高度，不要强制 minHeight 撑成两行 */
     paddingHorizontal: 12,
   },
-  composerTallActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    marginTop: 4,
-    /** 不再加 padding：+ 直接对齐 card 的左 padding（8pt），跟 short 一致 */
-    paddingHorizontal: 0,
-    gap: 10,
-  },
-  /** Tall 模式下右侧 chips 区域（model / agent） */
-  composerTallChips: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'nowrap',
-    gap: 10,
-  },
-  /** 内嵌的 + / ⏹ 圆钮：尺寸比 sendBtn 小一圈，不显眼 */
-  composerInlineBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+  /** Card-absolute 的 + / ⏹ 圆钮：bottom = left = COMPOSER_PLUS_BTN_INSET，short / tall 两模式
+   *  screen 位置完全一致；+ center 到 card 顶/底/左三边距离都是 COMPOSER_PILL_SIZE / 2。
+   *  COMPOSER_PILL_SIZE 变小时 inset 自动跟着变小，+ 仍正确居中。 */
+  composerPlusBtnAbsolute: {
+    position: 'absolute',
+    bottom: COMPOSER_PLUS_BTN_INSET,
+    left: COMPOSER_PLUS_BTN_INSET,
+    width: COMPOSER_PLUS_BTN_SIZE,
+    height: COMPOSER_PLUS_BTN_SIZE,
+    borderRadius: COMPOSER_PLUS_BTN_SIZE / 2,
     alignItems: 'center',
     justifyContent: 'center',
+    zIndex: 5,
   },
   });
 }

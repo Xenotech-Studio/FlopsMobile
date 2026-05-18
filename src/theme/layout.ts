@@ -5,16 +5,17 @@ import { Platform } from 'react-native';
  * 改这里的数字即可全局生效。
  */
 
-/** 任务相关页 header 左右圆形按钮（返回、筛选等）的直径 */
-export const HEADER_CIRCLE_BTN_SIZE = 54;
-
 /**
- * 聊天页：顶栏返回/新建圆钮直径，与 composer 单行输入框 minHeight 对齐。
+ * 全局 header 左右圆形按钮（返回 / 筛选 / 新建 / + 等）的直径。
+ * Tasks / Docs / Chat / ConversationList 都用同一个值，视觉语言一致。
+ *
+ * 注：composer 胶囊高度（COMPOSER_PILL_SIZE，定义在 ChatScreen.styles.ts）
+ *     在此基础上 +6 让 composer 略大于圆钮，输入区比按钮更显眼。
  */
-export const CHAT_COMPOSER_CONTROL_SIZE = 52;
+export const HEADER_CIRCLE_BTN_SIZE = 52;
 
 /**
- * 聊天发送钮直径：略小于 {@link CHAT_COMPOSER_CONTROL_SIZE}，深色实心钮视觉更重故收小一圈。
+ * 聊天发送钮直径：稍大于 {@link HEADER_CIRCLE_BTN_SIZE}，深色实心钮视觉更重故略放大一圈。
  */
 export const CHAT_COMPOSER_SEND_BTN_SIZE = 48;
 

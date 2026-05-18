@@ -464,6 +464,9 @@ export type Conversation = {
   /** 当前生效的上下文摘要 id（若有则可能存在压缩分界展示） */
   active_context_summary_id?: string;
   context_summaries?: ContextSummary[];
+  /** 上下文 L1 投影：主 system / 摘要注入 / 逐字尾 / 工具 schema 各自的 L1 字符数 + 上限。
+   *  用于 composer 旁环形进度条算"上下文已用比例"。后端按需返回，缺省时退化用"消息条数已压缩"。 */
+  context_projection_l1?: Record<string, unknown>;
 };
 
 /**

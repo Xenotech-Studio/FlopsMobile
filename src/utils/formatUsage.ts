@@ -47,6 +47,97 @@ export function getConversationContextCompressMessagePercent(conv: {
   return Math.min(100, Math.max(0, pct));
 }
 
+/** 将正整数格式化为简短中文单位（万），用于 L1 字符提示 */
+function approxChineseChars(n: number): string {
+  const x = Math.max(0, Math.round(Number(n)));
+  if (!Number.isFinite(x)) return '';
+  if (x < 10_000) return String(x);
+  const wan = x / 10_000;
+  const s = wan >= 100 ? wan.toFixed(0) : wan >= 10 ? wan.toFixed(1) : wan.toFixed(2);
+  return `${s.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')}万`;
+}
+
+/** L1 合计：主 system + tools JSON + 摘要注入 + 消息尾；分母优先 verbatim_hard_max_chars，
+ *  缺省回退 verbatim_max_chars（软上限）。null 表示数据不足。 */
+function contextProjectionCombinedTotals(
+  projection: Record<string, unknown> | null | undefined,
+): { total: number; denom: number; pct: number } | null {
+  if (!projection || typeof projection !== 'object') return null;
+  const primary = Number(projection.primary_system_l1_chars);
+  const sumInj = Number(projection.summary_injection_l1_chars);
+  const tail = Number(projection.verbatim_tail_l1_chars);
+  const tools = Number(projection.tools_schema_l1_chars);
+  const hardCap = Number(projection.verbatim_hard_max_chars);
+  const softCap = Number(projection.verbatim_max_chars);
+  const cap =
+    Number.isFinite(hardCap) && hardCap > 0
+      ? hardCap
+      : Number.isFinite(softCap) && softCap > 0
+        ? softCap
+        : NaN;
+  const prim = Number.isFinite(primary) && primary > 0 ? primary : 0;
+  const sumN = Number.isFinite(sumInj) && sumInj >= 0 ? sumInj : 0;
+  const tailN = Number.isFinite(tail) && tail >= 0 ? tail : 0;
+  const toolsN = Number.isFinite(tools) && tools >= 0 ? tools : 0;
+  if (!Number.isFinite(cap) || cap <= 0) return null;
+  const total = prim + sumN + tailN + toolsN;
+  const pct = Math.min(100, Math.max(0, Math.round((total / cap) * 100)));
+  return { total, denom: cap, pct };
+}
+
+/**
+ * 输入框旁环形进度的百分比：(主 system + 摘要注入 + 逐字尾 + tools) / verbatim 上限。
+ * 无投影时退化为「消息条数已压缩」比例。null = 没数据，不显示进度条。
+ */
+export function getComposerContextRingPercent(
+  conv: {
+    messages?: ConversationMessage[] | null;
+    active_context_summary_id?: string | null;
+    context_summaries?: ContextSummary[] | null;
+    context_projection_l1?: Record<string, unknown> | null;
+  } | null | undefined,
+): number | null {
+  if (!conv || typeof conv !== 'object') return null;
+  const p = conv.context_projection_l1;
+  if (p && typeof p === 'object') {
+    const c = contextProjectionCombinedTotals(p);
+    if (c) {
+      return Math.min(100, Math.max(0, (c.total / c.denom) * 100));
+    }
+  }
+  return getConversationContextCompressMessagePercent(conv);
+}
+
+/**
+ * 输入框旁环形进度的悬停 / 点击详情：上下文比例 + 消息已压缩比例。
+ */
+export function formatContextComposerHoverDetail(
+  conv: {
+    messages?: ConversationMessage[] | null;
+    active_context_summary_id?: string | null;
+    context_summaries?: ContextSummary[] | null;
+    context_projection_l1?: Record<string, unknown> | null;
+  } | null | undefined,
+): string {
+  const lines: string[] = [];
+  const p = conv?.context_projection_l1;
+  if (p && typeof p === 'object') {
+    const c = contextProjectionCombinedTotals(p);
+    if (c && c.denom > 0) {
+      lines.push(`约 ${approxChineseChars(c.total)}/${approxChineseChars(c.denom)} · ${c.pct}%`);
+    }
+  }
+  const msgPct = getConversationContextCompressMessagePercent(conv ?? null);
+  if (msgPct != null) {
+    lines.push(`约 ${msgPct}% 消息在摘要里`);
+  }
+  if (lines.length === 0) {
+    const ringPct = getComposerContextRingPercent(conv ?? null);
+    if (ringPct != null) lines.push(`约 ${Math.round(ringPct)}%`);
+  }
+  return lines.join('\n');
+}
+
 export function formatConversationUsageHeaderLine(
   us: UsageStats | null | undefined,
   options?: { currencyMode?: UsageCurrencyMode }

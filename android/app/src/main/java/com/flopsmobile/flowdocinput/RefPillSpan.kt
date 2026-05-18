@@ -27,8 +27,11 @@ class RefPillSpan(
   /** 字号（px）；通常 = view fontSize - 2 */
   var pillFontSize: Float = 14f
 
-  private val paddingH: Float = 8f
-  private val paddingV: Float = 2f
+  /** 跟 iOS RefPillAttachment 对齐：paddingH 收紧到 5（pill 起头一行时跟下面纯文本行
+   *  缩进更接近），paddingV 加大到 4（上下更宽松）。
+   *  TODO: 把 📄 emoji 换成 vector drawable / Material Symbols 字体，跟 iOS SF Symbol 对齐。 */
+  private val paddingH: Float = 5f
+  private val paddingV: Float = 4f
   private val cornerRadius: Float = 999f
 
   private val pillFont: Typeface = Typeface.DEFAULT

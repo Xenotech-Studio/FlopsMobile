@@ -61,6 +61,8 @@ import {
   formatUsageHoverDetail,
   formatConversationUsageHeaderLine,
   getConversationContextCompressMessagePercent,
+  getComposerContextRingPercent,
+  formatContextComposerHoverDetail,
 } from '../utils/formatUsage';
 import { resolveContextCompressDividerPlacement } from '../utils/contextCompress';
 import { normalizeUsageCurrencyMode, type UsageCurrencyMode } from '../constants/pricingDisplay';
@@ -69,11 +71,13 @@ import Svg, { Path } from 'react-native-svg';
 import Clipboard from '@react-native-clipboard/clipboard';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
-import { CHAT_COMPOSER_CONTROL_SIZE } from '../theme/layout';
+import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import { chatInputOverlayGradient, toolPreviewFadeGradient } from '../theme/appColors';
 import { useAppTheme } from '../context/ThemeContext';
 import { createChatStyles } from './chat/ChatScreen.styles';
 import { ThinkingBlockView } from './chat/ThinkingBlockView';
+import { ComposerContextRing } from './chat/ComposerContextRing';
+import { HistoryLoadingOverlay } from './chat/HistoryLoadingOverlay';
 import { mergeToolResultChunk } from '../utils/toolResultPatch';
 import { ansiToSegments } from '../utils/ansiToSegments';
 import {
@@ -266,7 +270,7 @@ export function ChatScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Chat'>>();
   const { colors, isDark } = useAppTheme();
   const styles = useMemo(() => createChatStyles(colors), [colors]);
-  const headerHeight = insets.top + 8 + 12 + CHAT_COMPOSER_CONTROL_SIZE;
+  const headerHeight = insets.top + 8 + 12 + HEADER_CIRCLE_BTN_SIZE;
   /** 底部渐变条高度（叠在滚动内容上，透明→白） */
   const gradientStripHeight = 48;
   /** 输入行高度（输入框+发送+底部留白，模型/助手条绝对叠在留白内，不把整块顶上去） */
@@ -282,6 +286,8 @@ export function ChatScreen() {
   const [serverRawMessages, setServerRawMessages] = useState<ConversationMessage[]>([]);
   const [contextSummaries, setContextSummaries] = useState<ContextSummary[]>([]);
   const [activeContextSummaryId, setActiveContextSummaryId] = useState('');
+  /** 后端按需返回的上下文 L1 投影；composer 旁环形进度条算"已用比例"用 */
+  const [contextProjectionL1, setContextProjectionL1] = useState<Record<string, unknown> | null>(null);
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
   const [usageRuns, setUsageRuns] = useState<UsageRun[]>([]);
   const [showTokenUsageInChat, setShowTokenUsageInChat] = useState(true);
@@ -307,7 +313,15 @@ export function ChatScreen() {
     bound_agent_id?: string;
     agent_profile?: AgentProfile;
   } | null>(null);
-  const [usageDetailModalBody, setUsageDetailModalBody] = useState<string | null>(null);
+  /** Bottom sheet 用量详情：null = 关；对象里 body 必填，title / actionLabel / onAction 可选。
+   *  从 stats icon 入口打开时只传 body；从环形进度条入口打开时传 title="上下文用量" +
+   *  当存在压缩摘要时再带 actionLabel "跳转到压缩截断位置" + onAction = 滚动到那里。 */
+  const [usageDetailModalState, setUsageDetailModalState] = useState<{
+    title?: string;
+    body: string;
+    actionLabel?: string;
+    onAction?: () => void;
+  } | null>(null);
   /** 编辑用户消息后重新生成（与 Web/Desktop 一致） */
   const [userMessageEdit, setUserMessageEdit] = useState<{
     afterIndex: number;
@@ -329,11 +343,20 @@ export function ChatScreen() {
   const [composerPickerOpen, setComposerPickerOpen] = useState(false);
   /** 编辑 Modal 内是否打开 picker（与主 composer 用同一个 modal 不同 ref 表） */
   const [editPickerOpen, setEditPickerOpen] = useState(false);
+  /** picker dismiss 之后是否要把 firstResponder 还给对应 adapter。
+   *  在 onPickDoc 里置 true，在 onAfterDismiss 里读 + 触发 focus 后清回 false。 */
+  const pendingComposerFocusRef = useRef(false);
+  const pendingEditFocusRef = useRef(false);
   /** 回到本页时强制重建输入框，避免多行/高度在其它页编辑后残留 */
   const [composerRemountKey, setComposerRemountKey] = useState(0);
   const [loading, setLoading] = useState(false);
   /** 仅从路由拉取对话历史（GET conversation）期间，与流式 loading 分离 */
-  const [conversationHistoryLoading, setConversationHistoryLoading] = useState(false);
+  /** 初值 = 有 conversationId 时直接 true：避免页面切换那一帧 useEffect 还没跑、
+   *  composer 短暂从渐变里"露脸"再被 loading overlay 盖上。
+   *  无 conversationId（新对话）时不需要拉历史，初值 false。 */
+  const [conversationHistoryLoading, setConversationHistoryLoading] = useState(
+    () => !!params?.conversationId,
+  );
   /** 正在执行 resumeV2Stream（含 AppState 恢复），用于空占位文案显示 Resuming... */
   const [v2ResumeUiActive, setV2ResumeUiActive] = useState(false);
   const [streamingText, setStreamingText] = useState('');
@@ -400,6 +423,8 @@ export function ChatScreen() {
     setContextSummaries(Array.isArray(sums) ? sums : []);
     const aid = conversation.active_context_summary_id;
     setActiveContextSummaryId(typeof aid === 'string' ? aid.trim() : '');
+    const proj = conversation.context_projection_l1;
+    setContextProjectionL1(proj && typeof proj === 'object' ? proj : null);
     setConversationMeta({
       bound_agent_id: typeof conversation.bound_agent_id === 'string' ? conversation.bound_agent_id : undefined,
       agent_profile: conversation.agent_profile,
@@ -2729,11 +2754,12 @@ export function ChatScreen() {
             ) : null}
             </View>
           </ScrollView>
-          {conversationHistoryLoading ? (
-            <View style={styles.historyLoadingOverlay}>
-              <ActivityIndicator size="large" color={colors.textSecondary} />
-            </View>
-          ) : null}
+          <HistoryLoadingOverlay
+            visible={conversationHistoryLoading}
+            bottomOverflow={insets.bottom + 32}
+            overlayStyle={styles.historyLoadingOverlay}
+            spinnerColor={colors.textSecondary}
+          />
           {/* 底部整块贴屏底：渐变铺满整块并延伸到底，输入行叠在渐变底部，无单独白底；点渐变区（未点到输入/发送）可滚到底 */}
           <View style={[styles.bottomOverlay, { height: bottomOverlayHeight }]}>
             <LinearGradient
@@ -2760,7 +2786,7 @@ export function ChatScreen() {
               {(() => {
                 const renderPlusBtn = (
                   <TouchableOpacity
-                    style={styles.composerInlineBtn}
+                    style={styles.composerPlusBtnAbsolute}
                     onPress={loading ? handleStop : () => setComposerPickerOpen(true)}
                     disabled={!loading && (!session || conversationHistoryLoading)}
                     accessibilityLabel={loading ? '停止' : '引用 FlowDoc 文档'}
@@ -2790,7 +2816,7 @@ export function ChatScreen() {
                       >
                         {composerModelTriggerLabel}
                       </Text>
-                      <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
+                      <Ionicons name="chevron-down" size={14} color={colors.placeholder} />
                     </TouchableOpacity>
                     {showAgentComposerColumn ? (
                       agentComposerInteractive ? (
@@ -2808,7 +2834,7 @@ export function ChatScreen() {
                           >
                             {composerAgentLabel}
                           </Text>
-                          <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
+                          <Ionicons name="chevron-down" size={14} color={colors.placeholder} />
                         </TouchableOpacity>
                       ) : (
                         <View style={styles.composerMetaChipReadonly}>
@@ -2824,93 +2850,131 @@ export function ChatScreen() {
                     ) : null}
                   </>
                 ) : null;
-                const renderUsage =
+                /* 右下角不再是长串"共 N tok · ~¥X.XXX"，改成：环形上下文进度 + 统计图 icon；
+                   icon 点击弹原来的本对话用量详情。跟 web 版 ComposerContextRing 对齐。 */
+                const ringPct =
+                  showTokenUsageInChat && conversationId && !conversationHistoryLoading
+                    ? getComposerContextRingPercent({
+                        messages: serverRawMessages,
+                        context_summaries: contextSummaries,
+                        active_context_summary_id: activeContextSummaryId,
+                        context_projection_l1: contextProjectionL1,
+                      })
+                    : null;
+                const showStatsIcon =
                   showTokenUsageInChat &&
                   usageStats &&
                   conversationId &&
-                  !conversationHistoryLoading ? (
-                    <TouchableOpacity
-                      style={styles.composerUsageInMetaRow}
-                      onPress={() =>
-                        setUsageDetailModalBody(
-                          formatUsageHoverDetail(usageStats, {
-                            currencyMode: usageCurrencyDisplay,
-                            modelPriceReference,
-                            selectedModelId,
-                            scope: 'conversation',
-                          })
-                        )
-                      }
-                      activeOpacity={0.7}
-                      accessibilityLabel="本对话用量详情"
-                      hitSlop={{ top: 4, bottom: 4, left: 8, right: 8 }}
-                    >
-                      <Text
-                        style={styles.composerUsageText}
-                        numberOfLines={1}
-                        ellipsizeMode="tail"
-                      >
-                        {formatConversationUsageHeaderLine(usageStats, {
-                          currencyMode: usageCurrencyDisplay,
-                        })}
-                      </Text>
-                    </TouchableOpacity>
+                  !conversationHistoryLoading;
+                const renderUsage =
+                  ringPct != null || showStatsIcon ? (
+                    <View style={styles.composerUsageInMetaRow}>
+                      {ringPct != null ? (
+                        <TouchableOpacity
+                          activeOpacity={0.7}
+                          accessibilityLabel="本对话上下文已用比例"
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          onPress={() => {
+                            const detail =
+                              formatContextComposerHoverDetail({
+                                messages: serverRawMessages,
+                                context_summaries: contextSummaries,
+                                active_context_summary_id: activeContextSummaryId,
+                                context_projection_l1: contextProjectionL1,
+                              }) || `约 ${Math.round(ringPct)}%`;
+                            /* 有压缩摘要分界时才提供"跳转到压缩截断位置"按钮 */
+                            const canJump = contextCompressMessagePercent != null;
+                            setUsageDetailModalState({
+                              title: '上下文用量',
+                              body: detail,
+                              ...(canJump
+                                ? {
+                                    actionLabel: contextCompressScrollToAnchorTitle,
+                                    onAction: scrollToContextCompressAnchor,
+                                  }
+                                : {}),
+                            });
+                          }}
+                        >
+                          <ComposerContextRing percent={ringPct} size={12} />
+                        </TouchableOpacity>
+                      ) : null}
+                      {showStatsIcon ? (
+                        <TouchableOpacity
+                          style={styles.composerUsageIconBtn}
+                          activeOpacity={0.7}
+                          accessibilityLabel="本对话用量与计费详情"
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          onPress={() =>
+                            setUsageDetailModalState({
+                              title: '本对话用量详情',
+                              body: formatUsageHoverDetail(usageStats, {
+                                currencyMode: usageCurrencyDisplay,
+                                modelPriceReference,
+                                selectedModelId,
+                                scope: 'conversation',
+                              }),
+                            })
+                          }
+                        >
+                          <Ionicons
+                            name="stats-chart-outline"
+                            size={12}
+                            color={colors.placeholder}
+                          />
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
                   ) : null;
+                /* FlowDocSlateAdapter 跨 short ↔ tall 切换保持在同一个 JSX 位置：
+                   [card > inputArea > inputWrapper > FlowDocSlateAdapter]，
+                   两模式只改外层 style；+ 按钮抽成 card 的 absolute child，screen 位置不动；
+                   model / agent chips 永远在 card 外的绝对 meta row。 */
+                const adapter = (
+                  <FlowDocSlateAdapter
+                    key={composerRemountKey}
+                    ref={composerAdapterRef}
+                    initialDocument={composerDoc}
+                    onChange={setComposerDoc}
+                    onSubmitOnEnter={handleSendMessage}
+                    placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
+                    placeholderColor={colors.placeholder}
+                    textColor={colors.textPrimary}
+                    pillBackgroundColor={colors.surfaceMuted}
+                    pillTextColor={colors.textMuted}
+                    fontSize={16}
+                    /** 跟用户消息气泡 styles.userText 对齐：16 / 22 */
+                    lineHeight={22}
+                    pillMaxLabelTextWidth={100}
+                    editable={!loading && !conversationHistoryLoading}
+                  />
+                );
                 return (
                   <>
                     <View
                       style={composerTall ? styles.composerCardTall : styles.composerCardShort}
                       pointerEvents="box-none"
                     >
-                      {composerTall ? (
-                        <>
-                          <View style={styles.composerInputTall} pointerEvents="box-none">
-                            <FlowDocSlateAdapter
-                              key={composerRemountKey}
-                              ref={composerAdapterRef}
-                              initialDocument={composerDoc}
-                              onChange={setComposerDoc}
-                              onSubmitOnEnter={handleSendMessage}
-                              placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
-                              placeholderColor={colors.placeholder}
-                              textColor={colors.textPrimary}
-                              pillBackgroundColor={colors.surfaceMuted}
-                              pillTextColor={colors.textMuted}
-                              fontSize={16}
-                              editable={!loading && !conversationHistoryLoading}
-                            />
-                          </View>
-                          <View style={styles.composerTallActions} pointerEvents="box-none">
-                            {renderPlusBtn}
-                            <View style={styles.composerTallChips}>{renderChips}</View>
-                            {renderUsage}
-                          </View>
-                        </>
-                      ) : (
-                        <View style={styles.composerInputRow} pointerEvents="box-none">
-                          {renderPlusBtn}
-                          <View style={styles.composerInputShort} pointerEvents="box-none">
-                            <FlowDocSlateAdapter
-                              key={composerRemountKey}
-                              ref={composerAdapterRef}
-                              initialDocument={composerDoc}
-                              onChange={setComposerDoc}
-                              onSubmitOnEnter={handleSendMessage}
-                              placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
-                              placeholderColor={colors.placeholder}
-                              textColor={colors.textPrimary}
-                              pillBackgroundColor={colors.surfaceMuted}
-                              pillTextColor={colors.textMuted}
-                              fontSize={16}
-                              editable={!loading && !conversationHistoryLoading}
-                            />
-                          </View>
+                      <View
+                        style={
+                          composerTall
+                            ? styles.composerInputAreaTall
+                            : styles.composerInputAreaShort
+                        }
+                        pointerEvents="box-none"
+                      >
+                        <View
+                          style={composerTall ? styles.composerInputTall : styles.composerInputShort}
+                          pointerEvents="box-none"
+                        >
+                          {adapter}
                         </View>
-                      )}
+                      </View>
+                      {/* + 按钮：card 的 absolute child；bottom:10 left:8 在 short / tall 都一样 */}
+                      {renderPlusBtn}
                     </View>
-                    {/* short 模式：模型 / 助手 chips 走绝对 meta row（贴在 composer 下面留白里）。
-                        tall 模式：chips 已经在卡片底部 inline，这里不再渲染。 */}
-                    {!composerTall && session ? (
+                    {/* 模型 / 助手 chips：永远在 card 外的绝对 meta row，short / tall 都贴底 6pt */}
+                    {session ? (
                       <View style={styles.composerMetaRowAbsolute}>
                         <View style={styles.composerMetaPills}>{renderChips}</View>
                         {renderUsage}
@@ -2957,9 +3021,12 @@ export function ChatScreen() {
       onSelectModel={(id) => void handleSelectAgent(id)}
     />
     <UsageDetailModal
-      visible={usageDetailModalBody != null}
-      onClose={() => setUsageDetailModalBody(null)}
-      body={usageDetailModalBody ?? ''}
+      visible={usageDetailModalState != null}
+      onClose={() => setUsageDetailModalState(null)}
+      title={usageDetailModalState?.title}
+      body={usageDetailModalState?.body ?? ''}
+      actionLabel={usageDetailModalState?.actionLabel}
+      onAction={usageDetailModalState?.onAction}
     />
     <Modal
       visible={userMessageEdit != null}
@@ -3022,6 +3089,8 @@ export function ChatScreen() {
                 pillBackgroundColor={colors.surfaceMuted}
                 pillTextColor={colors.textMuted}
                 fontSize={16}
+                lineHeight={22}
+                pillMaxLabelTextWidth={100}
                 editable
               />
             ) : null}
@@ -3074,6 +3143,16 @@ export function ChatScreen() {
         composerRefDataByKeyRef.current.set(ref.key, ref);
         const mention = ref.mention_text || `@${ref.title || ''}`;
         composerAdapterRef.current?.insertPill(ref.key, mention, ref.title || '', true);
+        /* 等模态彻底 dismiss 动画结束之后再 focus，否则 modal 还盖着 textView，
+           focus 调用会被忽略 → 光标视觉上消失。native insertPill 已经把 selectedRange
+           设到了 pill 之后那个位置，所以 focus() 即可，不需要 focusAtOffset。 */
+        pendingComposerFocusRef.current = true;
+      }}
+      onAfterDismiss={() => {
+        if (pendingComposerFocusRef.current) {
+          pendingComposerFocusRef.current = false;
+          composerAdapterRef.current?.focus();
+        }
       }}
     />
     <FlowDocPickerModal
@@ -3089,6 +3168,13 @@ export function ChatScreen() {
         });
         const mention = ref.mention_text || `@${ref.title || ''}`;
         userMessageEditAdapterRef.current?.insertPill(ref.key, mention, ref.title || '', true);
+        pendingEditFocusRef.current = true;
+      }}
+      onAfterDismiss={() => {
+        if (pendingEditFocusRef.current) {
+          pendingEditFocusRef.current = false;
+          userMessageEditAdapterRef.current?.focus();
+        }
       }}
     />
     </>

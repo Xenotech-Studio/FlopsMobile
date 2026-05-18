@@ -257,7 +257,20 @@
       att.fontSize = MAX(10.0, self.fontSize - 2);
       att.maxLabelTextWidth = self.pillMaxLabelTextWidth;
       [att refreshImage];
-      [attr appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
+      /* attachment 占位字符（U+FFFC）必须显式带 NSFontAttribute / NSForegroundColorAttributeName，
+         否则光标删到紧贴 pill 之后时 UITextView 的 typingAttributes 继承自 pill 字符（无字号），
+         接着输入的字会用系统默认小字号。 */
+      NSMutableAttributedString *pillAtomic =
+          [[NSMutableAttributedString alloc] initWithAttributedString:
+               [NSAttributedString attributedStringWithAttachment:att]];
+      UIFont *bodyFont = [self baseFontOfSize:self.fontSize];
+      [pillAtomic addAttribute:NSFontAttributeName
+                         value:bodyFont
+                         range:NSMakeRange(0, pillAtomic.length)];
+      [pillAtomic addAttribute:NSForegroundColorAttributeName
+                         value:(self.textColor ?: [UIColor labelColor])
+                         range:NSMakeRange(0, pillAtomic.length)];
+      [attr appendAttributedString:pillAtomic];
     }
   }
 
@@ -301,7 +314,19 @@
                               NSForegroundColorAttributeName: self.textColor ?: [UIColor labelColor]};
 
   NSMutableAttributedString *pillStr = [[NSMutableAttributedString alloc] init];
-  [pillStr appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
+  /* attachment 字符也带正文 font / textColor —— 见上文 applyContentJson 的同款注释。
+     删掉 pill 后续的空格时，光标会落到紧贴 pill 之后，typingAttributes 继承 pill 字符
+     的属性；如果 pill 字符没字号，后续输入会变成系统默认小字号。 */
+  NSMutableAttributedString *pillAtomic =
+      [[NSMutableAttributedString alloc] initWithAttributedString:
+           [NSAttributedString attributedStringWithAttachment:att]];
+  [pillAtomic addAttribute:NSFontAttributeName
+                     value:font
+                     range:NSMakeRange(0, pillAtomic.length)];
+  [pillAtomic addAttribute:NSForegroundColorAttributeName
+                     value:(self.textColor ?: [UIColor labelColor])
+                     range:NSMakeRange(0, pillAtomic.length)];
+  [pillStr appendAttributedString:pillAtomic];
   [pillStr appendAttributedString:[[NSAttributedString alloc] initWithString:@" " attributes:textAttrs]];
 
   NSRange sel = self.textView.selectedRange;
@@ -656,6 +681,13 @@
                 didChangeContentJson:[self currentContentJson]
                             pillCount:[self currentPillCount]];
   }
+  /* 程序式改 textStorage（insertPill / setContentJson / applyMark 等）不会触发
+     -textViewDidChange，因此也不会走到 setNeedsLayout / layoutSubviews ——
+     -maybeEmitContentSizeChange 不会 fire，JS 端 autoHeight 还停在改前高度，
+     文本就被截断（pill 折行后看不到第二行 / 光标也消失）。
+     在每次 content 变化后主动重布局，确保 -layoutSubviews 跑一遍。 */
+  [self setNeedsLayout];
+  [self layoutIfNeeded];
 }
 
 // MARK: - UITextViewDelegate

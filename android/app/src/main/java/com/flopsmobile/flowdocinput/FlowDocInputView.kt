@@ -526,6 +526,11 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
       putInt("pillCount", currentPillCount())
     }
     dispatchEvent("topChangeContent", payload)
+    /* 程序式改 text（insertPill / setContentJson / applyMark 等）后强制重布局 + 重测，
+       让 onLayout → maybeEmitContentSize 跑一遍。否则 JS 端 autoHeight 还是改前高度，
+       pill 折行后第二行 / 光标会被截断。EditText 改 text 一般会自动 requestLayout，
+       这里再保险一下。*/
+    requestLayout()
   }
 
   private fun emitSplitRequest(offset: Int) {
