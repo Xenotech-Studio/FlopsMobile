@@ -1247,3 +1247,62 @@ export async function selectModel(session: Session, model: string): Promise<Mode
   }
   return (await res.json()) as ModelsConfigResponse;
 }
+
+/* ============================================================
+ * FlowDoc 文档树 + 快照
+ *   - 树：GET /api/flowdoc/tx/tree（Flops 代理到 FlowDoc /api/tree/tree）
+ *   - 快照：GET /api/flowdoc/doc/{doc_id}/snapshot（二进制 Y.Doc）
+ *   两条都走 Flops，无需配置额外的 FlowDoc 域名 / 鉴权头。
+ * ============================================================ */
+
+export type FlowDocTreeItem = {
+  id: string;
+  name?: string | null;
+  /** 'folder' / 'doc' / 'cooperateInbox'；其它类型容错保留字符串原值 */
+  type: string;
+  parentId?: string | null;
+  children?: string[];
+  level?: number;
+  accessRole?: 'owner' | 'collaborator';
+  ownerNickname?: string | null;
+  ownerUserId?: string | null;
+  createdAt?: number;
+  updatedAt?: number;
+  meta?: Record<string, unknown>;
+};
+
+export async function getFlowDocTree(session: Session): Promise<FlowDocTreeItem[]> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/flowdoc/tx/tree`, {
+    method: 'GET',
+    headers: authHeaders(session.access_token),
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => '');
+    throw new Error(`获取 FlowDoc 文档树失败: ${res.status} ${err}`);
+  }
+  const data = (await res.json()) as { ok?: boolean; tree?: FlowDocTreeItem[]; error?: string };
+  if (data?.ok === false) throw new Error(data.error || '获取 FlowDoc 文档树失败');
+  return Array.isArray(data?.tree) ? data.tree : [];
+}
+
+/** 返回 Y.Doc 二进制快照。404 时返回 null（文档存在于树但尚无 snapshot：新建未输入文字的状态）。 */
+export async function getFlowDocSnapshot(
+  session: Session,
+  docId: string,
+): Promise<Uint8Array | null> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(
+    `${base}api/flowdoc/doc/${encodeURIComponent(docId)}/snapshot`,
+    {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    },
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(`获取 FlowDoc 快照失败: ${res.status}`);
+  }
+  const buf = await res.arrayBuffer();
+  return new Uint8Array(buf);
+}
