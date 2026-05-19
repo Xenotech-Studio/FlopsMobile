@@ -52,6 +52,10 @@ import {
 } from '../../api/androidUpdateApi';
 import { downloadApk, installApk } from '../../utils/androidUpdate';
 import { isApnsSupported } from '../../notifications/apnsClient';
+import {
+  subscribeClientOutdated,
+  type ClientOutdatedDetail,
+} from '../../utils/clientCompatBus';
 import { shadowSheet, shadowCardThemed } from '../../theme/shadows';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -73,6 +77,8 @@ export function ProfileSheet({
     avatarUrl?: string;
     nickname?: string;
   } | null>(null);
+  /** 服务器 426：当前 mobile 版本已被网关拒绝；用来在 about 面板顶部展示红色横幅 */
+  const [clientOutdated, setClientOutdated] = useState<ClientOutdatedDetail | null>(null);
 
   useEffect(() => {
     if (!session) {
@@ -105,6 +111,20 @@ export function ProfileSheet({
   const [expandedChangelogVersion, setExpandedChangelogVersion] = useState<
     string | null
   >(null);
+
+  /** 订阅 426 总线：记下被服务器拒掉的版本号用于横幅；并在 Android 上自动展开 about modal
+   *  （iOS 没这步，会由 UpgradeRequiredOverlay 的「我知道了」结束流程） */
+  useEffect(() => {
+    return subscribeClientOutdated((d) => {
+      setClientOutdated(d);
+      if (Platform.OS === 'android') {
+        setAboutVisible(true);
+        setUpdateStatus('idle');
+        setUpdateError('');
+        setLatestRelease(null);
+      }
+    });
+  }, []);
 
   const openAbout = useCallback(() => {
     setAboutVisible(true);
@@ -329,6 +349,15 @@ export function ProfileSheet({
               style={styles.aboutBody}
               contentContainerStyle={styles.aboutBodyContent}
             >
+              {clientOutdated ? (
+                <View style={styles.outdatedBanner}>
+                  <Text style={styles.outdatedBannerText}>
+                    {`服务器已不再支持当前版本 ${clientOutdated.reported || APP_VERSION}`}
+                    {clientOutdated.min ? `（要求 ≥ ${clientOutdated.min}）` : ''}
+                    {isAndroid ? '，请使用下方"检查更新"升级。' : '。'}
+                  </Text>
+                </View>
+              ) : null}
               <View style={styles.aboutRow}>
                 <Text style={styles.aboutLabel}>当前版本</Text>
                 <Text style={styles.aboutVersion}>{APP_VERSION}</Text>
@@ -633,6 +662,15 @@ function createStyles(c: AppColors) {
     aboutRow: { marginBottom: 12 },
     aboutLabel: { fontSize: 14, color: c.textMuted, marginBottom: 4 },
     aboutVersion: { fontSize: 17, fontWeight: '600', color: c.textPrimary },
+    outdatedBanner: {
+      marginBottom: 12,
+      padding: 12,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: c.danger,
+      backgroundColor: 'rgba(220, 38, 38, 0.10)',
+    },
+    outdatedBannerText: { color: c.textPrimary, fontSize: 13, lineHeight: 20 },
     aboutCheckBtn: {
       backgroundColor: c.primary,
       paddingVertical: 12,

@@ -1,7 +1,14 @@
 /**
  * HTTP 请求调试日志：封装 fetch 并打印完整请求/响应（可配置、可截断）。
  * 仅在 __DEV__ 时生效；可通过 ENABLE_HTTP_DEBUG 强制开启。
+ *
+ * 同时承担"客户端最低支持版本网关"职责：
+ *  - 每个请求带 X-Client-Platform=mobile / X-Client-Version=<APP_VERSION>
+ *  - 命中 426 时通过 clientCompatBus 通知顶层，弹强制升级遮罩
  */
+
+import { APP_VERSION } from '../appVersion';
+import { notifyClientOutdated } from './clientCompatBus';
 
 const TAG = '[FlopsMobile HTTP]';
 const MAX_BODY_LOG = 1200;
@@ -86,6 +93,44 @@ export type FetchDebugOptions = { log4xxAsInfo?: boolean };
  * 带完整调试日志的 fetch：打印请求 URL/方法/头/体，以及响应状态/头/体（流式响应仅标 [streaming]）。
  * options.log4xxAsInfo：为 true 时，4xx 响应按 log 输出而非 warn，避免预期内的错误（如密码错误）在调试器里显示为报错。
  */
+const MOBILE_PLATFORM = 'mobile';
+
+function withCompatHeaders(init?: RequestInit): RequestInit {
+  const next: RequestInit = { ...(init || {}) };
+  const headers: Record<string, string> = {
+    ...headersToObject(next.headers as Headers | Record<string, string> | undefined),
+  };
+  if (!('X-Client-Platform' in headers) && !('x-client-platform' in headers)) {
+    headers['X-Client-Platform'] = MOBILE_PLATFORM;
+  }
+  if (!('X-Client-Version' in headers) && !('x-client-version' in headers)) {
+    headers['X-Client-Version'] = APP_VERSION;
+  }
+  next.headers = headers;
+  return next;
+}
+
+async function maybeHandle426(res: Response): Promise<void> {
+  if (res.status !== 426) return;
+  try {
+    const clone = res.clone();
+    const data = (await clone.json()) as {
+      platform?: string;
+      min_supported_version?: string;
+      reported_version?: string;
+      detail?: string;
+    };
+    notifyClientOutdated({
+      platform: data?.platform || MOBILE_PLATFORM,
+      min: data?.min_supported_version || '',
+      reported: data?.reported_version || APP_VERSION,
+      message: data?.detail || '',
+    });
+  } catch {
+    notifyClientOutdated({ platform: MOBILE_PLATFORM, min: '', reported: APP_VERSION, message: '' });
+  }
+}
+
 export async function fetchWithDebugLog(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -93,11 +138,12 @@ export async function fetchWithDebugLog(
 ): Promise<Response> {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   const method = (init?.method || 'GET').toUpperCase();
-  const reqHeaders = headersToObject(init?.headers as Headers | Record<string, string> | undefined);
+  const initWithHeaders = withCompatHeaders(init);
+  const reqHeaders = headersToObject(initWithHeaders.headers as Headers | Record<string, string> | undefined);
   let reqBody: string | null = null;
-  if (init?.body != null) {
-    if (typeof init.body === 'string') reqBody = init.body;
-    else if (typeof (init.body as { toString?: () => string }).toString === 'function') reqBody = (init.body as { toString: () => string }).toString();
+  if (initWithHeaders.body != null) {
+    if (typeof initWithHeaders.body === 'string') reqBody = initWithHeaders.body;
+    else if (typeof (initWithHeaders.body as { toString?: () => string }).toString === 'function') reqBody = (initWithHeaders.body as { toString: () => string }).toString();
     else reqBody = '[非字符串 body]';
   }
 
@@ -106,7 +152,8 @@ export async function fetchWithDebugLog(
   }
 
   try {
-    const res = await (fetch as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>)(input, init);
+    const res = await (fetch as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>)(input, initWithHeaders);
+    await maybeHandle426(res);
     const resHeaders = headersToObject(res.headers);
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
     const isExpected4xx = options?.log4xxAsInfo && res.status >= 400 && res.status < 500;
