@@ -22,6 +22,7 @@
  */
 import React, {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -32,6 +33,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Extrapolation,
@@ -53,11 +55,25 @@ import { ProjectScreen } from '../ProjectScreen';
 import { DocsScreen } from '../DocsScreen';
 import { ChatScreen } from '../ChatScreen';
 import { SystemGestureExclusionView } from '../../components/SystemGestureExclusionView';
+import { subscribeClientOutdated } from '../../utils/clientCompatBus';
+import { getScreenCornerRadius } from '../../utils/screenInfo';
 
 /** 抽屉完全展开时主页面右侧保留的 peek 宽度 */
 const PEEK_WIDTH = 64;
-/** 主页面在最大展开时圆角的最终值 */
-const MAIN_RADIUS_OPEN = 24;
+/** 主页面在最大展开时圆角的兜底值（无法推断屏幕圆角的设备） */
+const MAIN_RADIUS_FALLBACK = 24;
+/** 通过 safe-area top inset 推断 iOS 设备屏幕物理圆角；Android 用保守默认值。
+ *  - top inset ≥ 59：灵动岛设备（iPhone 14 Pro+ / 15+ / 16）：屏幕圆角约 55pt
+ *  - top inset ≥ 44：刘海设备（iPhone X – 14 普通 / iPhone 15）：屏幕圆角约 47pt
+ *  - 其它（含 iPhone SE 等矩形屏）：0 */
+function inferScreenCornerRadius(topInset: number): number {
+  if (Platform.OS === 'ios') {
+    if (topInset >= 59) return 55;
+    if (topInset >= 44) return 47;
+    return 0;
+  }
+  return MAIN_RADIUS_FALLBACK;
+}
 /** 抽屉自身 dim 上限：progress=0 时最暗、progress=1 时全亮（参考 Claude app 的「刚拉开抽屉偏暗、展开到位才完全显形」效果） */
 const DRAWER_DIM_AT_CLOSED = 0.55;
 /** 左缘热区宽度（与现有左缘开 Profile 一致） */
@@ -78,7 +94,26 @@ const SPRING_CONFIG = {
 
 export function DrawerShell() {
   const { width: winWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const { colors } = useAppTheme();
+
+  /** Android 通过 native module 异步读出来的屏幕物理圆角；iOS 始终为 0（走 inferScreenCornerRadius 查表兜底） */
+  const [nativeCornerRadius, setNativeCornerRadius] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    getScreenCornerRadius().then((v) => {
+      if (!cancelled) setNativeCornerRadius(v);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** 主页面完全展开时的圆角：优先用 native 实测（仅 Android 12+），否则用 inferScreenCornerRadius 查表兜底 */
+  const mainRadiusOpen = useMemo(
+    () => (nativeCornerRadius > 0 ? nativeCornerRadius : inferScreenCornerRadius(insets.top)),
+    [nativeCornerRadius, insets.top]
+  );
 
   /** 抽屉展开比例：0 = 关闭，1 = 完全展开。reanimated shared value，UI 线程驱动动画。 */
   const progress = useSharedValue(0);
@@ -107,6 +142,16 @@ export function DrawerShell() {
 
   const presentProfileSheet = useCallback(() => {
     profileSheetRef.current?.present();
+  }, []);
+
+  /** 服务器 426：Android 上自动 present ProfileSheet（sheet 内部也订阅总线，会同步打开 about modal）。
+   *  iOS 不自动 present —— iOS 的 UpgradeRequiredOverlay 只展示「我知道了」，用户可手动进 Profile 看横幅。 */
+  useEffect(() => {
+    return subscribeClientOutdated(() => {
+      if (Platform.OS === 'android') {
+        profileSheetRef.current?.present();
+      }
+    });
   }, []);
 
   /** DrawerContent 点条目：切顶层页 + 关抽屉 */
@@ -189,19 +234,50 @@ export function DrawerShell() {
     [maxTranslateX, progress]
   );
 
-  /** 主页面容器 transform / borderRadius / 阴影 */
-  const animatedMainStyle = useAnimatedStyle(() => {
+  /** 拖动 / 打开时启用 Android elevation；progress 离开 0 即开，回到 0 即关。
+   *  Android 不能用 reanimated 动态 elevation（会闪烁），故走 JS state。iOS 的 shadowOpacity 走下方
+   *  animatedShadowStyle 跟 progress 平滑变。 */
+  const [shadowOn, setShadowOn] = useState(false);
+  useAnimatedReaction(
+    () => progress.value > 0.005,
+    (curr, prev) => {
+      'worklet';
+      if (prev == null) return;
+      if (curr !== prev) runOnJS(setShadowOn)(curr);
+    }
+  );
+
+  /** 外层：transform（shadow 也挂在外层，外层不能 overflow:hidden 否则阴影被裁掉） */
+  const animatedMainOuterStyle = useAnimatedStyle(() => {
     const tx = progress.value * maxTranslateX;
+    return {
+      transform: [{ translateX: tx }],
+    };
+  });
+
+  /** 内层：borderRadius（内层 overflow:hidden 用来裁剪 children；shadow 不放这里） */
+  const animatedMainInnerStyle = useAnimatedStyle(() => {
     const radius = interpolate(
       progress.value,
       [0, 1],
-      [0, MAIN_RADIUS_OPEN],
+      [0, mainRadiusOpen],
       Extrapolation.CLAMP
     );
     return {
-      transform: [{ translateX: tx }],
       borderRadius: radius,
-      // shadow 走 iOS 平台样式；Android elevation 在静态 style 里恒定（动态 elevation 抖动）
+    };
+  });
+
+  /** iOS：主页面阴影随 progress 平滑显隐（progress=0 完全无阴影，progress 一离开 0 就拉到峰值）。
+   *  参考 Claude app：阴影很柔和、低不透明，仅作边缘层次提示而不是强黑边。 */
+  const animatedShadowStyle = useAnimatedStyle(() => {
+    return {
+      shadowOpacity: interpolate(
+        progress.value,
+        [0, 0.05, 1],
+        [0, 0.08, 0.08],
+        Extrapolation.CLAMP
+      ),
     };
   });
 
@@ -251,7 +327,7 @@ export function DrawerShell() {
 
   return (
     <DrawerProvider value={handle}>
-      <View style={[styles.root, { backgroundColor: colors.backgroundSecondary }]}>
+      <View style={[styles.root, { backgroundColor: colors.drawerBackground }]}>
         {/* 背后：抽屉本体（静止，不做 transform）；上叠 dim 层，刚拉开偏暗、展开到位才完全显形 */}
         <View style={styles.drawerBack} pointerEvents={isOpen ? 'auto' : 'none'}>
           <DrawerContent />
@@ -261,34 +337,45 @@ export function DrawerShell() {
           />
         </View>
 
-        {/* 前面：主页面；整体做 translateX / borderRadius / shadow（不再压暗主页，仅作为可点关闭区） */}
+        {/* 前面：主页面。
+         *  外层只做 translateX + shadow（不能 overflow:hidden，否则阴影被裁掉）。
+         *  内层做 borderRadius + overflow:hidden 来裁剪子内容。 */}
         <Animated.View
           style={[
-            styles.mainWrap,
-            { backgroundColor: colors.chatScreenBackground },
-            animatedMainStyle,
-            Platform.OS === 'ios' && isOpen
-              ? {
-                  shadowColor: '#000',
-                  shadowOffset: { width: -2, height: 0 },
-                  shadowOpacity: 0.18,
-                  shadowRadius: 12,
-                }
+            styles.mainOuter,
+            animatedMainOuterStyle,
+            Platform.OS === 'ios'
+              ? [
+                  {
+                    shadowColor: '#000',
+                    shadowOffset: { width: -1, height: 0 },
+                    shadowRadius: 8,
+                  },
+                  animatedShadowStyle,
+                ]
               : null,
-            Platform.OS === 'android' && isOpen ? { elevation: 12 } : null,
+            Platform.OS === 'android' && shadowOn ? { elevation: 6 } : null,
           ]}
         >
-          {activeElement}
+          <Animated.View
+            style={[
+              styles.mainInner,
+              { backgroundColor: colors.chatScreenBackground },
+              animatedMainInnerStyle,
+            ]}
+          >
+            {activeElement}
 
-          {/* 透明手势捕获层：isOpen 时接管点击关 + 左滑关；不做任何压暗效果 */}
-          {isOpen ? (
-            <GestureDetector gesture={closeGesture}>
-              <View
-                style={StyleSheet.absoluteFill}
-                onTouchEnd={close}
-              />
-            </GestureDetector>
-          ) : null}
+            {/* 透明手势捕获层：isOpen 时接管点击关 + 左滑关；不做任何压暗效果 */}
+            {isOpen ? (
+              <GestureDetector gesture={closeGesture}>
+                <View
+                  style={StyleSheet.absoluteFill}
+                  onTouchEnd={close}
+                />
+              </GestureDetector>
+            ) : null}
+          </Animated.View>
         </Animated.View>
 
         {/* 左缘手势条：仅抽屉关闭时挂载；SystemGestureExclusionView 让 Android 不抢系统返回 */}
@@ -317,8 +404,13 @@ const styles = StyleSheet.create({
   drawerBack: {
     ...StyleSheet.absoluteFillObject,
   },
-  mainWrap: {
+  /** 外层：fill 容器，承载 transform + shadow；不能 overflow:hidden（否则阴影被裁掉） */
+  mainOuter: {
     ...StyleSheet.absoluteFillObject,
+  },
+  /** 内层：承载 borderRadius + overflow:hidden 来裁剪 children；shadow 不放这里 */
+  mainInner: {
+    flex: 1,
     overflow: 'hidden',
   },
   drawerDim: {

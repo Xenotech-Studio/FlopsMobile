@@ -293,7 +293,7 @@ function SectionLabel({ text, colors }: { text: string; colors: AppColors }) {
 
 function createStyles(c: AppColors) {
   return StyleSheet.create({
-    container: { flex: 1, backgroundColor: c.backgroundSecondary },
+    container: { flex: 1, backgroundColor: c.drawerBackground },
     scroll: { flex: 1 },
     scrollContent: {
       paddingHorizontal: 20,
@@ -330,7 +330,7 @@ function createStyles(c: AppColors) {
       gap: 12,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: c.borderMuted,
-      backgroundColor: c.backgroundSecondary,
+      backgroundColor: c.drawerBackground,
     },
     avatarBtn: {
       width: 40,

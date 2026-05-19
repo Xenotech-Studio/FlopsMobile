@@ -5,6 +5,8 @@
 export type AppColors = {
   background: string;
   backgroundSecondary: string;
+  /** 抽屉外壳画布：比 chatScreenBackground 略暗，使主页面"浮"在抽屉之上的层次更明显 */
+  drawerBackground: string;
   /** 聊天页主画布：亮模式极浅灰（与任务详情页底一致）；暗色同 background */
   chatScreenBackground: string;
   /** 列表类主画布（任务栈、Docs 占位等）；浅色与 chatScreenBackground 一致 */
@@ -102,6 +104,10 @@ export const LIGHT_LIST_CANVAS_IOS = '#f9fafb';
 /** 浅色同语义画布：Android 略深于 iOS；仍浅于 surfaceMuted，避免与次要块面色黏连 */
 export const LIGHT_LIST_CANVAS_ANDROID = '#f7f7f7';
 
+/** 浅色抽屉画布：比主画布略暗一档，让主页面在抽屉打开时形成可见的"卡片在底色上"层次。 */
+export const LIGHT_DRAWER_CANVAS_IOS = '#ededef';
+export const LIGHT_DRAWER_CANVAS_ANDROID = '#e8e8e8';
+
 /** 浅色 + Android：列表画布略加深，顶栏/Sheet 标题下分割线改为 androidCircleFabHairline（与圆钮描边一致）。 */
 export function withLightPlatformListCanvas(
   isDark: boolean,
@@ -114,6 +120,7 @@ export function withLightPlatformListCanvas(
     backgroundSecondary: LIGHT_LIST_CANVAS_ANDROID,
     chatScreenBackground: LIGHT_LIST_CANVAS_ANDROID,
     conversationListBackground: LIGHT_LIST_CANVAS_ANDROID,
+    drawerBackground: LIGHT_DRAWER_CANVAS_ANDROID,
     headerBarBottomBorderColor: colors.androidCircleFabHairline,
   };
 }
@@ -121,6 +128,7 @@ export function withLightPlatformListCanvas(
 export const lightColors: AppColors = {
   background: '#ffffff',
   backgroundSecondary: LIGHT_LIST_CANVAS_IOS,
+  drawerBackground: LIGHT_DRAWER_CANVAS_IOS,
   chatScreenBackground: LIGHT_LIST_CANVAS_IOS,
   /** 与 chatScreenBackground 同色；Android 浅色下由 withLightPlatformListCanvas 同步加深 */
   conversationListBackground: LIGHT_LIST_CANVAS_IOS,
@@ -202,6 +210,7 @@ export const darkColors: AppColors = {
   /** 聊天主画布、任务列表等与会话列表统一的深灰底 */
   background: '#101010',
   backgroundSecondary: '#0a0a0b',
+  drawerBackground: '#070708',
   chatScreenBackground: '#101010',
   conversationListBackground: '#101010',
   /** 略亮于列表底，对比低于原 surfaceMuted，分割线更暗、更弱 */
