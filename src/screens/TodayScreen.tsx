@@ -69,6 +69,7 @@ import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { PullToRefreshRing } from '../components/PullToRefreshRing';
 import { InboxRunSpinner, InboxUnreadCheck } from '../components/InboxListIndicators';
 import { HamburgerButton } from './shell/HamburgerButton';
+import { useDrawer } from './shell/DrawerContext';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 import { shadowCircleButtonThemed, shadowMenu, shadowSoft } from '../theme/shadows';
@@ -111,6 +112,7 @@ type ListRow = TaskItem;
 
 export function TodayScreen() {
   const navigation = useNavigation<Nav>();
+  const { setActive } = useDrawer();
   const insets = useSafeAreaInsets();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -362,14 +364,16 @@ export function TodayScreen() {
     [navigation]
   );
 
+  /** 对话行点击：与抽屉 Recents 一致，作为顶层页切换，不 stack push */
   const onConvPress = useCallback(
     (conv: ConversationListItem) => {
-      navigation.navigate('Chat', {
+      setActive({
+        kind: 'chat',
         conversationId: conv.id,
         conversationTitle: (conv.title && conv.title.trim()) || '新对话',
       });
     },
-    [navigation]
+    [setActive]
   );
 
   const onCalendarPress = useCallback(

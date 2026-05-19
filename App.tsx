@@ -24,13 +24,11 @@ import { PushTokenLifecycle } from './src/notifications/PushTokenLifecycle';
 import { PresenceReporter } from './src/notifications/PresenceReporter';
 import { DeepLinkRouter } from './src/notifications/DeepLinkRouter';
 
-// 参考 FlopsIOS：首帧就是聊天页，无跳转动画；返回手势可回到主页面
+// 首帧 = DrawerShell（默认 active=today）。Chat 不再预 push 在栈上：
+// 由抽屉 + 按钮 / Recents / 今日页对话段 setActive 提升为顶层页，避免「两层导航」。
 const initialNavState = {
-  index: 1,
-  routes: [
-    { name: 'Main' as const },
-    { name: 'Chat' as const, params: { conversationTitle: '新对话' } },
-  ],
+  index: 0,
+  routes: [{ name: 'Main' as const }],
 };
 
 function AppContent() {

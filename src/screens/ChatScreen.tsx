@@ -74,6 +74,7 @@ import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import { chatInputOverlayGradient, toolPreviewFadeGradient } from '../theme/appColors';
 import { useAppTheme } from '../context/ThemeContext';
+import { HamburgerButton } from './shell/HamburgerButton';
 import { createChatStyles } from './chat/ChatScreen.styles';
 import { ThinkingBlockView } from './chat/ThinkingBlockView';
 import { ComposerContextRing } from './chat/ComposerContextRing';
@@ -263,7 +264,21 @@ function ReadPagesHeaderLoadBar({
   );
 }
 
-export function ChatScreen() {
+/** 从 DrawerShell 直接渲染时透传的覆盖参数：
+ *  - inDrawer = 顶层页模式，header 左上角换汉堡（开抽屉），不挂左缘 PanResponder（避免与 DrawerShell 左缘手势冲突）。
+ *  - conversationIdOverride / conversationTitleOverride 取代 route.params；route.params 在 stack-push 模式下仍是入口。
+ */
+export type ChatScreenProps = {
+  inDrawer?: boolean;
+  conversationIdOverride?: string;
+  conversationTitleOverride?: string;
+};
+
+export function ChatScreen({
+  inDrawer = false,
+  conversationIdOverride,
+  conversationTitleOverride,
+}: ChatScreenProps = {}) {
   const { session } = useSession();
   const insets = useSafeAreaInsets();
   const route = useRoute();
@@ -279,7 +294,13 @@ export function ChatScreen() {
   const bottomOverlayHeight = gradientStripHeight + inputRowHeight;
   /** 列表底部留白，让内容可滚入渐变下方 */
   const scrollBottomPadding = bottomOverlayHeight + 12;
-  const params = (route.params ?? undefined) as ChatRouteParams | undefined;
+  /** drawer 模式下用 props 覆盖；stack-push 模式下读 route.params */
+  const params: ChatRouteParams | undefined = inDrawer
+    ? {
+        conversationId: conversationIdOverride,
+        conversationTitle: conversationTitleOverride,
+      }
+    : ((route.params ?? undefined) as ChatRouteParams | undefined);
   const [conversationId, setConversationId] = useState(params?.conversationId ?? '');
   const [conversationTitle, setConversationTitle] = useState(params?.conversationTitle ?? '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -2219,7 +2240,8 @@ export function ChatScreen() {
     );
   }
 
-  const canGoBack = navigation.canGoBack();
+  /** drawer 模式下不渲染返回，由 HamburgerButton 顶替；同时左缘 PanResponder 不挂，避免与 DrawerShell 左缘手势重叠 */
+  const canGoBack = !inDrawer && navigation.canGoBack();
   const leftEdgePan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -2585,7 +2607,9 @@ export function ChatScreen() {
           topSolidHeight={insets.top + 8}
           gradientBaseHex={colors.chatScreenBackground}
         />
-        {canGoBack ? (
+        {inDrawer ? (
+          <HamburgerButton />
+        ) : canGoBack ? (
           <TouchableOpacity
             style={styles.circleBtn}
             onPress={() => navigation.goBack()}

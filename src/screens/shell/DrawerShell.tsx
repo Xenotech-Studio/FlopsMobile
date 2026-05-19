@@ -51,6 +51,7 @@ import { ProfileSheet } from './ProfileSheet';
 import { TodayScreen } from '../TodayScreen';
 import { ProjectScreen } from '../ProjectScreen';
 import { DocsScreen } from '../DocsScreen';
+import { ChatScreen } from '../ChatScreen';
 import { SystemGestureExclusionView } from '../../components/SystemGestureExclusionView';
 
 /** 抽屉完全展开时主页面右侧保留的 peek 宽度 */
@@ -236,6 +237,15 @@ export function DrawerShell() {
         );
       case 'docs':
         return <DocsScreen key="docs" />;
+      case 'chat':
+        return (
+          <ChatScreen
+            key={`chat-${active.conversationId ?? `new-${active.nonce ?? 0}`}`}
+            inDrawer
+            conversationIdOverride={active.conversationId}
+            conversationTitleOverride={active.conversationTitle}
+          />
+        );
     }
   }, [active]);
 

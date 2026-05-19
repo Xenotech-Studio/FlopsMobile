@@ -11,7 +11,10 @@
 export type DrawerActive =
   | { kind: 'today' }
   | { kind: 'project'; projectId: string; projectName?: string }
-  | { kind: 'docs' };
+  | { kind: 'docs' }
+  /** 从抽屉 / 今日页对话段进入的对话：作为顶层页直接渲染，而不是再 push 一层 ChatScreen。
+   *  conversationId 缺省 = 新对话；nonce 用于「+ 新对话」每次点击都强制 remount。 */
+  | { kind: 'chat'; conversationId?: string; conversationTitle?: string; nonce?: number };
 
 /** 今日页新建：无无序区时传 unorganized；有无序区时在 sheet 里选 */
 export type TaskCreatePlacement =

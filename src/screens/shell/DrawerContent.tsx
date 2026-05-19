@@ -22,8 +22,6 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useDrawer } from './DrawerContext';
 import { useTask } from '../../context/TaskContext';
@@ -35,10 +33,7 @@ import {
   type ConversationListItem,
 } from '../../api';
 import type { AppColors } from '../../theme/appColors';
-import type { RootStackParamList } from '../../navigation/types';
 import { shadowCircleButtonThemed } from '../../theme/shadows';
-
-type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 /** Project 列表行 */
 type DrawerProjectRow = { id: string; name: string };
@@ -47,8 +42,7 @@ export function DrawerContent() {
   const insets = useSafeAreaInsets();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const navigation = useNavigation<Nav>();
-  const { active, setActive, presentProfileSheet, close } = useDrawer();
+  const { active, setActive, presentProfileSheet } = useDrawer();
   const { session, serverBaseUrl } = useSession();
   const { projects, loadProjects } = useTask();
 
@@ -108,21 +102,22 @@ export function DrawerContent() {
     [setActive]
   );
 
+  /** Recents 行点击 / 新对话 + 都走 setActive，把 Chat 提升为抽屉顶层页（不再 stack push） */
   const onPickRecent = useCallback(
     (conv: ConversationListItem) => {
-      close();
-      navigation.navigate('Chat', {
+      setActive({
+        kind: 'chat',
         conversationId: conv.id,
         conversationTitle: (conv.title && conv.title.trim()) || '新对话',
       });
     },
-    [close, navigation]
+    [setActive]
   );
 
   const onNewChat = useCallback(() => {
-    close();
-    navigation.navigate('Chat', undefined);
-  }, [close, navigation]);
+    // nonce 让每次点 + 都强制 remount 一个全新 ChatScreen
+    setActive({ kind: 'chat', nonce: Date.now() });
+  }, [setActive]);
 
   const onAvatarPress = useCallback(() => {
     presentProfileSheet();
