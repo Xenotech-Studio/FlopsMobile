@@ -23,6 +23,7 @@ import { navigationRef } from './src/navigation/navigationRef';
 import { PushTokenLifecycle } from './src/notifications/PushTokenLifecycle';
 import { PresenceReporter } from './src/notifications/PresenceReporter';
 import { DeepLinkRouter } from './src/notifications/DeepLinkRouter';
+import { UpgradeRequiredOverlay } from './src/components/UpgradeRequiredOverlay';
 
 // 参考 FlopsIOS：首帧就是聊天页，无跳转动画；返回手势可回到主页面
 const initialNavState = {
@@ -92,6 +93,7 @@ export default function App() {
             <PushTokenLifecycle />
             <PresenceReporter />
             <AppContent />
+            <UpgradeRequiredOverlay />
           </SessionProvider>
         </ThemeProvider>
       </SafeAreaProvider>

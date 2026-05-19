@@ -38,6 +38,7 @@ import {
 import { downloadApk, installApk } from '../utils/androidUpdate';
 import KeepAwake from 'react-native-keep-awake';
 import { isApnsSupported } from '../notifications/apnsClient';
+import { subscribeClientOutdated, type ClientOutdatedDetail } from '../utils/clientCompatBus';
 
 const EDGE_WIDTH = 24;
 const SWIPE_THRESHOLD = 60;
@@ -69,6 +70,8 @@ export function ProfileScreen() {
   const [downloadedVersion, setDownloadedVersion] = useState<string | null>(null);
   const [userInfo, setUserInfo] = useState<{ avatarUrl?: string; nickname?: string } | null>(null);
   const [expandedChangelogVersion, setExpandedChangelogVersion] = useState<string | null>(null);
+  /** 服务器 426：当前 mobile 版本已被网关拒绝；用来在更新面板顶部展示红色横幅 */
+  const [clientOutdated, setClientOutdated] = useState<ClientOutdatedDetail | null>(null);
 
   useEffect(() => {
     if (!session) {
@@ -100,6 +103,19 @@ export function ProfileScreen() {
       },
     })
   ).current;
+
+  // 订阅 426 总线：Android 通过此触发自动开「关于/检查更新」modal；iOS 由 UpgradeRequiredOverlay 自己处理
+  useEffect(() => {
+    return subscribeClientOutdated((d) => {
+      setClientOutdated(d);
+      if (Platform.OS === 'android') {
+        setUpdateModalVisible(true);
+        setUpdateStatus('idle');
+        setUpdateError('');
+        setLatestRelease(null);
+      }
+    });
+  }, []);
 
   const openUpdateModal = useCallback(() => {
     setUpdateModalVisible(true);
@@ -308,6 +324,15 @@ export function ProfileScreen() {
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.modalBody} contentContainerStyle={styles.modalBodyContent}>
+              {clientOutdated ? (
+                <View style={styles.outdatedBanner}>
+                  <Text style={styles.outdatedBannerText}>
+                    {`服务器已不再支持当前版本 ${clientOutdated.reported || APP_VERSION}`}
+                    {clientOutdated.min ? `（要求 ≥ ${clientOutdated.min}）` : ''}
+                    {isAndroid ? '，请使用下方"检查更新"升级。' : '。'}
+                  </Text>
+                </View>
+              ) : null}
               <View style={styles.updateRow}>
                 <Text style={styles.updateLabel}>当前版本</Text>
                 <Text style={styles.updateVersion}>{APP_VERSION}</Text>
@@ -574,6 +599,15 @@ function createProfileStyles(c: AppColors) {
     modalTitle: { fontSize: 18, fontWeight: '700', color: c.textHeader },
     modalBody: { maxHeight: 400 },
     modalBodyContent: { padding: 16, paddingBottom: 24 },
+    outdatedBanner: {
+      marginBottom: 12,
+      padding: 12,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: c.danger,
+      backgroundColor: 'rgba(220, 38, 38, 0.10)',
+    },
+    outdatedBannerText: { color: c.textPrimary, fontSize: 13, lineHeight: 20 },
     updateRow: { marginBottom: 12 },
     updateLabel: { fontSize: 14, color: c.textMuted, marginBottom: 4 },
     updateVersion: { fontSize: 17, fontWeight: '600', color: c.textPrimary },
