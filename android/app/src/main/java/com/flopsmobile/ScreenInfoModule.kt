@@ -30,17 +30,17 @@ class ScreenInfoModule(reactContext: ReactApplicationContext) :
 
   private fun readCornerRadiusDp(): Double {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return 0.0
-    val activity = currentActivity ?: return 0.0
+    val activity = getCurrentActivity() ?: return 0.0
     val insets = activity.window.decorView.rootWindowInsets ?: return 0.0
-    val positions = intArrayOf(
+    val positions = listOf(
       RoundedCorner.POSITION_TOP_LEFT,
       RoundedCorner.POSITION_TOP_RIGHT,
       RoundedCorner.POSITION_BOTTOM_LEFT,
       RoundedCorner.POSITION_BOTTOM_RIGHT,
     )
     val maxRadiusPx = positions
-      .mapNotNull { insets.getRoundedCorner(it) }
-      .maxOfOrNull { it.radius } ?: 0
+      .mapNotNull { pos -> insets.getRoundedCorner(pos) }
+      .maxOfOrNull { corner -> corner.radius } ?: 0
     if (maxRadiusPx == 0) return 0.0
     val density = reactApplicationContext.resources.displayMetrics.density
     return maxRadiusPx / density.toDouble()
