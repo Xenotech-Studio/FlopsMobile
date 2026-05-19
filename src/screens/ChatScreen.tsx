@@ -2781,6 +2781,7 @@ export function ChatScreen({
           <HistoryLoadingOverlay
             visible={conversationHistoryLoading}
             bottomOverflow={insets.bottom + 32}
+            topOffset={headerHeight}
             overlayStyle={styles.historyLoadingOverlay}
             spinnerColor={colors.textSecondary}
           />

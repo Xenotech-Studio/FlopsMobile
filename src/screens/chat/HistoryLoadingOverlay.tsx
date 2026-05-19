@@ -22,6 +22,8 @@ export type HistoryLoadingOverlayProps = {
   spinnerColor: string;
   /** Fade out 时长（ms），默认 220ms — 比 default 300 短一些，避免遮罩"赖着不走"的感觉 */
   fadeDurationMs?: number;
+  /** overlay 距离容器顶部的偏移（避免遮挡 header），默认 0 */
+  topOffset?: number;
 };
 
 export function HistoryLoadingOverlay({
@@ -30,6 +32,7 @@ export function HistoryLoadingOverlay({
   overlayStyle,
   spinnerColor,
   fadeDurationMs = 220,
+  topOffset = 0,
 }: HistoryLoadingOverlayProps) {
   const opacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const [mounted, setMounted] = useState(visible);
@@ -55,7 +58,7 @@ export function HistoryLoadingOverlay({
 
   return (
     <Animated.View
-      style={[overlayStyle, { bottom: -bottomOverflow, opacity }]}
+      style={[overlayStyle, { top: topOffset, bottom: -bottomOverflow, opacity }]}
       pointerEvents={visible ? 'auto' : 'none'}
     >
       <ActivityIndicator size="large" color={spinnerColor} />
