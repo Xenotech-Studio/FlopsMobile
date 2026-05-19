@@ -19,6 +19,7 @@ import android.text.Spanned
 import android.text.TextWatcher
 import android.text.InputType
 import android.text.style.BackgroundColorSpan
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -28,6 +29,7 @@ import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
 import android.util.TypedValue
+import android.view.View
 import androidx.appcompat.widget.AppCompatEditText
 import com.facebook.react.bridge.ReactContext
 import com.facebook.react.bridge.WritableMap
@@ -68,6 +70,13 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
     background = null
     setPadding(0, 0, 0, 0)
     setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+    /* setPadding(0,0,0,0) 把 EditText 默认垂直留白也清了，加上默认 Gravity.TOP，
+       单行文本会贴在 view 顶部；autoHeight 模式下 view 高度 ≈ COMPOSER_PILL_SIZE 比
+       1 行文本高，视觉上文本偏上。CENTER_VERTICAL 让单行落到几何中心；多行 autoHeight
+       view 高度 = 内容高度，gravity 在此情况下视觉上无差异。
+       includeFontPadding=false 顺便去掉字体 ascender/descender 多算的留白，让居中更准。 */
+    gravity = Gravity.CENTER_VERTICAL or Gravity.START
+    includeFontPadding = false
 
     addTextChangedListener(object : TextWatcher {
       override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -591,8 +600,14 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
   }
 
   private fun dispatchEvent(name: String, data: WritableMap) {
+    /* AppCompatEditText 的 super 构造期会触发一次 onSelectionChanged(0, 0)。此时 view 还没被
+       React reconciler 分配 react tag（id == View.NO_ID），surfaceId 也拿不到。这条 dispatch
+       会被 Fabric 当成 LEGACY 事件 → 走 InteropEventEmitter → 再回到 FabricEventDispatcher，
+       直接死循环 StackOverflow。等 view 真正挂上 react tree 后才允许 emit。 */
+    if (id == View.NO_ID) return
     val reactContext = context as? ReactContext ?: return
     val surfaceId = UIManagerHelper.getSurfaceId(this)
+    if (surfaceId == -1) return
     val dispatcher = UIManagerHelper.getEventDispatcherForReactTag(reactContext, id) ?: return
     dispatcher.dispatchEvent(FlowDocInputEvent(surfaceId, id, name, data))
   }

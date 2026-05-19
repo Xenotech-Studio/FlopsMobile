@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
  * yarn dev [ios|android|android:real] [--quick]: start Metro + run app.
- * --quick: 跳过清理 cache（不传 --reset-cache）、端口被占用时跳过确认直接使用下一可用端口。
+ * --quick: 跳过清理 cache（不传 --reset-cache）。
+ * 端口被占用时自动递增到下一可用端口，不再交互确认。
  * android:real: 仅 Android，优先选择真机（排除 emulator-*），未找到真机则报错。
  * Platform: 1) yarn dev ios / yarn dev android / yarn dev android:real  2) rn-dev.config.json (per OS)  3) OS default.
  */
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
-const readline = require('readline');
 const concurrently = require('concurrently');
 
 const projectRoot = path.resolve(__dirname, '..');
@@ -39,35 +39,18 @@ function findFreePort(startFrom) {
   })();
 }
 
-function askUseOtherPort() {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question('\n[dev] 端口 8081 已被占用。是否改用其他端口？(Y/n) ', (answer) => {
-      rl.close();
-      const trimmed = (answer || '').trim().toLowerCase();
-      if (trimmed === 'n' || trimmed === 'no') {
-        console.error('已取消。可先结束占用端口的进程：lsof -i :8081\n');
-        process.exit(1);
-      }
-      resolve();
-    });
-  });
-}
-
-function resolveMetroPort(skipPortConfirm) {
+function resolveMetroPort() {
   return isPortInUse(DEFAULT_METRO_PORT).then((inUse) => {
     if (!inUse) return DEFAULT_METRO_PORT;
-    const next = () =>
-      findFreePort(DEFAULT_METRO_PORT + 1).then((port) => {
-        if (port == null) {
-          console.error('[dev] 未找到可用端口。\n');
-          process.exit(1);
-        }
-        console.log(`[dev] 使用端口 ${port}\n`);
-        return port;
-      });
-    if (skipPortConfirm) return next();
-    return askUseOtherPort().then(next);
+    console.log(`[dev] 端口 ${DEFAULT_METRO_PORT} 已被占用，自动寻找下一可用端口…`);
+    return findFreePort(DEFAULT_METRO_PORT + 1).then((port) => {
+      if (port == null) {
+        console.error('[dev] 未找到可用端口。\n');
+        process.exit(1);
+      }
+      console.log(`[dev] 使用端口 ${port}\n`);
+      return port;
+    });
   });
 }
 
@@ -148,7 +131,7 @@ if (target === 'android' || target === 'android:real') {
 
 const runAppScript = path.resolve(__dirname, 'run-app.js');
 
-resolveMetroPort(quick).then((port) => {
+resolveMetroPort().then((port) => {
   const cacheFlag = quick ? '' : ' --reset-cache';
   const { result } = concurrently(
     [

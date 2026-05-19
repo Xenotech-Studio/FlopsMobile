@@ -15,6 +15,7 @@ import { codegenNativeCommands, codegenNativeComponent } from 'react-native';
 // react-native 团队的 deprecation 警告对这些类型还没生效（codegen 模板里官方自己也是这样写的）。
 import type {
   BubblingEventHandler,
+  DirectEventHandler,
   Double,
   Int32,
   WithDefault,
@@ -90,7 +91,9 @@ interface NativeProps extends ViewProps {
   onPillPress?: BubblingEventHandler<PillPressEvent>;
   onFocusNative?: BubblingEventHandler<Readonly<{}>>;
   onBlurNative?: BubblingEventHandler<Readonly<{}>>;
-  onContentSizeChange?: BubblingEventHandler<ContentSizeEvent>;
+  /** RN 约定：onContentSizeChange 是 DirectEventHandler；用 Bubbling 会跟 TextInput 的
+   *  view config 在 Android 上撞 topic 名，触发 "Event cannot be both direct and bubbling"。 */
+  onContentSizeChange?: DirectEventHandler<ContentSizeEvent>;
   onSplitRequest?: BubblingEventHandler<SplitRequestEvent>;
   onMergeBackwardRequest?: BubblingEventHandler<MergeBackwardRequestEvent>;
 }

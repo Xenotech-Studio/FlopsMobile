@@ -864,14 +864,15 @@ export function createChatStyles(c: AppColors) {
   composerInputShort: {
     flex: 1,
     paddingHorizontal: COMPOSER_CARD_PADDING_H,
-    /* iOS UITextView 把文本贴顶部渲染（不像 RN TextInput 单行自动居中），
-     *  胶囊内的 1.6× fontSize 高度上半部分被文本占满，下半部分空着，整体视觉偏上。
-     *  用不对称 padding（top > bottom）把文本下推一点；
-     *  历史值：8/8 偏上、12/4 偏下，取中间 10/6 让视觉中心更接近胶囊几何中心。
-     *  Android EditText 单行自动居中，保留对称 padding。 */
-    paddingTop: Platform.OS === 'ios' ? 10 : 4,
-    paddingBottom: Platform.OS === 'ios' ? 6 : 4,
+    /* FlowDocInput 高度 = native 测出的内容高度（约 1 行字号 × 1.6 ≈ 26dp），
+     *  比 minHeight (40dp) 短，靠 justifyContent center 把它落到容器中。
+     *  paddingTop < paddingBottom 是有意为之：字体视觉重心高于几何中心
+     *  （descender < ascender 视觉权重），纯几何居中会显得偏下，
+     *  上下不对称 2dp 把视觉中心推回胶囊几何中心。 */
+    paddingTop: 2,
+    paddingBottom: 6,
     minHeight: COMPOSER_PILL_SIZE - 12,
+    justifyContent: 'center',
   },
   composerInputTall: {
     /* tall 模式下输入区填满卡片宽度；高度完全由 native autoHeight 决定，

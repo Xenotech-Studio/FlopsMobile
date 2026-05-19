@@ -4,6 +4,13 @@
  */
 import { convProfileLog } from './debug/conversationLoadProfile';
 import { fetchWithDebugLog } from './utils/httpDebugLog';
+import {
+  SrpClientSession,
+  deriveSrpPassword,
+  generateSaltHex,
+  computeVerifier,
+  encryptEnvelope,
+} from './lib/srp';
 
 export type Session = {
   user_id: string;
@@ -111,7 +118,6 @@ export async function login(
   deviceName: string = 'FlopsMobile'
 ): Promise<{ session: Session }> {
   const base = ensureSlash(serverBaseUrl);
-  const { SrpClientSession, deriveSrpPassword } = await import('./lib/srp');
 
   // 1) challenge: 服务端拿 verifier 算 B，回 salt + B + session_id
   const r1 = await fetchWithDebugLog(
@@ -190,8 +196,6 @@ export async function changePassword(
   newPassword: string
 ): Promise<{ message: string }> {
   const base = ensureSlash(serverBaseUrl);
-  const { SrpClientSession, deriveSrpPassword, generateSaltHex, computeVerifier, encryptEnvelope } =
-    await import('./lib/srp');
 
   // 1) 用旧密码完成一次 SRP 挑战 / 证明，准备 old_session_id / old_A / old_M1
   const r1 = await fetchWithDebugLog(
@@ -334,8 +338,6 @@ export async function registerUser(
   params: { user_id: string; password: string; email: string; verify_token: string }
 ): Promise<void> {
   const base = ensureSlash(serverBaseUrl);
-  const { deriveSrpPassword, generateSaltHex, computeVerifier, encryptEnvelope } =
-    await import('./lib/srp');
 
   // 1) 拉公钥
   const pkRes = await fetchWithDebugLog(`${base}api/srp/pubkey`, { method: 'GET' });

@@ -302,6 +302,9 @@ function createStyles(c: AppColors) {
       fontSize: 26,
       fontWeight: '700',
       color: c.textHeader,
+      /** scrollContent.paddingHorizontal=20，再缩进 8 跟 MenuRow.row 的 paddingHorizontal 同步，
+       *  让 "Flops" 起始 x 和下面菜单项内容（icon）的起始 x 对齐。 */
+      marginLeft: 8,
       marginBottom: 16,
       fontFamily: 'serif',
     },

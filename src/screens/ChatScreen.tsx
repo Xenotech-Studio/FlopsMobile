@@ -2662,6 +2662,13 @@ export function ChatScreen({
                 const animated = scrollToEndAnimatedRef.current;
                 scrollToEndAnimatedRef.current = true;
                 scrollRef.current?.scrollToEnd({ animated });
+                /* Android：onContentSizeChange 经常在内容真正布局完前先 fire 一次（中间高度），
+                   单次 scrollToEnd 只滚到那个中间位置。再补两次延迟滚动盖住后续布局抖动。
+                   iOS 同步布局基本一次到位，不需要。 */
+                if (Platform.OS === 'android') {
+                  requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
+                  setTimeout(() => scrollRef.current?.scrollToEnd({ animated: false }), 200);
+                }
               }
             }}
             keyboardShouldPersistTaps="handled"

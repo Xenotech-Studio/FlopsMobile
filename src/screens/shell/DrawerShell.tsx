@@ -57,6 +57,7 @@ import { ChatScreen } from '../ChatScreen';
 import { SystemGestureExclusionView } from '../../components/SystemGestureExclusionView';
 import { subscribeClientOutdated } from '../../utils/clientCompatBus';
 import { getScreenCornerRadius } from '../../utils/screenInfo';
+import { HEADER_CIRCLE_BTN_SIZE } from '../../theme/layout';
 
 /** 抽屉完全展开时主页面右侧保留的 peek 宽度 */
 const PEEK_WIDTH = 64;
@@ -378,13 +379,19 @@ export function DrawerShell() {
           </Animated.View>
         </Animated.View>
 
-        {/* 左缘手势条：仅抽屉关闭时挂载；SystemGestureExclusionView 让 Android 不抢系统返回 */}
+        {/* 左缘手势条：仅抽屉关闭时挂载；SystemGestureExclusionView 让 Android 不抢系统返回。
+         *  top 让出 topBar 整片区域：Android 上这条 strip 宽 56dp 且 elevation:24，会盖住
+         *  topBar 左上的 HamburgerButton（左沿 ~16dp 起、宽 52dp），box-only 把 tap 吞掉
+         *  就出现「汉堡键点不动」。让 strip 从 topBar 下方开始即可，左滑唤起仍可用。 */}
         {!isOpen ? (
           <GestureDetector gesture={openGesture}>
             <SystemGestureExclusionView
               style={[
                 styles.leftEdge,
-                { width: LEFT_EDGE_STRIP_WIDTH },
+                {
+                  width: LEFT_EDGE_STRIP_WIDTH,
+                  top: insets.top + HEADER_CIRCLE_BTN_SIZE + 20,
+                },
               ]}
               pointerEvents="box-only"
               collapsable={false}
