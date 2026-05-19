@@ -58,8 +58,8 @@ import { SystemGestureExclusionView } from '../../components/SystemGestureExclus
 const PEEK_WIDTH = 64;
 /** 主页面在最大展开时圆角的最终值 */
 const MAIN_RADIUS_OPEN = 24;
-/** 遮罩在最大展开时的不透明度 */
-const OVERLAY_ALPHA_OPEN = 0.35;
+/** 抽屉自身 dim 上限：progress=0 时最暗、progress=1 时全亮（参考 Claude app 的「刚拉开抽屉偏暗、展开到位才完全显形」效果） */
+const DRAWER_DIM_AT_CLOSED = 0.55;
 /** 左缘热区宽度（与现有左缘开 Profile 一致） */
 const LEFT_EDGE_STRIP_WIDTH = Platform.OS === 'android' ? 56 : 24;
 /** 抽屉触发阈值（与现有左缘手势一致） */
@@ -205,9 +205,9 @@ export function DrawerShell() {
     };
   });
 
-  /** 遮罩透明度 */
-  const animatedOverlayStyle = useAnimatedStyle(() => ({
-    opacity: progress.value * OVERLAY_ALPHA_OPEN,
+  /** 抽屉 dim：progress=0 时最暗、progress=1 时全亮（抽屉本体上叠一层黑色，不再压暗主页） */
+  const animatedDrawerDimStyle = useAnimatedStyle(() => ({
+    opacity: (1 - progress.value) * DRAWER_DIM_AT_CLOSED,
   }));
 
   /** 拼装 DrawerHandle */
@@ -252,12 +252,16 @@ export function DrawerShell() {
   return (
     <DrawerProvider value={handle}>
       <View style={[styles.root, { backgroundColor: colors.backgroundSecondary }]}>
-        {/* 背后：抽屉本体（静止，不做 transform） */}
+        {/* 背后：抽屉本体（静止，不做 transform）；上叠 dim 层，刚拉开偏暗、展开到位才完全显形 */}
         <View style={styles.drawerBack} pointerEvents={isOpen ? 'auto' : 'none'}>
           <DrawerContent />
+          <Animated.View
+            style={[styles.drawerDim, animatedDrawerDimStyle]}
+            pointerEvents="none"
+          />
         </View>
 
-        {/* 前面：主页面 + 遮罩；整体做 translateX / borderRadius / shadow */}
+        {/* 前面：主页面；整体做 translateX / borderRadius / shadow（不再压暗主页，仅作为可点关闭区） */}
         <Animated.View
           style={[
             styles.mainWrap,
@@ -276,20 +280,15 @@ export function DrawerShell() {
         >
           {activeElement}
 
-          {/* 半透明遮罩：进度越大越暗；isOpen 时接管点击关 + 左滑关手势 */}
+          {/* 透明手势捕获层：isOpen 时接管点击关 + 左滑关；不做任何压暗效果 */}
           {isOpen ? (
             <GestureDetector gesture={closeGesture}>
-              <Animated.View
-                style={[styles.overlay, animatedOverlayStyle]}
+              <View
+                style={StyleSheet.absoluteFill}
                 onTouchEnd={close}
               />
             </GestureDetector>
-          ) : (
-            <Animated.View
-              style={[styles.overlay, animatedOverlayStyle]}
-              pointerEvents="none"
-            />
-          )}
+          ) : null}
         </Animated.View>
 
         {/* 左缘手势条：仅抽屉关闭时挂载；SystemGestureExclusionView 让 Android 不抢系统返回 */}
@@ -322,7 +321,7 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     overflow: 'hidden',
   },
-  overlay: {
+  drawerDim: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#000',
   },
