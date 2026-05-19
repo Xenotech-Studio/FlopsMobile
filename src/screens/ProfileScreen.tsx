@@ -104,7 +104,8 @@ export function ProfileScreen() {
     })
   ).current;
 
-  // 订阅 426 总线：Android 通过此触发自动开「关于/检查更新」modal；iOS 由 UpgradeRequiredOverlay 自己处理
+  // 订阅 426 总线：记下被服务器拒掉的版本号用于横幅；并在用户从 UpgradeRequiredOverlay
+  // 点「前往更新页」跳过来时，自动展开 Android 的检查更新 modal（iOS 没有这步）
   useEffect(() => {
     return subscribeClientOutdated((d) => {
       setClientOutdated(d);
