@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '../api';
 import { DEFAULT_SERVER_URL, normalizeServerUrl } from '../config';
+import { clearStoredKUser } from '../lib/kUserStorage';
 
 const STORAGE_KEY_SESSION = '@FlopsMobile/session';
 
@@ -35,6 +36,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     setSession(null);
     await AsyncStorage.removeItem(STORAGE_KEY_SESSION);
+    await clearStoredKUser();
   }, []);
 
   const restoreSession = useCallback(async () => {

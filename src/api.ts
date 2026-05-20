@@ -10,7 +10,18 @@ import {
   generateSaltHex,
   computeVerifier,
   encryptEnvelope,
+  deriveKDK,
+  generateKUser,
+  wrapKUser,
+  unwrapKUser,
+  bytesToBase64,
+  base64ToBytes,
 } from './lib/srp';
+import {
+  setStoredKUser,
+  getStoredKUser,
+  clearStoredKUser,
+} from './lib/kUserStorage';
 
 export type Session = {
   user_id: string;
@@ -163,6 +174,7 @@ export async function login(
     user?: { id?: string };
     access_token?: string;
     M2?: string;
+    k_user_blob?: string | null;
   };
 
   // 4) mutual auth：验证服务端的 M2，防 fake-server 中间人
@@ -173,6 +185,39 @@ export async function login(
   const token = data.access_token;
   const uid = (data.user && data.user.id) || userId;
   if (!token) throw new Error('服务端未返回 access_token');
+
+  // 5) K_user 生命周期（Phase 1）：跟 Web SDK 同一套行为
+  //    任何 K_user 异常都不影响登录主流程；失败时清掉本机残留避免脏数据
+  try {
+    const kdk = deriveKDK(srpPw, ch.salt, userId);
+    if (data.k_user_blob) {
+      const kUser = unwrapKUser(data.k_user_blob, kdk);
+      await setStoredKUser(bytesToBase64(kUser));
+    } else {
+      const kUser = generateKUser();
+      const blob = wrapKUser(kUser, kdk);
+      const up = await fetchWithDebugLog(
+        `${base}api/srp/upload_k_user`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ k_user_blob: blob }),
+        },
+        { log4xxAsInfo: true }
+      );
+      if (up.ok) {
+        await setStoredKUser(bytesToBase64(kUser));
+      } else if (up.status !== 409) {
+        // 409 = 别的设备已传过；放弃本机这把，等下次登录从 server 拿正确的
+        // 其他 4xx/5xx 也只 best-effort 失败
+        console.warn('upload_k_user failed:', up.status);
+      }
+    }
+  } catch (e) {
+    console.warn('K_user materialization skipped:', (e as Error)?.message || e);
+    await clearStoredKUser();
+  }
+
   return {
     session: {
       user_id: uid,
@@ -226,6 +271,23 @@ export async function changePassword(
   const newVerifier = computeVerifier(userId, newSrpPw, newSalt);
   const newEnvelope = encryptEnvelope(newPassword, pubkey_pem);
 
+  // K_user 重封：本机有就复用；没有就新建一把（顺手把 K_user 体系 materialize）
+  let kUserBytes: Uint8Array;
+  const stored = await getStoredKUser();
+  if (stored) {
+    try {
+      const b = base64ToBytes(stored);
+      if (b.length !== 32) throw new Error('stored K_user wrong length');
+      kUserBytes = b;
+    } catch {
+      kUserBytes = generateKUser();
+    }
+  } else {
+    kUserBytes = generateKUser();
+  }
+  const newKdk = deriveKDK(newSrpPw, newSalt, userId);
+  const rewrappedKUserBlob = wrapKUser(kUserBytes, newKdk);
+
   // 3) POST /api/srp/change_password
   const res = await fetchWithDebugLog(
     `${base}api/srp/change_password`,
@@ -239,6 +301,7 @@ export async function changePassword(
         salt: newSalt,
         verifier: newVerifier,
         envelope: newEnvelope,
+        k_user_blob: rewrappedKUserBlob,
       }),
     },
     { log4xxAsInfo: true }
@@ -248,6 +311,8 @@ export async function changePassword(
     throw new Error((err as { detail?: string }).detail || `修改密码失败: ${res.status}`);
   }
   const data = (await res.json()) as { message?: string };
+  // 改密成功才落本机 K_user（即便之前没有，现在也算正式确立）
+  await setStoredKUser(bytesToBase64(kUserBytes));
   return { message: data.message ?? 'Password changed successfully' };
 }
 
@@ -344,13 +409,16 @@ export async function registerUser(
   if (!pkRes.ok) throw new Error(`无法获取 recovery 公钥: ${pkRes.status}`);
   const { pubkey_pem } = (await pkRes.json()) as { pubkey_pem: string };
 
-  // 2) 本地算 SRP 三件套
+  // 2) 本地算 SRP 三件套 + K_user 三件套
   const salt = generateSaltHex();
   const srpPw = await deriveSrpPassword(params.password, salt);
   const verifier = computeVerifier(params.user_id, srpPw, salt);
   const envelope = encryptEnvelope(params.password, pubkey_pem);
+  const kUser = generateKUser();
+  const kdk = deriveKDK(srpPw, salt, params.user_id);
+  const k_user_blob = wrapKUser(kUser, kdk);
 
-  // 3) POST 注册 —— 后端的 /api/auth/register 已支持 srp_salt/srp_verifier/password_envelope
+  // 3) POST 注册 —— 后端的 /api/auth/register 已支持 SRP + K_user 字段（additive）
   const res = await fetchWithDebugLog(
     `${base}api/auth/register`,
     {
@@ -361,6 +429,7 @@ export async function registerUser(
         srp_salt: salt,
         srp_verifier: verifier,
         password_envelope: envelope,
+        k_user_blob,
         email: params.email,
         verify_token: params.verify_token,
       }),
@@ -371,6 +440,9 @@ export async function registerUser(
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail || `注册失败: ${res.status}`);
   }
+  // 注册后顺手把 K_user 落本机 —— 注册完通常会立刻 login，login 里也有
+  // K_user materialize 兜底，但提前落避免短暂"没锁"的视觉空窗
+  await setStoredKUser(bytesToBase64(kUser));
 }
 
 /** POST /api/auth/bind_email —— 老用户补绑 / 改绑邮箱（需 Bearer token） */

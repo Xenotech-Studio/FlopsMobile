@@ -17,6 +17,7 @@
  */
 
 import { sha256 } from '@noble/hashes/sha2.js';
+import { hkdf } from '@noble/hashes/hkdf.js';
 import argon2 from 'react-native-argon2';
 import forge from 'node-forge';
 
@@ -244,4 +245,107 @@ export function encryptEnvelope(plaintextPassword: string, pubkeyPem: string): s
     mgf1: { md: forge.md.sha256.create() },
   });
   return forge.util.encode64(ct);
+}
+
+// =====================================================================
+// Phase 1：用户数据加密体系（K_user / KDK / AES-GCM）
+// 与 FlowUserSystemSDK/core/data_crypto.js + backend/data_crypto/aes.py
+// 字节级互通（已 round-trip 过）。
+// =====================================================================
+
+const KEY_LEN = 32;
+const NONCE_LEN = 12;
+const TAG_LEN = 16;
+const KDK_INFO_PREFIX = 'kuser/';
+
+function bytesToBase64Local(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  // RN 全局有 btoa（Hermes 提供）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (global as any).btoa(bin);
+}
+
+function base64ToBytesLocal(b64: string): Uint8Array {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bin = (global as any).atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+export function bytesToBase64(bytes: Uint8Array): string {
+  return bytesToBase64Local(bytes);
+}
+
+export function base64ToBytes(b64: string): Uint8Array {
+  return base64ToBytesLocal(b64);
+}
+
+/**
+ * KDK = HKDF-SHA256(IKM=srp_password, salt=SRP salt, info='kuser/' + userId, 32)
+ * SRP server 知道 verifier 反推不出 srp_password（离散对数），所以也算不出 KDK。
+ */
+export function deriveKDK(srpPasswordHex: string, saltHex: string, userId: string): Uint8Array {
+  const ikm = hexToBytes(srpPasswordHex);
+  const salt = hexToBytes(saltHex);
+  const info = utf8(KDK_INFO_PREFIX + userId);
+  return hkdf(sha256, ikm, salt, info, KEY_LEN);
+}
+
+export function generateKUser(): Uint8Array {
+  const b = new Uint8Array(KEY_LEN);
+  const grv = global.crypto?.getRandomValues;
+  if (typeof grv !== 'function') {
+    throw new Error('crypto.getRandomValues unavailable (need react-native-get-random-values polyfill)');
+  }
+  grv.call(global.crypto, b);
+  return b;
+}
+
+/** AES-256-GCM 加密。输出 nonce(12) || ct || tag(16)。 */
+export function aesGcmEncrypt(plaintext: Uint8Array, key: Uint8Array): Uint8Array {
+  if (key.length !== KEY_LEN) throw new TypeError(`key must be ${KEY_LEN} bytes`);
+  const nonce = new Uint8Array(NONCE_LEN);
+  const grv = global.crypto?.getRandomValues;
+  if (typeof grv !== 'function') throw new Error('crypto.getRandomValues unavailable');
+  grv.call(global.crypto, nonce);
+  const keyStr = forge.util.createBuffer(forge.util.binary.raw.encode(key));
+  const cipher = forge.cipher.createCipher('AES-GCM', keyStr);
+  cipher.start({
+    iv: forge.util.createBuffer(forge.util.binary.raw.encode(nonce)),
+    tagLength: TAG_LEN * 8,
+  });
+  cipher.update(forge.util.createBuffer(forge.util.binary.raw.encode(plaintext)));
+  cipher.finish();
+  const ct = forge.util.binary.raw.decode(cipher.output.getBytes());
+  const tag = forge.util.binary.raw.decode(cipher.mode.tag.getBytes());
+  return concat(nonce, ct, tag);
+}
+
+export function aesGcmDecrypt(blob: Uint8Array, key: Uint8Array): Uint8Array {
+  if (key.length !== KEY_LEN) throw new TypeError(`key must be ${KEY_LEN} bytes`);
+  if (blob.length < NONCE_LEN + TAG_LEN) throw new Error('blob too short');
+  const nonce = blob.subarray(0, NONCE_LEN);
+  const tag = blob.subarray(blob.length - TAG_LEN);
+  const ct = blob.subarray(NONCE_LEN, blob.length - TAG_LEN);
+  const keyStr = forge.util.createBuffer(forge.util.binary.raw.encode(key));
+  const decipher = forge.cipher.createDecipher('AES-GCM', keyStr);
+  decipher.start({
+    iv: forge.util.createBuffer(forge.util.binary.raw.encode(nonce)),
+    tag: forge.util.createBuffer(forge.util.binary.raw.encode(tag)),
+    tagLength: TAG_LEN * 8,
+  });
+  decipher.update(forge.util.createBuffer(forge.util.binary.raw.encode(ct)));
+  const ok = decipher.finish();
+  if (!ok) throw new Error('AES-GCM auth tag verification failed');
+  return forge.util.binary.raw.decode(decipher.output.getBytes());
+}
+
+export function wrapKUser(kUser: Uint8Array, kdk: Uint8Array): string {
+  return bytesToBase64Local(aesGcmEncrypt(kUser, kdk));
+}
+
+export function unwrapKUser(blobB64: string, kdk: Uint8Array): Uint8Array {
+  return aesGcmDecrypt(base64ToBytesLocal(blobB64), kdk);
 }
