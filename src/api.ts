@@ -10,6 +10,7 @@ import {
   generateSaltHex,
   computeVerifier,
   encryptEnvelope,
+  encryptEnvelopeBytes,
   deriveKDK,
   generateKUser,
   wrapKUser,
@@ -216,20 +217,36 @@ export async function login(
     } else {
       const kUser = generateKUser();
       const blob = wrapKUser(kUser, kdk);
+      // Tier 3 recovery envelope（steven.pub 包 K_user）：同上传一并捎给 server
+      let envelopeForUpload: string | null = null;
+      try {
+        const pkRes = await fetchWithDebugLog(`${base}api/srp/pubkey`, { method: 'GET' });
+        if (pkRes.ok) {
+          const { pubkey_pem } = (await pkRes.json()) as { pubkey_pem?: string };
+          if (pubkey_pem) {
+            const { encryptEnvelopeBytes } = await import('./lib/srp');
+            envelopeForUpload = encryptEnvelopeBytes(kUser, pubkey_pem);
+          }
+        }
+      } catch (e) {
+        console.warn('K_user envelope generation skipped:', (e as Error)?.message || e);
+      }
       const up = await fetchWithDebugLog(
         `${base}api/srp/upload_k_user`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ k_user_blob: blob }),
+          body: JSON.stringify(
+            envelopeForUpload
+              ? { k_user_blob: blob, k_user_envelope: envelopeForUpload }
+              : { k_user_blob: blob }
+          ),
         },
         { log4xxAsInfo: true }
       );
       if (up.ok) {
         await setStoredKUser(bytesToBase64(kUser));
       } else if (up.status !== 409) {
-        // 409 = 别的设备已传过；放弃本机这把，等下次登录从 server 拿正确的
-        // 其他 4xx/5xx 也只 best-effort 失败
         console.warn('upload_k_user failed:', up.status);
       }
     }
@@ -437,6 +454,8 @@ export async function registerUser(
   const kUser = generateKUser();
   const kdk = deriveKDK(srpPw, salt, params.user_id);
   const k_user_blob = wrapKUser(kUser, kdk);
+  // Tier 3 recovery envelope（同 K_user，steven.pub 包）
+  const k_user_envelope = encryptEnvelopeBytes(kUser, pubkey_pem);
 
   // 3) POST 注册 —— 后端的 /api/auth/register 已支持 SRP + K_user 字段（additive）
   const res = await fetchWithDebugLog(
@@ -450,6 +469,7 @@ export async function registerUser(
         srp_verifier: verifier,
         password_envelope: envelope,
         k_user_blob,
+        k_user_envelope,
         email: params.email,
         verify_token: params.verify_token,
       }),

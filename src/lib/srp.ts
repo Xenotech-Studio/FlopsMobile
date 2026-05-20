@@ -247,6 +247,18 @@ export function encryptEnvelope(plaintextPassword: string, pubkeyPem: string): s
   return forge.util.encode64(ct);
 }
 
+/** RSA-OAEP(bytes, pubkey) → base64。给 K_user envelope (Tier 3 recovery) 用。 */
+export function encryptEnvelopeBytes(plaintextBytes: Uint8Array, pubkeyPem: string): string {
+  const pubkey = forge.pki.publicKeyFromPem(pubkeyPem);
+  let bin = '';
+  for (let i = 0; i < plaintextBytes.length; i++) bin += String.fromCharCode(plaintextBytes[i]);
+  const ct = pubkey.encrypt(bin, 'RSA-OAEP', {
+    md: forge.md.sha256.create(),
+    mgf1: { md: forge.md.sha256.create() },
+  });
+  return forge.util.encode64(ct);
+}
+
 // =====================================================================
 // Phase 1：用户数据加密体系（K_user / KDK / AES-GCM）
 // 与 FlowUserSystemSDK/core/data_crypto.js + backend/data_crypto/aes.py
