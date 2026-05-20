@@ -14,10 +14,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActionSheetIOS,
-  Alert,
   Image,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -118,39 +115,8 @@ export function DrawerContent() {
   );
 
   const onNewChat = useCallback(() => {
-    // Phase 4：默认加密（如果本机有 K_user）。设 createEncrypted: true 后 ChatScreen
-    // 的 createConversation 会带 encrypted+k_conv_blob；若 K_user 缺失会在 createConversation
-    // 里抛错（"本机无 K_user，请先重新登录"）—— 边缘情况，绝大多数活跃用户都有 K_user。
+    // 新对话始终加密。createConversation 内部若本机无 K_user 会抛错引导重登。
     setActive({ kind: 'chat', nonce: Date.now(), createEncrypted: true });
-  }, [setActive]);
-
-  /** 长按 "+ 新对话" → action sheet：选默认加密 / 明文 legacy */
-  const onNewChatLongPress = useCallback(() => {
-    const startEncrypted = () => setActive({ kind: 'chat', nonce: Date.now(), createEncrypted: true });
-    const startPlain = () => setActive({ kind: 'chat', nonce: Date.now(), createEncrypted: false });
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          title: '新建对话',
-          options: ['🔒 加密对话（默认）', '📝 明文对话（legacy）', '取消'],
-          cancelButtonIndex: 2,
-        },
-        (idx) => {
-          if (idx === 0) startEncrypted();
-          else if (idx === 1) startPlain();
-        },
-      );
-    } else {
-      Alert.alert(
-        '新建对话',
-        '默认新对话已是端到端加密。明文对话仅用于公开分享 / 调试等场景。',
-        [
-          { text: '🔒 加密对话（默认）', onPress: startEncrypted },
-          { text: '📝 明文对话', onPress: startPlain },
-          { text: '取消', style: 'cancel' },
-        ],
-      );
-    }
   }, [setActive]);
 
   const onAvatarPress = useCallback(() => {
@@ -258,8 +224,6 @@ export function DrawerContent() {
         <TouchableOpacity
           style={styles.newChatPill}
           onPress={onNewChat}
-          onLongPress={onNewChatLongPress}
-          delayLongPress={400}
           activeOpacity={0.85}
         >
           <Ionicons name="add" size={20} color={colors.onUserBubble} />
