@@ -125,12 +125,24 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
     if (changed) maybeEmitContentSize()
   }
 
+  override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    /* JS 端 autoHeight：先 setHeight=旧 contentHeight，再 setText 长出多行。
+       此时 parent 的 heightMeasureSpec 还是旧值，onSizeChanged / onLayout(changed)
+       都不会 fire，只有 onMeasure 一定走。这里 post 一次 emit，让 layout 拿到的
+       真实内容高度有机会上报回 JS，再触发新的 layout pass。 */
+    post { maybeEmitContentSize() }
+  }
+
   private fun maybeEmitContentSize() {
-    /* EditText 的 measure 拿出来的 height 反映当前内容 wrap 之后所需高度。
-       size 没变就不 emit，避免抖动。 */
+    /* 用 TextView 内部 layout.height（内容真实所需高度）而不是 measuredHeight
+       （受 parent 的 EXACTLY measure spec 约束、始终等于 JS 给的旧 contentHeight）。
+       对齐 iOS sizeThatFits 的"无 height 约束 measure"语义。 */
     val w = measuredWidth
-    val h = measuredHeight
-    if (w <= 0 || h <= 0) return
+    if (w <= 0) return
+    val tlayout = layout ?: return
+    val h = tlayout.height + paddingTop + paddingBottom
+    if (h <= 0) return
     if (w == lastReportedContentWidth && h == lastReportedContentHeight) return
     lastReportedContentWidth = w
     lastReportedContentHeight = h

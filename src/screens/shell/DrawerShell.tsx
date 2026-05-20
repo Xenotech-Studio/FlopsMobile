@@ -256,16 +256,12 @@ export function DrawerShell() {
     };
   });
 
-  /** 内层：borderRadius（内层 overflow:hidden 用来裁剪 children；shadow 不放这里） */
+  /** 内层：borderRadius（内层 overflow:hidden 用来裁剪 children；shadow 不放这里）
+   *  整个抽屉过程恒定为设备物理圆角；关闭时主页面铺满屏幕，圆角跟设备自身的
+   *  屏幕圆角重合不可见，所以 progress=0 → 1 整段保持同一个值，不再插值。 */
   const animatedMainInnerStyle = useAnimatedStyle(() => {
-    const radius = interpolate(
-      progress.value,
-      [0, 1],
-      [0, mainRadiusOpen],
-      Extrapolation.CLAMP
-    );
     return {
-      borderRadius: radius,
+      borderRadius: mainRadiusOpen,
     };
   });
 
