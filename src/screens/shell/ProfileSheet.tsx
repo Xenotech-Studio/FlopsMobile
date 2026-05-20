@@ -12,6 +12,7 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import {
@@ -32,7 +33,7 @@ import {
   BottomSheetScrollView,
 } from '@gorhom/bottom-sheet';
 import type { BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import KeepAwake from 'react-native-keep-awake';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -207,14 +208,31 @@ export function ProfileSheet({
     }
   }, [serverBaseUrl]);
 
+  /** 记一下「这次 dismiss 是因为要去子页」；子页 pop 回 DrawerShell focus 时
+   *  自动重新 present，让 sheet 看起来"还在" —— 实测比让 sheet 跨页常驻更自然
+   *  （后者会发生底栏 sheet 飘在不相关页面上的违和感）。 */
+  const willReopenOnReturn = useRef(false);
+
   /** 关 sheet 同时 push 子页：sheet 下滑动画 与 RootStack push 动画并行 */
   const dismissAndNavigate = useCallback(
     (route: keyof RootStackParamList) => {
+      willReopenOnReturn.current = true;
       sheetRef.current?.dismiss();
       // navigate 不要 setTimeout，让两个动画在同一帧并行启动
       navigation.navigate(route as never);
     },
     [navigation, sheetRef]
+  );
+
+  /** DrawerShell 再次 focus（= 从设置子页 pop 回来）时，若刚才是因 dismissAndNavigate
+   *  关掉的，就再 present 一次。consume 完立刻清旗，避免下次普通 dismiss 又被错误重开。 */
+  useFocusEffect(
+    useCallback(() => {
+      if (willReopenOnReturn.current) {
+        willReopenOnReturn.current = false;
+        sheetRef.current?.present();
+      }
+    }, [sheetRef])
   );
 
   const renderBackdrop = useCallback(
