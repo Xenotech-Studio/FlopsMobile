@@ -16,12 +16,32 @@ import {
   unwrapKUser,
   bytesToBase64,
   base64ToBytes,
+  deriveKConvFromBlob,
+  wrapKConvForWire,
+  decryptMessageLocal,
+  decryptSseChunkLocal,
+  setCachedKConv,
+  getCachedKConv,
 } from './lib/srp';
 import {
   setStoredKUser,
   getStoredKUser,
   clearStoredKUser,
 } from './lib/kUserStorage';
+
+// transport.pub 模块级缓存：first chat_v2 POST 时拉一次，后续 forever 用
+let _transportPubkeyPem: string | null = null;
+
+async function getTransportPubkeyMobile(serverBaseUrl: string): Promise<string> {
+  if (_transportPubkeyPem) return _transportPubkeyPem;
+  const base = ensureSlash(serverBaseUrl);
+  const res = await fetchWithDebugLog(`${base}api/transport/pubkey`, { method: 'GET' });
+  if (!res.ok) throw new Error(`transport pubkey ${res.status}`);
+  const data = (await res.json()) as { pubkey_pem?: string };
+  if (!data.pubkey_pem) throw new Error('transport pubkey_pem missing');
+  _transportPubkeyPem = data.pubkey_pem;
+  return _transportPubkeyPem;
+}
 
 export type Session = {
   user_id: string;
@@ -639,7 +659,32 @@ export async function getConversation(
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail || `获取对话失败: ${res.status}`);
   }
-  const conversation = (await res.json()) as Conversation;
+  const conversation = (await res.json()) as Conversation & {
+    encrypted?: boolean;
+    k_conv_blob?: string;
+    messages?: Array<Record<string, unknown>>;
+  };
+  // 加密对话：用本机 K_user 派生 K_conv 缓存 + 本地解密 messages
+  if (conversation && conversation.encrypted && conversation.k_conv_blob) {
+    try {
+      let kConv = getCachedKConv(conversationId);
+      if (!kConv) {
+        const kUserStr = await getStoredKUser();
+        if (kUserStr) {
+          const kUserBytes = base64ToBytes(kUserStr);
+          kConv = deriveKConvFromBlob(conversation.k_conv_blob, kUserBytes);
+          setCachedKConv(conversationId, kConv);
+        }
+      }
+      if (kConv && Array.isArray(conversation.messages)) {
+        conversation.messages = conversation.messages.map((m) => decryptMessageLocal(m, kConv!));
+      }
+    } catch (e) {
+      // 失败时 messages 保留 sentinel 状态，UI 起码不崩
+      // eslint-disable-next-line no-console
+      console.warn('[encrypted conv mobile] decrypt failed:', (e as Error)?.message || e);
+    }
+  }
   const t2 = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const msgs = conversation?.messages;
   const messageCount = Array.isArray(msgs) ? msgs.length : 0;
@@ -975,6 +1020,7 @@ export async function streamChatV2Loop(
           type?: string;
           _replay_from?: number;
           replay_from?: number;
+          ciphertext?: string;
         };
         try {
           data = JSON.parse(jsonStr) as ChatStreamEvent & {
@@ -982,9 +1028,32 @@ export async function streamChatV2Loop(
             type?: string;
             _replay_from?: number;
             replay_from?: number;
+            ciphertext?: string;
           };
         } catch {
           continue;
+        }
+        // 加密对话：encrypted_chunk wrapper → 解出 inner JSON 再分发
+        if (data && data.type === 'encrypted_chunk' && data.ciphertext) {
+          const _kc = getCachedKConv(conversationId);
+          if (_kc) {
+            try {
+              const innerStr = decryptSseChunkLocal(`data: ${jsonStr}\n\n`, _kc);
+              if (innerStr && innerStr.startsWith('data: ')) {
+                data = JSON.parse(
+                  innerStr.slice('data: '.length).replace(/\n\n$/, '').trim()
+                ) as typeof data;
+              }
+            } catch (e) {
+              // eslint-disable-next-line no-console
+              console.warn('[encrypted_chunk mobile] decrypt failed:', (e as Error)?.message || e);
+              continue;
+            }
+          } else {
+            // eslint-disable-next-line no-console
+            console.warn('[encrypted_chunk mobile] no cached K_conv, skip');
+            continue;
+          }
         }
         if (typeof data._replay_from === 'number' && Number.isFinite(data._replay_from)) {
           replayFrom = data._replay_from;
@@ -1057,6 +1126,21 @@ export async function streamChatV2Loop(
       };
     } else {
       body = { subscribe_only: true, run_id: v2RunId, replay_from: 0 };
+    }
+
+    // 加密 conv：用 cached K_conv 算 k_conv_wire 附在 body 里（每次发 / 重连都重算 nonce）
+    {
+      const _kcSend = getCachedKConv(conversationId);
+      if (_kcSend) {
+        try {
+          const pub = await getTransportPubkeyMobile(base);
+          body.k_conv_wire = wrapKConvForWire(_kcSend, pub);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error('[encrypted chat_v2 mobile] wrap K_conv failed:', (e as Error)?.message || e);
+          throw new Error('加密对话发送失败：本机无法包装 K_conv');
+        }
+      }
     }
 
     let res: Response;

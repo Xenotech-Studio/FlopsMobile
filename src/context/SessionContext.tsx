@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '../api';
 import { DEFAULT_SERVER_URL, normalizeServerUrl } from '../config';
 import { clearStoredKUser } from '../lib/kUserStorage';
+import { clearCachedKConv } from '../lib/srp';
 
 const STORAGE_KEY_SESSION = '@FlopsMobile/session';
 
@@ -37,6 +38,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     setSession(null);
     await AsyncStorage.removeItem(STORAGE_KEY_SESSION);
     await clearStoredKUser();
+    try { clearCachedKConv(); } catch { /* ignore */ }
   }, []);
 
   const restoreSession = useCallback(async () => {

@@ -349,3 +349,97 @@ export function wrapKUser(kUser: Uint8Array, kdk: Uint8Array): string {
 export function unwrapKUser(blobB64: string, kdk: Uint8Array): Uint8Array {
   return aesGcmDecrypt(base64ToBytesLocal(blobB64), kdk);
 }
+
+// =====================================================================
+// K_conv (per-conversation) helpers
+// 与 FlowUserSystemSDK/core/data_crypto.js + backend/conversation_system/message_crypto.py
+// 字节级互通。
+// =====================================================================
+
+/** k_conv_blob (base64) + K_user → K_conv 字节。 */
+export function deriveKConvFromBlob(kConvBlobB64: string, kUserBytes: Uint8Array): Uint8Array {
+  if (!kConvBlobB64 || kUserBytes.length !== KEY_LEN) {
+    throw new Error('deriveKConvFromBlob: invalid inputs');
+  }
+  const blob = base64ToBytesLocal(kConvBlobB64);
+  const kConv = aesGcmDecrypt(blob, kUserBytes);
+  if (kConv.length !== KEY_LEN) throw new Error('K_conv must be 32 bytes');
+  return kConv;
+}
+
+/** K_conv → RSA-OAEP-SHA256(transport.pub) → base64。每次 chat_v2 POST 都重算。 */
+export function wrapKConvForWire(kConvBytes: Uint8Array, transportPubPem: string): string {
+  if (kConvBytes.length !== KEY_LEN) throw new Error('wrapKConvForWire: K_conv invalid');
+  const pub = forge.pki.publicKeyFromPem(transportPubPem);
+  let bin = '';
+  for (let i = 0; i < kConvBytes.length; i++) bin += String.fromCharCode(kConvBytes[i]);
+  const ct = pub.encrypt(bin, 'RSA-OAEP', {
+    md: forge.md.sha256.create(),
+    mgf1: { md: forge.md.sha256.create() },
+  });
+  return forge.util.encode64(ct);
+}
+
+/** message dict 解密 content_ciphertext / tool_calls_ciphertext / reasoning_*_ciphertext。 */
+export function decryptMessageLocal(
+  msg: Record<string, unknown>,
+  kConvBytes: Uint8Array,
+): Record<string, unknown> {
+  if (!msg || typeof msg !== 'object') return msg;
+  const out: Record<string, unknown> = { ...msg };
+  const fields: Array<[string, string]> = [
+    ['content', 'content_ciphertext'],
+    ['tool_calls', 'tool_calls_ciphertext'],
+    ['reasoning_content', 'reasoning_content_ciphertext'],
+    ['reasoning_seconds', 'reasoning_seconds_ciphertext'],
+  ];
+  for (const [plain, ct] of fields) {
+    if (typeof out[ct] !== 'string') continue;
+    const blobB64 = out[ct] as string;
+    delete out[ct];
+    try {
+      const blob = base64ToBytesLocal(blobB64);
+      const pt = aesGcmDecrypt(blob, kConvBytes);
+      out[plain] = JSON.parse(new TextDecoder().decode(pt));
+    } catch (e) {
+      out[plain] = `[encrypted ${plain} — decrypt failed: ${(e as Error)?.message || e}]`;
+    }
+  }
+  return out;
+}
+
+/** 单条 SSE chunk 字符串 (data: {...}\n\n)。若 type==='encrypted_chunk' 用 K_conv 解出内层 JSON。 */
+export function decryptSseChunkLocal(chunkStr: string, kConvBytes: Uint8Array): string {
+  if (typeof chunkStr !== 'string' || !chunkStr.startsWith('data: ')) return chunkStr;
+  const body = chunkStr.slice('data: '.length).replace(/\n\n$/, '').trim();
+  if (!body) return chunkStr;
+  let parsed: { type?: string; ciphertext?: string };
+  try { parsed = JSON.parse(body); } catch { return chunkStr; }
+  if (!parsed || parsed.type !== 'encrypted_chunk' || !parsed.ciphertext) return chunkStr;
+  try {
+    const blob = base64ToBytesLocal(parsed.ciphertext);
+    const innerPt = aesGcmDecrypt(blob, kConvBytes);
+    const innerStr = new TextDecoder().decode(innerPt);
+    return `data: ${innerStr}\n\n`;
+  } catch {
+    return chunkStr;
+  }
+}
+
+// K_conv 缓存（per conv_id，模块级；进程生命期；logout 时由 SessionContext 清）
+const _kConvCache: Map<string, Uint8Array> = new Map();
+
+export function setCachedKConv(convId: string, kConvBytes: Uint8Array): void {
+  if (!convId || kConvBytes.length !== KEY_LEN) return;
+  _kConvCache.set(String(convId), kConvBytes);
+}
+
+export function getCachedKConv(convId: string): Uint8Array | null {
+  if (!convId) return null;
+  return _kConvCache.get(String(convId)) || null;
+}
+
+export function clearCachedKConv(convId?: string): void {
+  if (convId) _kConvCache.delete(String(convId));
+  else _kConvCache.clear();
+}
