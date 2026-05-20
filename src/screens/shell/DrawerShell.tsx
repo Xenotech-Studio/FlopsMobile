@@ -28,11 +28,13 @@ import React, {
   useState,
 } from 'react';
 import {
+  BackHandler,
   Platform,
   StyleSheet,
   View,
   useWindowDimensions,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -54,10 +56,8 @@ import { TodayScreen } from '../TodayScreen';
 import { ProjectScreen } from '../ProjectScreen';
 import { DocsScreen } from '../DocsScreen';
 import { ChatScreen } from '../ChatScreen';
-import { SystemGestureExclusionView } from '../../components/SystemGestureExclusionView';
 import { subscribeClientOutdated } from '../../utils/clientCompatBus';
 import { getScreenCornerRadius } from '../../utils/screenInfo';
-import { HEADER_CIRCLE_BTN_SIZE } from '../../theme/layout';
 
 /** 抽屉完全展开时主页面右侧保留的 peek 宽度 */
 const PEEK_WIDTH = 64;
@@ -154,6 +154,28 @@ export function DrawerShell() {
       }
     });
   }, []);
+
+  /** Android：在顶层抽屉页接住系统返回（含左缘滑动手势）：
+   *  - 抽屉已开：先关抽屉。
+   *  - 抽屉已关：当作"打开抽屉"，避免直接退出 app。
+   *  这条只在 DrawerShell focused 时挂；用户从抽屉页 push 进 Chat / TaskDetail
+   *  等子页时 DrawerShell 失焦，listener 卸下，子页的返回手势恢复 pop 默认行为。
+   *  Android 系统层面 systemGestureExclusionRects 一台屏只能排除 200dp 左右，
+   *  超出区域的左缘滑动仍会触发系统返回；BackHandler 在这里兜底。 */
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'android') return;
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        if (isOpen) {
+          close();
+        } else {
+          open();
+        }
+        return true;
+      });
+      return () => sub.remove();
+    }, [isOpen, open, close])
+  );
 
   /** DrawerContent 点条目：切顶层页 + 关抽屉 */
   const setActiveAndClose = useCallback(
@@ -381,19 +403,18 @@ export function DrawerShell() {
           </Animated.View>
         </Animated.View>
 
-        {/* 左缘手势条：仅抽屉关闭时挂载；SystemGestureExclusionView 让 Android 不抢系统返回。
-         *  top 让出 topBar 整片区域：Android 上这条 strip 宽 56dp 且 elevation:24，会盖住
-         *  topBar 左上的 HamburgerButton（左沿 ~16dp 起、宽 52dp），box-only 把 tap 吞掉
-         *  就出现「汉堡键点不动」。让 strip 从 topBar 下方开始即可，左滑唤起仍可用。 */}
-        {!isOpen ? (
+        {/* 左缘开抽屉手势条：仅 iOS 挂载。
+         *  - iOS 没有"系统左缘 = 返回"约定，pan 是唯一的左缘开抽屉入口。
+         *  - Android 改成完全靠 BackHandler 接住系统返回（含左缘滑动）→ open()，
+         *    省掉这条 strip 跟 SystemGestureExclusionView，避免 strip 跟其它点击
+         *    区域抢手势（曾经盖过 HamburgerButton 触发"点不动"那个 bug）；
+         *    代价是 Android 失去 drag-to-peek 的跟手反馈，按下放手才弹开。 */}
+        {!isOpen && Platform.OS === 'ios' ? (
           <GestureDetector gesture={openGesture}>
-            <SystemGestureExclusionView
+            <View
               style={[
                 styles.leftEdge,
-                {
-                  width: LEFT_EDGE_STRIP_WIDTH,
-                  top: insets.top + HEADER_CIRCLE_BTN_SIZE + 20,
-                },
+                { width: LEFT_EDGE_STRIP_WIDTH },
               ]}
               pointerEvents="box-only"
               collapsable={false}
