@@ -351,7 +351,6 @@ export function DrawerShell() {
                   animatedShadowStyle,
                 ]
               : null,
-            Platform.OS === 'android' && shadowOn ? { elevation: 6 } : null,
           ]}
         >
           <Animated.View
@@ -359,6 +358,13 @@ export function DrawerShell() {
               styles.mainInner,
               { backgroundColor: colors.chatScreenBackground },
               animatedMainInnerStyle,
+              /* Android：elevation 必须挂在有 backgroundColor 的 View 上才会渲染阴影；
+                 之前挂在 mainOuter（透明）上等于没效果。挪到 mainInner 配合 borderRadius
+                 让阴影按圆角卡片形状投在抽屉上。elevation 调到 16 让阴影明显可见，
+                 Android 9+ 用 shadowColor 给阴影加点饱和度。 */
+              Platform.OS === 'android' && shadowOn
+                ? { elevation: 16, shadowColor: '#000' }
+                : null,
             ]}
           >
             {activeElement}
