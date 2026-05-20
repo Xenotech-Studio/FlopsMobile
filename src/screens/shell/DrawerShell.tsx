@@ -339,6 +339,7 @@ export function DrawerShell() {
             inDrawer
             conversationIdOverride={active.conversationId}
             conversationTitleOverride={active.conversationTitle}
+            createEncrypted={Boolean(active.createEncrypted)}
           />
         );
     }

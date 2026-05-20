@@ -746,16 +746,30 @@ export async function deleteConversation(
  */
 export async function createConversation(
   session: Session,
-  opts?: { bound_agent_id?: string }
+  opts?: { bound_agent_id?: string; encrypted?: boolean }
 ): Promise<{ id: string }> {
   const base = session.server_base_url;
-  const body: Record<string, string> = {};
+  const body: Record<string, unknown> = {};
   const bid = String(opts?.bound_agent_id || '').trim();
   if (bid) body.bound_agent_id = bid;
+  // 加密对话：现场生成 K_conv + 用本机 K_user 包成 k_conv_blob 一并 POST，
+  // 创建成功后 setCachedKConv 让随后的 chat_v2 自带 k_conv_wire
+  if (opts?.encrypted) {
+    const kUserStr = await getStoredKUser();
+    if (!kUserStr) throw new Error('本机无 K_user，请先重新登录');
+    const { generateKConvAndBlob } = await import('./lib/srp');
+    const kUserBytes = base64ToBytes(kUserStr);
+    const { kConvBytes, kConvBlobB64 } = generateKConvAndBlob(kUserBytes);
+    body.encrypted = true;
+    body.k_conv_blob = kConvBlobB64;
+    // 缓存到 SDK module-level cache（chat_v2 路径会查它）
+    // 但 conv id 还不知道（创建后才知）；我们 store 一份临时键，回头 patch
+    (body as Record<string, unknown>).__pending_kconv = kConvBytes;
+  }
   const res = await fetchWithDebugLog(`${base}api/conversations`, {
     method: 'POST',
     headers: authHeaders(session.access_token),
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, __pending_kconv: undefined }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -763,6 +777,13 @@ export async function createConversation(
   }
   const data = (await res.json()) as { id?: string };
   if (!data.id) throw new Error('服务端未返回会话 id');
+  // 创建成功后注册 K_conv 到 cache
+  if (opts?.encrypted) {
+    try {
+      const pending = (body as Record<string, unknown>).__pending_kconv as Uint8Array | undefined;
+      if (pending) setCachedKConv(data.id, pending);
+    } catch { /* ignore */ }
+  }
   return { id: data.id };
 }
 

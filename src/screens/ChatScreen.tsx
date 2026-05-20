@@ -272,12 +272,15 @@ export type ChatScreenProps = {
   inDrawer?: boolean;
   conversationIdOverride?: string;
   conversationTitleOverride?: string;
+  /** true 时：新建对话走加密路径（POST /api/conversations 带 encrypted+k_conv_blob） */
+  createEncrypted?: boolean;
 };
 
 export function ChatScreen({
   inDrawer = false,
   conversationIdOverride,
   conversationTitleOverride,
+  createEncrypted = false,
 }: ChatScreenProps = {}) {
   const { session } = useSession();
   const insets = useSafeAreaInsets();
@@ -1226,10 +1229,10 @@ export function ChatScreen({
     if (!convId) {
       try {
         const bid = String(draftAgentId || '').trim();
-        const { id } = await createConversation(
-          session,
-          bid ? { bound_agent_id: bid } : undefined
-        );
+        const opts: { bound_agent_id?: string; encrypted?: boolean } = {};
+        if (bid) opts.bound_agent_id = bid;
+        if (createEncrypted) opts.encrypted = true;
+        const { id } = await createConversation(session, Object.keys(opts).length ? opts : undefined);
         convId = id;
         setConversationId(id);
         conversationIdRef.current = id;

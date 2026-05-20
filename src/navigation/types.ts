@@ -14,7 +14,14 @@ export type DrawerActive =
   | { kind: 'docs' }
   /** 从抽屉 / 今日页对话段进入的对话：作为顶层页直接渲染，而不是再 push 一层 ChatScreen。
    *  conversationId 缺省 = 新对话；nonce 用于「+ 新对话」每次点击都强制 remount。 */
-  | { kind: 'chat'; conversationId?: string; conversationTitle?: string; nonce?: number };
+  | {
+      kind: 'chat';
+      conversationId?: string;
+      conversationTitle?: string;
+      nonce?: number;
+      /** 长按"+ 新对话" → "新建加密对话" 时 true；ChatScreen 据此创建 conv 时带 encrypted+k_conv_blob */
+      createEncrypted?: boolean;
+    };
 
 /** 今日页新建：无无序区时传 unorganized；有无序区时在 sheet 里选 */
 export type TaskCreatePlacement =

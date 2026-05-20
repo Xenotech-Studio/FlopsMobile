@@ -14,7 +14,10 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ActionSheetIOS,
+  Alert,
   Image,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -117,6 +120,35 @@ export function DrawerContent() {
   const onNewChat = useCallback(() => {
     // nonce 让每次点 + 都强制 remount 一个全新 ChatScreen
     setActive({ kind: 'chat', nonce: Date.now() });
+  }, [setActive]);
+
+  /** 长按 "+ 新对话" → action sheet：选普通 / 加密 */
+  const onNewChatLongPress = useCallback(() => {
+    const startEncrypted = () => setActive({ kind: 'chat', nonce: Date.now(), createEncrypted: true });
+    const startNormal = () => setActive({ kind: 'chat', nonce: Date.now() });
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          title: '新建对话',
+          options: ['普通对话', '🔒 加密对话（端到端密文）', '取消'],
+          cancelButtonIndex: 2,
+        },
+        (idx) => {
+          if (idx === 0) startNormal();
+          else if (idx === 1) startEncrypted();
+        },
+      );
+    } else {
+      Alert.alert(
+        '新建对话',
+        '加密对话：消息 / 工具 / 思考全部端到端密文，server 即便被拖库也看不到原文。',
+        [
+          { text: '普通对话', onPress: startNormal },
+          { text: '🔒 加密对话', onPress: startEncrypted },
+          { text: '取消', style: 'cancel' },
+        ],
+      );
+    }
   }, [setActive]);
 
   const onAvatarPress = useCallback(() => {
@@ -224,6 +256,8 @@ export function DrawerContent() {
         <TouchableOpacity
           style={styles.newChatPill}
           onPress={onNewChat}
+          onLongPress={onNewChatLongPress}
+          delayLongPress={400}
           activeOpacity={0.85}
         >
           <Ionicons name="add" size={20} color={colors.onUserBubble} />
