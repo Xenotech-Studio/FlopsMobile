@@ -26,6 +26,7 @@ import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { convProfileLog } from '../debug/conversationLoadProfile';
 import { useSession } from '../context/SessionContext';
+import { bytesToBase64, getCachedKAgent, getCachedKConv } from '../lib/srp';
 import type { RootStackParamList } from '../navigation/types';
 import {
   createConversation,
@@ -69,12 +70,15 @@ import { normalizeUsageCurrencyMode, type UsageCurrencyMode } from '../constants
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import Svg, { Path } from 'react-native-svg';
 import Clipboard from '@react-native-clipboard/clipboard';
+import { MenuView } from '@react-native-menu/menu';
+import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import { chatInputOverlayGradient, toolPreviewFadeGradient } from '../theme/appColors';
 import { useAppTheme } from '../context/ThemeContext';
 import { HamburgerButton } from './shell/HamburgerButton';
+import { AnimatedCircleButton } from '../components/AnimatedCircleButton';
 import { createChatStyles } from './chat/ChatScreen.styles';
 import { ThinkingBlockView } from './chat/ThinkingBlockView';
 import { ComposerContextRing } from './chat/ComposerContextRing';
@@ -337,6 +341,12 @@ export function ChatScreen({
     bound_agent_id?: string;
     agent_profile?: AgentProfile;
   } | null>(null);
+  /** runV2WithHandlers 是 useCallback([session, ...])，里头读 conversationMeta 不稳；
+   *  用 ref 把最新 meta 镜像出来给 streamChatV2Loop 的 agentEncryption 选项。 */
+  const conversationMetaRef = useRef(conversationMeta);
+  useEffect(() => {
+    conversationMetaRef.current = conversationMeta;
+  }, [conversationMeta]);
   /** Bottom sheet 用量详情：null = 关；对象里 body 必填，title / actionLabel / onAction 可选。
    *  从 stats icon 入口打开时只传 body；从环形进度条入口打开时传 title="上下文用量" +
    *  当存在压缩摘要时再带 actionLabel "跳转到压缩截断位置" + onAction = 滚动到那里。 */
@@ -1190,8 +1200,20 @@ export function ChatScreen({
 
       /** 与 FlopsWeb Chat.jsx 一致：用本轮固定的 convId 判断存活；勿与 streamTargetRef 比（首包前 ref 可能尚未随 setState 同步） */
       const streamSessionConvId = opts.convId;
+      /** 加密 agent 时，把 bound_agent_id + k_agent_blob 喂给 streamChatV2Loop，
+       *  让它自动派生 K_agent 并拼 k_agent_wire（server 强制 400 兜底）。 */
+      const _meta = conversationMetaRef.current;
+      const _aid = String(_meta?.bound_agent_id || _meta?.agent_profile?.agent_id || '').trim();
+      const _agentEnc =
+        _aid && _meta?.agent_profile?.encrypted
+          ? {
+              agentId: _aid,
+              kAgentBlobB64: _meta.agent_profile.k_agent_blob ?? null,
+            }
+          : undefined;
       await streamChatV2Loop(session, streamTargetRef.current, opts.start, onEvent, opts.signal, {
         isAlive: () => conversationIdRef.current === streamSessionConvId && !opts.signal.aborted,
+        agentEncryption: _agentEnc,
       });
 
       return { streamDone, finalText, localBlocks, lastConvId: streamTargetRef.current };
@@ -1566,6 +1588,109 @@ export function ChatScreen({
       handleStop,
     ]
   );
+
+  /** 对话头部 ⋯ 菜单各 item 的处理逻辑。
+   *  iOS 走 MenuView（UIMenu 原生毛玻璃 + 系统动画）；Android 走自绘 Modal popover
+   *  （Material PopupMenu 渲染 SF Symbol image 跟我们其它视觉对不齐，所以自己画）。 */
+  const handleConvInfo = useCallback(() => {
+    if (!conversationId) return;
+    const meta = conversationMetaRef.current;
+    const isEncrypted = Boolean(getCachedKConv(conversationId));
+    const boundAgentId = String(meta?.bound_agent_id || meta?.agent_profile?.agent_id || '').trim();
+    const lines: string[] = [];
+    lines.push(`对话 ID：${conversationId}`);
+    lines.push(`加密状态：${isEncrypted ? '端到端加密' : '明文'}`);
+    if (boundAgentId) {
+      const dn = (meta?.agent_profile?.display_name || '').trim();
+      lines.push(`绑定 Agent：${dn ? `${dn}（${boundAgentId}）` : boundAgentId}`);
+      if (meta?.agent_profile?.encrypted) lines.push('Agent 印象段：端到端加密');
+    }
+    Alert.alert('对话信息', lines.join('\n'));
+  }, [conversationId]);
+
+  const handleConvDiagCopy = useCallback(() => {
+    if (!conversationId) return;
+    const meta = conversationMetaRef.current;
+    const boundAgentId = String(meta?.bound_agent_id || meta?.agent_profile?.agent_id || '').trim();
+    const payload: Record<string, unknown> = {
+      schema_version: 1,
+      conv_id: conversationId,
+      user_id: session?.user_id || null,
+      bound_agent_id: boundAgentId || null,
+      exported_at: new Date().toISOString(),
+    };
+    try {
+      const kc = getCachedKConv(conversationId);
+      if (kc) payload.k_conv_b64 = bytesToBase64(kc);
+      if (boundAgentId) {
+        const ka = getCachedKAgent(boundAgentId);
+        if (ka) payload.k_agent_b64 = bytesToBase64(ka);
+      }
+    } catch {
+      /* 缓存里没就不带 K_*，至少 conv_id / user_id 指针还能给开发者用 */
+    }
+    const jsonStr = JSON.stringify(payload);
+    const bytes = new TextEncoder().encode(jsonStr);
+    const blob = 'flops-diag:v1:' + bytesToBase64(bytes);
+    Clipboard.setString(blob);
+    Alert.alert('诊断资料已复制', '请发给开发者（含本对话标识与本机持有的密钥；非加密对话不含密钥）');
+  }, [conversationId, session]);
+
+  /** iOS MenuView 的 actions（SF Symbol image），id → handler 分发 */
+  const convMenuActions = useMemo(
+    () => [
+      { id: 'info', title: '对话信息', image: 'info.circle' },
+      { id: 'diag', title: '复制诊断资料', image: 'doc.on.clipboard' },
+    ],
+    [],
+  );
+  const onConvMenuPressAction = useCallback(
+    (e: { nativeEvent: { event: string } }) => {
+      const id = e.nativeEvent.event;
+      if (id === 'info') handleConvInfo();
+      else if (id === 'diag') handleConvDiagCopy();
+    },
+    [handleConvInfo, handleConvDiagCopy],
+  );
+
+  /** iOS MenuView 是 native UIButton.menu，press 事件抢不到，只能拿
+   *  onOpenMenu / onCloseMenu 当 down/up 信号。spring 参数跟 AnimatedCircleButton
+   *  对齐：按下放大到 1.12（紧、无 overshoot），关闭时回 1（一次 overshoot 再静下来）。 */
+  const convMenuBtnScale = useRef(new Animated.Value(1)).current;
+  const animateConvMenuPressDown = useCallback(() => {
+    try {
+      ReactNativeHapticFeedback.trigger('impactLight', { enableVibrateFallback: true });
+    } catch {
+      /* ignore */
+    }
+    Animated.spring(convMenuBtnScale, {
+      toValue: 1.12,
+      useNativeDriver: true,
+      friction: 14,
+      tension: 220,
+    }).start();
+  }, [convMenuBtnScale]);
+  const animateConvMenuPressUp = useCallback(() => {
+    Animated.spring(convMenuBtnScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      friction: 5.5,
+      tension: 200,
+    }).start();
+  }, [convMenuBtnScale]);
+
+  /** Android ⋯ 菜单走自绘 Modal popover */
+  const [convMenuOpen, setConvMenuOpen] = useState(false);
+  /** 两端 ⋯ 菜单都用同一个 Modal popover：press 反馈由 AnimatedCircleButton 包，
+   *  这里只管开/关。AnimatedCircleButton 的 onPress 在松手时 fire（finger up），
+   *  正好满足"按住的时候可以一直按住、松手才打开菜单 + 触发弹跳"。 */
+  const openConvMenu = useCallback(() => {
+    if (!conversationId) return;
+    setConvMenuOpen(true);
+  }, [conversationId]);
+  const closeConvMenu = useCallback(() => {
+    setConvMenuOpen(false);
+  }, []);
 
   const handleNewConversation = useCallback(async () => {
     if (loading) return;
@@ -2613,13 +2738,12 @@ export function ChatScreen({
         {inDrawer ? (
           <HamburgerButton />
         ) : canGoBack ? (
-          <TouchableOpacity
+          <AnimatedCircleButton
             style={styles.circleBtn}
             onPress={() => navigation.goBack()}
-            activeOpacity={0.7}
           >
             <Ionicons name="chevron-back" size={24} color={colors.textSecondary} />
-          </TouchableOpacity>
+          </AnimatedCircleButton>
         ) : (
           <View style={styles.circleBtn} />
         )}
@@ -2628,14 +2752,40 @@ export function ChatScreen({
             {conversationId ? (conversationTitle || '新对话') : 'Flops'}
           </Text>
         </View>
-        <TouchableOpacity
-          style={styles.circleBtn}
-          onPress={handleNewConversation}
-          disabled={loading}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="add" size={24} color={colors.textSecondary} />
-        </TouchableOpacity>
+        {/* 右上角 ⋯ 菜单：iOS 用 MenuView（UIMenu 原生毛玻璃 + 系统动画 + 系统点
+         *  外部关）；Android 用 AnimatedCircleButton + 自绘 Modal popover。
+         *  iOS 上的 scale 动画通过 MenuView.onOpenMenu / onCloseMenu 触发，
+         *  按下 ~80ms 后才放大（native UIMenu 检测期，绕不过），跟 Android 的
+         *  "按下立即放大、松手弹回"在时机上略有不同。 */}
+        {Platform.OS === 'ios' ? (
+          <MenuView
+            title=""
+            actions={convMenuActions}
+            onPressAction={onConvMenuPressAction}
+            onOpenMenu={animateConvMenuPressDown}
+            onCloseMenu={animateConvMenuPressUp}
+            shouldOpenOnLongPress={false}
+          >
+            <Animated.View
+              style={[
+                styles.circleBtn,
+                !conversationId && styles.circleBtnDisabled,
+                { transform: [{ scale: convMenuBtnScale }] },
+              ]}
+              pointerEvents={conversationId ? 'auto' : 'none'}
+            >
+              <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
+            </Animated.View>
+          </MenuView>
+        ) : (
+          <AnimatedCircleButton
+            style={[styles.circleBtn, !conversationId && styles.circleBtnDisabled]}
+            onPress={openConvMenu}
+            disabled={!conversationId}
+          >
+            <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
+          </AnimatedCircleButton>
+        )}
       </View>
 
       <KeyboardAvoidingView
@@ -3212,6 +3362,58 @@ export function ChatScreen({
         }
       }}
     />
+
+    {/* Android：⋯ 菜单的自绘 popover；iOS 走 MenuView 不需要本 Modal。 */}
+    {Platform.OS === 'android' ? (
+    <Modal
+      visible={convMenuOpen}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={closeConvMenu}
+    >
+      <TouchableOpacity
+        style={styles.convMenuBackdrop}
+        activeOpacity={1}
+        onPress={closeConvMenu}
+      >
+        <View
+          style={[
+            styles.convMenuCard,
+            {
+              top: insets.top + 8 + HEADER_CIRCLE_BTN_SIZE + 6,
+              right: 16,
+            },
+          ]}
+          onStartShouldSetResponder={() => true}
+        >
+          <TouchableOpacity
+            style={styles.convMenuItem}
+            activeOpacity={0.6}
+            onPress={() => {
+              closeConvMenu();
+              handleConvInfo();
+            }}
+          >
+            <Ionicons name="information-circle-outline" size={20} color={colors.textPrimary} />
+            <Text style={styles.convMenuItemText}>对话信息</Text>
+          </TouchableOpacity>
+          <View style={styles.convMenuDivider} />
+          <TouchableOpacity
+            style={styles.convMenuItem}
+            activeOpacity={0.6}
+            onPress={() => {
+              closeConvMenu();
+              handleConvDiagCopy();
+            }}
+          >
+            <Ionicons name="copy-outline" size={20} color={colors.textPrimary} />
+            <Text style={styles.convMenuItemText}>复制诊断资料</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+    ) : null}
     </>
   );
 }

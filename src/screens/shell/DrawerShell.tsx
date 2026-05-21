@@ -58,6 +58,7 @@ import { DocsScreen } from '../DocsScreen';
 import { ChatScreen } from '../ChatScreen';
 import { subscribeClientOutdated } from '../../utils/clientCompatBus';
 import { getScreenCornerRadius } from '../../utils/screenInfo';
+import { SHADOW_COLOR } from '../../theme/shadows';
 
 /** 抽屉完全展开时主页面右侧保留的 peek 宽度 */
 const PEEK_WIDTH = 64;
@@ -367,7 +368,7 @@ export function DrawerShell() {
             Platform.OS === 'ios'
               ? [
                   {
-                    shadowColor: '#000',
+                    shadowColor: SHADOW_COLOR,
                     shadowOffset: { width: -1, height: 0 },
                     shadowRadius: 8,
                   },
@@ -386,7 +387,7 @@ export function DrawerShell() {
                  让阴影按圆角卡片形状投在抽屉上。elevation 调到 16 让阴影明显可见，
                  Android 9+ 用 shadowColor 给阴影加点饱和度。 */
               Platform.OS === 'android' && shadowOn
-                ? { elevation: 16, shadowColor: '#000' }
+                ? { elevation: 16, shadowColor: SHADOW_COLOR }
                 : null,
             ]}
           >

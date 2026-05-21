@@ -368,6 +368,23 @@ export function unwrapKUser(blobB64: string, kdk: Uint8Array): Uint8Array {
 // 字节级互通。
 // =====================================================================
 
+/** 新对话：生成 K_conv，返回 (K_conv_bytes, k_conv_blob_base64)。
+ *  与 Web `userSystem/core/data_crypto.js` 同款语义，便于跨端互通。 */
+export function generateKConvAndBlob(kUserBytes: Uint8Array): {
+  kConvBytes: Uint8Array;
+  kConvBlobB64: string;
+} {
+  if (kUserBytes.length !== KEY_LEN) throw new Error('generateKConvAndBlob: K_user invalid');
+  const kConv = new Uint8Array(KEY_LEN);
+  const grv = global.crypto?.getRandomValues;
+  if (typeof grv !== 'function') {
+    throw new Error('crypto.getRandomValues unavailable (need react-native-get-random-values polyfill)');
+  }
+  grv.call(global.crypto, kConv);
+  const blob = aesGcmEncrypt(kConv, kUserBytes);
+  return { kConvBytes: kConv, kConvBlobB64: bytesToBase64(blob) };
+}
+
 /** k_conv_blob (base64) + K_user → K_conv 字节。 */
 export function deriveKConvFromBlob(kConvBlobB64: string, kUserBytes: Uint8Array): Uint8Array {
   if (!kConvBlobB64 || kUserBytes.length !== KEY_LEN) {
@@ -454,4 +471,58 @@ export function getCachedKConv(convId: string): Uint8Array | null {
 export function clearCachedKConv(convId?: string): void {
   if (convId) _kConvCache.delete(String(convId));
   else _kConvCache.clear();
+}
+
+/* ============================================================
+ * K_agent（per-agent）
+ * ============================================================
+ * 跟 K_conv 完全平行：server 在 agent record 上存 k_agent_blob =
+ * AES-GCM(K_agent, K_user)，client 拿到后用 K_user 解出 K_agent 缓存
+ * （per agent_id，多个 conv 共享同一 K_agent）。chat_v2 发送时若 bound
+ * agent 是 encrypted，把 K_agent 用 transport.pub 包成 k_agent_wire 附在
+ * body 里。
+ *
+ * Web 端规范实现见 FlopsWeb/src/userSystem/core/data_crypto.js 的 K_agent 段。
+ */
+
+/** k_agent_blob (base64) + K_user → K_agent 字节 (32B) */
+export function deriveKAgentFromBlob(kAgentBlobB64: string, kUserBytes: Uint8Array): Uint8Array {
+  if (!kAgentBlobB64 || kUserBytes.length !== KEY_LEN) {
+    throw new Error('deriveKAgentFromBlob: invalid inputs');
+  }
+  const blob = base64ToBytes(kAgentBlobB64);
+  const kAgent = aesGcmDecrypt(blob, kUserBytes);
+  if (kAgent.length !== KEY_LEN) throw new Error('K_agent must be 32 bytes');
+  return kAgent;
+}
+
+/** K_agent → RSA-OAEP(transport.pub) → base64。每次 chat_v2 POST 重算。 */
+export function wrapKAgentForWire(kAgentBytes: Uint8Array, transportPubPem: string): string {
+  if (kAgentBytes.length !== KEY_LEN) throw new Error('wrapKAgentForWire: K_agent invalid');
+  const pub = forge.pki.publicKeyFromPem(transportPubPem);
+  let bin = '';
+  for (let i = 0; i < kAgentBytes.length; i++) bin += String.fromCharCode(kAgentBytes[i]);
+  const ct = pub.encrypt(bin, 'RSA-OAEP', {
+    md: forge.md.sha256.create(),
+    mgf1: { md: forge.md.sha256.create() },
+  });
+  return forge.util.encode64(ct);
+}
+
+// K_agent 缓存（per agent_id，模块级；进程生命期；logout 时由 SessionContext 清）
+const _kAgentCache: Map<string, Uint8Array> = new Map();
+
+export function setCachedKAgent(agentId: string, kAgentBytes: Uint8Array): void {
+  if (!agentId || kAgentBytes.length !== KEY_LEN) return;
+  _kAgentCache.set(String(agentId), kAgentBytes);
+}
+
+export function getCachedKAgent(agentId: string): Uint8Array | null {
+  if (!agentId) return null;
+  return _kAgentCache.get(String(agentId)) || null;
+}
+
+export function clearCachedKAgent(agentId?: string): void {
+  if (agentId) _kAgentCache.delete(String(agentId));
+  else _kAgentCache.clear();
 }

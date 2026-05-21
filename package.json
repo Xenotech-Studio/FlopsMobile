@@ -1,6 +1,6 @@
 {
   "name": "FlopsMobile",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "scripts": {
     "postinstall": "patch-package",
@@ -20,6 +20,7 @@
     "@react-native-async-storage/async-storage": "^2.1.2",
     "@react-native-clipboard/clipboard": "^1.16.3",
     "@react-native-community/datetimepicker": "^8.6.0",
+    "@react-native-menu/menu": "^2.0.0",
     "@react-native/new-app-screen": "0.84.0",
     "@react-navigation/bottom-tabs": "^7.0.0",
     "@react-navigation/native": "^7.0.0",

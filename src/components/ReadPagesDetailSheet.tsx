@@ -20,7 +20,7 @@ import {
 } from '@gorhom/bottom-sheet';
 import type { BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import { shadowSheet } from '../theme/shadows';
+import { SHADOW_COLOR, shadowSheet } from '../theme/shadows';
 import { TASK_FONT_SIZE_BODY, TASK_FONT_SIZE_SMALL } from '../theme/typography';
 import { tryParsePartialReadingStream } from '../utils/toolCardParsers';
 import { useAppTheme } from '../context/ThemeContext';
@@ -286,7 +286,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#b0b0b0',
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 3 },
+      ios: { shadowColor: SHADOW_COLOR, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 3 },
       android: { elevation: 2 },
     }),
   },

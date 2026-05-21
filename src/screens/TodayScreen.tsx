@@ -46,6 +46,7 @@ import { useSharedValue, runOnUI } from 'react-native-reanimated';
 import { useTask } from '../context/TaskContext';
 import { useSession } from '../context/SessionContext';
 import {
+  createConversation,
   deleteConversation,
   listConversations,
   runInboxStream,
@@ -69,6 +70,7 @@ import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { PullToRefreshRing } from '../components/PullToRefreshRing';
 import { InboxRunSpinner, InboxUnreadCheck } from '../components/InboxListIndicators';
 import { HamburgerButton } from './shell/HamburgerButton';
+import { AnimatedCircleButton } from '../components/AnimatedCircleButton';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 import { shadowCircleButtonThemed, shadowMenu, shadowSoft } from '../theme/shadows';
@@ -391,6 +393,18 @@ export function TodayScreen() {
     setShowProjectSelect(true);
   }, [projects.length]);
 
+  /** 新对话：建一条空 conversation 然后进 Chat 页（不挂项目/folder） */
+  const onCreateChat = useCallback(async () => {
+    if (!session) return;
+    try {
+      const { id } = await createConversation(session);
+      navigation.navigate('Chat', { conversationId: id, conversationTitle: '新对话' });
+      loadConvs();
+    } catch (e) {
+      Alert.alert('新建对话失败', e instanceof Error ? e.message : String(e));
+    }
+  }, [session, navigation, loadConvs]);
+
   const onSelectProjectForCreate = useCallback(
     (project: Project) => {
       setShowProjectSelect(false);
@@ -480,10 +494,9 @@ export function TodayScreen() {
   const taskLoading = isLoadingTasks && todayTasks.length === 0;
   const showEndToday = shouldShowEndTodayButton();
 
-  /** 列表头：日期 + filter 段头 */
+  /** 列表头：filter 段头 */
   const ListHeader = (
     <View style={styles.taskHeaderWrap}>
-      <Text style={styles.todayBig}>今日任务</Text>
       <View style={styles.sectionRow}>
         <Text style={styles.sectionTitle}>
           今日 {filteredTodayTasks.length} 个任务
@@ -504,14 +517,22 @@ export function TodayScreen() {
     </View>
   );
 
-  /** 列表尾：结束今天 + 对话段 */
+  /** 列表尾：[结束今天 | 新建任务] 同行 + 对话段 */
   const ListFooter = (
     <View style={styles.footerWrap}>
-      {showEndToday ? (
-        <TouchableOpacity style={styles.endTodayBtn} onPress={endToday} activeOpacity={0.8}>
-          <Text style={styles.endTodayText}>结束今天</Text>
+      <View style={styles.taskActionRow}>
+        {showEndToday ? (
+          <TouchableOpacity style={styles.endTodayBtn} onPress={endToday} activeOpacity={0.8}>
+            <Text style={styles.endTodayText}>结束今天</Text>
+          </TouchableOpacity>
+        ) : (
+          <View />
+        )}
+        <TouchableOpacity style={styles.pillBtn} onPress={onCreateTask} activeOpacity={0.85}>
+          <Ionicons name="add" size={20} color={colors.onPrimary} />
+          <Text style={styles.pillBtnText}>新建任务</Text>
         </TouchableOpacity>
-      ) : null}
+      </View>
 
       <View style={styles.sectionRow}>
         <Text style={styles.sectionTitle}>对话</Text>
@@ -540,21 +561,28 @@ export function TodayScreen() {
             onLongPress={() => setDeleteConvTarget(c)}
             activeOpacity={0.7}
           >
-            <View style={styles.convRowTitle}>
-              <Text style={styles.convRowText} numberOfLines={1}>
-                {(c.title && c.title.trim()) || '新对话'}
-              </Text>
-              {chatV2RunningByConv[c.id] ? (
-                <InboxRunSpinner />
-              ) : chatV2UnreadByConv[c.id] ? (
-                <InboxUnreadCheck />
+            <View style={styles.convRowMain}>
+              <View style={styles.convRowTitle}>
+                <Text style={styles.convRowText} numberOfLines={1}>
+                  {(c.title && c.title.trim()) || '新对话'}
+                </Text>
+                {chatV2RunningByConv[c.id] ? (
+                  <InboxRunSpinner />
+                ) : chatV2UnreadByConv[c.id] ? (
+                  <InboxUnreadCheck />
+                ) : null}
+              </View>
+              {c.updated_at ? (
+                <Text style={styles.convRowMeta} numberOfLines={1}>
+                  {formatTime(c.updated_at)}
+                </Text>
               ) : null}
             </View>
-            {c.updated_at ? (
-              <Text style={styles.convRowMeta} numberOfLines={1}>
-                {formatTime(c.updated_at)}
-              </Text>
-            ) : null}
+            <Ionicons
+              name="chevron-forward"
+              size={18}
+              color={colors.textMuted}
+            />
           </TouchableOpacity>
         ))
       )}
@@ -582,13 +610,12 @@ export function TodayScreen() {
             </TouchableOpacity>
           ) : null}
         </View>
-        <TouchableOpacity
+        <AnimatedCircleButton
           style={styles.headerCircleBtn}
           onPress={onCalendarPress}
-          activeOpacity={0.7}
         >
           <Ionicons name="calendar-outline" size={22} color={colors.textSecondary} />
-        </TouchableOpacity>
+        </AnimatedCircleButton>
       </View>
 
       {/* 主列表 */}
@@ -661,8 +688,18 @@ export function TodayScreen() {
         </View>
       ) : null}
 
-      {/* 底部 sticky 搜索框（UI 占位） */}
+      {/* 底部 sticky：单个暗色 pill（新对话）+ 全宽搜索框 */}
       <View style={[styles.searchWrap, { paddingBottom: Math.max(insets.bottom, 8) + 8 }]}>
+        <View style={styles.pillRow}>
+          <TouchableOpacity
+            style={styles.pillBtn}
+            onPress={onCreateChat}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="add" size={20} color={colors.onPrimary} />
+            <Text style={styles.pillBtnText}>新对话</Text>
+          </TouchableOpacity>
+        </View>
         <View style={styles.searchInputBox}>
           <Ionicons name="search" size={18} color={colors.textMuted} />
           <TextInput
@@ -672,13 +709,6 @@ export function TodayScreen() {
             returnKeyType="search"
           />
         </View>
-        <TouchableOpacity
-          style={styles.addBtn}
-          onPress={onCreateTask}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="add" size={22} color={colors.primary} />
-        </TouchableOpacity>
       </View>
 
       {/* 删除对话确认 */}
@@ -790,13 +820,7 @@ function createStyles(c: AppColors) {
       borderWidth: 1,
       borderColor: c.borderMuted,
     },
-    taskHeaderWrap: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 },
-    todayBig: {
-      fontSize: 22,
-      fontWeight: '700',
-      color: c.textHeader,
-      marginBottom: 8,
-    },
+    taskHeaderWrap: { paddingTop: 8, paddingBottom: 4 },
     sectionRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -812,17 +836,25 @@ function createStyles(c: AppColors) {
       fontSize: TASK_FONT_SIZE_SMALL,
       color: c.placeholder,
     },
-    listContent: { paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
-    footerWrap: { paddingHorizontal: 16, paddingTop: 12 },
+    /** 整列表横向缩进 22pt（footerWrap/headerWrap 原本各自 16；统一收到容器一级，让
+     *  "今日 X 个任务"段头、各任务行、结束今天/新建任务行、"对话"段头与各 conv 行
+     *  全部对齐到 x=22，跟顶栏左上角圆形汉堡按钮（x=16 起）左沿对齐 + 圆形视觉权重 ~6。
+     *  ProjectScreen 同类列表为 20，这里略再深一档。 */
+    listContent: { paddingHorizontal: 22, paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
+    footerWrap: { paddingTop: 12 },
+    taskActionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 12,
+    },
     endTodayBtn: {
-      alignSelf: 'flex-start',
       paddingHorizontal: 20,
       paddingVertical: 12,
       backgroundColor: c.surface,
       borderRadius: 20,
       borderWidth: 1,
       borderColor: c.androidCircleFabHairline,
-      marginBottom: 12,
       ...Platform.select({ ios: { ...shadowSoft } }),
     },
     endTodayText: { fontSize: 16, fontWeight: '500', color: c.textPrimary },
@@ -833,10 +865,14 @@ function createStyles(c: AppColors) {
     },
     convEmptyText: { marginTop: 8, fontSize: 13, color: c.placeholder },
     convRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
       paddingVertical: 12,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: c.conversationListSeparator,
     },
+    convRowMain: { flex: 1, minWidth: 0 },
     convRowTitle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     convRowText: { flex: 1, minWidth: 0, fontSize: 15, color: c.textPrimary, fontWeight: '500' },
     convRowMeta: { fontSize: 12, color: c.textMuted, marginTop: 2 },
@@ -849,44 +885,45 @@ function createStyles(c: AppColors) {
       paddingVertical: 12,
       zIndex: 9,
     },
-    /* sticky 搜索 */
+    /* sticky 底栏：上方 pill 行 + 下方搜索框 */
     searchWrap: {
       position: 'absolute',
       left: 0,
       right: 0,
       bottom: 0,
       paddingHorizontal: 16,
-      paddingTop: 8,
-      flexDirection: 'row',
-      alignItems: 'center',
+      paddingTop: 10,
+      flexDirection: 'column',
       gap: 10,
       backgroundColor: c.chatScreenBackground,
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: c.borderMuted,
     },
+    pillRow: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      gap: 10,
+    },
+    pillBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderRadius: 24,
+      backgroundColor: c.primary,
+      ...shadowMenu,
+    },
+    pillBtnText: { fontSize: 15, fontWeight: '600', color: c.onPrimary },
     searchInputBox: {
-      flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      borderRadius: 22,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      borderRadius: 24,
       backgroundColor: c.surface,
-      borderWidth: 1,
-      borderColor: c.borderMuted,
+      ...shadowMenu,
     },
     searchInput: { flex: 1, fontSize: 15, color: c.textPrimary, padding: 0 },
-    addBtn: {
-      width: 44,
-      height: 44,
-      borderRadius: 22,
-      backgroundColor: c.surface,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderWidth: 1,
-      borderColor: c.borderMuted,
-    },
     /* 删除 modal */
     deleteOverlay: { flex: 1, backgroundColor: c.modalBackdrop },
     deleteCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },

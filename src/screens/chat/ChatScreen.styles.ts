@@ -1,5 +1,5 @@
 import { Platform, StyleSheet } from 'react-native';
-import { androidCircleFabOutline, shadowCircleButtonThemed } from '../../theme/shadows';
+import { SHADOW_COLOR, androidCircleFabOutline, shadowCircleButtonThemed } from '../../theme/shadows';
 import { HEADER_CIRCLE_BTN_SIZE, CHAT_COMPOSER_SEND_BTN_SIZE } from '../../theme/layout';
 import { TASK_FONT_SIZE_TITLE } from '../../theme/typography';
 import type { AppColors } from '../../theme/appColors';
@@ -182,6 +182,41 @@ export function createChatStyles(c: AppColors) {
     alignItems: 'center',
     backgroundColor: c.surface,
     ...shadowCircleButtonThemed(c),
+  },
+  /** ⋯ 圆按钮在没 conversationId 时灰化（MenuView 不能直接 disable，靠样式 + pointerEvents） */
+  circleBtnDisabled: { opacity: 0.4 },
+  /** Android ⋯ 菜单 popover：iOS 走 MenuView native，本组只给 Android 用。
+   *  backdrop = 整屏透明遮罩（点空白关）；卡片 absolute 锚定在右上角圆按钮下方。 */
+  convMenuBackdrop: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  convMenuCard: {
+    position: 'absolute',
+    minWidth: 200,
+    backgroundColor: c.surface,
+    borderRadius: 14,
+    paddingVertical: 4,
+    /* 立体感全交给阴影：iOS shadow* + Android elevation 12 + 共用 SHADOW_COLOR alpha。
+       描边去掉了，靠 surface 色 + 投影边缘渗光就够形状辨识。 */
+    shadowColor: SHADOW_COLOR,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 12,
+  },
+  convMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  convMenuItemText: { fontSize: 15, color: c.textPrimary, fontWeight: '500' },
+  convMenuDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: c.borderMuted,
+    marginHorizontal: 8,
   },
   leftEdgeGesture: {
     position: 'absolute',
@@ -769,13 +804,13 @@ export function createChatStyles(c: AppColors) {
     /** iOS：无描边 + 与顶栏圆钮差异化的 offset0 阴影；Android：与顶栏圆钮同 androidCircleFabOutline */
     ...(Platform.OS === 'ios'
       ? {
-          shadowColor: '#000',
+          shadowColor: SHADOW_COLOR,
           shadowOffset: { width: 0, height: 0 },
           shadowOpacity: 0.07,
           shadowRadius: 14,
         }
       : Platform.OS === 'android'
-        ? androidCircleFabOutline(c)
+        ? androidCircleFabOutline(c, 2)
         : {}),
   },
   /** 实心圆钮：`chatComposerSendBackground`（浅色柔灰深、深色仅略亮于 userBubble） */
@@ -809,13 +844,13 @@ export function createChatStyles(c: AppColors) {
     /** iOS 微阴影 + Android 描边，跟原 composerInput 视觉对齐 */
     ...(Platform.OS === 'ios'
       ? {
-          shadowColor: '#000',
+          shadowColor: SHADOW_COLOR,
           shadowOffset: { width: 0, height: 0 },
           shadowOpacity: 0.07,
           shadowRadius: 14,
         }
       : Platform.OS === 'android'
-        ? androidCircleFabOutline(c)
+        ? androidCircleFabOutline(c, 2)
         : {}),
   },
   composerCardTall: {
@@ -835,13 +870,13 @@ export function createChatStyles(c: AppColors) {
     paddingHorizontal: COMPOSER_CARD_PADDING_H,
     ...(Platform.OS === 'ios'
       ? {
-          shadowColor: '#000',
+          shadowColor: SHADOW_COLOR,
           shadowOffset: { width: 0, height: 0 },
           shadowOpacity: 0.07,
           shadowRadius: 14,
         }
       : Platform.OS === 'android'
-        ? androidCircleFabOutline(c)
+        ? androidCircleFabOutline(c, 2)
         : {}),
   },
   /** Input-area：所有模式下都包住 inputWrapper（FlowDocSlateAdapter 的父级），保证

@@ -23,6 +23,10 @@ import {
   decryptSseChunkLocal,
   setCachedKConv,
   getCachedKConv,
+  deriveKAgentFromBlob,
+  wrapKAgentForWire,
+  setCachedKAgent,
+  getCachedKAgent,
 } from './lib/srp';
 import {
   setStoredKUser,
@@ -555,8 +559,15 @@ export type ConversationMessage = {
 };
 
 export type AgentProfile = {
+  agent_id?: string;
   display_name?: string;
   call_name?: string;
+  /** server 标记此 agent 为 encrypted（agent record 字段、K_agent 体系存在）。 */
+  encrypted?: boolean;
+  /** AES-GCM(K_agent, K_user) base64；client 用 K_user 解出 K_agent 缓存。
+   *  encrypted=true 时一定带；chat_v2 发送时 client 把 K_agent 包成
+   *  k_agent_wire 附在 body 里。 */
+  k_agent_blob?: string | null;
 };
 
 /** 服务端上下文摘要（与 Web/Desktop flops-chat-ui 一致） */
@@ -588,7 +599,9 @@ export type Conversation = {
 };
 
 /**
- * 获取对话列表：GET /api/conversations
+ * 获取对话列表：GET /api/conversations。
+ * 列表里每条 encrypted conv 都带 (title_ciphertext, k_conv_blob)，用 K_user 派 K_conv
+ * 后本地解出 title 写回。对齐 FlopsWeb `utils/convTitleDecrypt.js` 的语义。
  */
 export async function listConversations(
   session: Session
@@ -604,6 +617,42 @@ export async function listConversations(
   }
   const data = (await res.json()) as ConversationListItem[] | { conversations?: ConversationListItem[] };
   const list = Array.isArray(data) ? data : (data as { conversations?: ConversationListItem[] }).conversations ?? [];
+
+  // 加密 conv title 本地解：K_user 缺失或单条解失败都保留原 title sentinel，不抛错
+  try {
+    const kUserStr = await getStoredKUser();
+    if (kUserStr) {
+      const kUserBytes = base64ToBytes(kUserStr);
+      const { aesGcmDecrypt } = await import('./lib/srp');
+      for (const c of list) {
+        const raw = c as ConversationListItem & {
+          encrypted?: boolean;
+          title_ciphertext?: string;
+          k_conv_blob?: string;
+        };
+        if (!raw.encrypted || !raw.title_ciphertext) continue;
+        try {
+          let kConv = getCachedKConv(raw.id);
+          if (!kConv && raw.k_conv_blob) {
+            kConv = deriveKConvFromBlob(raw.k_conv_blob, kUserBytes);
+            setCachedKConv(raw.id, kConv);
+          }
+          if (!kConv) continue;
+          const blob = base64ToBytes(raw.title_ciphertext);
+          const pt = aesGcmDecrypt(blob, kConv);
+          const decoded = new TextDecoder().decode(pt);
+          // server 把 title 当 JSON 字符串存进密文：`"foo"`，所以这里要 parse 一层
+          raw.title = JSON.parse(decoded);
+        } catch {
+          // 单条解失败保留原 sentinel
+        }
+      }
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[conv list mobile] title decrypt batch failed:', (e as Error)?.message || e);
+  }
+
   return { conversations: list };
 }
 
@@ -746,9 +795,10 @@ export async function getConversation(
   const conversation = (await res.json()) as Conversation & {
     encrypted?: boolean;
     k_conv_blob?: string;
+    title_ciphertext?: string;
     messages?: Array<Record<string, unknown>>;
   };
-  // 加密对话：用本机 K_user 派生 K_conv 缓存 + 本地解密 messages
+  // 加密对话：用本机 K_user 派生 K_conv 缓存 + 本地解密 messages + title
   if (conversation && conversation.encrypted && conversation.k_conv_blob) {
     try {
       let kConv = getCachedKConv(conversationId);
@@ -760,13 +810,46 @@ export async function getConversation(
           setCachedKConv(conversationId, kConv);
         }
       }
-      if (kConv && Array.isArray(conversation.messages)) {
-        conversation.messages = conversation.messages.map((m) => decryptMessageLocal(m, kConv!));
+      if (kConv) {
+        if (Array.isArray(conversation.messages)) {
+          conversation.messages = conversation.messages.map((m) => decryptMessageLocal(m, kConv!));
+        }
+        // conv 自己的 title 也带密文（跟列表接口同款），ChatScreen 顶部标题直接读
+        // conversation.title，所以这里得就地替换掉 server 给的 sentinel
+        if (typeof conversation.title_ciphertext === 'string' && conversation.title_ciphertext) {
+          try {
+            const { aesGcmDecrypt } = await import('./lib/srp');
+            const blob = base64ToBytes(conversation.title_ciphertext);
+            const pt = aesGcmDecrypt(blob, kConv);
+            conversation.title = JSON.parse(new TextDecoder().decode(pt));
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.warn('[encrypted conv mobile] title decrypt failed:', (e as Error)?.message || e);
+          }
+        }
       }
     } catch (e) {
       // 失败时 messages 保留 sentinel 状态，UI 起码不崩
       // eslint-disable-next-line no-console
       console.warn('[encrypted conv mobile] decrypt failed:', (e as Error)?.message || e);
+    }
+  }
+  // 加密 agent：拿到 agent_profile.k_agent_blob 后用 K_user 派生 K_agent 缓存，
+  // 供后续 chat_v2 POST 拼 k_agent_wire。多个 conv 共享同一 K_agent。
+  if (conversation?.agent_profile?.encrypted && conversation.agent_profile.k_agent_blob) {
+    const aid = String(conversation.agent_profile.agent_id || conversation.bound_agent_id || '').trim();
+    if (aid && !getCachedKAgent(aid)) {
+      try {
+        const kUserStr = await getStoredKUser();
+        if (kUserStr) {
+          const kUserBytes = base64ToBytes(kUserStr);
+          const kAgent = deriveKAgentFromBlob(conversation.agent_profile.k_agent_blob, kUserBytes);
+          setCachedKAgent(aid, kAgent);
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[encrypted agent mobile] K_agent derive failed:', (e as Error)?.message || e);
+      }
     }
   }
   const t2 = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -1033,6 +1116,12 @@ export type ChatV2StreamStart =
 export type StreamChatV2LoopOptions = {
   /** 返回 false 时停止循环（例如已切换对话） */
   isAlive?: () => boolean;
+  /** 加密 agent 时，让 loop 知道当前 bound agent + k_agent_blob 兜底（缓存里没有时用 K_user 派生）。
+   *  对应 server 端：encrypted agent 的 chat_v2 必须带 k_agent_wire，否则 400。 */
+  agentEncryption?: {
+    agentId: string;
+    kAgentBlobB64?: string | null;
+  };
 };
 
 function getTextDecoder(): { decode(chunk: Uint8Array, options?: { stream?: boolean }): string } {
@@ -1233,17 +1322,40 @@ export async function streamChatV2Loop(
       body = { subscribe_only: true, run_id: v2RunId, replay_from: 0 };
     }
 
-    // 加密 conv：用 cached K_conv 算 k_conv_wire 附在 body 里（每次发 / 重连都重算 nonce）
+    // 加密 conv + agent：用 cached K_conv / K_agent 算 k_conv_wire / k_agent_wire 附在 body 里
+    // （每次发 / 重连都重算 nonce）。K_agent 走 options.agentEncryption 兜底派生：
+    // 缓存里没有 + 调用方给了 k_agent_blob 时，用本机 K_user 派生并存回缓存。
     {
       const _kcSend = getCachedKConv(conversationId);
-      if (_kcSend) {
+
+      let _kaSend: Uint8Array | null = null;
+      const _agentEnc = options?.agentEncryption;
+      if (_agentEnc && _agentEnc.agentId) {
+        _kaSend = getCachedKAgent(_agentEnc.agentId);
+        if (!_kaSend && _agentEnc.kAgentBlobB64) {
+          try {
+            const kUserStr = await getStoredKUser();
+            if (kUserStr) {
+              const kUserBytes = base64ToBytes(kUserStr);
+              _kaSend = deriveKAgentFromBlob(_agentEnc.kAgentBlobB64, kUserBytes);
+              setCachedKAgent(_agentEnc.agentId, _kaSend);
+            }
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.warn('[encrypted chat_v2 mobile] K_agent derive failed:', (e as Error)?.message || e);
+          }
+        }
+      }
+
+      if (_kcSend || _kaSend) {
         try {
           const pub = await getTransportPubkeyMobile(base);
-          body.k_conv_wire = wrapKConvForWire(_kcSend, pub);
+          if (_kcSend) body.k_conv_wire = wrapKConvForWire(_kcSend, pub);
+          if (_kaSend) body.k_agent_wire = wrapKAgentForWire(_kaSend, pub);
         } catch (e) {
           // eslint-disable-next-line no-console
-          console.error('[encrypted chat_v2 mobile] wrap K_conv failed:', (e as Error)?.message || e);
-          throw new Error('加密对话发送失败：本机无法包装 K_conv');
+          console.error('[encrypted chat_v2 mobile] wrap K_conv/K_agent failed:', (e as Error)?.message || e);
+          throw new Error('加密对话发送失败：本机无法包装密钥');
         }
       }
     }

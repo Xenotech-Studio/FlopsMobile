@@ -5,6 +5,7 @@ import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import type { TaskItem } from '../taskApi';
 import { TaskRowContextMenu, type RowPreview } from './TaskRowContextMenu';
 import { TaskRowContent } from './TaskRowContent';
+import { SHADOW_COLOR } from '../theme/shadows';
 
 const priorityColors: Record<string, string> = {
   now: '#dc2626',
@@ -103,7 +104,7 @@ export function TaskRow({
       backgroundColor: colors.surface,
       ...Platform.select({
         ios: {
-          shadowColor: '#000' as const,
+          shadowColor: SHADOW_COLOR,
           shadowOffset: { width: 0, height: 2 },
           shadowOpacity: 0.06,
           shadowRadius: 6,

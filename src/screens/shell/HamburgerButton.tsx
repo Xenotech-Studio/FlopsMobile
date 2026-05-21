@@ -3,12 +3,13 @@
  * 三个顶层页（TodayScreen / ProjectScreen / DocsScreen）都用此组件，保持视觉/语义一致。
  */
 import React, { useMemo } from 'react';
-import { StyleSheet, TouchableOpacity } from 'react-native';
+import { StyleSheet } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAppTheme } from '../../context/ThemeContext';
 import type { AppColors } from '../../theme/appColors';
 import { shadowCircleButtonThemed } from '../../theme/shadows';
 import { HEADER_CIRCLE_BTN_SIZE } from '../../theme/layout';
+import { AnimatedCircleButton } from '../../components/AnimatedCircleButton';
 import { useDrawer } from './DrawerContext';
 
 export function HamburgerButton() {
@@ -16,14 +17,13 @@ export function HamburgerButton() {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   return (
-    <TouchableOpacity
+    <AnimatedCircleButton
       style={styles.btn}
       onPress={open}
-      activeOpacity={0.7}
       hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
     >
       <Ionicons name="menu-outline" size={26} color={colors.textSecondary} />
-    </TouchableOpacity>
+    </AnimatedCircleButton>
   );
 }
 

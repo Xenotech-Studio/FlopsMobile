@@ -24,6 +24,7 @@ import { PushTokenLifecycle } from './src/notifications/PushTokenLifecycle';
 import { PresenceReporter } from './src/notifications/PresenceReporter';
 import { DeepLinkRouter } from './src/notifications/DeepLinkRouter';
 import { UpgradeRequiredOverlay } from './src/components/UpgradeRequiredOverlay';
+import { EncryptionReloginOverlay } from './src/components/EncryptionReloginOverlay';
 
 // 首帧 = DrawerShell（默认 active=today）。Chat 不再预 push 在栈上：
 // 由抽屉 + 按钮 / Recents / 今日页对话段 setActive 提升为顶层页，避免「两层导航」。
@@ -92,6 +93,7 @@ export default function App() {
             <PresenceReporter />
             <AppContent />
             <UpgradeRequiredOverlay />
+            <EncryptionReloginOverlay />
           </SessionProvider>
         </ThemeProvider>
       </SafeAreaProvider>

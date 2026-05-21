@@ -1773,6 +1773,11 @@
   dependencies:
     invariant "^2.2.4"
 
+"@react-native-menu/menu@^2.0.0":
+  version "2.0.0"
+  resolved "https://registry.yarnpkg.com/@react-native-menu/menu/-/menu-2.0.0.tgz#21d3fcb15687df86386fee7815cc5ff79d26bc9e"
+  integrity sha512-hb8Mirw6aKPGONhgo52IiNpwHtISVrgCT3rMdFX1qS7eOFNzOcQh8d2UDnaH5zVpxN+QuvWtaaiRMGFpIjzdtA==
+
 "@react-native/assets-registry@0.84.0":
   version "0.84.0"
   resolved "https://registry.npmjs.org/@react-native/assets-registry/-/assets-registry-0.84.0.tgz"

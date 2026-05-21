@@ -76,6 +76,7 @@ import {
   isTaskBelongToDay,
 } from '../utils/taskFilters';
 import { HamburgerButton } from './shell/HamburgerButton';
+import { AnimatedCircleButton } from '../components/AnimatedCircleButton';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 
@@ -88,7 +89,6 @@ const PULL_RING_THRESHOLD = 120;
 const MIN_REFRESH_DURATION_MS = 1000;
 const TAB_CAPSULE_PADDING = 6;
 const TAB_PADDING_X = 12;
-const TAB_PADDING_Y = 3;
 const TAB_ACTIVE_ANIM_DURATION = 200;
 
 function formatConvTime(isoString: string): string {
@@ -448,21 +448,19 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
           </Text>
         </View>
         {tab === 'chats' ? (
-          <TouchableOpacity
+          <AnimatedCircleButton
             style={styles.headerCircleBtn}
             onPress={handleNewConv}
-            activeOpacity={0.7}
           >
             <Ionicons name="add" size={26} color={colors.textSecondary} />
-          </TouchableOpacity>
+          </AnimatedCircleButton>
         ) : (
-          <TouchableOpacity
+          <AnimatedCircleButton
             style={styles.headerCircleBtn}
             onPress={() => setFilterVisible(true)}
-            activeOpacity={0.7}
           >
             <Ionicons name="filter-outline" size={22} color={colors.textSecondary} />
-          </TouchableOpacity>
+          </AnimatedCircleButton>
         )}
       </View>
 
@@ -765,8 +763,8 @@ function TabBtn({
       style={[
         tabStyles.btn,
         {
-          paddingLeft: TAB_PADDING_X + TAB_PADDING_Y,
-          paddingRight: TAB_PADDING_X + TAB_PADDING_Y,
+          paddingLeft: TAB_PADDING_X,
+          paddingRight: TAB_PADDING_X,
         },
       ]}
       onPress={onPress}
@@ -797,6 +795,8 @@ const tabStyles = StyleSheet.create({
     paddingVertical: 18 - TAB_CAPSULE_PADDING,
     borderRadius: 999,
     overflow: 'hidden',
+    flexShrink: 1,
+    minWidth: 0,
   },
   btnBg: { ...StyleSheet.absoluteFillObject, borderRadius: 999 },
   btnContent: {
@@ -1001,6 +1001,9 @@ function createStyles(c: AppColors) {
       paddingHorizontal: TAB_CAPSULE_PADDING,
       backgroundColor: c.surface,
       borderRadius: 999,
+      flexShrink: 1,
+      minWidth: 0,
+      overflow: 'hidden',
       ...shadowCircleButtonThemed(c),
     },
     fab: {
