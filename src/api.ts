@@ -539,6 +539,10 @@ export type ConversationListItem = {
   chat_v2_running?: boolean;
   /** 与 Web 列表一致：本轮结束后未在会话内读过 */
   chat_v2_unread?: boolean;
+  /** 关联的 Flowtask 项目 ID；null / 缺省 = 未挂到任何项目（"近期对话"段） */
+  flowtask_project_id?: string | null;
+  /** 关联的 Flowtask 项目内 folder ID；null / 缺省 = 项目直属，不在子文件夹里 */
+  flowtask_folder_id?: string | null;
 };
 
 export type ConversationMessage = {
@@ -601,6 +605,66 @@ export async function listConversations(
   const data = (await res.json()) as ConversationListItem[] | { conversations?: ConversationListItem[] };
   const list = Array.isArray(data) ? data : (data as { conversations?: ConversationListItem[] }).conversations ?? [];
   return { conversations: list };
+}
+
+/** Flops 后端给项目维护的子文件夹（跟 Flowtask 项目挂钩的那种）。 */
+export type FlowtaskFolder = {
+  id: string;
+  project_id: string;
+  parent_id?: string | null;
+  name: string;
+  sort_key?: number | null;
+  created_at?: string;
+  updated_at?: string;
+  conversation_count?: number;
+};
+
+/**
+ * 原子设置会话的「项目 + 文件夹」归属：POST /api/conversations/{cid}/placement
+ * 省略字段 = 保持不变；显式 null/'' = 移出。
+ */
+export async function placeConversation(
+  session: Session,
+  conversationId: string,
+  opts: { flowtask_project_id?: string | null; flowtask_folder_id?: string | null }
+): Promise<void> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(
+    `${base}api/conversations/${encodeURIComponent(conversationId)}/placement`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify(opts),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `归属设置失败: ${res.status}`);
+  }
+}
+
+/**
+ * 列项目内的 folder：GET /api/flowtask/projects/{project_id}/folders
+ * 返回顺序就是后端给的顺序（已按 sort_key）。
+ */
+export async function listFlowtaskFolders(
+  session: Session,
+  projectId: string
+): Promise<{ folders: FlowtaskFolder[] }> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(
+    `${base}api/flowtask/projects/${encodeURIComponent(projectId)}/folders`,
+    {
+      method: 'GET',
+      headers: authHeaders(session.access_token),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `获取项目文件夹失败: ${res.status}`);
+  }
+  const data = (await res.json()) as { folders?: FlowtaskFolder[] };
+  return { folders: Array.isArray(data?.folders) ? data.folders : [] };
 }
 
 type ResponseBodyReader = { read(): Promise<{ value?: Uint8Array; done: boolean }> };

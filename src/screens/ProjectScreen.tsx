@@ -4,7 +4,8 @@
  * 与旧版相比：
  *  - 左上角"返回"圆钮 → 改为汉堡按钮（开抽屉）。本页是顶层，不需要 goBack。
  *  - 底部 floating capsule tab 从 3 项扩到 4 项：Chats / Tasks / Calendar / FlowChart。
- *  - Chats tab：目前后端 ConversationListItem 不带 project_id，临时显示"项目对话即将推出"的占位。
+ *  - Chats tab：按 conversation.flowtask_project_id 等于当前 projectId 过滤；再用横向胶囊
+ *    tab 在「默认 / 各 folder」之间切（参考 Web FlowtaskProjectDetailPage 的 folder-tabs）。
  *  - Tasks tab = 旧 list tab；Calendar tab = 旧 calendar tab；FlowChart tab = 旧 flow tab，逻辑保留。
  *  - RootStack 顶层挂载，左缘开抽屉手势由 DrawerShell 提供；本页自身不挂左缘手势。
  */
@@ -41,6 +42,16 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useTask } from '../context/TaskContext';
+import { useSession } from '../context/SessionContext';
+import {
+  createConversation,
+  listConversations,
+  listFlowtaskFolders,
+  placeConversation,
+  type ConversationListItem,
+  type FlowtaskFolder,
+} from '../api';
+import { InboxRunSpinner, InboxUnreadCheck } from '../components/InboxListIndicators';
 import type { RootStackParamList } from '../navigation/types';
 import { fetchTasks, type TaskItem } from '../taskApi';
 import { TaskRow } from '../components/TaskRow';
@@ -79,6 +90,16 @@ const TAB_CAPSULE_PADDING = 6;
 const TAB_PADDING_X = 12;
 const TAB_PADDING_Y = 3;
 const TAB_ACTIVE_ANIM_DURATION = 200;
+
+function formatConvTime(isoString: string): string {
+  try {
+    const d = new Date(isoString);
+    if (Number.isNaN(d.getTime())) return isoString;
+    return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+  } catch {
+    return isoString;
+  }
+}
 
 export type ProjectScreenProps = {
   projectId: string;
@@ -145,7 +166,7 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
   }, [flowChartTasks, projectTasks]);
 
   /* ---------- tab 状态与设置 ---------- */
-  const [tab, setTab] = useState<Tab>('tasks');
+  const [tab, setTab] = useState<Tab>('chats');
   const [selectedDate, setSelectedDate] = useState(() => new Date());
 
   const [filterVisible, setFilterVisible] = useState(false);
@@ -155,6 +176,100 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
   const [showProjectName, setShowProjectName] = useState(false);
   const [showOnlyMineCalendar, setShowOnlyMineCalendar] = useState(false);
   const [statusLevelCalendar, setStatusLevelCalendar] = useState<StatusLevel>(3);
+
+  /* ---------- 项目对话段 ---------- */
+  const { session } = useSession();
+  const [convList, setConvList] = useState<ConversationListItem[]>([]);
+  const [folders, setFolders] = useState<FlowtaskFolder[]>([]);
+  const [convLoading, setConvLoading] = useState(false);
+  /** null = 「默认」段（flowtask_folder_id 为空的对话），string = 某 folder.id */
+  const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
+
+  const loadConvs = useCallback(async () => {
+    if (!session) return;
+    setConvLoading(true);
+    try {
+      const [convRes, folderRes] = await Promise.all([
+        listConversations(session),
+        listFlowtaskFolders(session, projectId).catch(() => ({ folders: [] as FlowtaskFolder[] })),
+      ]);
+      setConvList(convRes.conversations ?? []);
+      setFolders(folderRes.folders ?? []);
+    } catch {
+      setConvList([]);
+      setFolders([]);
+    } finally {
+      setConvLoading(false);
+    }
+  }, [session, projectId]);
+
+  useEffect(() => {
+    loadConvs();
+  }, [loadConvs]);
+
+  /** 跟 Web ConversationList 的语义一致：按 conversation.flowtask_project_id 等于当前项目 ID 过滤 */
+  const projectConvs = useMemo(
+    () => convList.filter((c) => c.flowtask_project_id === projectId),
+    [convList, projectId]
+  );
+
+  /** 按 folder 分组：null key = "默认"；string key = folder.id。计数给 capsule tab 用 */
+  const convCountByFolder = useMemo(() => {
+    const map = new Map<string | null, number>();
+    map.set(null, 0);
+    folders.forEach((f) => map.set(f.id, 0));
+    for (const c of projectConvs) {
+      const fid = typeof c.flowtask_folder_id === 'string' && c.flowtask_folder_id.trim()
+        ? c.flowtask_folder_id.trim()
+        : null;
+      map.set(fid, (map.get(fid) ?? 0) + 1);
+    }
+    return map;
+  }, [projectConvs, folders]);
+
+  /** 当 folder 数据变化（比如刚加载完）后，若 activeFolderId 不存在了就回到默认 */
+  useEffect(() => {
+    if (activeFolderId == null) return;
+    if (!folders.some((f) => f.id === activeFolderId)) setActiveFolderId(null);
+  }, [folders, activeFolderId]);
+
+  /** 当前胶囊 tab 下的对话子集 */
+  const visibleConvs = useMemo(() => {
+    return projectConvs.filter((c) => {
+      const fid = typeof c.flowtask_folder_id === 'string' && c.flowtask_folder_id.trim()
+        ? c.flowtask_folder_id.trim()
+        : null;
+      return fid === activeFolderId;
+    });
+  }, [projectConvs, activeFolderId]);
+
+  const onConvPress = useCallback(
+    (conv: ConversationListItem) => {
+      navigation.navigate('Chat', {
+        conversationId: conv.id,
+        conversationTitle: (conv.title && conv.title.trim()) || '新对话',
+      });
+    },
+    [navigation]
+  );
+
+  /** chats tab 右上角「+」：建一条空对话，挂到当前项目（+ 当前 folder，如果有选中）。
+   *  Place 失败也照常进 Chat，避免阻塞用户输入，后续用户进 Chat 后还可手动归位。 */
+  const handleNewConv = useCallback(async () => {
+    if (!session) return;
+    try {
+      const { id } = await createConversation(session);
+      await placeConversation(session, id, {
+        flowtask_project_id: projectId,
+        flowtask_folder_id: activeFolderId,
+      }).catch(() => undefined);
+      navigation.navigate('Chat', { conversationId: id, conversationTitle: '新对话' });
+      // 不 await，让导航先发生；列表刷新跟在后台
+      loadConvs();
+    } catch (e) {
+      Alert.alert('新建对话失败', e instanceof Error ? e.message : String(e));
+    }
+  }, [session, projectId, activeFolderId, navigation, loadConvs]);
 
   const statusKey = useMemo(() => `statusLevel_project_${projectId}`, [projectId]);
   const statusLevelCalendarKey = useMemo(
@@ -332,13 +447,23 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
             {title}
           </Text>
         </View>
-        <TouchableOpacity
-          style={styles.headerCircleBtn}
-          onPress={() => setFilterVisible(true)}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="filter-outline" size={22} color={colors.textSecondary} />
-        </TouchableOpacity>
+        {tab === 'chats' ? (
+          <TouchableOpacity
+            style={styles.headerCircleBtn}
+            onPress={handleNewConv}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="add" size={26} color={colors.textSecondary} />
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={styles.headerCircleBtn}
+            onPress={() => setFilterVisible(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="filter-outline" size={22} color={colors.textSecondary} />
+          </TouchableOpacity>
+        )}
       </View>
 
       {visibleRemoteSessions.length > 0 ? (
@@ -355,18 +480,106 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
         <View style={styles.mainContent}>
           {tab === 'chats' && (
             <View style={[styles.tabRoot, { paddingTop: headerHeight }]}>
-              <View style={styles.centered}>
-                <Ionicons
-                  name="chatbubbles-outline"
-                  size={56}
-                  color={colors.placeholder}
-                />
-                <Text style={styles.emptyText}>项目对话即将推出</Text>
-                <Text style={styles.emptyHint}>
-                  当前对话与项目尚未关联；
-                  {'\n'}请到「今天」页查看全部对话
-                </Text>
-              </View>
+              {convLoading && projectConvs.length === 0 ? (
+                <View style={styles.centered}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                </View>
+              ) : projectConvs.length === 0 ? (
+                <View style={styles.centered}>
+                  <Ionicons
+                    name="chatbubbles-outline"
+                    size={56}
+                    color={colors.placeholder}
+                  />
+                  <Text style={styles.emptyText}>暂无项目对话</Text>
+                  <Text style={styles.emptyHint}>
+                    项目内的对话会出现在这里
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  {/* folder 维度胶囊 tab：横向滚动；首项「默认」恒挂，对应没归入子文件夹的对话。
+                      跟 Web FlowtaskProjectDetailPage 的 folder-tabs 等价语义。
+                      没自定义 folder 时整行不挂——只剩一个「默认」tab 没有切换意义、还占空间。 */}
+                  {folders.length > 0 ? (
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      style={styles.folderTabsScroll}
+                      contentContainerStyle={styles.folderTabsRow}
+                    >
+                      {[
+                        { id: null as string | null, name: '默认' },
+                        ...folders.map((f) => ({ id: f.id, name: f.name || '(未命名)' })),
+                      ].map((item) => {
+                        const active = activeFolderId === item.id;
+                        const cnt = convCountByFolder.get(item.id) ?? 0;
+                        return (
+                          <TouchableOpacity
+                            key={item.id ?? '__default'}
+                            style={[styles.folderTab, active && styles.folderTabActive]}
+                            onPress={() => setActiveFolderId(item.id)}
+                            activeOpacity={0.7}
+                          >
+                            <Text
+                              style={[styles.folderTabLabel, active && styles.folderTabLabelActive]}
+                              numberOfLines={1}
+                            >
+                              {item.name}
+                            </Text>
+                            <Text
+                              style={[styles.folderTabCount, active && styles.folderTabCountActive]}
+                            >
+                              {cnt}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  ) : null}
+                  <ScrollView
+                    contentContainerStyle={styles.convScrollContent}
+                    refreshControl={
+                      <RefreshControl
+                        refreshing={convLoading}
+                        onRefresh={loadConvs}
+                        tintColor={colors.primary}
+                      />
+                    }
+                  >
+                    {visibleConvs.length === 0 ? (
+                      <View style={styles.convFolderEmpty}>
+                        <Text style={styles.convFolderEmptyText}>该文件夹下暂无对话</Text>
+                      </View>
+                    ) : (
+                      visibleConvs.map((c) => (
+                        <TouchableOpacity
+                          key={c.id}
+                          style={styles.convRow}
+                          onPress={() => onConvPress(c)}
+                          activeOpacity={0.7}
+                        >
+                          <View style={styles.convRowTitle}>
+                            <Text style={styles.convRowText} numberOfLines={1}>
+                              {(c.title && c.title.trim()) || '新对话'}
+                            </Text>
+                            {c.chat_v2_running ? (
+                              <InboxRunSpinner />
+                            ) : c.chat_v2_unread ? (
+                              <InboxUnreadCheck />
+                            ) : null}
+                          </View>
+                          {c.updated_at ? (
+                            <Text style={styles.convRowMeta} numberOfLines={1}>
+                              {formatConvTime(c.updated_at)}
+                            </Text>
+                          ) : null}
+                        </TouchableOpacity>
+                      ))
+                    )}
+                  </ScrollView>
+                </>
+              )}
             </View>
           )}
 
@@ -729,6 +942,43 @@ function createStyles(c: AppColors) {
       textAlign: 'center',
     },
     tabRoot: { flex: 1 },
+    /** topBar.paddingHorizontal=16，HamburgerButton 是圆形 + 阴影，视觉左边沿大致
+     *  在 x≈20 处（圆的左边沿 16 + 内边视觉权重）。列表 / 胶囊 tab 取同样的 20
+     *  让两者左对齐；右 padding 也对齐右上角圆按钮的右边沿（对称）。 */
+    convScrollContent: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 120 },
+    convRow: {
+      paddingVertical: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.conversationListSeparator,
+    },
+    convRowTitle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    convRowText: { flex: 1, minWidth: 0, fontSize: 15, color: c.textPrimary, fontWeight: '500' },
+    convRowMeta: { fontSize: 12, color: c.textMuted, marginTop: 2 },
+    /** ScrollView 默认有 flexGrow:1（在 column 父里会把竖向余高吃掉），加 flexGrow:0
+     *  让它紧贴内容。不然 tab 行下方会出现一段空白。 */
+    folderTabsScroll: { flexGrow: 0 },
+    /** 胶囊外形带 borderRadius:14，左侧弧度让视觉重心比 box 左沿更靠右一点。
+     *  比 convScrollContent (20) 多 4dp 让视觉左沿跟下方对话行对齐。 */
+    /** paddingVertical 14：胶囊行跟上面的圆形汉堡按钮纵向多让点呼吸。 */
+    folderTabsRow: { paddingHorizontal: 18, paddingVertical: 14, gap: 8, alignItems: 'center' },
+    /** 胶囊高度对齐 sheet 里那种 toggle 控件（segmentTrack 高 40dp），
+     *  paddingVertical 8 + fontSize 14 → 大概 34-36dp，更好点中。 */
+    folderTab: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderRadius: 18,
+      backgroundColor: c.surfaceMuted,
+    },
+    folderTabActive: { backgroundColor: c.primary },
+    folderTabLabel: { fontSize: 14, color: c.textPrimary, fontWeight: '500' },
+    folderTabLabelActive: { color: c.onPrimary },
+    folderTabCount: { fontSize: 13, color: c.textMuted },
+    folderTabCountActive: { color: c.onPrimary, opacity: 0.85 },
+    convFolderEmpty: { paddingVertical: 40, alignItems: 'center' },
+    convFolderEmptyText: { fontSize: 13, color: c.placeholder },
     bottomBar: {
       position: 'absolute',
       left: 0,
