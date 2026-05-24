@@ -37,6 +37,7 @@ import { TASK_FONT_SIZE_TITLE } from '../theme/typography';
 import { FolderView } from './docs/FolderView';
 import { DocBodyView, type DocBodyViewHandle } from './docs/DocBodyView';
 import { HamburgerButton } from './shell/HamburgerButton';
+import { HeaderCircleButton } from '../components/HeaderCircleButton';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 const FOLDER_LIKE_TYPES = new Set(['folder', 'cooperateInbox']);
@@ -196,20 +197,22 @@ export function DocsScreen() {
         />
         <View style={styles.headerLeft}>
           <HamburgerButton />
-          <TouchableOpacity
-            style={styles.circleBtn}
+          <HeaderCircleButton
+            ionicon="list-outline"
+            sfSymbol="list.bullet"
+            iconSize={24}
             onPress={() => setTreeSheetVisible(true)}
-            activeOpacity={0.7}
             hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-          >
-            <Ionicons name="list-outline" size={24} color={colors.textSecondary} />
-          </TouchableOpacity>
+          />
         </View>
         <View style={styles.headerTitleWrap}>
           <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
             {headerTitle}
           </Text>
         </View>
+        {/* ⋯ 没用 HeaderCircleButton 是因为这里有个 3s 长按 secret（onPressIn/Out 计时
+            跳 SlateRNSpike dev 页），HeaderCircleButton/AnimatedCircleButton 的 native
+            iOS 路径不暴露 press-in/out 信号，特殊化保留 TouchableOpacity。 */}
         <TouchableOpacity
           style={styles.circleBtn}
           onPress={onOptionsPress}

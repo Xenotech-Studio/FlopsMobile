@@ -315,6 +315,57 @@ function runIosBuild(artifact, target) {
 
   const projectRoot = path.resolve(__dirname, '..');
   const iosDir = path.join(projectRoot, 'ios');
+
+  /* RN 0.84 prebuilt RNDeps 的 variant swap 脚本用 rmdir 清空中间目录，任何残留的
+     .DS_Store（Finder 偷塞 / 别工具留下）会让"空目录"实际不空，xcodebuild 翻 ENOTEMPTY
+     直接挂掉。详见 run-app.js 同名函数。每次 build 前扫一遍 ios/ 下的 .DS_Store。 */
+  try {
+    spawnSync('find', [iosDir, '-name', '.DS_Store', '-type', 'f', '-delete'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+  } catch (_) {
+    // 失败也只是 warn 不阻断
+  }
+
+  /* Podfile.lock 比上次 build 输出新 = pod install 之后没成功 build 过 → nuke DerivedData
+     防 Fabric 缓存 symbol 错乱。详见 run-app.js 的同名函数（增量加 native Fabric pod 后
+     React-Fabric 缓存不含 debug-only symbol 引发 linker 报"Undefined symbols"几十个）。 */
+  try {
+    const lockPath = path.join(iosDir, 'Podfile.lock');
+    const dd = path.join(require('os').homedir(), 'Library', 'Developer', 'Xcode', 'DerivedData');
+    if (fs.existsSync(lockPath) && fs.existsSync(dd)) {
+      const flopsBuildDirs = fs
+        .readdirSync(dd)
+        .filter((n) => n.startsWith('FlopsMobile-'));
+      if (flopsBuildDirs.length > 0) {
+        const lockMtime = fs.statSync(lockPath).mtimeMs;
+        let latestBuildMtime = 0;
+        for (const e of flopsBuildDirs) {
+          const productsPath = path.join(dd, e, 'Build', 'Products');
+          if (fs.existsSync(productsPath)) {
+            const m = fs.statSync(productsPath).mtimeMs;
+            if (m > latestBuildMtime) latestBuildMtime = m;
+          }
+        }
+        if (latestBuildMtime > 0 && lockMtime > latestBuildMtime) {
+          console.log(
+            '[build] Podfile.lock 比上次构建产物新，nuke DerivedData 防 Fabric 缓存 symbol 错乱…'
+          );
+          for (const e of flopsBuildDirs) {
+            const p = path.join(dd, e);
+            try {
+              spawnSync('rm', ['-rf', p]);
+              console.log(`[build]   deleted ${p}`);
+            } catch (err) {
+              console.warn(`[build]   delete ${p} failed: ${err.message}`);
+            }
+          }
+        }
+      }
+    }
+  } catch (_) {
+    // 失败 warn 不阻断
+  }
   const workspace = process.env.FLOPS_IOS_WORKSPACE || 'FlopsMobile.xcworkspace';
   const scheme = process.env.FLOPS_IOS_SCHEME || 'FlopsMobile';
   const configuration = process.env.FLOPS_IOS_CONFIGURATION || 'Release';

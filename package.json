@@ -92,7 +92,11 @@
     },
     "ios": {
       "componentProvider": {
-        "FlowDocInputView": "FlowDocInputViewComponentView"
+        "FlowDocInputView": "FlowDocInputViewComponentView",
+        "BouncyButtonView": "BouncyButtonViewComponentView",
+        "BouncySegmentedControl": "BouncySegmentedControlComponentView",
+        "BouncyTabBar": "BouncyTabBarComponentView",
+        "BouncyGlassCard": "BouncyGlassCardComponentView"
       }
     }
   },

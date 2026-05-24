@@ -76,7 +76,12 @@ import {
   isTaskBelongToDay,
 } from '../utils/taskFilters';
 import { HamburgerButton } from './shell/HamburgerButton';
-import { AnimatedCircleButton } from '../components/AnimatedCircleButton';
+import {
+  AnimatedCircleButton,
+  IS_IOS_LIQUID_GLASS,
+} from '../components/AnimatedCircleButton';
+import { Fab } from '../components/Fab';
+import { NativeTabBar } from '../components/NativeTabBar';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 
@@ -87,8 +92,7 @@ const SHOW_TIME_KEY = 'showTimeLabels_projectDetail';
 const SHOW_PROJECT_KEY = 'showProjectName_projectDetail';
 const PULL_RING_THRESHOLD = 120;
 const MIN_REFRESH_DURATION_MS = 1000;
-const TAB_CAPSULE_PADDING = 6;
-const TAB_PADDING_X = 12;
+const TAB_CAPSULE_PADDING = 4;
 const TAB_ACTIVE_ANIM_DURATION = 200;
 
 function formatConvTime(isoString: string): string {
@@ -451,6 +455,7 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
           <AnimatedCircleButton
             style={styles.headerCircleBtn}
             onPress={handleNewConv}
+            iosSfSymbol={{ name: 'plus', size: 16, color: colors.textSecondary }}
           >
             <Ionicons name="add" size={26} color={colors.textSecondary} />
           </AnimatedCircleButton>
@@ -458,6 +463,7 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
           <AnimatedCircleButton
             style={styles.headerCircleBtn}
             onPress={() => setFilterVisible(true)}
+            iosSfSymbol={{ name: 'line.3.horizontal.decrease', size: 16, color: colors.textSecondary }}
           >
             <Ionicons name="filter-outline" size={22} color={colors.textSecondary} />
           </AnimatedCircleButton>
@@ -682,37 +688,64 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
         </View>
       ) : null}
 
-      {/* 底部 floating capsule tab + 新建 FAB */}
+      {/* 底部 sticky：tab + FAB 单行并列。tab 拿 flex:1 横向铺满，FAB 紧贴右侧。
+          iOS 26+ 走原生 UITabBar（icon 上 / title 下 stacked + Liquid Glass）；
+          iOS < 26 / Android 走自绘 tabCapsule 兜底。 */}
       <View
         style={[
           styles.bottomBar,
           { paddingBottom: Math.max(insets.bottom, 12) + 4 },
         ]}
       >
-        <View style={styles.bottomBarRow}>
-          <View style={styles.tabCapsule}>
-            {(
-              [
-                { tab: 'chats' as Tab, label: 'Chats', icon: 'chatbubbles-outline' },
-                { tab: 'tasks' as Tab, label: 'Tasks', icon: 'list' },
-                { tab: 'calendar' as Tab, label: 'Calendar', icon: 'calendar' },
-                { tab: 'flow' as Tab, label: 'Flow', icon: 'git-network-outline' },
-              ] as const
-            ).map(({ tab: t, label, icon }) => (
-              <TabBtn
-                key={t}
-                label={label}
-                icon={icon}
-                active={tab === t}
-                onPress={() => setTab(t)}
-                colors={colors}
-              />
-            ))}
-          </View>
-          <View style={{ flex: 1 }} />
-          <TouchableOpacity style={styles.fab} onPress={onCreateTask}>
-            <Ionicons name="add" size={26} color={colors.primary} />
-          </TouchableOpacity>
+        <View style={styles.bottomRow}>
+          {IS_IOS_LIQUID_GLASS ? (
+            <NativeTabBar<Tab>
+              style={styles.nativeTabs}
+              iconSize={14}
+              titleSize={9}
+              selectedTintColor="#3a3a3c"
+              items={[
+                { key: 'chats', title: 'Chats', sfSymbol: 'bubble.left.and.bubble.right' },
+                { key: 'tasks', title: 'Tasks', sfSymbol: 'list.bullet' },
+                { key: 'calendar', title: 'Calendar', sfSymbol: 'calendar' },
+                { key: 'flow', title: 'Flow', sfSymbol: 'point.3.connected.trianglepath.dotted' },
+              ]}
+              selectedKey={tab}
+              onChange={setTab}
+            />
+          ) : (
+            <View style={[styles.tabCapsule, styles.tabCapsuleFlex]}>
+              {(
+                [
+                  { tab: 'chats' as Tab, label: 'Chats', icon: 'chatbubbles-outline' },
+                  { tab: 'tasks' as Tab, label: 'Tasks', icon: 'list' },
+                  { tab: 'calendar' as Tab, label: 'Calendar', icon: 'calendar' },
+                  { tab: 'flow' as Tab, label: 'Flow', icon: 'git-network-outline' },
+                ] as const
+              ).map(({ tab: t, label, icon }) => (
+                <TabBtn
+                  key={t}
+                  label={label}
+                  icon={icon}
+                  active={tab === t}
+                  onPress={() => setTab(t)}
+                  colors={colors}
+                />
+              ))}
+            </View>
+          )}
+          {/* iOS 26+ glass 路径：UIButton glass material 在 60pt bounds 内部有 ~4pt 居中
+              内缩——可视玻璃圆比 bounds 小一圈，flex-end 对齐后视觉底比 tab pill 视觉底
+              高几 pt。translateY: 7 硬把 FAB 视觉往下推补偿，让两个视觉底对齐。
+              Android / iOS<26 fallback 没有 glass material 内缩，translateY 0，FAB 自然跟
+              tab capsule 底对齐。 */}
+          <Fab
+            ionicon="add"
+            sfSymbol="plus"
+            size={60}
+            style={IS_IOS_LIQUID_GLASS ? { transform: [{ translateY: 8 }] } : undefined}
+            onPress={onCreateTask}
+          />
         </View>
       </View>
 
@@ -734,6 +767,12 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
   );
 }
 
+/* TabBtn —— Android / iOS<26 fallback。布局参考 iOS NativeTabBar（icon 上 / label 下
+ *  stacked，capsule 高 60pt），但 active 视觉用我们原有的设计：active 段渲染填充背景
+ *  pill（colors.userBubble），icon + label 翻到 colors.onUserBubble；非 active 段是
+ *  colors.textMuted、无背景。pill 通过 Animated opacity 在 active 切换时淡入淡出 200ms。
+ *
+ *  capsule + overflow:hidden 让 absoluteFill 的 bg pill 跟 TabBtn 形状贴合。 */
 function TabBtn({
   label,
   icon,
@@ -747,9 +786,14 @@ function TabBtn({
   onPress: () => void;
   colors: AppColors;
 }) {
-  const activeBg = colors.userBubble;
+  /* active bg 用深灰 '#3a3a3c'（iOS tertiary system fill 色值，比 colors.userBubble 浅一档
+     —— userBubble 在浅色主题下是 #1c1c1c 接近纯黑、用户觉得太重）。这个色值在浅色 + 深色
+     主题下都跟 surface 形成足够对比：浅色 surface=白时它是深灰显眼；深色 surface=#1f1f1f
+     时它略亮看着"高亮"。 */
+  const activeBg = '#3a3a3c';
   const activeFg = colors.onUserBubble;
   const inactiveFg = colors.textMuted;
+  const fg = active ? activeFg : inactiveFg;
 
   const v = useSharedValue(active ? 1 : 0);
   useEffect(() => {
@@ -760,13 +804,7 @@ function TabBtn({
 
   return (
     <TouchableOpacity
-      style={[
-        tabStyles.btn,
-        {
-          paddingLeft: TAB_PADDING_X,
-          paddingRight: TAB_PADDING_X,
-        },
-      ]}
+      style={tabStyles.btn}
       onPress={onPress}
       activeOpacity={0.7}
     >
@@ -775,14 +813,8 @@ function TabBtn({
         pointerEvents="none"
       />
       <View style={tabStyles.btnContent}>
-        <Ionicons
-          name={icon as never}
-          size={14}
-          color={active ? activeFg : inactiveFg}
-        />
-        <Text style={[tabStyles.label, { color: active ? activeFg : inactiveFg }]}>
-          {label}
-        </Text>
+        <Ionicons name={icon as never} size={22} color={fg} />
+        <Text style={[tabStyles.label, { color: fg }]}>{label}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -790,22 +822,22 @@ function TabBtn({
 
 const tabStyles = StyleSheet.create({
   btn: {
-    flexDirection: 'row',
+    flex: 1,
+    flexDirection: 'column',
     alignItems: 'center',
-    paddingVertical: 18 - TAB_CAPSULE_PADDING,
+    justifyContent: 'center',
+    paddingVertical: 8,
     borderRadius: 999,
     overflow: 'hidden',
-    flexShrink: 1,
-    minWidth: 0,
   },
-  btnBg: { ...StyleSheet.absoluteFillObject, borderRadius: 999 },
+  btnBg: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 999 },
   btnContent: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
-    gap: 4,
+    gap: 1,
     zIndex: 1,
   },
-  label: { fontSize: TASK_FONT_SIZE_SMALL, fontWeight: '600' },
+  label: { fontSize: 9, fontWeight: '600' },
 });
 
 function CalendarTab({
@@ -986,23 +1018,48 @@ function createStyles(c: AppColors) {
       bottom: 0,
       flexDirection: 'column',
       alignItems: 'stretch',
+      /* paddingLeft: 两边分开——iOS NativeTabBar 自带内部 padding，外层给 0 让 UITabBar
+         的 floating pill 视觉刚好；Android / iOS<26 自绘 capsule 完全贴屏边会很挤，
+         加 12pt 透气。
+         paddingRight: 22 两边一样（FAB 在右，逻辑同质）。 */
+      paddingLeft: IS_IOS_LIQUID_GLASS ? 0 : 12,
+      paddingRight: 22,
+      paddingTop: 10,
+      gap: 10,
     },
-    bottomBarRow: {
+    /* tab + FAB 单行：space-between 把 tab 推到左、FAB 推到右、中间留空。
+       alignItems: 'flex-end' —— iOS 26 UITabBar 把 floating pill 锚在 bounds 底部，
+       UIButton glass 居中。flex-end 让两个 child 的"视觉底"对齐。
+       height: 60 给加大后的 FAB（60pt）留位；UITabBar 还是 52pt 高 bounds，靠 flex-end
+       会贴在 row 底部（视觉上 tab pill 跟 FAB 底对齐）。 */
+    bottomRow: {
       flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: 16,
-      gap: 12,
+      alignItems: 'flex-end',
+      justifyContent: 'space-between',
+      height: 60,
     },
+    /* iOS 26+ native UITabBar：320pt 宽（4 tab × ~80pt 给每 tab 留点透气空间）+ 52pt 高
+       （比 FAB 的 60pt 小 8pt，靠 bottomRow.alignItems: 'flex-end' tab 底跟 FAB 底对齐、
+       顶部少一截就行）。320 + FAB 60 = 380 < iPhone 17 Pro 内容宽 394，不溢出。 */
+    nativeTabs: {
+      width: 320,
+      height: 52,
+    },
+    /* iOS < 26 / Android fallback：tabCapsuleFlex 这个样式已经废弃但保留兼容现有
+       callsite——传 {} 没副作用。 */
+    tabCapsuleFlex: {},
+    /* tabCapsule 跟 FAB 直径同高（60pt）；宽度 280（每 tab 70pt）比 iOS NativeTabBar 的
+       320 收紧——自绘字体没 iOS native 那种 dynamic type / 字距加宽，相同宽度下视觉更挤，
+       所以这里特意收一点让 inter-icon 间距舒服些。iOS 那边宽度走 nativeTabs 不受影响。 */
     tabCapsule: {
       flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'center',
-      height: 52,
+      justifyContent: 'space-between',
+      width: 280,
+      height: 60,
       paddingHorizontal: TAB_CAPSULE_PADDING,
       backgroundColor: c.surface,
       borderRadius: 999,
-      flexShrink: 1,
-      minWidth: 0,
       overflow: 'hidden',
       ...shadowCircleButtonThemed(c),
     },

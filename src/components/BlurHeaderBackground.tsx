@@ -85,3 +85,78 @@ const styles = StyleSheet.create({
     bottom: 0,
   },
 });
+
+type BlurFooterBackgroundProps = {
+  style?: ViewStyle;
+  /** 底部纯色区域高度（安全区 + 下间距），渐变在其上方（搜索框/FAB 区域 + 一段透明 fade） */
+  bottomSolidHeight?: number;
+  /** 同 BlurHeaderBackground.gradientBaseHex */
+  gradientBaseHex?: string;
+};
+
+/**
+ * 底栏背景：BlurHeaderBackground 的镜像版——底部纯色，上方是自下而上"实色到透明"
+ * 的渐变。用在 floating 搜索 / FAB 之类的底栏，让滚动内容滚到下面时被柔化遮挡，
+ * 而不是被实色硬切。
+ */
+export function BlurFooterBackground({
+  style,
+  bottomSolidHeight = 0,
+  gradientBaseHex,
+}: BlurFooterBackgroundProps) {
+  const { colors } = useAppTheme();
+  const base = gradientBaseHex ?? colors.background;
+
+  const { solidBottom, gradientColors } = useMemo(() => {
+    return {
+      solidBottom: rgbaFromBase(base, 0.98),
+      /* 跟 BlurHeaderBackground 同 alpha 阶梯但反序——0=transparent end（顶），1=opaque
+         end（底）。视觉上跟顶部 header 的 fade 强度对称。 */
+      gradientColors: [
+        rgbaFromBase(base, 0.05),
+        rgbaFromBase(base, 0.2),
+        rgbaFromBase(base, 0.6),
+        rgbaFromBase(base, 0.92),
+        rgbaFromBase(base, 0.98),
+      ] as const,
+    };
+  }, [base]);
+
+  const gradientStyle = [
+    footerStyles.gradient,
+    bottomSolidHeight > 0 && { bottom: bottomSolidHeight },
+  ];
+  return (
+    <View style={[footerStyles.fill, style]} pointerEvents="none">
+      <LinearGradient
+        colors={[...gradientColors]}
+        locations={[0, 0.05, 0.25, 0.4, 1]}
+        style={gradientStyle}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
+      />
+      {bottomSolidHeight > 0 ? (
+        <View style={[footerStyles.solidBottom, { height: bottomSolidHeight, backgroundColor: solidBottom }]} />
+      ) : null}
+    </View>
+  );
+}
+
+const footerStyles = StyleSheet.create({
+  fill: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  solidBottom: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+  },
+  gradient: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+});

@@ -5,6 +5,7 @@
  * iOS: reads rn-dev.config.json "ios.simulator" for --simulator "Device Name".
  */
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 const { spawn, execSync } = require('child_process');
 
@@ -42,6 +43,88 @@ function getIosSimulator() {
   return null;
 }
 
+/**
+ * iOS 防御性清理：删 ios/ 目录下所有 .DS_Store。
+ *
+ * 缘起：RN 0.84 的 prebuilt RNDeps 用 [CP-User] script phase 在 Debug/Release
+ * variant 之间 swap xcframework，用 `rmdir` 清空中间目录。任何残留的 .DS_Store
+ * （Finder 偷塞 / 别的工具留下的）都会让"空目录"实际不空，rmdir 失败，整次
+ * xcodebuild 挂掉（典型报错 `ENOTEMPTY: directory not empty, rmdir
+ * 'ReactNativeDependencies.xcframework/Headers'`）。
+ *
+ * 最常见场景：跑过一次 Release archive（如 yarn build ios testflight）之后再
+ * 切回 Debug 用 yarn dev ios。下次 swap variant 时 stale .DS_Store 就会绊脚。
+ *
+ * 用 macOS 自带的 find 一行删干净，零依赖、毫秒级。失败也只是 warn，不阻断 build。
+ */
+function cleanupIosDSStore() {
+  try {
+    const iosDir = path.resolve(__dirname, '..', 'ios');
+    if (!fs.existsSync(iosDir)) return;
+    execSync(`find "${iosDir}" -name .DS_Store -type f -delete`, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+  } catch (e) {
+    console.warn(`[ios] 清理 .DS_Store 失败（继续 build）：${e.message}`);
+  }
+}
+
+/**
+ * iOS 防御性清理 #2：如果 Podfile.lock 比上次 build 输出还新（说明 pod install 在
+ * 上次 build 之后跑过），强制 nuke 整个 DerivedData。
+ *
+ * 缘起：增量加 native Fabric pod（如 BouncyGlassCard）后，CocoaPods 复用缓存的
+ * React-Fabric prebuilt 库，但新 pod 的 codegen 引入了 vtable 引用 debug-only symbol
+ * （getDebugName / getDebugProps / Sealable::ensureUnsealed 等），被缓存的 React-Fabric
+ * 不暴露 → linker 报"Undefined symbols for architecture arm64"几十个，看不懂。
+ * 手动 nuke DerivedData + Pods 重建一次就好。
+ *
+ * 判断逻辑：比较 Podfile.lock 的 mtime 跟 DerivedData 里 Build/Products 目录的 mtime——
+ * 后者代表上次构建产物时间。lock 比它新 = pod install 之后没成功 build 过 = 应该 nuke。
+ * 第一次 build（DerivedData 不存在）也不 nuke，让首次 build 正常跑。
+ */
+function maybeNukeDerivedDataAfterPodInstall() {
+  const lockPath = path.resolve(__dirname, '..', 'ios', 'Podfile.lock');
+  if (!fs.existsSync(lockPath)) return;
+
+  const dd = path.join(os.homedir(), 'Library', 'Developer', 'Xcode', 'DerivedData');
+  if (!fs.existsSync(dd)) return;
+
+  let flopsBuildDirs;
+  try {
+    flopsBuildDirs = fs.readdirSync(dd).filter((n) => n.startsWith('FlopsMobile-'));
+  } catch {
+    return;
+  }
+  if (flopsBuildDirs.length === 0) return; // 首次构建，没 DerivedData
+
+  const lockMtime = fs.statSync(lockPath).mtimeMs;
+  let latestBuildMtime = 0;
+  for (const e of flopsBuildDirs) {
+    const productsPath = path.join(dd, e, 'Build', 'Products');
+    if (fs.existsSync(productsPath)) {
+      const m = fs.statSync(productsPath).mtimeMs;
+      if (m > latestBuildMtime) latestBuildMtime = m;
+    }
+  }
+
+  if (latestBuildMtime === 0) return; // 有 DerivedData 但没 Build/Products，也算首次
+  if (lockMtime <= latestBuildMtime) return; // lock 比构建产物老，没 pod install 过，跳过
+
+  console.log(
+    '[ios] Podfile.lock 比上次构建产物新（pod install 之后没成功 build 过），nuke DerivedData 防 Fabric 缓存 symbol 错乱…'
+  );
+  for (const e of flopsBuildDirs) {
+    const p = path.join(dd, e);
+    try {
+      execSync(`rm -rf "${p}"`);
+      console.log(`[ios]   deleted ${p}`);
+    } catch (err) {
+      console.warn(`[ios]   delete ${p} failed: ${err.message}`);
+    }
+  }
+}
+
 function waitForMetro() {
   const url = `http://127.0.0.1:${METRO_PORT}/`;
   const deadline = Date.now() + METRO_WAIT_TIMEOUT_MS;
@@ -65,6 +148,8 @@ function run() {
   const runTarget = target === 'android:real' ? 'android' : target;
   const args = ['react-native', `run-${runTarget}`];
   if (target === 'ios') {
+    cleanupIosDSStore();
+    maybeNukeDerivedDataAfterPodInstall();
     args.push('--mode', 'Debug');
     const simulator = getIosSimulator();
     if (simulator) {

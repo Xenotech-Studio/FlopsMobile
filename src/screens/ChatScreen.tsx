@@ -78,7 +78,10 @@ import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import { chatInputOverlayGradient, toolPreviewFadeGradient } from '../theme/appColors';
 import { useAppTheme } from '../context/ThemeContext';
 import { HamburgerButton } from './shell/HamburgerButton';
-import { AnimatedCircleButton } from '../components/AnimatedCircleButton';
+import {
+  AnimatedCircleButton,
+  IS_IOS_LIQUID_GLASS,
+} from '../components/AnimatedCircleButton';
 import { createChatStyles } from './chat/ChatScreen.styles';
 import { ThinkingBlockView } from './chat/ThinkingBlockView';
 import { ComposerContextRing } from './chat/ComposerContextRing';
@@ -2741,6 +2744,7 @@ export function ChatScreen({
           <AnimatedCircleButton
             style={styles.circleBtn}
             onPress={() => navigation.goBack()}
+            iosSfSymbol={{ name: 'chevron.backward', size: 16, color: colors.textSecondary }}
           >
             <Ionicons name="chevron-back" size={24} color={colors.textSecondary} />
           </AnimatedCircleButton>
@@ -2752,12 +2756,26 @@ export function ChatScreen({
             {conversationId ? (conversationTitle || '新对话') : 'Flops'}
           </Text>
         </View>
-        {/* 右上角 ⋯ 菜单：iOS 用 MenuView（UIMenu 原生毛玻璃 + 系统动画 + 系统点
-         *  外部关）；Android 用 AnimatedCircleButton + 自绘 Modal popover。
-         *  iOS 上的 scale 动画通过 MenuView.onOpenMenu / onCloseMenu 触发，
-         *  按下 ~80ms 后才放大（native UIMenu 检测期，绕不过），跟 Android 的
-         *  "按下立即放大、松手弹回"在时机上略有不同。 */}
-        {Platform.OS === 'ios' ? (
+        {/* 右上角 ⋯ 菜单 三条路：
+         *  - iOS 26+ (Liquid Glass)：AnimatedCircleButton 透传 menuActions 给 BouncyButton，
+         *    底下 UIButton 直接挂原生 UIMenu（glass material + 系统 scale + UIMenu 弹层 全套
+         *    系统接管）。
+         *  - iOS 15..25：保留 MenuView（也是原生 UIMenu，但没玻璃 material，配手挂 scale）。
+         *  - Android：AnimatedCircleButton + 自绘 Modal popover。 */}
+        {IS_IOS_LIQUID_GLASS ? (
+          <AnimatedCircleButton
+            style={[styles.circleBtn, !conversationId ? styles.circleBtnDisabled : null]}
+            disabled={!conversationId}
+            menuActions={convMenuActions.map((a) => ({ id: a.id, title: a.title }))}
+            iosSfSymbol={{ name: 'ellipsis', size: 16, color: colors.textSecondary }}
+            onMenuAction={(id) => {
+              if (id === 'info') handleConvInfo();
+              else if (id === 'diag') handleConvDiagCopy();
+            }}
+          >
+            <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
+          </AnimatedCircleButton>
+        ) : Platform.OS === 'ios' ? (
           <MenuView
             title=""
             actions={convMenuActions}

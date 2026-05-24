@@ -66,11 +66,16 @@ import {
   listUnorderedDumpParentsForProject,
 } from '../utils/taskChoreRegion';
 import { filterTasksByStatusLevel } from '../utils/taskFilters';
-import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import { BlurHeaderBackground, BlurFooterBackground } from '../components/BlurHeaderBackground';
 import { PullToRefreshRing } from '../components/PullToRefreshRing';
 import { InboxRunSpinner, InboxUnreadCheck } from '../components/InboxListIndicators';
 import { HamburgerButton } from './shell/HamburgerButton';
-import { AnimatedCircleButton } from '../components/AnimatedCircleButton';
+import {
+  AnimatedCircleButton,
+  IS_IOS_LIQUID_GLASS,
+} from '../components/AnimatedCircleButton';
+import { Fab } from '../components/Fab';
+import { BouncyGlassCard } from '../components/BouncyGlassCard';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 import { shadowCircleButtonThemed, shadowMenu, shadowSoft } from '../theme/shadows';
@@ -613,6 +618,7 @@ export function TodayScreen() {
         <AnimatedCircleButton
           style={styles.headerCircleBtn}
           onPress={onCalendarPress}
+          iosSfSymbol={{ name: 'calendar', size: 16, color: colors.textSecondary }}
         >
           <Ionicons name="calendar-outline" size={22} color={colors.textSecondary} />
         </AnimatedCircleButton>
@@ -688,26 +694,52 @@ export function TodayScreen() {
         </View>
       ) : null}
 
-      {/* 底部 sticky：单个暗色 pill（新对话）+ 全宽搜索框 */}
-      <View style={[styles.searchWrap, { paddingBottom: Math.max(insets.bottom, 8) + 8 }]}>
-        <View style={styles.pillRow}>
-          <TouchableOpacity
-            style={styles.pillBtn}
-            onPress={onCreateChat}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="add" size={20} color={colors.onPrimary} />
-            <Text style={styles.pillBtnText}>新对话</Text>
-          </TouchableOpacity>
-        </View>
-        <View style={styles.searchInputBox}>
-          <Ionicons name="search" size={18} color={colors.textMuted} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="搜索任务或对话"
-            placeholderTextColor={colors.placeholder}
-            returnKeyType="search"
-          />
+      {/* 底栏背后的渐变 fade，跟顶部 BlurHeaderBackground 镜像：底端是 safe-area solid
+          挡块，往上是 0.05→0.98 alpha 渐变，让滚动列表滚到搜索框下方时被柔化遮挡而不是
+          硬切。独立 overlay（不放进 searchWrap）以便 fade 高度可以盖过 searchRow，扩展
+          到 searchWrap 上方而不挤掉 searchRow 自身的位置。
+          套一层 wrapper 持有 bottom+height —— 直接把 bottom/height 透传给 BlurFooterBackground
+          会跟它内部的 absoluteFill (含 top:0) 冲突，Yoga 让 top 赢导致 overlay 被吸到屏顶。 */}
+      <View
+        style={[styles.bottomFade, { height: Math.max(insets.bottom, 8) + 52 + 10 + 24 }]}
+        pointerEvents="none"
+      >
+        <BlurFooterBackground
+          bottomSolidHeight={Math.max(insets.bottom, 8)}
+          gradientBaseHex={colors.chatScreenBackground}
+        />
+      </View>
+
+      {/* 底部 sticky：搜索框 + 新对话 FAB 单行并列。跟 ProjectScreen 底部"tab + FAB 单行"
+          同一个布局语言。 */}
+      <View style={[styles.searchWrap, { paddingBottom: Math.max(insets.bottom, 8) - 0 }]}>
+        <View style={styles.searchRow}>
+          {IS_IOS_LIQUID_GLASS ? (
+            <BouncyGlassCard
+              style={[styles.searchInputBoxFlex, styles.searchInputBoxGlass]}
+              cornerRadius={26}
+              interactive
+            >
+              <Ionicons name="search" size={18} color={colors.textMuted} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="搜索任务或对话"
+                placeholderTextColor={colors.placeholder}
+                returnKeyType="search"
+              />
+            </BouncyGlassCard>
+          ) : (
+            <View style={[styles.searchInputBox, styles.searchInputBoxFlex]}>
+              <Ionicons name="search" size={18} color={colors.textMuted} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="搜索任务或对话"
+                placeholderTextColor={colors.placeholder}
+                returnKeyType="search"
+              />
+            </View>
+          )}
+          <Fab ionicon="add" sfSymbol="plus" onPress={onCreateChat} />
         </View>
       </View>
 
@@ -885,23 +917,41 @@ function createStyles(c: AppColors) {
       paddingVertical: 12,
       zIndex: 9,
     },
+    /* 底栏 fade 覆盖层（BlurFooterBackground）。绝对定位贴底；高度在 callsite 按 safe-area
+       动态算。zIndex 隐式 = DOM 顺序，所以挂在 DraggableFlatList 之后、searchWrap 之前，让
+       它正好挡在滚动列表上面、漂浮控件下面。 */
+    bottomFade: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+    },
     /* sticky 底栏：上方 pill 行 + 下方搜索框 */
     searchWrap: {
       position: 'absolute',
       left: 0,
       right: 0,
       bottom: 0,
-      paddingHorizontal: 16,
+      /* paddingHorizontal: 22 跟列表 listContent 同款，搜索框左缘 / FAB 右缘对齐下方任务
+         /对话列表的左右沿一根垂直线。之前试过 28（DCR 同心几何对齐）、36（更紧），最终
+         视觉上跟列表内容对齐才统一。 */
+      paddingHorizontal: 26,
       paddingTop: 10,
       flexDirection: 'column',
       gap: 10,
-      backgroundColor: c.chatScreenBackground,
+      /* 没 backgroundColor —— 让搜索 / FAB 漂浮在下方滚动内容之上（跟 ProjectScreen 底栏
+         同款）。content 那侧 paddingBottom 已经给了 LIST_PADDING_BOTTOM_WITH_FOOTER 留位，
+         不会永久挡住最后几条。 */
     },
-    pillRow: {
+    /* 搜索 + FAB 单行：搜索拿 flex:1，FAB 紧贴右侧。alignItems: center 让两者垂直居中。 */
+    searchRow: {
       flexDirection: 'row',
-      justifyContent: 'flex-end',
+      alignItems: 'center',
       gap: 10,
     },
+    searchInputBoxFlex: { flex: 1 },
+    /* pillBtn / pillBtnText 还在被"任务段"的新建任务按钮（inline 在 sectionRow 里）用着，
+       底部 sticky 的"新对话 pill"已经换成 Fab——所以 pillBtn 的 callsite 只剩一处。 */
     pillBtn: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -913,15 +963,27 @@ function createStyles(c: AppColors) {
       ...shadowMenu,
     },
     pillBtnText: { fontSize: 15, fontWeight: '600', color: c.onPrimary },
+    /* height: 52 跟旁边 FAB（FAB_SIZE）等高；borderRadius: 26 = height/2 capsule 形状。
+       paddingVertical 去掉——固定高度下 alignItems: center 已经把 icon + 输入框居中。 */
     searchInputBox: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
       paddingHorizontal: 14,
-      paddingVertical: 12,
-      borderRadius: 24,
+      height: 52,
+      borderRadius: 26,
       backgroundColor: c.surface,
       ...shadowMenu,
+    },
+    /* iOS 26 glass 路径下的 search 卡片样式：保留 row + padding + gap，不要 bg/shadow
+       —— 玻璃材质 + system 折光由 BouncyGlassCard 内部 UIVisualEffectView 提供。
+       height: 52 跟 FAB 等高（cornerRadius: 26 在 BouncyGlassCard prop 上传）。 */
+    searchInputBoxGlass: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingHorizontal: 14,
+      height: 52,
     },
     searchInput: { flex: 1, fontSize: 15, color: c.textPrimary, padding: 0 },
     /* 删除 modal */

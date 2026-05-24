@@ -26,6 +26,18 @@ target 'FlopsMobile' do
   # In-app native module for FlowDocInput（Fabric atomic-pill rich text input）
   pod 'FlowDocInput', :path => './FlowDocInput'
 
+  # In-app native Fabric view: iOS-only bouncy press-feedback button (UI-thread driven)
+  pod 'BouncyButton', :path => './BouncyButton'
+
+  # In-app native Fabric view: iOS UISegmentedControl wrapper (iOS 26+ auto Liquid Glass)
+  pod 'BouncySegmentedControl', :path => './BouncySegmentedControl'
+
+  # In-app native Fabric view: 独立 UITabBar wrapper（iOS 26+ floating pill + icon/title stacked）
+  pod 'BouncyTabBar', :path => './BouncyTabBar'
+
+  # In-app native Fabric view: 通用 Liquid Glass card 容器（UIVisualEffectView + UIGlassEffect）
+  pod 'BouncyGlassCard', :path => './BouncyGlassCard'
+
   post_install do |installer|
     react_native_post_install(
       installer,

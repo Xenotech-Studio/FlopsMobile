@@ -40,6 +40,9 @@ import {
 } from '../utils/taskChoreRegion';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { IOSStyleSwitch } from '../components/IOSStyleSwitch';
+import { HeaderBackButton } from '../components/HeaderBackButton';
+import { HeaderCircleButton } from '../components/HeaderCircleButton';
+import { AnimatedCircleButton } from '../components/AnimatedCircleButton';
 import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import type { AppColors } from '../theme/appColors';
 import { useAppTheme } from '../context/ThemeContext';
@@ -522,17 +525,20 @@ export function TaskDetailScreen() {
           topSolidHeight={insets.top + 8}
           gradientBaseHex={colors.backgroundSecondary}
         />
-        <TouchableOpacity style={[styles.circleBtn, styles.circleBtnLeft]} onPress={onBack} activeOpacity={0.7}>
-          <Ionicons name="chevron-back" size={24} color={colors.textSecondary} />
-        </TouchableOpacity>
+        <HeaderBackButton onPress={onBack} />
         <View style={styles.topBarCenter}>
           <Text style={styles.topBarTitle}>{headerTitle}</Text>
         </View>
         {isCreate ? (
-          <TouchableOpacity
+          <AnimatedCircleButton
             style={[styles.circleBtn, styles.createBtn]}
             onPress={handleCreate}
             disabled={!editedTitle.trim() || saving}
+            iosNativeTitle={{
+              text: '创建',
+              color: editedTitle.trim() ? colors.textHeader : colors.placeholder,
+            }}
+            iosShowsSpinner={saving}
           >
             {saving ? (
               <ActivityIndicator size="small" color={colors.primary} />
@@ -541,19 +547,14 @@ export function TaskDetailScreen() {
                 创建
               </Text>
             )}
-          </TouchableOpacity>
+          </AnimatedCircleButton>
         ) : (
-          <TouchableOpacity
-            style={[styles.circleBtn, styles.circleBtnRight]}
+          <HeaderCircleButton
+            ionicon={showMetadata ? 'chevron-up' : 'ellipsis-horizontal'}
+            sfSymbol={showMetadata ? 'chevron.up' : 'ellipsis'}
+            iconSize={showMetadata ? 20 : 22}
             onPress={() => setShowMetadata((v) => !v)}
-            activeOpacity={0.7}
-          >
-            <Ionicons
-              name={showMetadata ? 'chevron-up' : 'ellipsis-horizontal'}
-              size={showMetadata ? 20 : 22}
-              color={colors.textSecondary}
-            />
-          </TouchableOpacity>
+          />
         )}
       </View>
 
