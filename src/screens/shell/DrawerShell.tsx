@@ -35,6 +35,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -78,14 +79,16 @@ function inferScreenCornerRadius(topInset: number): number {
 }
 /** 抽屉自身 dim 上限：progress=0 时最暗、progress=1 时全亮（参考 Claude app 的「刚拉开抽屉偏暗、展开到位才完全显形」效果） */
 const DRAWER_DIM_AT_CLOSED = 0.55;
-/** 左缘热区宽度（与现有左缘开 Profile 一致） */
-const LEFT_EDGE_STRIP_WIDTH = Platform.OS === 'android' ? 56 : 24;
-/** 抽屉触发阈值（与现有左缘手势一致） */
-const SWIPE_THRESHOLD = 60;
-/** Pan 激活的 x 位移阈值（避免与子组件竖向滚动争用） */
-const PAN_ACTIVE_OFFSET_X = 10;
-/** Pan 失败的 y 偏移上限 */
-const PAN_FAIL_OFFSET_Y = 24;
+/** 左缘热区宽度。iOS 加宽到 40 让手指更容易触发（接近 iOS 原生返回手势的触发区）。 */
+const LEFT_EDGE_STRIP_WIDTH = Platform.OS === 'android' ? 56 : 40;
+/** 抽屉触发阈值：translation 或 velocity 任一过就 commit 开。极灵敏 —— 比 iOS 原生返回
+ *  还轻，几乎指尖一拨即开。 */
+const SWIPE_THRESHOLD = 12;
+const SWIPE_VELOCITY_THRESHOLD = 80;
+/** Pan 激活的 x 位移阈值（避免与子组件竖向滚动争用）。降到 4 让手势几乎即时激活。 */
+const PAN_ACTIVE_OFFSET_X = 4;
+/** Pan 失败的 y 偏移上限。放宽到 32 容忍不完全水平的轻扫。 */
+const PAN_FAIL_OFFSET_Y = 32;
 
 const SPRING_CONFIG = {
   damping: 18,
@@ -121,6 +124,17 @@ export function DrawerShell() {
   const progress = useSharedValue(0);
   /** JS 侧记录当前是否「展开（含正在展开）」，用来切手势挂载 / pointerEvents */
   const [isOpen, setIsOpen] = useState(false);
+
+  /** isOpen 变化时触发轻 haptic 反馈（开 / 关都给一下「咔哒」感）。skipFirstHapticRef 防初次
+   *  mount 触发。手势 / HamburgerButton 点击 / progress 自动归位都会改 isOpen，都覆盖到。 */
+  const skipFirstHapticRef = useRef(true);
+  useEffect(() => {
+    if (skipFirstHapticRef.current) {
+      skipFirstHapticRef.current = false;
+      return;
+    }
+    ReactNativeHapticFeedback.trigger('impactLight', { enableVibrateFallback: true });
+  }, [isOpen]);
 
   /** active 顶层页 */
   const [active, setActive] = useState<DrawerActive>({ kind: 'today' });
@@ -214,7 +228,7 @@ export function DrawerShell() {
         })
         .onEnd((e) => {
           'worklet';
-          const opening = e.translationX > SWIPE_THRESHOLD || e.velocityX > 500;
+          const opening = e.translationX > SWIPE_THRESHOLD || e.velocityX > SWIPE_VELOCITY_THRESHOLD;
           progress.value = withSpring(opening ? 1 : 0, SPRING_CONFIG);
           runOnJS(setIsOpen)(opening);
         })
@@ -243,7 +257,7 @@ export function DrawerShell() {
         })
         .onEnd((e) => {
           'worklet';
-          const closing = e.translationX < -SWIPE_THRESHOLD || e.velocityX < -500;
+          const closing = e.translationX < -SWIPE_THRESHOLD || e.velocityX < -SWIPE_VELOCITY_THRESHOLD;
           progress.value = withSpring(closing ? 0 : 1, SPRING_CONFIG);
           runOnJS(setIsOpen)(!closing);
         })
