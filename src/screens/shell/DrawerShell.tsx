@@ -42,6 +42,7 @@ import Animated, {
   Extrapolation,
   interpolate,
   runOnJS,
+  useAnimatedProps,
   useAnimatedReaction,
   useAnimatedStyle,
   useSharedValue,
@@ -81,10 +82,13 @@ function inferScreenCornerRadius(topInset: number): number {
 const DRAWER_DIM_AT_CLOSED = 0.55;
 /** 左缘热区宽度。iOS 加宽到 40 让手指更容易触发（接近 iOS 原生返回手势的触发区）。 */
 const LEFT_EDGE_STRIP_WIDTH = Platform.OS === 'android' ? 56 : 40;
-/** 抽屉触发阈值：translation 或 velocity 任一过就 commit 开。比 iOS 返回手势略宽松，
- *  避免误触但任何稍带速度的右拨都触发。 */
-const SWIPE_THRESHOLD = 8;
-const SWIPE_VELOCITY_THRESHOLD = 50;
+/** 抽屉 commit 阈值：translation 或 velocity 任一过就 commit。对齐 iOS 原生返回手势体感:
+ *  - 位移 60pt 约抽屉满开宽度的 18%（iOS 系统 ~30%；我们略低点适合 drawer 不是 nav back）
+ *  - 速度 400pt/s 约一个明确的「轻甩」起步（iOS ~500-1000，更宽松接受不那么用力的 flick）
+ *  慢速拖：得拖到 60pt 才提示「松手就成」+ 才会 commit
+ *  快速扫：还没到 60pt 但速度过 400 → 一样触发 + commit */
+const SWIPE_THRESHOLD = 60;
+const SWIPE_VELOCITY_THRESHOLD = 400;
 /** Pan 激活的 x 位移阈值。2pt 即激活。 */
 const PAN_ACTIVE_OFFSET_X = 2;
 /** Pan 失败的 y 偏移上限。80 让对角滑动也能成功（iOS 返回手势是基于 ratio 的，没绝对上限,
@@ -101,6 +105,12 @@ const SPRING_CONFIG = {
   overshootClamping: false,
 } as const;
 
+/* 模块层稳定函数 —— runOnJS 必须接 stable function ref（不能是 worklet 内 inline closure）。
+ * 手势 commit 那刻立即触发轻 haptic，跟 setIsOpen 完全解耦：之前等 useAnimatedReaction 在
+ * progress 跨 0.98 时 setIsOpen → useEffect 才震，相当于动画快结束时震，感觉延迟。 */
+function triggerDrawerHaptic() {
+  ReactNativeHapticFeedback.trigger('impactLight', { enableVibrateFallback: true });
+}
 
 export function DrawerShell() {
   const { width: winWidth } = useWindowDimensions();
@@ -127,24 +137,12 @@ export function DrawerShell() {
 
   /** 抽屉展开比例：0 = 关闭，1 = 完全展开。reanimated shared value，UI 线程驱动动画。 */
   const progress = useSharedValue(0);
+  /** 一次性 haptic flag：在 gesture 跨阈值时 fire 一次告诉用户「松手就成」，避免重复震；
+   *  onBegin 重置。配套 openGesture / closeGesture 各一个。 */
+  const openHapticFired = useSharedValue(false);
+  const closeHapticFired = useSharedValue(false);
   /** JS 侧记录当前是否「展开（含正在展开）」，用来切手势挂载 / pointerEvents */
   const [isOpen, setIsOpen] = useState(false);
-
-  /** isOpen 变化时触发轻 haptic 反馈（开 / 关都给一下「咔哒」感）。skipFirstHapticRef 防初次
-   *  mount 触发。手势 / HamburgerButton 点击 / progress 自动归位都会改 isOpen，都覆盖到。
-   *  用 requestAnimationFrame 推到下一帧，避免跟 spring 启动同帧抢 JS 主线程导致开抽屉时
-   *  「手指离开后卡顿一下」（同步 native haptic call 会阻塞 1-2ms）。 */
-  const skipFirstHapticRef = useRef(true);
-  useEffect(() => {
-    if (skipFirstHapticRef.current) {
-      skipFirstHapticRef.current = false;
-      return;
-    }
-    const handle = requestAnimationFrame(() => {
-      ReactNativeHapticFeedback.trigger('impactLight', { enableVibrateFallback: true });
-    });
-    return () => cancelAnimationFrame(handle);
-  }, [isOpen]);
 
   /** active 顶层页 */
   const [active, setActive] = useState<DrawerActive>({ kind: 'today' });
@@ -155,15 +153,18 @@ export function DrawerShell() {
   /** 主页面 translateX 最大值 = 屏宽 - peek */
   const maxTranslateX = winWidth - PEEK_WIDTH;
 
-  /** 打开 / 关闭操作（带 spring 动画） */
+  /** 打开 / 关闭操作（带 spring 动画 + 立即 haptic）。手势 onEnd 自己调 triggerDrawerHaptic;
+   *  这里给非手势调用方（HamburgerButton 点击 / 程序式 open）也带上 haptic。 */
   const open = useCallback(() => {
     setIsOpen(true);
     progress.value = withSpring(1, SPRING_CONFIG);
+    triggerDrawerHaptic();
   }, [progress]);
 
   const close = useCallback(() => {
     progress.value = withSpring(0, SPRING_CONFIG);
     setIsOpen(false);
+    triggerDrawerHaptic();
   }, [progress]);
 
   const presentProfileSheet = useCallback(() => {
@@ -211,19 +212,11 @@ export function DrawerShell() {
     [close]
   );
 
-  /** UI 线程：progress 自动归位时同步 JS 侧 isOpen，保证手势挂载切换准确 */
-  useAnimatedReaction(
-    () => progress.value,
-    (v, prev) => {
-      'worklet';
-      if (prev == null) return;
-      if (prev > 0.02 && v <= 0.02) {
-        runOnJS(setIsOpen)(false);
-      } else if (prev < 0.98 && v >= 0.98) {
-        runOnJS(setIsOpen)(true);
-      }
-    }
-  );
+  /* setIsOpen 不再在 useAnimatedReaction 里跟 progress 跨阈值同步——那样会在动画快结束
+   * 时（progress 跨 0.98）触发 React 重渲染 + DrawerContent fiber walk，用户能看到末端
+   * 卡顿一下。现在改成 gesture 的 withSpring completion callback fire setIsOpen，spring
+   * 真正完成（值到位 + 静止）才更新 state，re-render 发生在动画已经结束的不可见时间点。
+   * open() / close() 程序式调用仍然直接同步 setIsOpen（那条路径还没动画启动，没卡顿风险）。 */
 
   /** 左缘开抽屉手势：仅 isOpen=false 时挂载 */
   const openGesture = useMemo(
@@ -231,16 +224,51 @@ export function DrawerShell() {
       Gesture.Pan()
         .activeOffsetX(PAN_ACTIVE_OFFSET_X)
         .failOffsetY([-PAN_FAIL_OFFSET_Y, PAN_FAIL_OFFSET_Y])
+        .onBegin(() => {
+          'worklet';
+          openHapticFired.value = false;
+        })
         .onUpdate((e) => {
           'worklet';
           const t = Math.max(0, e.translationX);
           progress.value = Math.min(1, t / maxTranslateX);
+          /* 跟 onEnd 完全一致的 commit 预测：translation 过线 OR velocity 过线 —— 慢扫够远会
+             触发，快速 flick 远没拖到 translation 阈值靠速度也会触发。haptic 一次性，告诉用户
+             「此刻松手就成」（确认反馈，不是事件回响）。 */
+          if (
+            !openHapticFired.value &&
+            (e.translationX > SWIPE_THRESHOLD || e.velocityX > SWIPE_VELOCITY_THRESHOLD)
+          ) {
+            openHapticFired.value = true;
+            runOnJS(triggerDrawerHaptic)();
+          }
         })
         .onEnd((e) => {
           'worklet';
-          const opening = e.translationX > SWIPE_THRESHOLD || e.velocityX > SWIPE_VELOCITY_THRESHOLD;
-          progress.value = withSpring(opening ? 1 : 0, SPRING_CONFIG);
-          runOnJS(setIsOpen)(opening);
+          /* commit 判定用 sticky haptic flag —— onUpdate 一旦提示「松手就成」就锁定 commit,
+             不允许 user 在「过线 + 减速 + 退一点」之后 release 不 commit 的「haptic 撒谎」。
+             兜底：如果 haptic 没 fire 过（gesture 极短未走完 onUpdate），看 release 时的
+             translation 或 velocity 也行。 */
+          const opening =
+            openHapticFired.value ||
+            e.translationX > SWIPE_THRESHOLD ||
+            e.velocityX > SWIPE_VELOCITY_THRESHOLD;
+          /* 传 velocity 让 spring 继承手势离开瞬间的速度，避免 spring 从 0 开始加速的
+             「先停一下再弹」感。velocityX(pt/s) ÷ maxTranslateX 换成 progress/s。
+             completion callback 触发 setIsOpen：动画真正完成（值到位 + 静止）才更新 React
+             state → re-render 发生在动画已结束的不可见时间点，杜绝末端卡顿。 */
+          progress.value = withSpring(
+            opening ? 1 : 0,
+            {
+              ...SPRING_CONFIG,
+              velocity: e.velocityX / maxTranslateX,
+            },
+            (finished) => {
+              'worklet';
+              if (finished) runOnJS(setIsOpen)(opening);
+            }
+          );
+          /* haptic 已在 onUpdate 跨阈值时给过（「松手就成」的预反馈），release 时不再震。 */
         })
         .onFinalize((_e, success) => {
           'worklet';
@@ -252,7 +280,7 @@ export function DrawerShell() {
           if (progress.value > 0 && progress.value < 1) {
             const opening = progress.value > 0.5;
             progress.value = withSpring(opening ? 1 : 0, SPRING_CONFIG);
-            runOnJS(setIsOpen)(opening);
+            // setIsOpen 由 useAnimatedReaction 在 progress 跨阈值时自动同步
           }
         }),
     [maxTranslateX, progress]
@@ -264,16 +292,43 @@ export function DrawerShell() {
       Gesture.Pan()
         .activeOffsetX(-PAN_ACTIVE_OFFSET_X)
         .failOffsetY([-PAN_FAIL_OFFSET_Y, PAN_FAIL_OFFSET_Y])
+        .onBegin(() => {
+          'worklet';
+          closeHapticFired.value = false;
+        })
         .onUpdate((e) => {
           'worklet';
           const t = e.translationX;
           progress.value = Math.max(0, Math.min(1, 1 + t / maxTranslateX));
+          // 同 openGesture：translation 或 velocity 任一过 commit 阈值 → 一次性 haptic
+          if (
+            !closeHapticFired.value &&
+            (e.translationX < -SWIPE_THRESHOLD || e.velocityX < -SWIPE_VELOCITY_THRESHOLD)
+          ) {
+            closeHapticFired.value = true;
+            runOnJS(triggerDrawerHaptic)();
+          }
         })
         .onEnd((e) => {
           'worklet';
-          const closing = e.translationX < -SWIPE_THRESHOLD || e.velocityX < -SWIPE_VELOCITY_THRESHOLD;
-          progress.value = withSpring(closing ? 0 : 1, SPRING_CONFIG);
-          runOnJS(setIsOpen)(!closing);
+          // 同 openGesture：用 sticky haptic flag 作为 commit 信号，避免「震过又没关」
+          const closing =
+            closeHapticFired.value ||
+            e.translationX < -SWIPE_THRESHOLD ||
+            e.velocityX < -SWIPE_VELOCITY_THRESHOLD;
+          /* 同 openGesture：传 velocity 继承手势速度 + completion callback 触发 setIsOpen，
+             re-render 发生在动画结束后，避免末端卡顿。haptic 已在 onUpdate 给过不重复。 */
+          progress.value = withSpring(
+            closing ? 0 : 1,
+            {
+              ...SPRING_CONFIG,
+              velocity: e.velocityX / maxTranslateX,
+            },
+            (finished) => {
+              'worklet';
+              if (finished) runOnJS(setIsOpen)(!closing);
+            }
+          );
         })
         .onFinalize((_e, success) => {
           'worklet';
@@ -282,7 +337,7 @@ export function DrawerShell() {
           if (progress.value > 0 && progress.value < 1) {
             const opening = progress.value > 0.5;
             progress.value = withSpring(opening ? 1 : 0, SPRING_CONFIG);
-            runOnJS(setIsOpen)(opening);
+            // setIsOpen 由 useAnimatedReaction 在 progress 跨阈值时自动同步
           }
         }),
     [maxTranslateX, progress]
@@ -335,6 +390,17 @@ export function DrawerShell() {
   const animatedDrawerDimStyle = useAnimatedStyle(() => ({
     opacity: (1 - progress.value) * DRAWER_DIM_AT_CLOSED,
   }));
+
+  /* gesture wrapper pointerEvents 在 UI 线程跟 progress 切换 —— 不走 React state，避免「等
+   * setIsOpen → React re-render → pointerEvents 更新」的链条。progress 跨 0.5 当作 commit
+   * 临界：抽屉过半开 → close 手势激活；抽屉过半关 → open 手势激活。快速 open/close 之间
+   * 不需要等动画完成 + state 更新就能接到下一次 gesture。 */
+  const closeGestureWrapperProps = useAnimatedProps(
+    () => ({ pointerEvents: progress.value > 0.5 ? ('auto' as const) : ('none' as const) }),
+  );
+  const openGestureWrapperProps = useAnimatedProps(
+    () => ({ pointerEvents: progress.value < 0.5 ? ('box-only' as const) : ('none' as const) }),
+  );
 
   /** 拼装 DrawerHandle */
   const handle = useMemo<DrawerHandle>(
@@ -423,15 +489,18 @@ export function DrawerShell() {
           >
             {activeElement}
 
-            {/* 透明手势捕获层：isOpen 时接管点击关 + 左滑关；不做任何压暗效果 */}
-            {isOpen ? (
-              <GestureDetector gesture={closeGesture}>
-                <View
-                  style={StyleSheet.absoluteFill}
-                  onTouchEnd={close}
-                />
-              </GestureDetector>
-            ) : null}
+            {/* 透明手势捕获层：抽屉开时接管点击关 + 左滑关。
+             *  pointerEvents 用 useAnimatedProps 跟 progress.value 在 UI 线程切，progress > 0.5
+             *  即激活——不等 React setIsOpen，rapid open/close 之间能立即接下一个 gesture。
+             *  GestureDetector 持续 attached 避免 native gesture recognizer 重建。
+             *  onTouchEnd 始终绑 close —— pointerEvents='none' 时 touch 不会到，不会误触。 */}
+            <GestureDetector gesture={closeGesture}>
+              <Animated.View
+                style={StyleSheet.absoluteFill}
+                animatedProps={closeGestureWrapperProps}
+                onTouchEnd={close}
+              />
+            </GestureDetector>
           </Animated.View>
         </Animated.View>
 
@@ -441,14 +510,17 @@ export function DrawerShell() {
          *    省掉这条 strip 跟 SystemGestureExclusionView，避免 strip 跟其它点击
          *    区域抢手势（曾经盖过 HamburgerButton 触发"点不动"那个 bug）；
          *    代价是 Android 失去 drag-to-peek 的跟手反馈，按下放手才弹开。 */}
-        {!isOpen && Platform.OS === 'ios' ? (
+        {Platform.OS === 'ios' ? (
           <GestureDetector gesture={openGesture}>
-            <View
+            <Animated.View
               style={[
                 styles.leftEdge,
                 { width: LEFT_EDGE_STRIP_WIDTH },
               ]}
-              pointerEvents="box-only"
+              /* pointerEvents 用 useAnimatedProps 跟 progress.value 在 UI 线程切：progress < 0.5
+               * 即激活（box-only），过半就让位给 closeGesture。GestureDetector 持续 attached
+               * 避免 isOpen 切换时 native gesture recognizer 重建。 */
+              animatedProps={openGestureWrapperProps}
               collapsable={false}
             />
           </GestureDetector>
