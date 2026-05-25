@@ -43,6 +43,9 @@ static const CGFloat kReleaseBounce = 0.35;
   NSString *_nativeTitleColorHex;
   // 当前 spinner 状态
   BOOL _showsActivityIndicator;
+  // 当前 glass material tint + prominence（控制按钮 base color / 实色感）
+  NSString *_glassTintColorHex;
+  BOOL _glassProminent;
   // iOS < 26 legacy 路径
   BOOL _pressing;
   CGFloat _pressScale;
@@ -71,14 +74,24 @@ static const CGFloat kReleaseBounce = 0.35;
        一个 callsite (e.g. TodayScreen Fab 没 transform) 复用时不会主动清，导致 translateY
        串台到下个屏。 */
     self.layer.transform = CATransform3DIdentity;
-    // SF Symbol image / title / spinner / tint 也要清，下个用例可能完全不同
-    UIButtonConfiguration *cfg = _glassButton.configuration;
-    cfg.image = nil;
-    cfg.title = nil;
-    cfg.attributedTitle = nil;
-    cfg.showsActivityIndicator = NO;
-    cfg.baseForegroundColor = nil;
-    _glassButton.configuration = cfg;
+    /* 完整重建 cfg 回 regular glassButtonConfiguration —— 不能只清字段，因为上次用例如果是
+       prominentGlassButtonConfiguration，cfg 类型本身就跟 ivar reset 后的 (_glassProminent=NO)
+       不一致；后续 updateProps 里 applyGlassTint 的 diff 检查可能错判 "config 类型没变"，导致
+       prominent cfg 残留 + 下次 mount 行为错乱 → 触发 crash。每次回收都重建 cfg 干净起步。 */
+    if (@available(iOS 26.0, *)) {
+      UIButtonConfiguration *cfg = [UIButtonConfiguration glassButtonConfiguration];
+      cfg.contentInsets = NSDirectionalEdgeInsetsZero;
+      cfg.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+      cfg.image = nil;
+      cfg.title = nil;
+      cfg.attributedTitle = nil;
+      cfg.baseBackgroundColor = nil;
+      cfg.baseForegroundColor = nil;
+      cfg.showsActivityIndicator = NO;
+      _glassButton.configuration = cfg;
+    }
+    _glassTintColorHex = nil;
+    _glassProminent = NO;
   } else {
     self.layer.transform = CATransform3DIdentity;
     _pressing = NO;
@@ -110,6 +123,7 @@ static const CGFloat kReleaseBounce = 0.35;
       /* 把 configuration 的内置 content padding 抹零——React 这边自己控制布局，glass
          material 是纯背景，不需要给 image/title 留 padding。 */
       cfg.contentInsets = NSDirectionalEdgeInsetsZero;
+      cfg.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
       /* 显式抹掉 configuration 可能附带的 image/title/tint 填充。glass material 只做
          透明玻璃背景，所有可视内容来自 React 子 view。否则 configuration 可能用默认
          label color 画一个深色 container 出来，跟 React 的 icon 叠出"两个圈"的错觉。 */
@@ -188,6 +202,13 @@ static const CGFloat kReleaseBounce = 0.35;
       [self applyShowsActivityIndicator:newViewProps.showsActivityIndicator];
     }
   }
+  if (oldViewProps.glassTintColorHex != newViewProps.glassTintColorHex ||
+      oldViewProps.glassProminent != newViewProps.glassProminent) {
+    if (_glassButton) {
+      [self applyGlassTint:RCTNSStringFromString(newViewProps.glassTintColorHex)
+                 prominent:newViewProps.glassProminent];
+    }
+  }
 
   [super updateProps:props oldProps:oldProps];
 
@@ -225,6 +246,22 @@ static const CGFloat kReleaseBounce = 0.35;
     [self bringSubviewToFront:childComponentView];
     childComponentView.userInteractionEnabled = NO;
   }
+}
+
+/* mountChildComponentView 在 glass 路径下调 bringSubviewToFront 把 child 推到 _glassButton
+ * 之上，**破坏了 Fabric 跟踪的 (index → child) 对应关系**。super.unmountChildComponentView
+ * 会断言 `self.currentContainerView.subviews[index] == child`，已经 reorder 必崩。
+ * 这里 glass 路径直接 removeFromSuperview 跳过 super 的 assert；child 仍然是 self 的 subview，
+ * 移除就是真正的卸载、Fabric 自己之后的 reconcile 也正确。
+ * 之前 Fab/HeaderCircleButton 用 iosSfSymbol 走 native title 路径 shouldRenderChildren=false,
+ * 根本没 React child 被 mount，所以没暴露这个 bug。folder tab 用 Text children 才触发。 */
+- (void)unmountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView
+                            index:(NSInteger)index {
+  if (_glassButton && childComponentView.superview == self) {
+    [childComponentView removeFromSuperview];
+    return;
+  }
+  [super unmountChildComponentView:childComponentView index:index];
 }
 
 // MARK: - Touch / event handling (glass path)
@@ -484,6 +521,57 @@ static UIColor *_bb_uiColorFromHex(NSString *hex) {
   UIButtonConfiguration *cfg = _glassButton.configuration;
   cfg.showsActivityIndicator = shows;
   _glassButton.configuration = cfg;
+}
+
+/* 切 glass 材质的着色 + prominent/regular 基础 config。
+ *
+ * 行为：
+ *   - glassButtonConfiguration  (prominent=NO)：半透明玻璃，baseBackgroundColor 给玻璃淡淡 tint。
+ *   - prominentGlassButtonConfiguration (prominent=YES)：更"实"的有色块，baseBackgroundColor
+ *     是主体颜色（类似 Apple 自家 primary action 按钮）。
+ *   - tintHex 为空：不上色，按对应 config 的默认（透明 / 系统色）。
+ *
+ * 切换 base config 会**整个替换** UIButtonConfiguration，所以这里要把已经 apply 过的 sfSymbol /
+ * title / spinner / colors 全部从 ivar 重新写回新 config，否则切完之后这些 native content
+ * 会丢。 */
+- (void)applyGlassTint:(NSString *)tintHex prominent:(BOOL)prominent {
+  /* 把 nil / "" 当同一个状态比较（recycle 后 ivar 是 nil，但 prop 默认是 ""）。 */
+  NSString *normNew = tintHex ?: @"";
+  NSString *normCur = _glassTintColorHex ?: @"";
+  if ([normCur isEqualToString:normNew] && _glassProminent == prominent) return;
+  _glassTintColorHex = [normNew copy];
+  _glassProminent = prominent;
+
+  if (!_glassButton) return;
+  if (@available(iOS 26.0, *)) {
+    UIButtonConfiguration *cfg = prominent
+        ? [UIButtonConfiguration prominentGlassButtonConfiguration]
+        : [UIButtonConfiguration glassButtonConfiguration];
+    cfg.contentInsets = NSDirectionalEdgeInsetsZero;
+    /* 强制 capsule cornerStyle：glass material（特别是 prominent variant）默认会用某种
+       动态 / 较小的 cornerStyle，渲染出来的可视玻璃形状比 button bounds 小 → 「选中 tab
+       看着比未选中的还矮」就是这个原因。capsule 让 glass material 跟随 bounds 走两端
+       半圆，跟 React 那侧 borderRadius:18 视觉一致。Fab/HeaderCircle (width=height) 时
+       capsule 等价于圆形也不影响。 */
+    cfg.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+    /* tint：上到 baseBackgroundColor，prominent 模式下 = 主体色，regular 模式下 = 玻璃 tint */
+    UIColor *bgColor = _bb_uiColorFromHex(tintHex);
+    cfg.baseBackgroundColor = bgColor;
+    /* 把之前 apply 过的 image / title / spinner / foreground tint 全部从 ivar 写回新 config —— 否则
+       切 config 会丢这些 native content。 */
+    if (_sfSymbolName.length > 0) {
+      CGFloat sz = _sfSymbolPointSize > 0 ? _sfSymbolPointSize : 22;
+      UIImageSymbolConfiguration *symCfg =
+          [UIImageSymbolConfiguration configurationWithPointSize:sz];
+      cfg.image = [UIImage systemImageNamed:_sfSymbolName withConfiguration:symCfg];
+    }
+    if (_nativeTitle.length > 0) cfg.title = _nativeTitle;
+    UIColor *fg = _bb_uiColorFromHex(
+        _sfSymbolColorHex.length > 0 ? _sfSymbolColorHex : _nativeTitleColorHex);
+    cfg.baseForegroundColor = fg;
+    cfg.showsActivityIndicator = _showsActivityIndicator;
+    _glassButton.configuration = cfg;
+  }
 }
 
 // MARK: - Hit testing (legacy path only)

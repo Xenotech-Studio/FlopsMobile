@@ -22,6 +22,9 @@ const COMPOSER_META_ROW_PADDING_RIGHT = 32;
  * ============================================================ */
 /** 主胶囊高度 = 顶栏圆钮直径，全局视觉锚点。改这个值会带动 + 内嵌、padding 等。 */
 const COMPOSER_PILL_SIZE = HEADER_CIRCLE_BTN_SIZE + 0;
+/** Card 圆角 = 半个胶囊高度（short 模式整体是 capsule、tall 模式上下两端也是相同半径）。
+ *  iOS 26 BouncyGlassCard 的 cornerRadius prop 用这个值，跟 short/tall View 的 borderRadius 一致。 */
+export const COMPOSER_CARD_RADIUS = COMPOSER_PILL_SIZE / 2;
 /** 内嵌 + / ⏹ 圆钮尺寸 */
 const COMPOSER_PLUS_BTN_SIZE = 32;
 /** + center 到 card 上 / 下 / 左 三边的距离 = COMPOSER_PILL_SIZE / 2；
@@ -861,8 +864,6 @@ export function createChatStyles(c: AppColors) {
     borderRadius: COMPOSER_PILL_SIZE / 2,
     marginHorizontal: COMPOSER_ROW_PADDING_H,
     marginTop: 12,
-    /** 跟 short 同 marginBottom：保证 short ↔ tall 切换时卡片底边线 y 完全不变。
-     *  绝对定位的 + 按钮 / chips meta row 都跟卡片底对齐，所以也跟着不动。 */
     marginBottom: 18,
     paddingTop: COMPOSER_TALL_PAD_TOP,
     paddingBottom: COMPOSER_TALL_PAD_BOTTOM,
@@ -883,6 +884,29 @@ export function createChatStyles(c: AppColors) {
    *  adapter 跨 short/tall 切换时 React 节点位置一致 — 不卸载、firstResponder 不丢。
    *  Short：单行 flex row，左侧 paddingLeft 给绝对 + 让位（+ 是 card 的 absolute child）。
    *  Tall：column，输入填满宽度；底部 paddingBottom 给绝对 + 让位。 */
+  /** iOS 26 Liquid Glass 路径下的 short / tall card 样式：去掉 backgroundColor + shadow + border
+   *  —— 玻璃材质 + 系统折光由 BouncyGlassCard 内部 UIVisualEffectView 提供，cornerRadius 通过 prop
+   *  传给 native。布局相关的 padding / margin / minHeight / flex direction 全部保留。 */
+  composerCardShortGlass: {
+    position: 'relative',
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: COMPOSER_PILL_SIZE,
+    marginHorizontal: COMPOSER_ROW_PADDING_H,
+    marginTop: 12,
+    marginBottom: 18,
+    paddingHorizontal: COMPOSER_CARD_PADDING_H,
+  },
+  composerCardTallGlass: {
+    position: 'relative',
+    flexDirection: 'column',
+    marginHorizontal: COMPOSER_ROW_PADDING_H,
+    marginTop: 12,
+    marginBottom: 18,
+    paddingTop: COMPOSER_TALL_PAD_TOP,
+    paddingBottom: COMPOSER_TALL_PAD_BOTTOM,
+    paddingHorizontal: COMPOSER_CARD_PADDING_H,
+  },
   composerInputAreaShort: {
     flexDirection: 'row',
     alignItems: 'center',

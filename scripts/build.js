@@ -6,6 +6,8 @@
  * - yarn build android apk           -> android apk
  * - yarn build android aab           -> android aab
  * - yarn build android upload        -> android apk + 上传 Flops 后端
+ * - yarn build android testinstall   -> assembleReleaseDev (com.flopsmobile.dev) + adb 装到所有连接设备
+ * - yarn build android testinstall real -> 同上，但过滤掉 emulator，只装到实机
  * - yarn build ios                   -> ios ipa (development export，sideload 自用)
  * - yarn build ios ipa               -> 同上
  * - yarn build ios testflight        -> ios ipa (app-store export) + 上传 App Store Connect → TestFlight
@@ -76,21 +78,33 @@ function normalizeArtifact(token) {
 
 function parseArgs(argv) {
   // Defaults: android + apk. 末尾可加：
-  // - upload     -> android 上传 Flops 后端
-  // - testflight -> iOS 上传 App Store Connect (TestFlight)
+  // - upload                -> android 上传 Flops 后端
+  // - testflight            -> iOS 上传 App Store Connect (TestFlight)
+  // - testinstall [real]    -> android assembleReleaseDev + adb install 到所有/仅实机
   let platform = 'android';
   let artifact = 'apk';
   let doUpload = false;
   let target = null;
+  let testinstallReal = false;
   let index = 0;
 
-  const last = argv[argv.length - 1];
-  if (last === 'upload') {
-    doUpload = true;
+  // testinstall 可能带 real 修饰：argv = [...prefix, 'testinstall', 'real']
+  if (argv[argv.length - 1] === 'real' && argv[argv.length - 2] === 'testinstall') {
+    target = 'testinstall';
+    testinstallReal = true;
+    argv = argv.slice(0, -2);
+  } else if (argv[argv.length - 1] === 'testinstall') {
+    target = 'testinstall';
     argv = argv.slice(0, -1);
-  } else if (last === 'testflight') {
-    target = 'testflight';
-    argv = argv.slice(0, -1);
+  } else {
+    const last = argv[argv.length - 1];
+    if (last === 'upload') {
+      doUpload = true;
+      argv = argv.slice(0, -1);
+    } else if (last === 'testflight') {
+      target = 'testflight';
+      argv = argv.slice(0, -1);
+    }
   }
 
   const maybePlatform = normalizePlatform(argv[0]);
@@ -136,7 +150,11 @@ function parseArgs(argv) {
     fail('testflight 仅支持 yarn build ios testflight');
   }
 
-  return { platform, artifact, doUpload, target };
+  if (target === 'testinstall' && platform !== 'android') {
+    fail('testinstall 仅支持 yarn build android testinstall [real]');
+  }
+
+  return { platform, artifact, doUpload, target, testinstallReal };
 }
 
 function runAndroidBuild(artifact) {
@@ -202,6 +220,100 @@ function runAndroidBuild(artifact) {
     return copied;
   }
   process.exit(1);
+}
+
+/**
+ * 编译 assembleReleaseDev → APK 装到所有连接的 adb 设备（real=true 时过滤掉 emulator）。
+ * - applicationId = com.flopsmobile.dev（跟 `yarn dev android` 同名，不会覆盖商店版 com.flopsmobile）
+ * - 走 release 优化（minify + JS bundled）所以能脱机跑（不依赖 Metro）
+ * - debug signing（debug.keystore），不需要正式签名密码
+ */
+function runAndroidTestInstall(realOnly) {
+  const androidDir = path.resolve(__dirname, '..', 'android');
+  const projectRoot = path.resolve(__dirname, '..');
+  const gradlew = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
+
+  console.log(`[build] platform=android`);
+  console.log(`[build] task=assembleReleaseDev (applicationId=com.flopsmobile.dev)`);
+  console.log(`[build] testinstall realOnly=${realOnly}`);
+
+  // releaseDev 用 debug.keystore（gradle 里已经配好 signingConfig signingConfigs.debug），
+  // 不需要 -Pandroid.injected.signing.* 系列参数。
+  const result = spawnSync(gradlew, ['assembleReleaseDev'], {
+    cwd: androidDir,
+    stdio: 'inherit',
+    shell: true,
+  });
+  if (typeof result.status !== 'number' || result.status !== 0) {
+    fail('gradle assembleReleaseDev 失败');
+  }
+
+  const outputDir = path.join(
+    androidDir,
+    'app',
+    'build',
+    'outputs',
+    'apk',
+    'releaseDev'
+  );
+  const apk = findLatestFileByExt(outputDir, '.apk');
+  if (!apk) {
+    fail(`构建成功但未找到 APK 产物：${outputDir}`);
+  }
+  const version = getPackageVersion(projectRoot);
+  const targetName = `FlopsMobile-${version}-testinstall.apk`;
+  const copied = copyArtifactToBuildRoot(projectRoot, apk, targetName);
+  console.log(`[build] APK: ${apk}`);
+  console.log(`[build] 已复制到: ${copied}`);
+
+  // 找设备
+  const adbList = spawnSync('adb', ['devices', '-l'], { encoding: 'utf8' });
+  if (adbList.status !== 0) {
+    fail(`adb devices 失败：${adbList.stderr || adbList.stdout}`);
+  }
+  /* `adb devices -l` 输出形如：
+   *   List of devices attached
+   *   emulator-5554   device product:sdk_gphone64_arm64 model:sdk_gphone64_arm64 ...
+   *   2B141FDH200xxx  device usb:1-3 product:NX669J model:Nubia_Z40_Pro device:...
+   *   192.168.1.50:5555  device  product:... (无线连接的实机也会带 ":")
+   * 实机判定：device id 不以 "emulator-" 开头。无线设备 (ip:port) 算实机。 */
+  const lines = adbList.stdout.split('\n').slice(1);
+  const devices = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const [id, status] = trimmed.split(/\s+/);
+    if (!id || status !== 'device') continue;
+    const isEmulator = id.startsWith('emulator-');
+    if (realOnly && isEmulator) continue;
+    devices.push({ id, isEmulator });
+  }
+
+  if (devices.length === 0) {
+    fail(
+      realOnly
+        ? '没找到任何 adb 实机（emulator 已被 real 过滤掉）'
+        : '没找到任何 adb 设备。检查 `adb devices` 输出。'
+    );
+  }
+
+  console.log(`[build] 目标设备 ${devices.length} 台：${devices.map((d) => d.id).join(', ')}`);
+  let failed = 0;
+  for (const dev of devices) {
+    console.log(`[build] adb -s ${dev.id} install -r ${copied}`);
+    const installRes = spawnSync('adb', ['-s', dev.id, 'install', '-r', copied], {
+      stdio: 'inherit',
+    });
+    if (installRes.status !== 0) {
+      console.error(`[build] 设备 ${dev.id} 安装失败 (code ${installRes.status})`);
+      failed += 1;
+    }
+  }
+  if (failed > 0) {
+    fail(`${failed}/${devices.length} 台设备安装失败`);
+  }
+  console.log(`[build] testinstall 完成：${devices.length} 台设备安装成功`);
+  return copied;
 }
 
 function runCommand(command, args, cwd) {
@@ -325,6 +437,37 @@ function runIosBuild(artifact, target) {
     });
   } catch (_) {
     // 失败也只是 warn 不阻断
+  }
+
+  /* 如果 React.xcframework 模拟器 slice 是空的（上次 build 被 RNDeps variant swap 切空了
+     没复原），自动 pod install 修复——否则 build 报 `React.xcframework/...: No such file
+     or directory` 直接挂。详见 run-app.js 同名函数。 */
+  try {
+    const sliceDir = path.join(
+      iosDir,
+      'Pods',
+      'React-Core-prebuilt',
+      'React.xcframework',
+      'ios-arm64_x86_64-simulator',
+    );
+    let needsRepair = false;
+    if (!fs.existsSync(sliceDir)) {
+      needsRepair = true;
+    } else {
+      const entries = fs.readdirSync(sliceDir);
+      if (entries.length === 0) needsRepair = true;
+    }
+    if (needsRepair) {
+      console.log(
+        '[build] React.xcframework 模拟器 slice 为空，自动 pod install 修复…'
+      );
+      const podResult = spawnSync('pod', ['install'], { cwd: iosDir, stdio: 'inherit' });
+      if (podResult.status !== 0) {
+        fail('pod install 失败。请手动 `cd ios && pod install` 后重试。');
+      }
+    }
+  } catch (_) {
+    // 失败 warn 不阻断；下面 xcodebuild 自己会报具体错
   }
 
   /* Podfile.lock 比上次 build 输出新 = pod install 之后没成功 build 过 → nuke DerivedData
@@ -470,7 +613,9 @@ function runIosBuild(artifact, target) {
   return { ipaPath: copied, buildNumber };
 }
 
-const { platform, artifact, doUpload, target } = parseArgs(process.argv.slice(2));
+const { platform, artifact, doUpload, target, testinstallReal } = parseArgs(
+  process.argv.slice(2)
+);
 
 if (platform === 'ios') {
   const result = runIosBuild(artifact, target);
@@ -485,6 +630,9 @@ if (platform === 'ios') {
   } else {
     process.exit(0);
   }
+} else if (target === 'testinstall') {
+  runAndroidTestInstall(testinstallReal);
+  process.exit(0);
 } else {
   const builtPath = runAndroidBuild(artifact);
   if (doUpload && builtPath) {

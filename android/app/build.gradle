@@ -108,6 +108,18 @@ android {
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
+        // releaseDev: release 的 minify + JS bundled（脱机能跑），但带 .dev applicationIdSuffix —— 包名跟
+        // `yarn dev android` 同名（com.flopsmobile.dev），不会覆盖商店版。给 `yarn build android testinstall`
+        // 用，方便 QA / 跨机验证 release 视觉但不干扰正式版安装。
+        releaseDev {
+            initWith release
+            applicationIdSuffix ".dev"
+            matchingFallbacks = ['release']
+            signingConfig signingConfigs.debug
+            // RN Gradle plugin 只给 debug / release 自动注入 usesCleartextTraffic placeholder，
+            // 自定义 buildType 必须手动补。"true" 跟 debug 一致（方便实机连本地 HTTP 服务做 QA）。
+            manifestPlaceholders = [usesCleartextTraffic: "true"]
+        }
     }
 }
 

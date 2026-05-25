@@ -6,6 +6,7 @@ import {
   Pressable,
   StyleSheet,
   ScrollView,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Modal,
@@ -21,6 +22,11 @@ import {
   type ViewStyle,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
+import Reanimated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -74,6 +80,7 @@ import { MenuView } from '@react-native-menu/menu';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import { BouncyGlassCard } from '../components/BouncyGlassCard';
 import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import { chatInputOverlayGradient, toolPreviewFadeGradient } from '../theme/appColors';
 import { useAppTheme } from '../context/ThemeContext';
@@ -82,7 +89,7 @@ import {
   AnimatedCircleButton,
   IS_IOS_LIQUID_GLASS,
 } from '../components/AnimatedCircleButton';
-import { createChatStyles } from './chat/ChatScreen.styles';
+import { createChatStyles, COMPOSER_CARD_RADIUS } from './chat/ChatScreen.styles';
 import { ThinkingBlockView } from './chat/ThinkingBlockView';
 import { ComposerContextRing } from './chat/ComposerContextRing';
 import { HistoryLoadingOverlay } from './chat/HistoryLoadingOverlay';
@@ -304,6 +311,60 @@ export function ChatScreen({
   const bottomOverlayHeight = gradientStripHeight + inputRowHeight;
   /** 列表底部留白，让内容可滚入渐变下方 */
   const scrollBottomPadding = bottomOverlayHeight + 12;
+  /* 键盘高度跟踪 —— bottomOverlay 是 position:absolute, bottom:0，KAV behavior=padding 不能推动
+   * absolute children（absolute 是相对父容器外框定位，padding 不影响）。两个平台都得手动加 bottom。
+   * KAV 仍然留着帮 ScrollView (flex:1) 自动缩小、避免历史消息卡到键盘后面。
+   *
+   * 用 SharedValue + Keyboard.addListener + withTiming：iOS keyboardWillShow 跟键盘动画同步 fire
+   * （带 duration），withTiming 跟着 → 同步丝滑；Android 只有 keyboardDidShow（动画结束后才 fire）,
+   * withTiming 在结束后再做 ~250ms 平滑插值——有轻微延迟但不是瞬移。
+   * 之前用过 useAnimatedKeyboard 但在 RN 0.84 / 新架构下 iOS 闪退、Android 抖（WindowInsets 跟
+   * layout race），干脆换成 JS 监听 + Reanimated 插值。 */
+  const kbHeightShared = useSharedValue(0);
+  /* JS 端的键盘开/关 state：用来做条件渲染（隐藏 meta row）+ 静态 style 覆盖（composer card
+   * marginBottom 从 18 → 8）。SharedValue 在 UI 线程，JSX 条件不能直接读它。 */
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    /* 注意：跟 TodayScreen 不同，chat 这里不加 insets.bottom navBar 补偿——bottomOverlay 在
+     * scrollAndGradientWrap (flex:1) 内部，Android adjustResize 通过 flex 链让 wrapper 部分缩
+     * 小，等于自动补偿了 nav bar inset；再叠 +insets.bottom 会过度补偿，composer 离键盘太远。 */
+    const showSub = Keyboard.addListener(showEvt, (e) => {
+      const d = (e as { duration?: number }).duration ?? 250;
+      kbHeightShared.value = withTiming(e.endCoordinates.height, { duration: d });
+      setKeyboardOpen(true);
+    });
+    const hideSub = Keyboard.addListener(hideEvt, (e) => {
+      const d = (e as { duration?: number }).duration ?? 250;
+      kbHeightShared.value = withTiming(0, { duration: d });
+      setKeyboardOpen(false);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [kbHeightShared, insets.bottom]);
+  /* bottomOverlay 的 bottom 偏移：
+   * - iOS：完全由 KAV behavior=padding 通过 scrollAndGradientWrap (flex:1) 缩小自动上浮（base
+   *   = 0，无 manual offset）。任何 JS 侧 withTiming 都跟 iOS 原生键盘动画曲线不同步，会感
+   *   觉卡片瞬移得比键盘快/慢——纯 KAV 才能 100% 原生 sync。代价是 card 离键盘距离 = 静态
+   *   marginBottom: 18，不能像 Android 收到 12pt。
+   * - Android：KAV behavior=undefined，KAV 不动，必须 manual lift（base = h）+ 额外 -6 偏移
+   *   让 card 视觉离键盘 12pt（marginBottom 18 + 偏移 6 = 12）。 */
+  const kbBottomStyle = useAnimatedStyle(() => {
+    const h = kbHeightShared.value;
+    if (Platform.OS !== 'android') return { bottom: 0 };
+    const ratio = Math.min(h / 50, 1);
+    return { bottom: h - 6 * ratio };
+  });
+  /* Meta row 的淡出：opacity 跟键盘动画绑，键盘弹起 → 渐淡出消失。pointerEvents 由 keyboardOpen
+   * JS state 控制（瞬间切换 OK，因为不可见就不该接收 touch）。 */
+  const kbMetaRowStyle = useAnimatedStyle(() => {
+    const h = kbHeightShared.value;
+    const ratio = Math.min(h / 50, 1);
+    return { opacity: 1 - ratio };
+  });
   /** drawer 模式下用 props 覆盖；stack-push 模式下读 route.params */
   const params: ChatRouteParams | undefined = inDrawer
     ? {
@@ -2808,7 +2869,10 @@ export function ChatScreen({
 
       <KeyboardAvoidingView
         style={styles.keyboardView}
-        behavior={Platform.select({ ios: 'padding', android: 'height' })}
+        /* Android 不传 behavior：AndroidManifest 已设 windowSoftInputMode=adjustResize，系统会
+         *  自己 resize window；再叠 KAV "height" 会双重处理，关键盘时残留高度不归零，composer
+         *  漂上去。iOS 必须 padding（没 adjustResize 等价物）。 */
+        behavior={Platform.select({ ios: 'padding', android: undefined })}
         keyboardVerticalOffset={0}
       >
         {error ? (
@@ -2963,8 +3027,9 @@ export function ChatScreen({
             overlayStyle={styles.historyLoadingOverlay}
             spinnerColor={colors.textSecondary}
           />
-          {/* 底部整块贴屏底：渐变铺满整块并延伸到底，输入行叠在渐变底部，无单独白底；点渐变区（未点到输入/发送）可滚到底 */}
-          <View style={[styles.bottomOverlay, { height: bottomOverlayHeight }]}>
+          {/* 底部整块贴屏底：渐变铺满整块并延伸到底，输入行叠在渐变底部，无单独白底；点渐变区（未点到输入/发送）可滚到底。
+              用 Reanimated.View + kbBottomStyle 让 bottom 在键盘动画中逐帧跟随。 */}
+          <Reanimated.View style={[styles.bottomOverlay, { height: bottomOverlayHeight }, kbBottomStyle]}>
             <LinearGradient
               colors={chatInputOverlayGradient(colors)}
               locations={[0, 0.45, 0.7, 1]}
@@ -3152,42 +3217,75 @@ export function ChatScreen({
                     editable={!loading && !conversationHistoryLoading}
                   />
                 );
-                return (
+                /* short / tall card 的「外壳」抽出来：iOS 26 走 BouncyGlassCard（玻璃材质 +
+                 *  系统折光），其它平台走原来的 View（bg + shadow / border）。inner 是 short/tall
+                 *  共享的 input area + 绝对 + 按钮。interactive=false：composer 主要靠键盘 focus
+                 *  使用，不想 tap 时整个卡片被 system scale 一下打断输入流。 */
+                const innerCardContent = (
                   <>
                     <View
-                      style={composerTall ? styles.composerCardTall : styles.composerCardShort}
+                      style={
+                        composerTall
+                          ? styles.composerInputAreaTall
+                          : styles.composerInputAreaShort
+                      }
                       pointerEvents="box-none"
                     >
                       <View
-                        style={
-                          composerTall
-                            ? styles.composerInputAreaTall
-                            : styles.composerInputAreaShort
-                        }
+                        style={composerTall ? styles.composerInputTall : styles.composerInputShort}
                         pointerEvents="box-none"
                       >
-                        <View
-                          style={composerTall ? styles.composerInputTall : styles.composerInputShort}
-                          pointerEvents="box-none"
-                        >
-                          {adapter}
-                        </View>
+                        {adapter}
                       </View>
-                      {/* + 按钮：card 的 absolute child；bottom:10 left:8 在 short / tall 都一样 */}
-                      {renderPlusBtn}
                     </View>
-                    {/* 模型 / 助手 chips：永远在 card 外的绝对 meta row，short / tall 都贴底 6pt */}
+                    {/* + 按钮：card 的 absolute child；bottom:10 left:8 在 short / tall 都一样 */}
+                    {renderPlusBtn}
+                  </>
+                );
+                return (
+                  <>
+                    {/* composer card 直接渲染——不能用 Reanimated.View wrapper，会干扰内部
+                     * FlowDocSlateAdapter 的 autoHeight 测量（中文/换行时 card 不变高、文本叠层
+                     * 渲染）。card 上移到键盘上方的过渡靠 kbBottomStyle 在 bottomOverlay 整体
+                     * 下移 6pt 实现，card 的 marginBottom: 18 保持静态。 */}
+                    {IS_IOS_LIQUID_GLASS ? (
+                      <BouncyGlassCard
+                        style={
+                          composerTall
+                            ? styles.composerCardTallGlass
+                            : styles.composerCardShortGlass
+                        }
+                        cornerRadius={COMPOSER_CARD_RADIUS}
+                        interactive
+                      >
+                        {innerCardContent}
+                      </BouncyGlassCard>
+                    ) : (
+                      <View
+                        style={composerTall ? styles.composerCardTall : styles.composerCardShort}
+                        pointerEvents="box-none"
+                      >
+                        {innerCardContent}
+                      </View>
+                    )}
+                    {/* 模型 / 助手 chips：永远在 card 外的绝对 meta row。键盘弹起时由 kbMetaRowStyle
+                     * 平滑淡出（opacity 1→0），pointerEvents 由 keyboardOpen JS state 控制（不可见
+                     * 时不接收 touch）。原本 `&& !keyboardOpen ? ... : null` 的瞬间 unmount 会跟
+                     * composer marginBottom 切换一起造成抖动，所以这里改成 always-render + 透明度。 */}
                     {session ? (
-                      <View style={styles.composerMetaRowAbsolute}>
+                      <Reanimated.View
+                        style={[styles.composerMetaRowAbsolute, kbMetaRowStyle]}
+                        pointerEvents={keyboardOpen ? 'none' : 'auto'}
+                      >
                         <View style={styles.composerMetaPills}>{renderChips}</View>
                         {renderUsage}
-                      </View>
+                      </Reanimated.View>
                     ) : null}
                   </>
                 );
               })()}
             </View>
-          </View>
+          </Reanimated.View>
         </View>
       </KeyboardAvoidingView>
     </View>

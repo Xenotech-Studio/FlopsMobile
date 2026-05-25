@@ -63,7 +63,7 @@ import {
   LIST_TOP_EXTRA,
 } from '../theme/layout';
 import { TASK_FONT_SIZE_SMALL, TASK_FONT_SIZE_TITLE } from '../theme/typography';
-import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
+import { BlurHeaderBackground, BlurFooterBackground } from '../components/BlurHeaderBackground';
 import { TaskFlowChartView } from '../components/TaskFlowChartView';
 import { RemoteCollabPresenceBar } from '../components/RemoteCollabPresenceBar';
 import { ScreenErrorBoundary } from '../components/ScreenErrorBoundary';
@@ -511,6 +511,7 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
                       showsHorizontalScrollIndicator={false}
                       style={styles.folderTabsScroll}
                       contentContainerStyle={styles.folderTabsRow}
+                      contentInsetAdjustmentBehavior="never"
                     >
                       {[
                         { id: null as string | null, name: '默认' },
@@ -518,12 +519,21 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
                       ].map((item) => {
                         const active = activeFolderId === item.id;
                         const cnt = convCountByFolder.get(item.id) ?? 0;
+                        /* iOS 强制走 worklet 路径（iosForceWorklet）—— 跟 Android 同款 Reanimated
+                         * bounce，不走 iOS 26 glass material。这样：
+                         *   - bg 色完全自由（folderTabActive 的 c.primary / folderTab 的 surfaceMuted 浅灰）
+                         *   - 没玻璃材质固有的 drop shadow
+                         *   - React children 两个 Text 各自 fontSize / color / weight 都生效
+                         *   - 仍有 UI 线程 bouncy press 反馈
+                         * 之前试 native glass 走 iosNativeTitle 因为单一字符串单一样式没法实现
+                         * 「label 14pt + count 13pt 半透明」，干脆放弃 glass。glass 留给 Fab /
+                         * HeaderCircleButton 等真吃材质的按钮。 */
                         return (
-                          <TouchableOpacity
+                          <AnimatedCircleButton
                             key={item.id ?? '__default'}
                             style={[styles.folderTab, active && styles.folderTabActive]}
                             onPress={() => setActiveFolderId(item.id)}
-                            activeOpacity={0.7}
+                            iosForceWorklet
                           >
                             <Text
                               style={[styles.folderTabLabel, active && styles.folderTabLabelActive]}
@@ -536,13 +546,23 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
                             >
                               {cnt}
                             </Text>
-                          </TouchableOpacity>
+                          </AnimatedCircleButton>
                         );
                       })}
                     </ScrollView>
                   ) : null}
                   <ScrollView
+                    style={styles.convScrollOuter}
                     contentContainerStyle={styles.convScrollContent}
+                    /* 内容刚好够长触发滚动时 iOS 默认 contentInsetAdjustmentBehavior 会回调
+                     * 一次 inset 调整 → 触发整个 tabRoot layout pass → folder tabs 高度抖
+                     * 1-2pt（用户报告的「滚动触发上下抖动」）。设 never 关掉自动调整。
+                     * automaticallyAdjustsScrollIndicatorInsets 也关掉，避免 scroll indicator
+                     * 出现/消失时 iOS 再触发一次 inset 回调。
+                     * convScrollOuter 显式 flex:1 让 ScrollView 占固定空间，外层尺寸不随内容
+                     * 长短变化，从根上断掉「内容增减触发父 layout pass」的链路。 */
+                    contentInsetAdjustmentBehavior="never"
+                    automaticallyAdjustsScrollIndicatorInsets={false}
                     refreshControl={
                       <RefreshControl
                         refreshing={convLoading}
@@ -687,6 +707,34 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
           />
         </View>
       ) : null}
+
+      {/* 底栏背后的渐变 fade，跟 TodayScreen 同款 —— 滚动列表滚到 tab/FAB 下方时被柔化遮挡。
+          三个 knob 跟 TodayScreen 同语义可独立调：
+            FADE_BOTTOM_BELOW: fade 底端离屏底距离（0 = 贴屏底；正值往上推）
+            FADE_TOP_ABOVE: fade 顶端离屏底距离（值越大越上、渐变越长）
+            FADE_SOLID_HEIGHT: 底部纯实色块高度（覆盖 safe-area 防 home indicator 区显空） */}
+      {(() => {
+        const FADE_BOTTOM_BELOW = 0;
+        const FADE_TOP_ABOVE = Math.max(insets.bottom, 12) + 60 + 26;
+        const FADE_SOLID_HEIGHT = Math.max(insets.bottom, 38);
+        return (
+          <View
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: -FADE_BOTTOM_BELOW,
+              height: FADE_TOP_ABOVE + FADE_BOTTOM_BELOW,
+            }}
+            pointerEvents="none"
+          >
+            <BlurFooterBackground
+              bottomSolidHeight={FADE_SOLID_HEIGHT}
+              gradientBaseHex={colors.chatScreenBackground}
+            />
+          </View>
+        );
+      })()}
 
       {/* 底部 sticky：tab + FAB 单行并列。tab 拿 flex:1 横向铺满，FAB 紧贴右侧。
           iOS 26+ 走原生 UITabBar（icon 上 / title 下 stacked + Liquid Glass）；
@@ -977,6 +1025,9 @@ function createStyles(c: AppColors) {
     /** topBar.paddingHorizontal=16，HamburgerButton 是圆形 + 阴影，视觉左边沿大致
      *  在 x≈20 处（圆的左边沿 16 + 内边视觉权重）。列表 / 胶囊 tab 取同样的 20
      *  让两者左对齐；右 padding 也对齐右上角圆按钮的右边沿（对称）。 */
+    /** ScrollView 自身 flex:1 占固定空间 —— 外层尺寸跟内容长短无关，从根上断掉「内容增减
+     *  触发父 layout pass → 上面 folder tabs 行抖动」的链路。 */
+    convScrollOuter: { flex: 1 },
     convScrollContent: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 120 },
     convRow: {
       paddingVertical: 12,
@@ -987,8 +1038,11 @@ function createStyles(c: AppColors) {
     convRowText: { flex: 1, minWidth: 0, fontSize: 15, color: c.textPrimary, fontWeight: '500' },
     convRowMeta: { fontSize: 12, color: c.textMuted, marginTop: 2 },
     /** ScrollView 默认有 flexGrow:1（在 column 父里会把竖向余高吃掉），加 flexGrow:0
-     *  让它紧贴内容。不然 tab 行下方会出现一段空白。 */
-    folderTabsScroll: { flexGrow: 0 },
+     *  让它紧贴内容。不然 tab 行下方会出现一段空白。
+     *  显式 height:64 = folderTabsRow 的 paddingVertical(14)*2 + tab minHeight(36)。固定高度
+     *  避免下面 conv ScrollView 内容多少触发滚动状态变化时通过 layout pass 影响到 tabs 行
+     *  的测量结果（用户报告的「切换 folder/tab 后位置 1-2pt 漂移」）。 */
+    folderTabsScroll: { flexGrow: 0, height: 64 },
     /** 胶囊外形带 borderRadius:14，左侧弧度让视觉重心比 box 左沿更靠右一点。
      *  比 convScrollContent (20) 多 4dp 让视觉左沿跟下方对话行对齐。 */
     /** paddingVertical 14：胶囊行跟上面的圆形汉堡按钮纵向多让点呼吸。 */
@@ -1001,11 +1055,18 @@ function createStyles(c: AppColors) {
       gap: 6,
       paddingHorizontal: 14,
       paddingVertical: 8,
+      /* minHeight 强制所有 tab 同高 —— 不设的话 RN ScrollView horizontal + gap +
+       * alignItems:center 在某些 case 下会让奇/偶 position 的 tab 高度差 1-2pt（疑似文字
+       * ascender/descender 自然高度不同导致 alignSelf 算出不同），强制 minHeight 一致就稳。
+       * 36 = paddingVertical(8)*2 + fontSize(14) + 字体行高 ~1.4 余裕。 */
+      minHeight: 36,
       borderRadius: 18,
       backgroundColor: c.surfaceMuted,
     },
     folderTabActive: { backgroundColor: c.primary },
     folderTabLabel: { fontSize: 14, color: c.textPrimary, fontWeight: '500' },
+    /* active 文字 onPrimary（白），跟 folderTabActive 的 primary bg 对比清楚。
+     * iOS 走 iosForceWorklet 路径不用 glass，bg 也是 solid primary，所以跟 Android 一致即可。 */
     folderTabLabelActive: { color: c.onPrimary },
     folderTabCount: { fontSize: 13, color: c.textMuted },
     folderTabCountActive: { color: c.onPrimary, opacity: 0.85 },

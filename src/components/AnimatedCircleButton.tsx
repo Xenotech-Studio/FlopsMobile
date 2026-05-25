@@ -18,6 +18,7 @@ import React, { useCallback, useMemo } from 'react';
 import {
   Platform,
   StyleSheet,
+  View,
   type StyleProp,
   type ViewStyle,
   type NativeSyntheticEvent,
@@ -82,6 +83,22 @@ type Props = {
   /** iOS 26+ glass 路径下用 UIButton 内置 spinner（iOS 16+ API）取代 image/title。
    *  适合 "loading / submitting" 状态。spinner 也跟着 button 一起 scale。 */
   iosShowsSpinner?: boolean;
+  /** iOS 26+ glass 路径下给玻璃材质上色（"#RRGGBB" / "#AARRGGBB"）。空 = 默认无 tint
+   *  半透明玻璃。深色按钮（如选中 tab / primary action）传一个跟 UI 主色一致的 hex 即可。
+   *  跟 `iosGlassProminent` 配合：`true` 走 prominent (有实色块感)，`false` 走 regular (淡 tint 半透明)。
+   *  在 iOS < 26 / Android 上忽略。 */
+  iosGlassTintColor?: string;
+  /** iOS 26+ glass 路径下选 prominent vs regular。默认 false。
+   *  prominent 适合需要强烈视觉权重的「主操作 / 选中态」，regular 适合次要按钮。
+   *  iOS < 26 / Android 忽略。 */
+  iosGlassProminent?: boolean;
+  /** iOS 强制走 Reanimated worklet 路径（跟 Android 同款）—— bypass iOS 26 glass material。
+   *  适合不需要玻璃质感的次要按钮，需要：
+   *    - 完全自定义 bg 色（包括 solid 浅灰、纯黑等 glass 给不出来的色）
+   *    - 不要 glass material 固有的 drop shadow
+   *    - React children 自由 mixed-font / 多 Text 组合
+   *  仍有 UI 线程 bouncy press 反馈（withSpring on shared value），只是没玻璃材质。 */
+  iosForceWorklet?: boolean;
   /** 控制是否渲染 React children（iOS < 26 / Android fallback content）。默认 auto——
    *  当任何 ios native content prop（iosSfSymbol / iosNativeTitle / iosShowsSpinner）在
    *  iOS 26+ glass 路径上生效时，自动不渲染 children；其它情况渲染。
@@ -109,7 +126,11 @@ if (__DEV__) {
 }
 
 export function AnimatedCircleButton(props: Props) {
-  if (Platform.OS === 'ios') {
+  /* iosForceWorklet=true：iOS 也走 Reanimated worklet 路径（跟 Android 一致）—— 适合不需要
+   * 玻璃质感的次要按钮（如 folder tab），可自由控制纯 bg 色 / shadow / mixed-font children
+   * 而不被 iOS 26 glass material 的固有 drop shadow / 单一 title 限制。仍然有 native-feel
+   * bouncy（worklet 在 UI 线程跑）。 */
+  if (Platform.OS === 'ios' && !props.iosForceWorklet) {
     return <IosNativeBouncy {...props} />;
   }
   return <AndroidWorkletBouncy {...props} />;
@@ -153,6 +174,8 @@ function IosNativeBouncy({
   iosSfSymbol,
   iosNativeTitle,
   iosShowsSpinner,
+  iosGlassTintColor,
+  iosGlassProminent,
   childrenRendering = 'auto',
 }: Props) {
   const handleNativePress = useCallback(
@@ -185,17 +208,22 @@ function IosNativeBouncy({
     );
   }, [menuActions]);
   /* iOS 26+ glass 路径下 native content 三件套：SF Symbol image / native title / spinner。
-     任一存在时让 UIButton 自己画，JS children 默认不渲染（避免 native content 跟 React
-     overlay 叠加）。其它情况（iOS < 26 / Android）children 总是渲染。 */
+     任一存在时让 UIButton 自己画。
+     但 React children 我们**始终渲染**（除非 callsite 显式 childrenRendering='never'）——
+     原因：Yoga 用 children 测量 button 的 intrinsic size（width/height）。如果不渲染，
+     button 被压成最小 size（只剩 padding），native title 就被截断成 1-2 字。
+     iOS 26 有 native content 时给 children 套一个 opacity:0 wrapper，视觉隐藏但仍贡献
+     layout sizing。iOS<26 / Android 没 native content，children 完全可见（fallback 路径）。 */
   const hasNativeSymbol =
     IS_IOS_LIQUID_GLASS && !!iosSfSymbol && iosSfSymbol.name.length > 0;
   const hasNativeTitle =
     IS_IOS_LIQUID_GLASS && !!iosNativeTitle && iosNativeTitle.text.length > 0;
   const hasSpinner = IS_IOS_LIQUID_GLASS && !!iosShowsSpinner;
   const usingAnyNativeContent = hasNativeSymbol || hasNativeTitle || hasSpinner;
-  const shouldRenderChildren =
-    childrenRendering === 'always' ||
-    (childrenRendering === 'auto' && !usingAnyNativeContent);
+  const shouldRenderChildren = childrenRendering !== 'never';
+  /* 仅 iOS 26 + 有 native content 时把 children 套 opacity:0 wrapper —— layout 还在，视觉
+     消失，让 UIButton 的 native content 独占可见性。 */
+  const hideChildrenForNativeContent = IS_IOS_LIQUID_GLASS && usingAnyNativeContent;
   return (
     <BouncyButtonNative
       style={finalStyle}
@@ -208,10 +236,25 @@ function IosNativeBouncy({
       nativeTitle={hasNativeTitle ? iosNativeTitle!.text : ''}
       nativeTitleColorHex={hasNativeTitle ? (iosNativeTitle!.color ?? '') : ''}
       showsActivityIndicator={hasSpinner}
+      glassTintColorHex={IS_IOS_LIQUID_GLASS ? (iosGlassTintColor ?? '') : ''}
+      glassProminent={IS_IOS_LIQUID_GLASS ? !!iosGlassProminent : false}
       onBouncyPress={handleNativePress}
       onMenuAction={handleNativeMenuAction}
     >
-      {shouldRenderChildren ? children : null}
+      {shouldRenderChildren ? (
+        hideChildrenForNativeContent ? (
+          /* opacity:0 wrapper：layout 还在，视觉消失；pointerEvents=none 避免它截 touch。
+             用 absolute fill 让 wrapper 不挤占 native content 的空间（native title 在 UIButton
+             自己的 content layer，跟这层 wrapper 不在同一个 layout 流里）。等等——absolute
+             不参与父容器尺寸测量。所以反过来：不要 absolute，让 wrapper 正常 flex layout
+             撑出父容器宽高，让 Yoga 测出来；native content 在 UIButton 自己的可视层。 */
+          <View style={{ opacity: 0, flexDirection: 'row', alignItems: 'center', gap: 6 }} pointerEvents="none">
+            {children}
+          </View>
+        ) : (
+          children
+        )
+      ) : null}
     </BouncyButtonNative>
   );
 }

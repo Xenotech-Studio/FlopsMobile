@@ -99,6 +99,21 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
           }
         }
         emitContentChange()
+        /* RN Fabric / Yoga 的 view 高度是 JS explicit 给的（autoHeight 路径下 style.height），
+           Yoga 觉得"高度没变"就不调 onMeasure，那我们 post 的 maybeEmitContentSize 也不跑 ——
+           表现就是用户键入 2→3 行 text 实际换行了但 contentSize event 不报、card 不长。
+           这里强制对自身做一次 UNSPECIFIED-height measure 让 TextView 内部重建 Layout 反映
+           新行数，然后直接 emit。 */
+        post {
+          val w = measuredWidth
+          if (w > 0) {
+            measure(
+              MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY),
+              MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),
+            )
+          }
+          maybeEmitContentSize()
+        }
       }
     })
 
@@ -178,7 +193,11 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
 
   fun setCustomLineHeight(lineHeight: Float) {
     if (lineHeight > 0) {
-      setLineHeight(lineHeight.toInt())
+      /* JS 端 prop 单位是 dp（跟 iOS pt 对齐），TextView.setLineHeight() 要 px。3x 密度设备
+         直接传 22 就被当 22px = 远小于 16sp 字体的实际行高，多行渲染重叠堆栈，autoHeight
+         也跟着报小、卡片不变高。先 dp → px 再设。 */
+      val px = (lineHeight * resources.displayMetrics.density).toInt()
+      setLineHeight(px)
     }
   }
 

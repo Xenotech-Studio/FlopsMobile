@@ -24,6 +24,8 @@ import React, {
 import {
   ActivityIndicator,
   Alert,
+  Keyboard,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -36,13 +38,18 @@ import {
   View,
 } from 'react-native';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import DraggableFlatList from 'react-native-draggable-flatlist';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import { useSharedValue, runOnUI } from 'react-native-reanimated';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+  runOnUI,
+} from 'react-native-reanimated';
 import { useTask } from '../context/TaskContext';
 import { useSession } from '../context/SessionContext';
 import {
@@ -296,6 +303,82 @@ export function TodayScreen() {
       ac.abort();
     };
   }, [session]);
+
+  /* ---------- 键盘高度跟踪（绝对定位浮动控件手动避让） ----------
+   *  RN 的 position:absolute 子元素是相对父容器**外框**定位的，KeyboardAvoidingView 的
+   *  padding 只能推动 flex/relative 子元素，对 absolute children 无效。iOS 跟 Android 都得
+   *  手动加 bottom offset。KAV 仍然保留——帮 list 区域 (flex:1) 在键盘弹起时自动缩小，避免
+   *  列表内容显示在键盘后面。
+   *
+   *  之前用过 Reanimated 的 useAnimatedKeyboard，但在 RN 0.84 / 新架构下 iOS 会闪退、Android
+   *  也会抖（看着像 WindowInsets 跟 layout 有 race）。换成手动方案：Keyboard.addListener 拿事
+   *  件 → 写到 SharedValue (UI 线程读) → useAnimatedStyle 输出 bottom/paddingBottom。
+   *  iOS keyboardWillShow 跟键盘动画同步 fire（带 duration），withTiming 用相同时长 → 跟键盘
+   *  动画同步。Android 只有 keyboardDidShow（动画结束才 fire），withTiming 在动画结束后再做
+   *  ~250ms 平滑插值——不是瞬移，仍有轻微延迟。要彻底跟 Android 键盘同步需要 keyboard-controller
+   *  独立 lib（新 native pod）。 */
+  const kbHeightShared = useSharedValue(0);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    /* Android edge-to-edge 下 e.endCoordinates.height 不包含 nav bar inset（键盘 overlap nav bar
+     * 那部分的高度不报）→ 我们的 bottom offset 比实际键盘顶低 insets.bottom，搜索框被切掉一半。
+     * 加 insets.bottom 补回去。iOS 不需要这个补偿。 */
+    const navBarFix = Platform.OS === 'android' ? insets.bottom : 0;
+    const showSub = Keyboard.addListener(showEvt, (e) => {
+      const d = (e as { duration?: number }).duration ?? 250;
+      kbHeightShared.value = withTiming(e.endCoordinates.height + navBarFix, { duration: d });
+    });
+    const hideSub = Keyboard.addListener(hideEvt, (e) => {
+      const d = (e as { duration?: number }).duration ?? 250;
+      kbHeightShared.value = withTiming(0, { duration: d });
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [kbHeightShared, insets.bottom]);
+  /* iOS：bottom 永远 0、paddingBottom 永远 12。SafeAreaView edges=['bottom'] 给 kavInner 加
+   * insets.bottom 的 padding —— iOS 在键盘弹起时**自动报 insets.bottom = 0**（键盘 zone 算
+   * unsafe）→ SafeAreaView padding 自动消失 → kavInner 跟着 KAV 缩到 kb top → searchWrap
+   * (bottom:0) + paddingBottom 12 落到 kb 上方 12pt。无键盘时 SafeAreaView padding = 34
+   * → searchWrap 在 home indicator 上方。零 JS 动画，100% 跟 iOS 键盘原生 sync。
+   *
+   * Android：SafeAreaView 的 insets.bottom 不随键盘变（nav bar inset 固定），adjustResize 在
+   * absolute children 上不可靠，保留 manual offset (h+12) 兜底；paddingBottom 切 0。
+   */
+  const kbSearchWrapStyle = useAnimatedStyle(() => {
+    const h = kbHeightShared.value;
+    const safeBottom = Math.max(insets.bottom, 8);
+    if (Platform.OS !== 'android') {
+      /* iOS 调节钮：bottom 控制 searchWrap 相对 kavInner 底端的偏移。负值把搜索框拉到 safe-area
+       * 里（侵入 home indicator 区域）；正值往上推。Yoga 不允许负 padding（会裁成 0），所以用
+       * 负 bottom 才能"再往下"。
+       * paddingBottom 4 是 searchRow 内部底部留白，跟键盘弹起场景共用（有键盘时 SafeAreaView
+       * padding 自动消失、KAV 加 kbHeight padding，search 离键盘 4pt）。 */
+      return {
+        bottom: -8,
+        paddingBottom: 2,
+      };
+    }
+    return {
+      bottom: h > 0 ? h + 12 : 0,
+      paddingBottom: h > 0 ? 0 : safeBottom,
+    };
+  });
+  /* bottomFade 三个独立调节钮（iOS）：
+   *   FADE_BOTTOM_BELOW_KAV: fade 底端离 kavInner 底端的距离（值越大 → fade 底端越下沉，
+   *     侵入 safe-area 越多）。等价于 wrapper 的 `bottom: -N`。
+   *   FADE_TOP_ABOVE_KAV: fade 顶端离 kavInner 底端的距离（值越大 → fade 顶端越上，渐变越长）。
+   *   FADE_SOLID_HEIGHT: wrapper 底端那段「纯不透明」实色块高度。0 = 纯渐变到底，没实色块。
+   * 总高 = FADE_TOP_ABOVE_KAV + FADE_BOTTOM_BELOW_KAV；gradient 区高 = 总高 - FADE_SOLID_HEIGHT。 */
+  const FADE_BOTTOM_BELOW_KAV = 38;
+  const FADE_TOP_ABOVE_KAV = 68;
+  const FADE_SOLID_HEIGHT = Math.max(insets.bottom, 8);
+  const kbBottomFadeStyle = useAnimatedStyle(() => {
+    const h = kbHeightShared.value;
+    return { bottom: Platform.OS === 'android' ? h : -FADE_BOTTOM_BELOW_KAV };
+  });
 
   /* ---------- 刷新 ---------- */
   const [refreshing, setRefreshing] = useState(false);
@@ -598,7 +681,27 @@ export function TodayScreen() {
   );
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <KeyboardAvoidingView
+      style={styles.kavInner}
+      /* Android 不传 behavior：AndroidManifest 已设 windowSoftInputMode=adjustResize，系统会
+       *  自己 resize 整个 window，再叠 KAV "height" 会双重处理，关键盘时残留高度不归零导致
+       *  bottom 漂移。iOS 必须 padding（无 adjustResize 等价物）。 */
+      behavior={Platform.select({ ios: 'padding', android: undefined })}
+      keyboardVerticalOffset={0}
+    >
+      {/* SafeAreaView 在外 + KAV 在内（跟 ChatScreen 同款顺序）：
+       *  - 无键盘：SafeAreaView 给整个 layout 加 insets.bottom 的下 padding，所有 absolute
+       *    bottom:0 的子元素都在 home indicator 上方
+       *  - 有键盘：iOS 报 insets.bottom=0 → SafeAreaView padding 自动消失；KAV 加 kbHeight
+       *    padding → kavInner 缩小让 absolute children 跟着原生上浮
+       *  零 JS 动画，跟 iOS 键盘 100% sync。
+       *  注：之前 KAV 在外、SafeAreaView 在内的顺序不奏效，SafeAreaView 内的 absolute
+       *  children 在 Yoga 里 anchor 到 outer border 而非 padding box。
+       *  内层 <View flex:1> wrapper 必须存在：KAV padding 缩小 KAV 自己的 content area，
+       *  absolute children 直接挂 KAV 上是按 outer border 定位的（padding 不影响），所以套
+       *  一层 flex:1 让 padding 通过 flex 链 propagate 给它，absolute children 才能跟着上浮。 */}
+      <View style={styles.kavInner}>
       {/* 顶部 header（绝对定位，blur 背景） */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
         <BlurHeaderBackground
@@ -700,19 +803,35 @@ export function TodayScreen() {
           到 searchWrap 上方而不挤掉 searchRow 自身的位置。
           套一层 wrapper 持有 bottom+height —— 直接把 bottom/height 透传给 BlurFooterBackground
           会跟它内部的 absoluteFill (含 top:0) 冲突，Yoga 让 top 赢导致 overlay 被吸到屏顶。 */}
-      <View
-        style={[styles.bottomFade, { height: Math.max(insets.bottom, 8) + 52 + 10 + 24 }]}
+      <Animated.View
+        style={[
+          styles.bottomFade,
+          /* height = FADE_TOP_ABOVE_KAV + FADE_BOTTOM_BELOW_KAV，跟 kbBottomFadeStyle 配对：
+           * - bottom = -FADE_BOTTOM_BELOW_KAV → wrapper 底端在 kavInner 下方 N pt
+           * - 总高 = wrapper 顶端到底端的距离 = FADE_TOP_ABOVE_KAV - (-FADE_BOTTOM_BELOW_KAV)
+           *   = FADE_TOP_ABOVE_KAV + FADE_BOTTOM_BELOW_KAV
+           * 所以调 FADE_TOP_ABOVE_KAV 只影响 fade 顶端位置；调 FADE_BOTTOM_BELOW_KAV 只影响底端。 */
+          { height: FADE_TOP_ABOVE_KAV + FADE_BOTTOM_BELOW_KAV },
+          kbBottomFadeStyle,
+        ]}
         pointerEvents="none"
       >
         <BlurFooterBackground
-          bottomSolidHeight={Math.max(insets.bottom, 8)}
+          bottomSolidHeight={FADE_SOLID_HEIGHT}
           gradientBaseHex={colors.chatScreenBackground}
         />
-      </View>
+      </Animated.View>
 
       {/* 底部 sticky：搜索框 + 新对话 FAB 单行并列。跟 ProjectScreen 底部"tab + FAB 单行"
           同一个布局语言。 */}
-      <View style={[styles.searchWrap, { paddingBottom: Math.max(insets.bottom, 8) - 0 }]}>
+      <Animated.View
+        style={[
+          styles.searchWrap,
+          /* paddingBottom 由 kbSearchWrapStyle 管：无键盘时 = max(insets.bottom, 8) 补 safe-area；
+           * 键盘弹起时 = 0（键盘自己占了底部空间，不再需要 safe-area inset）。 */
+          kbSearchWrapStyle,
+        ]}
+      >
         <View style={styles.searchRow}>
           {IS_IOS_LIQUID_GLASS ? (
             <BouncyGlassCard
@@ -741,7 +860,9 @@ export function TodayScreen() {
           )}
           <Fab ionicon="add" sfSymbol="plus" onPress={onCreateChat} />
         </View>
+      </Animated.View>
       </View>
+    </KeyboardAvoidingView>
 
       {/* 删除对话确认 */}
       <Modal
@@ -808,13 +929,16 @@ export function TodayScreen() {
         isAheadOfToday={isAheadOfToday}
         onCancelAheadOfToday={cancelAheadOfToday}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
 function createStyles(c: AppColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: c.chatScreenBackground },
+    /* KAV 内层 flex:1 wrapper —— iOS 让 KAV padding 缩小它、absolute children 跟着原生上浮，
+     * Android 让 adjustResize 缩小整个 wrapper 同理。layout-aware 元素都放进去。 */
+    kavInner: { flex: 1 },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     placeholderText: { fontSize: 16, color: c.textMuted },
     loadingText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: c.textMuted },

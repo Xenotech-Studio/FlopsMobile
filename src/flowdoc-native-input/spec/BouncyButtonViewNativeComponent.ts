@@ -63,6 +63,15 @@ interface NativeProps extends ViewProps {
    *  UIActivityIndicatorView 取代 title/image，spinner 也跟着 interactive glass scale。
    *  使用场景：button 提交中、loading 中等。 */
   showsActivityIndicator?: WithDefault<boolean, false>;
+  /** 玻璃材质着色（iOS 26+ glass 路径）。"#RRGGBB" / "#AARRGGBB"。非空 → 通过
+   *  baseBackgroundColor 给 glass material 上色；空 = 默认半透明无色玻璃。深色按钮（如
+   *  highlighted tab、primary action）传一个跟 UI 主色一致的 hex 即可。
+   *  跟 `glassProminent` 配合：`true` 走 prominentGlassButtonConfiguration（更"实"的有色块），
+   *  `false` 走 glassButtonConfiguration（淡淡 tint 的半透明玻璃）。 */
+  glassTintColorHex?: WithDefault<string, ''>;
+  /** iOS 26+ glass 路径下选 prominent (实色块感) vs regular (半透明)。默认 false = regular。
+   *  prominent 适合需要强烈视觉权重的「主操作 / 选中 tab」，regular 适合次要按钮 / 工具栏。 */
+  glassProminent?: WithDefault<boolean, false>;
   /** tap 识别成功（手指在 view 内松开）时触发。menu 模式下不发——UIButton 把 tap 转给
    *  UIMenu 弹出，emit 走 onMenuAction。 */
   onBouncyPress?: DirectEventHandler<PressEvent>;

@@ -125,6 +125,56 @@ function maybeNukeDerivedDataAfterPodInstall() {
   }
 }
 
+/**
+ * iOS 防御性清理 #3：如果 React-Core-prebuilt 的 React.xcframework 模拟器 slice 是空的，
+ * 自动跑 `pod install` 重新拉回来。
+ *
+ * 缘起：RNDeps 的 variant swap 脚本（Debug/Release 切换）在 build 中断 / 上次构建报错时
+ * 会把 React.xcframework 切空（ios-arm64_x86_64-simulator/* 目录被清掉）但没复原。下次
+ * build 直接报 `React.xcframework/ios-arm64_x86_64-simulator/*: No such file or directory`,
+ * 看起来很吓人实则只需要 pod install 一下就好。
+ *
+ * 这个函数自动检测 + 自动修。检查 simulator slice 目录是否存在且非空；空就 pod install。
+ */
+function maybeRepairReactXcframework() {
+  const sliceDir = path.resolve(
+    __dirname,
+    '..',
+    'ios',
+    'Pods',
+    'React-Core-prebuilt',
+    'React.xcframework',
+    'ios-arm64_x86_64-simulator',
+  );
+  let needsRepair = false;
+  if (!fs.existsSync(sliceDir)) {
+    needsRepair = true;
+  } else {
+    try {
+      const entries = fs.readdirSync(sliceDir);
+      if (entries.length === 0) needsRepair = true;
+    } catch {
+      needsRepair = true;
+    }
+  }
+  if (!needsRepair) return;
+
+  console.log(
+    '[ios] React.xcframework 模拟器 slice 为空（上次 build 被 RNDeps variant swap 切空了没复原），自动 pod install 修复…'
+  );
+  const iosDir = path.resolve(__dirname, '..', 'ios');
+  try {
+    execSync('pod install', { cwd: iosDir, stdio: 'inherit' });
+    console.log('[ios] pod install 完成，React.xcframework 已恢复');
+  } catch (err) {
+    console.error(
+      `[ios] pod install 失败：${err.message}\n` +
+        '请手动 `cd ios && pod install` 后重试。'
+    );
+    process.exit(1);
+  }
+}
+
 function waitForMetro() {
   const url = `http://127.0.0.1:${METRO_PORT}/`;
   const deadline = Date.now() + METRO_WAIT_TIMEOUT_MS;
@@ -149,6 +199,7 @@ function run() {
   const args = ['react-native', `run-${runTarget}`];
   if (target === 'ios') {
     cleanupIosDSStore();
+    maybeRepairReactXcframework();
     maybeNukeDerivedDataAfterPodInstall();
     args.push('--mode', 'Debug');
     const simulator = getIosSimulator();
