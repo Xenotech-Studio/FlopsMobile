@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 /**
- * yarn dev [ios|android|android:real] [--quick]: start Metro + run app.
+ * yarn dev [ios|android] [real] [--quick]: start Metro + run app.
  * --quick: 跳过清理 cache（不传 --reset-cache）。
  * 端口被占用时自动递增到下一可用端口，不再交互确认。
- * android:real: 仅 Android，优先选择真机（排除 emulator-*），未找到真机则报错。
- * Platform: 1) yarn dev ios / yarn dev android / yarn dev android:real  2) rn-dev.config.json (per OS)  3) OS default.
+ * real (空格分隔，跟在 platform 后)：
+ *   - android real：优先选第一台 USB/wifi 真机（adb，排除 emulator-*），未找到报错
+ *   - ios real：找第一台连接的 iPhone/iPad（xcrun xctrace），未找到报错
+ * Platform: 1) yarn dev <ios|android>  2) rn-dev.config.json (per OS)  3) OS default.
  */
 const path = require('path');
 const fs = require('fs');
@@ -116,14 +118,31 @@ function getPlatformFromConfig() {
 
 const argv = process.argv.slice(2);
 const quick = argv.includes('--quick');
-const argOverride = argv.find((a) => a === 'ios' || a === 'android' || a === 'android:real');
+/* 入参形式：
+ *   yarn dev ios
+ *   yarn dev android
+ *   yarn dev ios real        (空格分隔)
+ *   yarn dev android real    (空格分隔)
+ *   yarn dev ios:real        (兼容老的冒号形式)
+ *   yarn dev android:real    (兼容)
+ * 内部统一规范化成 'ios' / 'android' / 'ios:real' / 'android:real' 传给 run-app.js。 */
+const VALID_PLATFORMS = ['ios', 'android'];
+const platformArg = argv.find((a) =>
+  VALID_PLATFORMS.includes(a) || a === 'ios:real' || a === 'android:real'
+);
+const wantReal = argv.includes('real');
 const configPlatform = getPlatformFromConfig();
 const isDarwin = process.platform === 'darwin';
 const osDefault = isDarwin ? 'ios' : 'android';
 
-const target = (argOverride === 'ios' || argOverride === 'android' || argOverride === 'android:real')
-  ? argOverride
-  : (configPlatform || osDefault);
+let target;
+if (platformArg === 'ios:real' || platformArg === 'android:real') {
+  // 老形式冒号已经带 real 后缀
+  target = platformArg;
+} else {
+  const platform = platformArg || configPlatform || osDefault;
+  target = wantReal ? `${platform}:real` : platform;
+}
 
 if (target === 'android' || target === 'android:real') {
   ensureAndroidSdkConfigured();

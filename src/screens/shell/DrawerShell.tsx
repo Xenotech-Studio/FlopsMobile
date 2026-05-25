@@ -81,21 +81,26 @@ function inferScreenCornerRadius(topInset: number): number {
 const DRAWER_DIM_AT_CLOSED = 0.55;
 /** 左缘热区宽度。iOS 加宽到 40 让手指更容易触发（接近 iOS 原生返回手势的触发区）。 */
 const LEFT_EDGE_STRIP_WIDTH = Platform.OS === 'android' ? 56 : 40;
-/** 抽屉触发阈值：translation 或 velocity 任一过就 commit 开。极灵敏 —— 比 iOS 原生返回
- *  还轻，几乎指尖一拨即开。 */
-const SWIPE_THRESHOLD = 12;
-const SWIPE_VELOCITY_THRESHOLD = 80;
-/** Pan 激活的 x 位移阈值（避免与子组件竖向滚动争用）。降到 4 让手势几乎即时激活。 */
-const PAN_ACTIVE_OFFSET_X = 4;
-/** Pan 失败的 y 偏移上限。放宽到 32 容忍不完全水平的轻扫。 */
-const PAN_FAIL_OFFSET_Y = 32;
+/** 抽屉触发阈值：translation 或 velocity 任一过就 commit 开。比 iOS 返回手势略宽松，
+ *  避免误触但任何稍带速度的右拨都触发。 */
+const SWIPE_THRESHOLD = 8;
+const SWIPE_VELOCITY_THRESHOLD = 50;
+/** Pan 激活的 x 位移阈值。2pt 即激活。 */
+const PAN_ACTIVE_OFFSET_X = 2;
+/** Pan 失败的 y 偏移上限。80 让对角滑动也能成功（iOS 返回手势是基于 ratio 的，没绝对上限,
+ *  我们没有 ratio 选项就直接放宽，靠 activeOffsetX 挡纯纵向动作）。 */
+const PAN_FAIL_OFFSET_Y = 80;
 
+/* Snap spring：弹开要快但末端不能有可见回弹（user 说会「卡顿一下」就是末端微弹）。
+ * 取接近临界阻尼：damping ratio = damping / (2 * sqrt(stiffness * mass)) ≈ 1.0。
+ * 这里 damping 28 / stiffness 360 / mass 0.5 → ratio ≈ 1.04，刚过临界，无 overshoot 干净落位。 */
 const SPRING_CONFIG = {
-  damping: 18,
-  stiffness: 200,
-  mass: 0.7,
+  damping: 28,
+  stiffness: 360,
+  mass: 0.5,
   overshootClamping: false,
 } as const;
+
 
 export function DrawerShell() {
   const { width: winWidth } = useWindowDimensions();
@@ -126,14 +131,19 @@ export function DrawerShell() {
   const [isOpen, setIsOpen] = useState(false);
 
   /** isOpen 变化时触发轻 haptic 反馈（开 / 关都给一下「咔哒」感）。skipFirstHapticRef 防初次
-   *  mount 触发。手势 / HamburgerButton 点击 / progress 自动归位都会改 isOpen，都覆盖到。 */
+   *  mount 触发。手势 / HamburgerButton 点击 / progress 自动归位都会改 isOpen，都覆盖到。
+   *  用 requestAnimationFrame 推到下一帧，避免跟 spring 启动同帧抢 JS 主线程导致开抽屉时
+   *  「手指离开后卡顿一下」（同步 native haptic call 会阻塞 1-2ms）。 */
   const skipFirstHapticRef = useRef(true);
   useEffect(() => {
     if (skipFirstHapticRef.current) {
       skipFirstHapticRef.current = false;
       return;
     }
-    ReactNativeHapticFeedback.trigger('impactLight', { enableVibrateFallback: true });
+    const handle = requestAnimationFrame(() => {
+      ReactNativeHapticFeedback.trigger('impactLight', { enableVibrateFallback: true });
+    });
+    return () => cancelAnimationFrame(handle);
   }, [isOpen]);
 
   /** active 顶层页 */
@@ -232,9 +242,13 @@ export function DrawerShell() {
           progress.value = withSpring(opening ? 1 : 0, SPRING_CONFIG);
           runOnJS(setIsOpen)(opening);
         })
-        .onFinalize(() => {
+        .onFinalize((_e, success) => {
           'worklet';
-          // 兜底：手势失败 / 取消时若 progress 卡在中间，snap 到最近端
+          /* 兜底：仅当 onEnd 没正常结束（gesture 被 cancel / fail）才介入。
+             之前没传 success 参数 → onEnd 后 onFinalize 总 fire，此时 spring 才刚启动
+             progress.value 还很小 → 误判要关 → 反手 spring 0 盖掉 onEnd 的 OPEN 决策,
+             导致用户怎么 swipe 都打不开。 */
+          if (success) return;
           if (progress.value > 0 && progress.value < 1) {
             const opening = progress.value > 0.5;
             progress.value = withSpring(opening ? 1 : 0, SPRING_CONFIG);
@@ -261,8 +275,10 @@ export function DrawerShell() {
           progress.value = withSpring(closing ? 0 : 1, SPRING_CONFIG);
           runOnJS(setIsOpen)(!closing);
         })
-        .onFinalize(() => {
+        .onFinalize((_e, success) => {
           'worklet';
+          /* 同 openGesture：只在 gesture 被 cancel / fail 时介入兜底；onEnd 正常结束就 return。 */
+          if (success) return;
           if (progress.value > 0 && progress.value < 1) {
             const opening = progress.value > 0.5;
             progress.value = withSpring(opening ? 1 : 0, SPRING_CONFIG);

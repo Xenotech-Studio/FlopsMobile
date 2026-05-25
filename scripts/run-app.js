@@ -9,7 +9,7 @@ const os = require('os');
 const fs = require('fs');
 const { spawn, execSync } = require('child_process');
 
-const target = process.argv[2] || 'ios'; // ios | android | android:real
+const target = process.argv[2] || 'ios'; // ios | ios:real | android | android:real
 const METRO_PORT = parseInt(process.argv[3] || process.env.METRO_PORT || '8081', 10);
 const POLL_INTERVAL_MS = 800;
 const METRO_WAIT_TIMEOUT_MS = 60000;
@@ -40,6 +40,46 @@ function getIosSimulator() {
     const name = conf.ios && conf.ios.simulator;
     if (typeof name === 'string' && name.trim()) return name.trim();
   } catch (_) {}
+  return null;
+}
+
+/**
+ * 找第一台连接的 iOS 真机（iPhone/iPad）。用 `xcrun xctrace list devices` 解析；
+ * 真机行格式 `Name (Version) (UDID)`（两组括号），Mac 行只有 `Name (UDID)`（一组括号），
+ * 模拟器在 "== Simulators ==" 段，过滤掉。
+ * @returns {{ name: string, udid: string } | null}
+ */
+function getFirstRealIosDevice() {
+  try {
+    const out = execSync('xcrun xctrace list devices', { encoding: 'utf8' });
+    const lines = out.split(/\r?\n/);
+    let inDevicesSection = false;
+    for (const line of lines) {
+      if (line.startsWith('== Devices ==')) {
+        inDevicesSection = true;
+        continue;
+      }
+      if (line.startsWith('== ')) {
+        // 进入下个 section（Simulators / Devices Offline 等），停止扫描
+        inDevicesSection = false;
+        continue;
+      }
+      if (!inDevicesSection) continue;
+      // 匹配真机：name (version) (UDID)。Mac 只有一组括号、不匹配。
+      // Apple Watch 也会出现在这里但 RN 跑不上去，按 iPhone/iPad 名字大致过滤。
+      const m = line.match(/^(.+?) \([\d.]+\) \(([0-9A-Fa-f-]+)\)\s*$/);
+      if (!m) continue;
+      const name = m[1].trim();
+      const udid = m[2];
+      /* 白名单：name 必须含 iPhone 或 iPad（RN run-ios 不支持 Apple Watch / TV / Vision Pro）。
+         之前用「跳过 Apple Watch」黑名单结果实际跑出来还是选中了 Watch UDID（可能 name 里有
+         非常规空格 / 编码差异让 regex 失效），白名单更稳。 */
+      if (!/iPhone|iPad/i.test(name)) continue;
+      return { name, udid };
+    }
+  } catch (_) {
+    /* xctrace 不可用或解析失败 → 返回 null，调用方报错给用户 */
+  }
   return null;
 }
 
@@ -191,20 +231,37 @@ function waitForMetro() {
 
 function run() {
   const env = { ...process.env };
-  if (target === 'ios') {
+  if (target === 'ios' || target === 'ios:real') {
     env.RCT_NO_LAUNCH_PACKAGER = '1';
   }
 
-  const runTarget = target === 'android:real' ? 'android' : target;
+  const runTarget =
+    target === 'android:real' ? 'android' : target === 'ios:real' ? 'ios' : target;
   const args = ['react-native', `run-${runTarget}`];
-  if (target === 'ios') {
+  if (target === 'ios' || target === 'ios:real') {
     cleanupIosDSStore();
     maybeRepairReactXcframework();
     maybeNukeDerivedDataAfterPodInstall();
     args.push('--mode', 'Debug');
-    const simulator = getIosSimulator();
-    if (simulator) {
-      args.push('--simulator', simulator);
+    if (target === 'ios:real') {
+      const device = getFirstRealIosDevice();
+      if (!device) {
+        console.error(
+          '\n[ios:real] 未检测到 iOS 真机。请确认：\n' +
+            '  1) iPhone/iPad 通过 USB 连上 Mac，且已在设备上「信任此电脑」\n' +
+            '  2) Xcode 里已设过 development team / signing\n' +
+            '  3) `xcrun xctrace list devices` 能列出该设备\n' +
+            '或者用 yarn dev ios 跑模拟器。'
+        );
+        process.exit(1);
+      }
+      args.push('--udid', device.udid);
+      console.log(`[ios:real] 使用真机: ${device.name} (${device.udid})`);
+    } else {
+      const simulator = getIosSimulator();
+      if (simulator) {
+        args.push('--simulator', simulator);
+      }
     }
   }
   if (runTarget === 'android') {
