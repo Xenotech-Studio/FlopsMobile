@@ -79,6 +79,17 @@ export type FlowDocInputProps = {
   editable?: boolean;
   /** Enter 拆 block 语义：默认 true。code 块设 false 以保留多行 */
   enterCreatesBlock?: boolean;
+  /** UITextView.textContainerInset：让 textView frame 撑满外层 view，文本视觉留白靠这个
+   *  inset 给（不再由外层 JS View 包 padding 把 textView 框小）。设了以后 UITextView 自己
+   *  的 tap recognizer 覆盖整片可点区域，tap 在内文之外的 padding 区会自动把 cursor 落到
+   *  最近的文本位置（"卡片其它区域 = 输入框延伸"）。
+   *  callsite 通常给 short 模式左 inset 让位 + 按钮、tall 模式给底 inset 让位。 */
+  textContainerInset?: {
+    top?: number;
+    left?: number;
+    bottom?: number;
+    right?: number;
+  };
   style?: ViewStyle;
   onChangeContent?: (content: FlowDocContent, pillCount: number) => void;
   onChangeSelection?: (start: number, end: number) => void;
@@ -203,8 +214,12 @@ export const FlowDocInput = forwardRef(
       [],
     );
 
+    /* autoHeight 用 minHeight 而不是 height —— minHeight 给 view 提供"至少内容高度"的下界,
+     * 但允许 flex 父容器把 view 拉得更高（实现"UITextView frame 撑满 card"那种用法，让
+     * UITextView 自己的 tap recognizer 覆盖整片可点区域）。
+     * 没 flex 拉伸的传统 callsite 行为不变（view height ≈ minHeight ≈ content height）。 */
     const composedStyle = autoHeight
-      ? [props.style, { height: Math.max(contentHeight, fallbackMinHeight) }]
+      ? [props.style, { minHeight: Math.max(contentHeight, fallbackMinHeight) }]
       : props.style;
 
     return (
@@ -224,6 +239,10 @@ export const FlowDocInput = forwardRef(
         placeholderColor={props.placeholderColor}
         editable={props.editable}
         enterCreatesBlock={props.enterCreatesBlock}
+        textContainerInsetTop={props.textContainerInset?.top ?? 0}
+        textContainerInsetLeft={props.textContainerInset?.left ?? 0}
+        textContainerInsetBottom={props.textContainerInset?.bottom ?? 0}
+        textContainerInsetRight={props.textContainerInset?.right ?? 0}
         onChangeContent={handleContent}
         onSplitRequest={handleSplitRequest}
         onMergeBackwardRequest={handleMergeBackwardRequest}

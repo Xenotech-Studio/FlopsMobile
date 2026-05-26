@@ -3,8 +3,10 @@
  */
 
 import React, { useMemo } from 'react';
-import { StatusBar, View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
+import { SystemBars } from 'react-native-edge-to-edge';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import {
   NavigationContainer,
@@ -63,7 +65,11 @@ function AppContent() {
 
   return (
     <>
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+      {/* SystemBars 替代 RN 自带 StatusBar —— edge-to-edge 模式下 RN StatusBar 走的是
+          deprecated API（FLAG_FULLSCREEN 等），SystemBars 用现代 WindowInsets 路径同时管
+          status bar + nav bar 的内容色（icon / text）。
+          style='auto': 跟随当前色彩主题（dark theme → 浅色 icon；light → 深色 icon）。 */}
+      <SystemBars style={isDark ? 'light' : 'dark'} />
       {session ? (
         <VersionWelcomeProvider>
           <NavigationContainer ref={navigationRef} initialState={initialNavState} theme={navigationTheme}>
@@ -86,17 +92,19 @@ function AppContent() {
 export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <ThemeProvider>
-          <SessionProvider>
-            <PushTokenLifecycle />
-            <PresenceReporter />
-            <AppContent />
-            <UpgradeRequiredOverlay />
-            <EncryptionReloginOverlay />
-          </SessionProvider>
-        </ThemeProvider>
-      </SafeAreaProvider>
+      <KeyboardProvider>
+        <SafeAreaProvider>
+          <ThemeProvider>
+            <SessionProvider>
+              <PushTokenLifecycle />
+              <PresenceReporter />
+              <AppContent />
+              <UpgradeRequiredOverlay />
+              <EncryptionReloginOverlay />
+            </SessionProvider>
+          </ThemeProvider>
+        </SafeAreaProvider>
+      </KeyboardProvider>
     </GestureHandlerRootView>
   );
 }

@@ -77,6 +77,16 @@ interface NativeProps extends ViewProps {
   onBouncyPress?: DirectEventHandler<PressEvent>;
   /** 用户在原生 UIMenu 里选中一条 action 时触发；actionId = menuActionsJson 里对应条目的 id */
   onMenuAction?: DirectEventHandler<MenuActionEvent>;
+  /** 仅 menu 模式（iOS 26+ glass 路径，且 menuActionsJson 非空）下，UIButton 被 touch-down
+   *  即将弹出 UIMenu 时触发。callsite 可以借这个事件做"为菜单让位"类的 UI 联动（例如把同
+   *  行的搜索框 morph 成圆形）。不在 menu 模式下不会发。 */
+  onMenuWillShow?: DirectEventHandler<PressEvent>;
+  /** menu 关闭（用户选了某项 / 点 menu 外区域 dismiss / drag-out 取消）后触发。
+   *  iOS UIMenu 没公开 dismiss callback，native 侧靠两条线判定 dismiss：
+   *  (1) onMenuAction 触发后 → 立即视为 dismiss；
+   *  (2) 定时扫 window 子 view 找 context-menu overlay，找不到时 → 视为 dismiss。
+   *  与 onMenuWillShow 成对出现；非 menu 模式不发。 */
+  onMenuDidDismiss?: DirectEventHandler<PressEvent>;
 }
 
 export default codegenNativeComponent<NativeProps>(

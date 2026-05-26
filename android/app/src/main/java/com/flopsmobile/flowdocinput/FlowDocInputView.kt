@@ -24,6 +24,7 @@ import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputConnectionWrapper
+import android.view.inputmethod.InputMethodManager
 import android.text.style.CharacterStyle
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
@@ -65,6 +66,36 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
   }
   private fun pillMaxLabelTextWidthPx(): Float =
     pillMaxLabelTextWidthDp * resources.displayMetrics.density
+
+  /* textContainerInset 四边（dp）。等效 iOS UITextView.textContainerInset：让 EditText
+     view 撑满外层 wrapper，视觉留白靠 EditText 自身 padding。这样 EditText 的 tap recognizer
+     覆盖整片 hit area，外层任何区域 tap 都会走 EditText 自己的 cursor placement / selection
+     语义。 */
+  private var insetTopDp: Float = 0f
+  private var insetLeftDp: Float = 0f
+  private var insetBottomDp: Float = 0f
+  private var insetRightDp: Float = 0f
+  private fun applyTextContainerInsetPadding() {
+    val d = resources.displayMetrics.density
+    setPadding(
+      (insetLeftDp * d).toInt(),
+      (insetTopDp * d).toInt(),
+      (insetRightDp * d).toInt(),
+      (insetBottomDp * d).toInt(),
+    )
+  }
+  fun setTextContainerInsetTopDp(dp: Float) {
+    insetTopDp = dp; applyTextContainerInsetPadding()
+  }
+  fun setTextContainerInsetLeftDp(dp: Float) {
+    insetLeftDp = dp; applyTextContainerInsetPadding()
+  }
+  fun setTextContainerInsetBottomDp(dp: Float) {
+    insetBottomDp = dp; applyTextContainerInsetPadding()
+  }
+  fun setTextContainerInsetRightDp(dp: Float) {
+    insetRightDp = dp; applyTextContainerInsetPadding()
+  }
 
   init {
     background = null
@@ -353,6 +384,12 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
 
   fun focusInput() {
     requestFocus()
+    /* Android 上 requestFocus() 只让 view 获得 focus state，不自动弹 IME。EditText 在
+     * native user-initiated tap 时系统会自动 showSoftInput；但 imperative focus（比如
+     * RN 上层 ref.current.focus()）需要这里显式 showSoftInput 才弹键盘。跟 blurInput()
+     * 显式 hideSoftInputFromWindow 对称。 */
+    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+    imm?.showSoftInput(this, 0)
   }
 
   fun focusInputAtOffset(offset: Int) {
@@ -361,9 +398,16 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
     val len = text?.length ?: 0
     val pos = offset.coerceIn(0, len)
     setSelection(pos)
+    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+    imm?.showSoftInput(this, 0)
   }
 
   fun blurInput() {
+    /* Android 上 clearFocus() 只让 view 失去焦点，软键盘是独立的 IME service 不会跟着收。
+     * 必须显式 hideSoftInputFromWindow 把 IME 收掉。先收键盘再 clearFocus，避免 IME
+     * 在 focus 转移到别处时被系统重新拉起。 */
+    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+    imm?.hideSoftInputFromWindow(windowToken, 0)
     clearFocus()
   }
 

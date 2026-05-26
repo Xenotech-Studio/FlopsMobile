@@ -25,7 +25,6 @@ import {
   ActivityIndicator,
   Alert,
   Keyboard,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -34,19 +33,29 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   Vibration,
   View,
 } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  useKeyboardHandler,
+  useReanimatedKeyboardAnimation,
+} from 'react-native-keyboard-controller';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import DraggableFlatList from 'react-native-draggable-flatlist';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import Animated, {
+  interpolate,
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
+  withSpring,
   withTiming,
   runOnUI,
 } from 'react-native-reanimated';
@@ -80,8 +89,9 @@ import { HamburgerButton } from './shell/HamburgerButton';
 import {
   AnimatedCircleButton,
   IS_IOS_LIQUID_GLASS,
+  type AnimatedCircleButtonMenuAction,
 } from '../components/AnimatedCircleButton';
-import { Fab } from '../components/Fab';
+import { Fab, FAB_SIZE } from '../components/Fab';
 import { BouncyGlassCard } from '../components/BouncyGlassCard';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
@@ -304,80 +314,38 @@ export function TodayScreen() {
     };
   }, [session]);
 
-  /* ---------- 键盘高度跟踪（绝对定位浮动控件手动避让） ----------
-   *  RN 的 position:absolute 子元素是相对父容器**外框**定位的，KeyboardAvoidingView 的
-   *  padding 只能推动 flex/relative 子元素，对 absolute children 无效。iOS 跟 Android 都得
-   *  手动加 bottom offset。KAV 仍然保留——帮 list 区域 (flex:1) 在键盘弹起时自动缩小，避免
-   *  列表内容显示在键盘后面。
+  /* ---------- 键盘避让（react-native-keyboard-controller frame-perfect 路径）----------
+   *  上方 import 的 KAV 是 lib 版（drop-in for RN KAV，API 一致，但 native frame timing：
+   *  iOS UIKeyboardLayoutGuide / Android WindowInsetsCompat.Type.ime）。kavInner 缩小、kb 上
+   *  下抬升 list 视图区，全程跟键盘逐帧 sync，不再走 React render cycle，搜索框跟键盘同步无卡顿。
    *
-   *  之前用过 Reanimated 的 useAnimatedKeyboard，但在 RN 0.84 / 新架构下 iOS 会闪退、Android
-   *  也会抖（看着像 WindowInsets 跟 layout 有 race）。换成手动方案：Keyboard.addListener 拿事
-   *  件 → 写到 SharedValue (UI 线程读) → useAnimatedStyle 输出 bottom/paddingBottom。
-   *  iOS keyboardWillShow 跟键盘动画同步 fire（带 duration），withTiming 用相同时长 → 跟键盘
-   *  动画同步。Android 只有 keyboardDidShow（动画结束才 fire），withTiming 在动画结束后再做
-   *  ~250ms 平滑插值——不是瞬移，仍有轻微延迟。要彻底跟 Android 键盘同步需要 keyboard-controller
-   *  独立 lib（新 native pod）。 */
-  const kbHeightShared = useSharedValue(0);
-  useEffect(() => {
-    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    /* Android edge-to-edge 下 e.endCoordinates.height 不包含 nav bar inset（键盘 overlap nav bar
-     * 那部分的高度不报）→ 我们的 bottom offset 比实际键盘顶低 insets.bottom，搜索框被切掉一半。
-     * 加 insets.bottom 补回去。iOS 不需要这个补偿。 */
-    const navBarFix = Platform.OS === 'android' ? insets.bottom : 0;
-    const showSub = Keyboard.addListener(showEvt, (e) => {
-      const d = (e as { duration?: number }).duration ?? 250;
-      kbHeightShared.value = withTiming(e.endCoordinates.height + navBarFix, { duration: d });
-    });
-    const hideSub = Keyboard.addListener(hideEvt, (e) => {
-      const d = (e as { duration?: number }).duration ?? 250;
-      kbHeightShared.value = withTiming(0, { duration: d });
-    });
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
-  }, [kbHeightShared, insets.bottom]);
-  /* iOS：bottom 永远 0、paddingBottom 永远 12。SafeAreaView edges=['bottom'] 给 kavInner 加
-   * insets.bottom 的 padding —— iOS 在键盘弹起时**自动报 insets.bottom = 0**（键盘 zone 算
-   * unsafe）→ SafeAreaView padding 自动消失 → kavInner 跟着 KAV 缩到 kb top → searchWrap
-   * (bottom:0) + paddingBottom 12 落到 kb 上方 12pt。无键盘时 SafeAreaView padding = 34
-   * → searchWrap 在 home indicator 上方。零 JS 动画，100% 跟 iOS 键盘原生 sync。
-   *
-   * Android：SafeAreaView 的 insets.bottom 不随键盘变（nav bar inset 固定），adjustResize 在
-   * absolute children 上不可靠，保留 manual offset (h+12) 兜底；paddingBottom 切 0。
-   */
+   *  useReanimatedKeyboardAnimation: 返回 keyboard frame 的 SharedValue。height **负数**
+   *  offset 语义，-300 表示键盘 300pt 高。我们只用来在 searchWrap 两套 tuning（no-kb vs
+   *  kb-up）之间 interpolate 平滑过渡；主体几何位移由 KAV 缩 kavInner 处理（双重 driven 会
+   *  overshoot）。 */
+  const { height: kbAnimHeight } = useReanimatedKeyboardAnimation();
+  /* searchWrap 两态 tuning（动画 0→30pt h 区间内 interpolate）：
+   *  - no-kb: bottom:-8 paddingBottom:2，搜索框略侵入 home indicator 区。
+   *  - kb-up: bottom:0 paddingBottom:12，row 距键盘顶 12pt。
+   *  几何上 kbHeight 量级的整体上抬由 KAV 缩 kavInner 自动出。 */
   const kbSearchWrapStyle = useAnimatedStyle(() => {
-    const h = kbHeightShared.value;
-    const safeBottom = Math.max(insets.bottom, 8);
-    if (Platform.OS !== 'android') {
-      /* iOS 调节钮：bottom 控制 searchWrap 相对 kavInner 底端的偏移。负值把搜索框拉到 safe-area
-       * 里（侵入 home indicator 区域）；正值往上推。Yoga 不允许负 padding（会裁成 0），所以用
-       * 负 bottom 才能"再往下"。
-       * paddingBottom 4 是 searchRow 内部底部留白，跟键盘弹起场景共用（有键盘时 SafeAreaView
-       * padding 自动消失、KAV 加 kbHeight padding，search 离键盘 4pt）。 */
-      return {
-        bottom: -8,
-        paddingBottom: 2,
-      };
-    }
+    const h = -kbAnimHeight.value;
+    /* 无键盘 resting bottom = 0：让 searchWrap 停在 kavInner.bottom（= SafeAreaView content
+     *  底部），即 home indicator 上方。原 -8 让它沉进 safe area 区域，视觉上过于贴底。
+     *  键盘弹起时 bottom = 0、paddingBottom 12 让 row 离 kb 12pt（kavInner 由 lib KAV 缩到
+     *  kb 顶，searchWrap 跟 kavInner 底走）。 */
     return {
-      bottom: h > 0 ? h + 12 : 0,
-      paddingBottom: h > 0 ? 0 : safeBottom,
+      bottom: 0,
+      paddingBottom: interpolate(h, [0, 30], [2, 12], 'clamp'),
     };
   });
-  /* bottomFade 三个独立调节钮（iOS）：
-   *   FADE_BOTTOM_BELOW_KAV: fade 底端离 kavInner 底端的距离（值越大 → fade 底端越下沉，
-   *     侵入 safe-area 越多）。等价于 wrapper 的 `bottom: -N`。
-   *   FADE_TOP_ABOVE_KAV: fade 顶端离 kavInner 底端的距离（值越大 → fade 顶端越上，渐变越长）。
-   *   FADE_SOLID_HEIGHT: wrapper 底端那段「纯不透明」实色块高度。0 = 纯渐变到底，没实色块。
-   * 总高 = FADE_TOP_ABOVE_KAV + FADE_BOTTOM_BELOW_KAV；gradient 区高 = 总高 - FADE_SOLID_HEIGHT。 */
+  /* paddingHorizontal 单独一个 animated style，下面声明（要等 focusedProgress 出现）。 */
+  /* bottomFade 几何由 KAV 缩同步带动，静态 bottom -38 即可。 */
   const FADE_BOTTOM_BELOW_KAV = 38;
   const FADE_TOP_ABOVE_KAV = 68;
   const FADE_SOLID_HEIGHT = Math.max(insets.bottom, 8);
   const kbBottomFadeStyle = useAnimatedStyle(() => {
-    const h = kbHeightShared.value;
-    return { bottom: Platform.OS === 'android' ? h : -FADE_BOTTOM_BELOW_KAV };
+    return { bottom: -FADE_BOTTOM_BELOW_KAV };
   });
 
   /* ---------- 刷新 ---------- */
@@ -492,6 +460,209 @@ export function TodayScreen() {
       Alert.alert('新建对话失败', e instanceof Error ? e.message : String(e));
     }
   }, [session, navigation, loadConvs]);
+
+  /* ---------- 右下 FAB 菜单 ---------- */
+  /* "新建对话 / 新建任务" 两选项菜单。iOS 26 走 UIButton 原生 UIMenu（AnimatedCircleButton
+   *  menuActions 透传给底层 BouncyButton），native 那侧的 onMenuWillShow / onMenuDidDismiss
+   *  把 fabMenuOpen 跟原生菜单状态同步。其它平台（iOS<26 / Android）按 FAB 后 setFabMenuOpen
+   *  → 自绘 Modal popover，与 ChatScreen Android ⋯ 菜单同款实现。
+   *
+   *  动画同步：搜索框收缩动画**不**走 fabMenuOpen state → useEffect → withTiming 那条链
+   *  （那串走 React render cycle，会比 menu 系统动画明显慢几帧）。直接在 open/close 同款
+   *  callback 里**同步**推 shared value，touchDown emit 进 JS 后 worklet 立即接管，跟
+   *  iOS UIMenu 弹出动画基本零延迟齐播。 */
+  const [fabMenuOpen, setFabMenuOpen] = useState(false);
+  const searchCollapsed = useSharedValue(0);
+  /* fabMenuJustClosedAtRef：记录 menu 最近一次 close 的时间戳。给搜索胶囊 onPress focus
+   * 用——用户点搜索关 menu 那一下，swizzle 在 touchBegan 同帧 close，但 BouncyGlassCard
+   * 自己的 tap recognizer 在 touchEnd 才 fire（onPress 回调）；那时 fabMenuOpen 已 false，
+   * 单看当前状态判断会误把这次 dismiss tap 当 focus 意图。500ms 窗口内 skip focus 即可。 */
+  const fabMenuJustClosedAtRef = useRef<number>(0);
+  /* fabMenuShow：UI 线程 SharedValue 驱动 menu 可见性（opacity + scale + pointerEvents)。
+   * 跟 React state fabMenuOpen 并行 —— state 用于 React 侧逻辑联动（searchInput editable
+   * 等），SharedValue 用于动画 / 可见性切换。这样 menu 常驻 mount、不依赖 React re-render
+   * → 开菜单立即响应（worklet 一帧切 opacity），不再有 conditional mount 的 ~100ms 延迟。
+   *
+   * 关键时序：fabMenuShow.value 必须**先**设，再 setFabMenuOpen —— 前者立即触发 UI 线程
+   * worklet 动画（独立 thread），后者 schedule React re-render（主线程，会阻塞几十 ms)。
+   * 顺序反过来 worklet 会跟 setState 引发的 re-render 抢主线程时间片，感觉"等待 state"。
+   * duration 80ms 是 menu 进入感觉"瞬间"的上限，用户感受不到延迟。 */
+  const fabMenuShow = useSharedValue(0);
+  const openFabMenu = useCallback(() => {
+    fabMenuShow.value = withTiming(1, { duration: 80 });
+    searchCollapsed.value = withTiming(1, { duration: 220 });
+    setFabMenuOpen(true);
+  }, [searchCollapsed, fabMenuShow]);
+  const closeFabMenu = useCallback(() => {
+    fabMenuJustClosedAtRef.current = Date.now();
+    fabMenuShow.value = withTiming(0, { duration: 100 });
+    searchCollapsed.value = withTiming(0, { duration: 220 });
+    setFabMenuOpen(false);
+  }, [searchCollapsed, fabMenuShow]);
+
+  const fabMenuActions = useMemo<ReadonlyArray<AnimatedCircleButtonMenuAction>>(
+    () => [
+      { id: 'newChat', title: '新建对话' },
+      { id: 'newTask', title: '新建任务' },
+    ],
+    []
+  );
+
+  const onFabMenuPick = useCallback(
+    (id: string) => {
+      if (id === 'newChat') onCreateChat();
+      else if (id === 'newTask') onCreateTask();
+    },
+    [onCreateChat, onCreateTask]
+  );
+
+  /* 计算 search 长条态目标宽度。focused 态把 searchWrap 两侧 padding 从 26 收到 12（左右各
+   *  挤掉 14pt），搜索框宽度跟着补回 28pt。 */
+  const { width: windowWidth } = useWindowDimensions();
+  const SEARCH_WRAP_PADDING_H = 26;
+  const SEARCH_WRAP_PADDING_H_FOCUSED = 12;
+  const SEARCH_ROW_GAP = 10;
+  const searchExpandedWidth = Math.max(
+    FAB_SIZE,
+    windowWidth - SEARCH_WRAP_PADDING_H * 2 - SEARCH_ROW_GAP - FAB_SIZE
+  );
+  const searchExpandedWidthFocused = Math.max(
+    FAB_SIZE,
+    windowWidth - SEARCH_WRAP_PADDING_H_FOCUSED * 2 - SEARCH_ROW_GAP - FAB_SIZE
+  );
+
+  /* 整个搜索胶囊（不止 TextInput 那一块）点哪都能进输入态。BouncyGlassCard / 非 glass 路径
+   *  外层 wrapper 都接 onSearchPress。menu close 后 500ms 内的 tap 跳过 focus——那很可能
+   *  就是关 menu 那一下（swizzle touchBegan dismiss + recognizer touchEnd onPress 是同一次
+   *  tap 的两端）。 */
+  const searchInputRef = useRef<TextInput>(null);
+  /* focusedProgress：scale + pointerEvents 双驱动量，跟键盘 frame 逐帧同步。UI 线程 worklet,
+   * 完全不走 React render。Fab 的视觉切换与 hit-test 路由都在 animated style 里读取这条
+   * SharedValue（详见 fabPlus/CloseAnimStyle 定义）—— 跟键盘升起严格同帧，无 React state 延迟。 */
+  const focusedProgress = useSharedValue(0);
+  useKeyboardHandler({
+    onMove: (e) => {
+      'worklet';
+      focusedProgress.value = e.progress;
+    },
+  }, [focusedProgress]);
+  /* 用 scale 而不是 opacity 切换两个 Fab —— iOS UIGlassEffect 在子树 opacity:0 mount 时
+   * 实测背景没正常初始化 (close 圆不出来)。两个 Fab 永远 opacity:1，glass 材质从 mount
+   * 第一帧就完整渲染；通过 scale 0↔1 控制可见性（CALayer compose 顺序：contents → bounds
+   * → transform，glass 在 scale 之前已完整光栅化，transform 只是把整层缩放到 0 也无副作用）。 */
+  /* scale: 视觉切换；pointerEvents: hit-test 路由——两者都吃 focusedProgress（键盘 progress)。
+   * Android 必需把 pointerEvents 也走 UI 线程：Yoga 用 layout bounds 做 hit-test，scale=0 的
+   * 隐形 View 仍能截到 tap；React state 驱动的 pointerEvents 在 IME 弹起期间 render 延迟,
+   * tap 落点会跑到老状态的 pe=auto plus → 误触 openFabMenu。这里用 animated style 让
+   * pointerEvents 跟 scale 逐帧同步。iOS hit-test 已经用 transform 后 bounds，scale=0 即无
+   * 命中区域，pointerEvents 切换是冗余但无害。 */
+  const fabPlusAnimStyle = useAnimatedStyle(() => ({
+    /* fabMenuShow > 0 时把 + FAB 略缩到 0.8 + 淡出到 0，视觉上"被菜单吸收"。菜单卡片
+     * 从 bottom-right 长出来时正好覆盖 FAB 原位，过渡上 FAB 顺着 scale 1→0.8 退场,
+     * 看不到 FAB 露在菜单外。 */
+    transform: [{ scale: (1 - focusedProgress.value) * (1 - fabMenuShow.value * 0.2) }],
+    opacity: 1 - fabMenuShow.value,
+    pointerEvents:
+      focusedProgress.value > 0.5 || fabMenuShow.value > 0.1 ? 'none' : 'auto',
+  }));
+  const fabCloseAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: focusedProgress.value }],
+    pointerEvents: focusedProgress.value > 0.5 ? 'auto' : 'none',
+  }));
+  /* searchWrap 左右 padding：focused 时由 26 收到 12（每边各让出 14pt 给搜索框扩宽）。
+   * 单独一个 animated style 而不是合进 kbSearchWrapStyle —— 因为 focusedProgress 必须在
+   * useKeyboardHandler 之后才声明，跟早期声明的 kbSearchWrapStyle 时序对不上。 */
+  const searchWrapPaddingStyle = useAnimatedStyle(() => ({
+    paddingHorizontal: interpolate(
+      focusedProgress.value,
+      [0, 1],
+      [SEARCH_WRAP_PADDING_H, SEARCH_WRAP_PADDING_H_FOCUSED]
+    ),
+  }));
+  const onSearchPress = useCallback(() => {
+    if (Date.now() - fabMenuJustClosedAtRef.current < 500) return;
+    searchInputRef.current?.focus();
+  }, []);
+  /* Android 搜索框胶囊按下放大 —— RNGH 路径，跟 AnimatedCircleButton AndroidWorkletBouncy
+   * 同款。worklet 在 UI 线程直接驱动 scale，不走 JS bridge / React render scheduling，
+   * 快速 tap 时 spring 不会被立刻取消。胶囊宽 ~280pt，倍率 1.15 比圆钮 1.5 保守（再大
+   * 会越过 row 把 FAB 挤掉）。iOS 走 BouncyGlassCard 系统 interactive，不在这里管。 */
+  const searchBoxPressScale = useSharedValue(1);
+  const searchBoxPressAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: searchBoxPressScale.value }],
+  }));
+  /* fabMenu 可见性：opacity 0→1 + scale 0.1→1.0；transformOrigin 锚在 bottom-right
+   * (= FAB 位置)，所以菜单从 FAB 角"向左向上长出来"，不是 uniform 从中心放大。
+   * pointerEvents 在 show > 0.5 时切到 'auto'，避免 fade-in 早段被误触。 */
+  const fabMenuCardAnimStyle = useAnimatedStyle(() => ({
+    opacity: fabMenuShow.value,
+    transform: [{ scale: 0.1 + fabMenuShow.value * 0.9 }],
+    transformOrigin: 'right bottom',
+    pointerEvents: fabMenuShow.value > 0.5 ? 'auto' : 'none',
+  }));
+  const fabMenuBackdropAnimStyle = useAnimatedStyle(() => ({
+    pointerEvents: fabMenuShow.value > 0.5 ? 'auto' : 'none',
+  }));
+  const searchBoxTapGesture = useMemo(
+    () =>
+      /* 用 LongPress 而不是 Tap：Tap recognizer 对竞争敏感（max duration / max distance
+       * 限制严），Android EditText 在 touch hold 一会儿后会 claim ownership 用于
+       * cursor placement / selection，让 Tap 进入 FAIL → spring 被提前打断（用户的
+       * 观察：点输入框区域 "放大行为提前被打断"）。LongPress 本身被设计为持续到
+       * user release，更强势抢得过 EditText 内部 gesture。
+       * minDuration(0) 让它立即 active，不等 500ms；shouldCancelWhenOutside(false)
+       * 允许手指轻微移动不立刻 cancel。 */
+      Gesture.LongPress()
+        .minDuration(0)
+        .maxDistance(99999)
+        .shouldCancelWhenOutside(false)
+        .onStart(() => {
+          'worklet';
+          /* 胶囊横向 ~280pt，倍率不能跟圆按钮 1.4 等阶——1.1 已经能感觉到，再大宽度
+           * 放大会明显失真（"横向 resize 很夸张"）。 */
+          searchBoxPressScale.value = withSpring(1.1, { mass: 1, stiffness: 400, damping: 40 });
+        })
+        .onFinalize((_e, success) => {
+          'worklet';
+          searchBoxPressScale.value = withSpring(1, { mass: 1, stiffness: 220, damping: 14 });
+          if (success) {
+            runOnJS(onSearchPress)();
+          }
+        }),
+    [onSearchPress, searchBoxPressScale],
+  );
+  /* close Fab 的 onPress 必须 useCallback 稳定引用 —— Android 路径的 AnimatedCircleButton
+   * 用 RNGH `Gesture.Tap()` 包在 useMemo 里，依赖列表包含 onPress；inline 箭头函数每次 parent
+   * re-render 都是新引用 → useMemo 失效 → Gesture.Tap 实例重建 → RNGH 内部状态被重置,
+   * 正在跟踪的 tap 被取消。键盘动画期间 setSearchFocused 触发多次 re-render，tap 反复被
+   * 重置导致用户感觉"点了之后过一会儿才有效"。iOS 路径走 BouncyButtonNative 不受影响。 */
+  const onCloseFabPress = useCallback(() => {
+    searchInputRef.current?.blur();
+    Keyboard.dismiss();
+  }, []);
+
+  const searchBoxAnimatedStyle = useAnimatedStyle(() => {
+    const c = searchCollapsed.value;
+    const fp = focusedProgress.value;
+    /* 长条态宽度跟 focusedProgress 联动：focused 时 searchWrap padding 缩了 28pt，搜索框
+     * 补回这 28pt。collapsed (menu open) 态还是 52pt 圆。 */
+    const expandedNow = interpolate(fp, [0, 1], [searchExpandedWidth, searchExpandedWidthFocused]);
+    return {
+      width: interpolate(c, [0, 1], [expandedNow, FAB_SIZE]),
+    };
+  });
+  const searchContentAnimatedStyle = useAnimatedStyle(() => {
+    /* 圆形态只保留 icon —— TextInput + placeholder 用 opacity 0..1 衰减；圆收完时直接 0
+     *  避免文字渗出。0.5 前快速 fade out，避免文字跟着压缩看着奇怪。
+     *  marginLeft 同步 8→0：圆态下抹掉 icon 与 wrapper 之间的间距（之前用 row gap:8，但
+     *  flex gap 即使 wrapper 0 宽也会算占位，导致 paddingH 14×2 + icon 18 + gap 8 = 54 >
+     *  52pt，icon 右边会被裁 2pt）。把 gap 挪进 wrapper 自己的 marginLeft 让它动到 0 解决。 */
+    const c = searchCollapsed.value;
+    return {
+      opacity: interpolate(c, [0, 0.5], [1, 0], 'clamp'),
+      marginLeft: interpolate(c, [0, 1], [8, 0]),
+    };
+  });
 
   const onSelectProjectForCreate = useCallback(
     (project: Project) => {
@@ -684,10 +855,12 @@ export function TodayScreen() {
     <SafeAreaView style={styles.container} edges={['bottom']}>
     <KeyboardAvoidingView
       style={styles.kavInner}
-      /* Android 不传 behavior：AndroidManifest 已设 windowSoftInputMode=adjustResize，系统会
-       *  自己 resize 整个 window，再叠 KAV "height" 会双重处理，关键盘时残留高度不归零导致
-       *  bottom 漂移。iOS 必须 padding（无 adjustResize 等价物）。 */
-      behavior={Platform.select({ ios: 'padding', android: undefined })}
+      /* lib KAV 两端都用 'padding'：lib 内部走 WindowInsets.ime（Android）/
+       *  UIKeyboardLayoutGuide（iOS）拿 frame，paddingBottom 由 lib 直接驱动。Android 不再像
+       *  RN 自带 KAV 那样跟 adjustResize 双重处理——lib KAV 不依赖 adjustResize，传 undefined
+       *  会走到内部 default 分支变 no-op（content 不动）。edge-to-edge 模式下尤其要这样配，
+       *  因为 adjustResize 本身行为被 fitsSystemWindows=false 改变了。 */
+      behavior="padding"
       keyboardVerticalOffset={0}
     >
       {/* SafeAreaView 在外 + KAV 在内（跟 ChatScreen 同款顺序）：
@@ -739,6 +912,11 @@ export function TodayScreen() {
           data={localTaskOrder}
           keyExtractor={(item) => item.id}
           onDragEnd={({ data }) => setLocalTaskOrder(data)}
+          /* 任何 list 区域的 touchStart 都让输入框失焦 —— tap 跟滚动都从 touchStart 起步,
+           * 覆盖两种交互。keyboardDismissMode 是 RN 内置的滚动 dismiss 双保险（特别是 iOS
+           * 上的 interactive dismiss）。 */
+          onTouchStart={Keyboard.dismiss}
+          keyboardDismissMode="on-drag"
           ListHeaderComponent={ListHeader}
           ListFooterComponent={ListFooter}
           ListEmptyComponent={
@@ -828,37 +1006,107 @@ export function TodayScreen() {
         style={[
           styles.searchWrap,
           /* paddingBottom 由 kbSearchWrapStyle 管：无键盘时 = max(insets.bottom, 8) 补 safe-area；
-           * 键盘弹起时 = 0（键盘自己占了底部空间，不再需要 safe-area inset）。 */
+           * 键盘弹起时 = 0（键盘自己占了底部空间，不再需要 safe-area inset）。
+           * paddingHorizontal 由 searchWrapPaddingStyle 管：focused 时 26→12 收窄。 */
           kbSearchWrapStyle,
+          searchWrapPaddingStyle,
         ]}
       >
         <View style={styles.searchRow}>
-          {IS_IOS_LIQUID_GLASS ? (
-            <BouncyGlassCard
-              style={[styles.searchInputBoxFlex, styles.searchInputBoxGlass]}
-              cornerRadius={26}
-              interactive
-            >
-              <Ionicons name="search" size={18} color={colors.textMuted} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="搜索任务或对话"
-                placeholderTextColor={colors.placeholder}
-                returnKeyType="search"
+          {/* FAB 菜单打开时搜索框 morph 成 52pt 圆，只留 search icon——让位给上方 UIMenu。
+              BouncyGlassCard / View 套一层 Animated.View 控宽度；内部 icon + TextInput 套一
+              层 contentAnimatedStyle 控 opacity （宽收完前已经透明，避免文字露出来）。
+              flexShrink: 0 是关键——searchRow 是 row 容器，默认 flexShrink:1 会被 FAB / gap
+              挤压宽度（动画驱动的 width 又被 layout 压缩 → 两套尺寸打架）。pin 死宽度由
+              animated style 单方驱动。 */}
+          <Animated.View style={[styles.searchInputAnim, searchBoxAnimatedStyle]}>
+            {IS_IOS_LIQUID_GLASS ? (
+              <BouncyGlassCard
+                style={[styles.searchInputBoxGlass, styles.searchInputBoxFill]}
+                cornerRadius={26}
+                interactive
+                /* 整个胶囊点哪都进输入态 —— TextInput 物理区域比胶囊小（左边 icon 占
+                   一部分），点 icon 区或左边空白本来 TextInput 抓不到 focus。BouncyGlassCard
+                   自己的 UITapGestureRecognizer 已经 cancelsTouchesInView=NO，touch 仍可正常
+                   传给 TextInput；这里 onPress 是"点胶囊其它区域也焦"的补漏。menu 关闭后
+                   500ms 内的 tap 在 onSearchPress 里被 skip，避免关菜单那一下误 focus。 */
+                onPress={onSearchPress}
+              >
+                <Ionicons name="search" size={18} color={colors.textMuted} />
+                <Animated.View style={[styles.searchInputTextWrap, searchContentAnimatedStyle]}>
+                  <TextInput
+                    ref={searchInputRef}
+                    style={styles.searchInput}
+                    placeholder="搜索任务或对话"
+                    placeholderTextColor={colors.placeholder}
+                    returnKeyType="search"
+                    editable={!fabMenuOpen}
+                  />
+                </Animated.View>
+              </BouncyGlassCard>
+            ) : (
+              /* Android 路径胶囊按下放大：RNGH Gesture.Tap onBegin/onFinalize 在 UI 线程
+                 worklet 驱动 spring scale，不走 JS bridge，快速 tap 也能稳定 trigger
+                 出 spring 起始段。onEnd runOnJS(onSearchPress) 把业务回调切回 JS。 */
+              <GestureDetector gesture={searchBoxTapGesture}>
+                <Animated.View
+                  style={[styles.searchInputBox, styles.searchInputBoxFill, searchBoxPressAnimStyle]}
+                >
+                  <Ionicons name="search" size={18} color={colors.textMuted} />
+                  <Animated.View style={[styles.searchInputTextWrap, searchContentAnimatedStyle]}>
+                    <TextInput
+                      ref={searchInputRef}
+                      style={styles.searchInput}
+                      placeholder="搜索任务或对话"
+                      placeholderTextColor={colors.placeholder}
+                      returnKeyType="search"
+                      editable={!fabMenuOpen}
+                      /* Android：EditText 是 native focusable view，会自己吃自己区域内的
+                       * touch，导致 RNGH Gesture.Tap 在输入框区域 onBegin 不 fire = 按下
+                       * 放大失效。pointerEvents='none' 让 EditText 让出 hit-test，外层
+                       * GestureDetector 全权接管；focus 已经走 imperative searchInputRef
+                       * .focus()，不依赖 native touch。代价是 cursor 永远到末尾——对搜索
+                       * 场景 OK。键盘 IME 输入不走 hit-test，不受影响。 */
+                      pointerEvents={Platform.OS === 'android' ? 'none' : undefined}
+                    />
+                  </Animated.View>
+                </Animated.View>
+              </GestureDetector>
+            )}
+          </Animated.View>
+          {/* Fab + 菜单 —— dual Fab 叠放，按 searchFocused 切 wrapper opacity + pointerEvents：
+           *  - 非输入态：visible Fab 是 +（带 menuActions native UIMenu / 其它平台 onPress
+           *    openFabMenu）。
+           *  - 输入态：visible Fab 是 ×（onPress blur TextInput）。
+           *  关键：两个 Fab 各自的 prop 永远不变，所以底层 BouncyButton native 不会 diff
+           *  sfSymbolName / menuActionsJson → UIButton.configuration 不重算 → 无 layout
+           *  re-pass。state 切换只影响 wrapper View 的 opacity (CALayer.opacity，纯视觉，
+           *  不触发 layout)，所以输入框这一行不会再"跳"。 */}
+          <View style={styles.fabSwapWrap}>
+            {/* 两端统一 dual stack + scale crossfade。视觉跟 hit-test 路由都吃 focusedProgress
+                (UI 线程 SharedValue) —— scale 跟 pointerEvents 由 fab*AnimStyle 在 animated
+                style 里逐帧同步驱动（详见上面 fabPlus/CloseAnimStyle 注释）。close 在 z 底层、
+                plus 顶层覆盖（避开 iOS UIGlassEffect 子树 opacity:0 mount 的背景渲染 bug；
+                Android 无影响）。 */}
+            <Animated.View style={[StyleSheet.absoluteFill, fabCloseAnimStyle]}>
+              <Fab
+                ionicon="close"
+                sfSymbol="xmark"
+                onPress={onCloseFabPress}
               />
-            </BouncyGlassCard>
-          ) : (
-            <View style={[styles.searchInputBox, styles.searchInputBoxFlex]}>
-              <Ionicons name="search" size={18} color={colors.textMuted} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="搜索任务或对话"
-                placeholderTextColor={colors.placeholder}
-                returnKeyType="search"
+            </Animated.View>
+            <Animated.View style={[StyleSheet.absoluteFill, fabPlusAnimStyle]}>
+              <Fab
+                ionicon="add"
+                sfSymbol="plus"
+                onPress={IS_IOS_LIQUID_GLASS ? undefined : openFabMenu}
+                menuActions={IS_IOS_LIQUID_GLASS ? fabMenuActions : undefined}
+                onMenuAction={IS_IOS_LIQUID_GLASS ? onFabMenuPick : undefined}
+                onMenuWillShow={IS_IOS_LIQUID_GLASS ? openFabMenu : undefined}
+                onMenuDidDismiss={IS_IOS_LIQUID_GLASS ? closeFabMenu : undefined}
               />
-            </View>
-          )}
-          <Fab ionicon="add" sfSymbol="plus" onPress={onCreateChat} />
+            </Animated.View>
+          </View>
         </View>
       </Animated.View>
       </View>
@@ -929,6 +1177,62 @@ export function TodayScreen() {
         isAheadOfToday={isAheadOfToday}
         onCancelAheadOfToday={cancelAheadOfToday}
       />
+
+      {/* 非 iOS 26 走自绘 popover；iOS 26 走原生 UIMenu 不渲染。
+       *
+       * 改造历史：以前用 <Modal>，Android 上 native dialog 冷启动 200-400ms；后来去掉
+       * Modal 直接 absolute View，但 fabMenuOpen ? <menu/> : null 还是 conditional mount,
+       * Yoga layout + native view 创建几十 ms。现在 menu 跟 backdrop 全部 **常驻 mount**,
+       * 可见性靠 SharedValue 驱动 opacity / scale / pointerEvents，开菜单 worklet 一帧
+       * 直接切，无 mount 延迟。
+       *
+       * 位置：right / bottom 比 FAB 各偏移一点点（右 26→30, 底 +8），让 menu 卡片覆盖
+       * 整个 FAB 范围 + 视觉上向左上长出来。borderRadius 跟 FAB 一致。 */}
+      {!IS_IOS_LIQUID_GLASS ? (
+        <>
+          <Animated.View
+            style={[StyleSheet.absoluteFill, styles.fabMenuBackdrop, fabMenuBackdropAnimStyle]}
+          >
+            <Pressable style={StyleSheet.absoluteFill} onPress={closeFabMenu} />
+          </Animated.View>
+          <Animated.View
+            style={[
+              styles.fabMenuCard,
+              {
+                bottom: Math.max(insets.bottom, 8) + 8,
+                /* right 26 跟 FAB 右沿（searchWrap.paddingHorizontal）对齐 —— 菜单右边
+                 * 不向内错开，跟 FAB 右沿一根垂直线。 */
+                right: 26,
+              },
+              fabMenuCardAnimStyle,
+            ]}
+          >
+            <TouchableOpacity
+              style={styles.fabMenuItem}
+              activeOpacity={0.6}
+              onPress={() => {
+                closeFabMenu();
+                onCreateChat();
+              }}
+            >
+              <Ionicons name="chatbubble-outline" size={20} color={colors.textPrimary} />
+              <Text style={styles.fabMenuItemText}>新建对话</Text>
+            </TouchableOpacity>
+            <View style={styles.fabMenuDivider} />
+            <TouchableOpacity
+              style={styles.fabMenuItem}
+              activeOpacity={0.6}
+              onPress={() => {
+                closeFabMenu();
+                onCreateTask();
+              }}
+            >
+              <Ionicons name="checkbox-outline" size={20} color={colors.textPrimary} />
+              <Text style={styles.fabMenuItemText}>新建任务</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -1067,13 +1371,34 @@ function createStyles(c: AppColors) {
          同款）。content 那侧 paddingBottom 已经给了 LIST_PADDING_BOTTOM_WITH_FOOTER 留位，
          不会永久挡住最后几条。 */
     },
-    /* 搜索 + FAB 单行：搜索拿 flex:1，FAB 紧贴右侧。alignItems: center 让两者垂直居中。 */
+    /* 搜索 + FAB 单行：searchInputAnim 宽度由 animated style 单方驱动，FAB 固定 52pt。
+       justifyContent: space-between 让 FAB 死贴右沿——之前默认 flex-start，搜索框收缩时
+       FAB 跟着左移、展开时右移，看着像"按钮被拽来拽去"。space-between 下：展开态两者
+       宽和 ≈ row 总宽（无空隙），collapsed 态搜索贴左、FAB 贴右、中间空白，FAB 位置稳定不动。
+       gap 10 在 collapsed 态会被 space-between 的间距盖掉（间距大于 gap 时 gap 不显），
+       展开态两 item 紧贴反而是 gap 10 控间距——两种态下间距连续过渡。 */
     searchRow: {
       flexDirection: 'row',
       alignItems: 'center',
+      justifyContent: 'space-between',
       gap: 10,
     },
-    searchInputBoxFlex: { flex: 1 },
+    /* searchInputAnim：搜索框外层 wrapper，宽度由 searchBoxAnimatedStyle 单方驱动（不
+       走 flex）。height 跟 FAB 等高 (52pt)，菜单打开收成 52pt 圆。flexShrink:0 防止
+       搜索框被 searchRow 的 flex layout 二次压缩，跟 animated width 打架。 */
+    searchInputAnim: { height: 52, flexShrink: 0, justifyContent: 'center' },
+    /* searchInputBoxFill：让内部 BouncyGlassCard / View 撑满 searchInputAnim 的宽度（动画
+       驱动），而不是 flex:1（跟 parent flex 抢宽）。 */
+    searchInputBoxFill: { width: '100%' },
+    /* dual Fab 包层：固定 FAB 尺寸的 wrapper，两个 Fab 都 absoluteFill 进去 stack 叠放。
+       state 切只动子 wrapper 的 opacity（Reanimated worklet 驱动，UI 线程 220ms 渐变）+
+       pointerEvents（React state 切 hit-test target），不动子 Fab 自身 prop，UIButton 内部
+       完全稳定无 layout re-pass。 */
+    fabSwapWrap: { width: FAB_SIZE, height: FAB_SIZE },
+    /* TextInput / placeholder 套这一层，opacity 跟 searchContentAnimatedStyle 联动 ——
+       菜单打开收圆时文字先 fade out 再宽度收完，避免文字被压扁/挤出来。flex:1 让它在
+       icon 旁吃满剩余宽度。overflow:hidden 收圆时把溢出文字裁掉。 */
+    searchInputTextWrap: { flex: 1, overflow: 'hidden' },
     /* pillBtn / pillBtnText 还在被"任务段"的新建任务按钮（inline 在 sectionRow 里）用着，
        底部 sticky 的"新对话 pill"已经换成 Fab——所以 pillBtn 的 callsite 只剩一处。 */
     pillBtn: {
@@ -1088,28 +1413,86 @@ function createStyles(c: AppColors) {
     },
     pillBtnText: { fontSize: 15, fontWeight: '600', color: c.onPrimary },
     /* height: 52 跟旁边 FAB（FAB_SIZE）等高；borderRadius: 26 = height/2 capsule 形状。
-       paddingVertical 去掉——固定高度下 alignItems: center 已经把 icon + 输入框居中。 */
+       paddingVertical 去掉——固定高度下 alignItems: center 已经把 icon + 输入框居中。
+       paddingLeft = 17 = borderRadius − icon半宽 = 26 − 9：让 search icon 的水平中心
+       永远落在 capsule 左半圆圆心 (x=26) 上，长条 / 圆形两态都对齐。paddingRight 留 14
+       给文字 padding；圆形态 textWrap flex:1 占满右侧 slack，icon 位置不被它影响。
+       gap 移除：FAB 菜单打开时 search morph 成 52pt 圆，row gap 即使 textWrap 0 宽也会
+       算占位（导致 icon 被裁）。改由 searchInputTextWrap 的 marginLeft 控间距，动画到 0。 */
     searchInputBox: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 8,
-      paddingHorizontal: 14,
+      paddingLeft: 17,
+      paddingRight: 14,
       height: 52,
       borderRadius: 26,
       backgroundColor: c.surface,
       ...shadowMenu,
     },
-    /* iOS 26 glass 路径下的 search 卡片样式：保留 row + padding + gap，不要 bg/shadow
+    /* iOS 26 glass 路径下的 search 卡片样式：保留 row + padding，不要 bg/shadow
        —— 玻璃材质 + system 折光由 BouncyGlassCard 内部 UIVisualEffectView 提供。
-       height: 52 跟 FAB 等高（cornerRadius: 26 在 BouncyGlassCard prop 上传）。 */
+       height: 52 跟 FAB 等高（cornerRadius: 26 在 BouncyGlassCard prop 上传）。
+       paddingLeft / gap 处理同 searchInputBox（详见上面注释）。 */
     searchInputBoxGlass: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 8,
-      paddingHorizontal: 14,
+      paddingLeft: 17,
+      paddingRight: 14,
       height: 52,
     },
-    searchInput: { flex: 1, fontSize: 15, color: c.textPrimary, padding: 0 },
+    searchInput: {
+      flex: 1,
+      fontSize: 15,
+      color: c.textPrimary,
+      padding: 0,
+      /* TextInput frame 是按 ascender / descender 度量的，父级 alignItems:'center' 居中
+       * 的是 frame，不是文字 cap-height 视觉中心 —— 看起来都偏下，两端都拉一下。
+       * Android EditText 偏移更明显，外加 includeFontPadding + textAlignVertical
+       * 关掉系统级字体度量 padding。 */
+      marginTop: Platform.OS === 'android' ? -3 : -1,
+      ...(Platform.OS === 'android' && {
+        includeFontPadding: false,
+        textAlignVertical: 'center' as const,
+      }),
+    },
+    /* FAB 菜单 popover（仅 iOS<26 / Android 走这套；iOS 26 上原生 UIMenu 接管，
+       本 Modal 不渲染）。视觉与 ChatScreen 的 convMenu* 系列同款，便于以后抽。 */
+    /* backdrop 用 absoluteFill 全屏覆盖；只用来捕获 outside tap 关菜单，不变暗——
+     * 跟 ChatScreen 的 convMenuBackdrop 同款，让 menu 跟背景靠 shadow / surface 区分,
+     * 不是靠全屏遮罩。elevation 9000 < menu 9999，确保 backdrop 在 menu 下方。 */
+    fabMenuBackdrop: {
+      backgroundColor: 'transparent',
+      zIndex: 9000,
+      elevation: 9000,
+    },
+    fabMenuCard: {
+      position: 'absolute',
+      minWidth: 240,
+      backgroundColor: c.surface,
+      /* 圆角跟 FAB 一致 (FAB borderRadius = FAB_SIZE/2 = 26)，视觉上"圆按钮长大成菜单"。
+       * 不要 border —— 跟 ChatScreen convMenuCard 一样，靠 shadowMenu 跟背景区分。 */
+      borderRadius: FAB_SIZE / 2,
+      overflow: 'hidden',
+      /* 卡片内 items 离卡片边距留 padding，配合 borderRadius 26 让 item 不顶到圆角。 */
+      paddingVertical: 6,
+      paddingHorizontal: 18,
+      zIndex: 9999,
+      elevation: 9999,
+      ...shadowMenu,
+    },
+    fabMenuItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+    },
+    fabMenuDivider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: c.conversationListSeparator,
+      marginHorizontal: 8,
+    },
+    fabMenuItemText: { fontSize: 15, color: c.textPrimary },
     /* 删除 modal */
     deleteOverlay: { flex: 1, backgroundColor: c.modalBackdrop },
     deleteCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },

@@ -15,7 +15,10 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 import { shadowFabThemed } from '../theme/shadows';
-import { AnimatedCircleButton } from './AnimatedCircleButton';
+import {
+  AnimatedCircleButton,
+  type AnimatedCircleButtonMenuAction,
+} from './AnimatedCircleButton';
 
 export const FAB_SIZE = 52;
 
@@ -32,6 +35,12 @@ type Props = {
   /** style override，merge 在默认 fab style 之后。给 callsite 微调位置用——比如跟 iOS 26
    *  UITabBar 一起出现时 transform translateY 来补偿 glass material 的内部 padding。 */
   style?: StyleProp<ViewStyle>;
+  /** 透传给 AnimatedCircleButton 的 iOS 26 原生 UIMenu props。非空时按下不发 onPress、改弹菜单。
+   *  其它平台需要 callsite 自己用 onPress 走 fallback popover（Fab 不替你做 fallback）。 */
+  menuActions?: ReadonlyArray<AnimatedCircleButtonMenuAction>;
+  onMenuAction?: (actionId: string) => void;
+  onMenuWillShow?: () => void;
+  onMenuDidDismiss?: () => void;
 };
 
 export function Fab({
@@ -43,6 +52,10 @@ export function Fab({
   onPress,
   disabled,
   style,
+  menuActions,
+  onMenuAction,
+  onMenuWillShow,
+  onMenuDidDismiss,
 }: Props) {
   const { colors } = useAppTheme();
   const iconColor = color ?? colors.primary;
@@ -53,6 +66,10 @@ export function Fab({
       onPress={onPress}
       disabled={disabled}
       iosSfSymbol={{ name: sfSymbol, size: 16, color: iconColor }}
+      menuActions={menuActions}
+      onMenuAction={onMenuAction}
+      onMenuWillShow={onMenuWillShow}
+      onMenuDidDismiss={onMenuDidDismiss}
     >
       <Ionicons name={ionicon} size={iconSize} color={iconColor} />
     </AnimatedCircleButton>

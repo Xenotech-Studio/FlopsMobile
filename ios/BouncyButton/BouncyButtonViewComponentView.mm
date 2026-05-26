@@ -1,10 +1,71 @@
 #import "BouncyButtonViewComponentView.h"
 
 #import <React/RCTConversions.h>
+#import <objc/runtime.h>
 #import <react/renderer/components/FlopsMobileSpec/ComponentDescriptors.h>
 #import <react/renderer/components/FlopsMobileSpec/EventEmitters.h>
 #import <react/renderer/components/FlopsMobileSpec/Props.h>
 #import <react/renderer/components/FlopsMobileSpec/RCTComponentViewHelpers.h>
+
+@class BouncyButtonViewComponentView;
+
+/* 全局活跃 menu views 集合：menu 打开期间 BouncyButtonViewComponentView 自己 add 到这里；
+ * UIApplication.sendEvent: 的 swizzle 看到任何 touch began 就遍历这个集合通知 dismiss。
+ * weak 引用避免 view 被释放后悬挂；同一时刻 iOS UIMenu 也只能开一个，集合实际多半只有 1 元素。 */
+static NSHashTable<BouncyButtonViewComponentView *> *gBBActiveMenuViews;
+
+@interface BouncyButtonViewComponentView (BBMenuDismissPrivate)
+- (void)bb_dismissFromSwizzle;
+@end
+
+/* swizzle UIApplication.sendEvent: —— 每个 UIEvent 都必经此方法（包括 touches / motion /
+ * remote control）。menu 期间任何 touchPhaseBegan 立即 → dismiss。
+ *
+ * 为什么走 swizzle 而不是 gesture recognizer：试过把 BBAnyTouchRecognizer 挂在 app window
+ * 上、加 UIWindowDidBecomeVisible/Hidden notification 装到 overlay window 上、放 canPrevent
+ * 那一套——iOS 26 UIMenu 的 dismiss view 把 touch 拦在 view-level 内部，window-level
+ * recognizer 不 fire；overlay window 实测也不发 Visible/Hidden notification。sendEvent 是
+ * UIKit dispatch 入口、所有 event 必经，绕不过去。实机验证同毫秒 emit dismiss。 */
+@interface UIApplication (BBMenuDismissSwizzle)
+@end
+
+@implementation UIApplication (BBMenuDismissSwizzle)
+
++ (void)load {
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    Method orig = class_getInstanceMethod([UIApplication class], @selector(sendEvent:));
+    Method swiz = class_getInstanceMethod([UIApplication class], @selector(bb_swizzledSendEvent:));
+    if (orig != NULL && swiz != NULL) {
+      method_exchangeImplementations(orig, swiz);
+    }
+  });
+}
+
+- (void)bb_swizzledSendEvent:(UIEvent *)event {
+  /* 先抓状态 —— 在调原始 sendEvent 之前判断"是否要触发 dismiss"。如果倒过来（先调原始
+   * 再判断），原始那次 dispatch 里的 handleGlassTouchDown 会刚把 self 加到 gBBActiveMenuViews，
+   * 我们的判断就把 menu 同一帧又 dismiss 了 —— FAB tap 自爆。 */
+  BOOL shouldDismiss = NO;
+  if (event.type == UIEventTypeTouches && gBBActiveMenuViews.count > 0) {
+    for (UITouch *t in event.allTouches) {
+      if (t.phase == UITouchPhaseBegan) {
+        shouldDismiss = YES;
+        break;
+      }
+    }
+  }
+  [self bb_swizzledSendEvent:event];  // 调原始（swap 后这个名字指向 original IMP）
+  if (shouldDismiss) {
+    /* 拷一份 snapshot 再遍历——dismiss 过程中 view 会 remove 自己，原集合不能直接迭代。 */
+    NSArray<BouncyButtonViewComponentView *> *snap = [gBBActiveMenuViews allObjects];
+    for (BouncyButtonViewComponentView *v in snap) {
+      [v bb_dismissFromSwizzle];
+    }
+  }
+}
+
+@end
 
 using namespace facebook::react;
 
@@ -50,6 +111,13 @@ static const CGFloat kReleaseBounce = 0.35;
   BOOL _pressing;
   CGFloat _pressScale;
   BOOL _bouncyDisabled;
+  // menu 生命周期：UIMenu 没公开 dismiss callback，自己维护"打开/关闭"状态机供 JS 联动。
+  // dismiss 信号来源（任一先到都触发 finishMenuDismiss）：
+  //   1. UIAction handler (用户选 item 时)
+  //   2. UIApplication.sendEvent: swizzle (用户 menu 外 touch 时) — 快路径，~1 帧
+  //   3. NSTimer poll 视图树 _UIContextMenu* class (非 touch dismiss 兜底，比如 app 切后台)
+  BOOL _menuPresenting;
+  NSTimer *_menuDismissPollTimer;
 }
 
 + (ComponentDescriptorProvider)componentDescriptorProvider {
@@ -105,6 +173,14 @@ static const CGFloat kReleaseBounce = 0.35;
   _showsActivityIndicator = NO;
   _pressScale = 1.12;
   _bouncyDisabled = NO;
+  /* recycle 时若上一次 menu 还在 polling，得停了 timer + 清状态。
+     emit dismiss 此时不发——view 已经从屏幕上拿走，下游 JS 也无意义。 */
+  if (_menuDismissPollTimer) {
+    [_menuDismissPollTimer invalidate];
+    _menuDismissPollTimer = nil;
+  }
+  if (gBBActiveMenuViews) [gBBActiveMenuViews removeObject:self];
+  _menuPresenting = NO;
   static const auto defaultProps = std::make_shared<const BouncyButtonViewProps>();
   _props = defaultProps;
 }
@@ -278,6 +354,10 @@ static const CGFloat kReleaseBounce = 0.35;
 
 - (void)handleGlassTouchDown {
   if ([self glassIsInMenuMode]) {
+    /* menu 模式：scale spring 不跑（让系统 morph 接管视觉），但要 emit menu-will-show 让
+       上层 JS 做联动（搜索框 morph 等）。touchDown 比 menu 实际可视稍早一帧，对 JS 那侧
+       width 动画来说反而是个好起点——动画 200ms~ 跟 menu 同步弹起。 */
+    [self emitMenuWillShowAndStartDismissWatcher];
     return;
   }
   [self animateGlassAndChildrenToScale:_pressScale
@@ -419,6 +499,134 @@ static const CGFloat kReleaseBounce = 0.35;
   if (auto eventEmitter =
           std::static_pointer_cast<const BouncyButtonViewEventEmitter>(_eventEmitter)) {
     eventEmitter->onMenuAction({.actionId = std::string([actionId UTF8String])});
+  }
+  /* UIAction 触发即视为 menu dismiss——iOS UIMenu 选完一项后立即开始关闭动画，没有再 surface
+     的窗口。dismiss-by-outside-tap 走 swizzle 路径瞬时；polling 兜底非 touch dismiss。 */
+  [self finishMenuDismiss];
+}
+
+// MARK: - Menu lifecycle (will-show / did-dismiss)
+
+/* JS 侧需要"菜单打开 / 关闭"两端信号来联动同行控件（典型场景：TodayScreen 右下 FAB 弹菜单
+   时，左边搜索框 morph 成圆）。UIButton + showsMenuAsPrimaryAction 的 UIMenu 没公开
+   present/dismiss callback，所以自己拼三条线（任一先到即关，后到走 _menuPresenting 首 if
+   nop）：
+   - will-show：handleGlassTouchDown 进入 menu 模式时主动 emit（touchDown 是 menu 即将弹的
+     最早 hook，比实际可视早一帧；JS 200ms~ width 动画刚好跟弹层同步起来）。
+   - did-dismiss：
+     (a) UIAction handler emit 选中 + 立即视为关闭。
+     (b) UIApplication.sendEvent: swizzle（顶部）：menu 期间任何 touch began → 同步 dismiss。
+         主路径，~1 帧延迟，实机验证同毫秒 emit。试过 window-level recognizer 不 fire (iOS
+         UIMenu dismiss view 把 touch 拦在 view-level)、试过 UIWindowDidBecomeVisible/Hidden
+         notification 不发，最后落 swizzle。
+     (c) NSTimer 周期性扫 key window 子树找 _UIContextMenu* class 没了即关闭。慢路径
+         兜底（系统切前后台 / app 强制取消等非 touch dismiss）。200ms 间隔，CPU 几乎零。
+
+   私有类名 string-contains 检查（(c)），避免直接调用私有 API（不调方法、不发 selector），
+   符合 App Store 规则边界。无法识别 menu overlay 也不会卡死——polling 30s 超时兜底。 */
+/* polling 是慢路径兜底，仅给非 touch dismiss（app 切前后台 / 系统强制取消 / app 自己
+   setMenu:nil 等）保命。主路径是 sendEvent swizzle，dismiss 延迟基本同毫秒。
+   200ms 够保守、CPU 几乎零开销。 */
+static const NSTimeInterval kMenuDismissPollInterval = 0.2;
+static const NSTimeInterval kMenuPollStartDelay = 0.25;  // 留时间让 menu 实际可视
+static const NSTimeInterval kMenuMaxLifetime = 30.0;     // 兜底：menu 不可能开这么久
+
+- (void)emitMenuWillShowAndStartDismissWatcher {
+  if (_menuPresenting) return;
+  _menuPresenting = YES;
+  /* 注册到全局活跃 menu views——swizzled UIApplication.sendEvent 会查这个集合。
+     hashtable 用 weak ref，self 释放时自动从集合移除（避免悬挂指针）。 */
+  static dispatch_once_t hashOnce;
+  dispatch_once(&hashOnce, ^{
+    gBBActiveMenuViews = [NSHashTable weakObjectsHashTable];
+  });
+  [gBBActiveMenuViews addObject:self];
+  if (auto eventEmitter =
+          std::static_pointer_cast<const BouncyButtonViewEventEmitter>(_eventEmitter)) {
+    eventEmitter->onMenuWillShow({});
+  }
+  /* polling 慢路径兜底（非 touch dismiss 用）。 */
+  __weak __typeof(self) weakSelf = self;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                               (int64_t)(kMenuPollStartDelay * NSEC_PER_SEC)),
+                 dispatch_get_main_queue(),
+                 ^{
+    __strong __typeof(self) ss = weakSelf;
+    if (!ss || !ss->_menuPresenting) return;
+    [ss startMenuDismissPolling];
+  });
+}
+
+- (void)startMenuDismissPolling {
+  if (_menuDismissPollTimer) return;
+  __weak __typeof(self) weakSelf = self;
+  NSDate *startedAt = [NSDate date];
+  _menuDismissPollTimer =
+      [NSTimer scheduledTimerWithTimeInterval:kMenuDismissPollInterval
+                                      repeats:YES
+                                        block:^(NSTimer *_Nonnull timer) {
+    __strong __typeof(self) ss = weakSelf;
+    if (!ss || !ss->_menuPresenting) {
+      [timer invalidate];
+      return;
+    }
+    if (-[startedAt timeIntervalSinceNow] > kMenuMaxLifetime) {
+      [ss finishMenuDismiss];
+      return;
+    }
+    if (![ss isContextMenuOverlayPresentInAnyWindow]) {
+      [ss finishMenuDismiss];
+    }
+  }];
+}
+
+- (BOOL)isContextMenuOverlayPresentInAnyWindow {
+  if (@available(iOS 13.0, *)) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+      if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+      UIWindowScene *ws = (UIWindowScene *)scene;
+      for (UIWindow *win in ws.windows) {
+        if ([self viewSubtreeContainsContextMenuOverlay:win]) return YES;
+      }
+    }
+  } else {
+    /* iOS 12 不会走 glass 路径，理论上到不了这里；兜底走 keyWindow。 */
+    UIWindow *win = UIApplication.sharedApplication.keyWindow;
+    if (win && [self viewSubtreeContainsContextMenuOverlay:win]) return YES;
+  }
+  return NO;
+}
+
+- (BOOL)viewSubtreeContainsContextMenuOverlay:(UIView *)view {
+  NSString *cls = NSStringFromClass([view class]);
+  /* UIButton.menu (showsMenuAsPrimaryAction) 走 UIContextMenu 内部基础架构，overlay container
+     的私有类名以 "_UIContextMenu" 起头（_UIContextMenuPlatterTransitionView /
+     _UIContextMenuContainerView 等）。"EditMenu" 是 iOS 16+ UIEditMenuInteraction 的类前缀，
+     UIButton menu 不走它，但放一起做兜底也无害。 */
+  if ([cls hasPrefix:@"_UIContextMenu"] || [cls hasPrefix:@"_UIEditMenu"]) {
+    return YES;
+  }
+  for (UIView *sub in view.subviews) {
+    if ([self viewSubtreeContainsContextMenuOverlay:sub]) return YES;
+  }
+  return NO;
+}
+
+- (void)bb_dismissFromSwizzle {
+  [self finishMenuDismiss];
+}
+
+- (void)finishMenuDismiss {
+  if (!_menuPresenting) return;
+  _menuPresenting = NO;
+  [gBBActiveMenuViews removeObject:self];
+  if (_menuDismissPollTimer) {
+    [_menuDismissPollTimer invalidate];
+    _menuDismissPollTimer = nil;
+  }
+  if (auto eventEmitter =
+          std::static_pointer_cast<const BouncyButtonViewEventEmitter>(_eventEmitter)) {
+    eventEmitter->onMenuDidDismiss({});
   }
 }
 

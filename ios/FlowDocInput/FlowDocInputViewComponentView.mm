@@ -92,6 +92,15 @@ using namespace facebook::react;
   if (oldViewProps.enterCreatesBlock != newViewProps.enterCreatesBlock) {
     [_inputView setEnterCreatesBlock:newViewProps.enterCreatesBlock];
   }
+  if (oldViewProps.textContainerInsetTop != newViewProps.textContainerInsetTop ||
+      oldViewProps.textContainerInsetLeft != newViewProps.textContainerInsetLeft ||
+      oldViewProps.textContainerInsetBottom != newViewProps.textContainerInsetBottom ||
+      oldViewProps.textContainerInsetRight != newViewProps.textContainerInsetRight) {
+    [_inputView setTextContainerInsets:UIEdgeInsetsMake(newViewProps.textContainerInsetTop,
+                                                        newViewProps.textContainerInsetLeft,
+                                                        newViewProps.textContainerInsetBottom,
+                                                        newViewProps.textContainerInsetRight)];
+  }
 
   [super updateProps:props oldProps:oldProps];
 }

@@ -22,7 +22,7 @@
  * - archive/export 完成后调用 build-and-upload-ios.js，凭据来自 ios-upload-config.json
  *
  * Also accepts common typos for android:
- * - anrdoid / anrdoi
+ * - anrdoid / anrdoi / anroid
  */
 const fs = require('fs');
 const os = require('os');
@@ -62,7 +62,7 @@ function readPasswords(pswPath) {
 function normalizePlatform(token) {
   if (!token) return null;
   const v = token.toLowerCase();
-  if (v === 'android' || v === 'anrdoid' || v === 'anrdoi') return 'android';
+  if (v === 'android' || v === 'anrdoid' || v === 'anrdoi' || v === 'anroid') return 'android';
   if (v === 'ios') return 'ios';
   return null;
 }

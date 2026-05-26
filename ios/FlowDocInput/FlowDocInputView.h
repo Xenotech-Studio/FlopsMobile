@@ -55,6 +55,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) BOOL editable;
 /** Enter 当作"拆 block"语义：默认 YES；code 块设 NO 以保留多行 */
 @property (nonatomic, assign) BOOL enterCreatesBlock;
+/** UITextView.textContainerInset 4 边：让 textView frame 撑满整个 view、内部用 inset 给文本
+ *  视觉留白。允许 UITextView 自己的 tap recognizer 接管整片可点区域（"卡片其它区域 = 输入
+ *  框延伸"原生体感）。callsite 通常给 short 模式左侧 inset 让位 + 按钮，tall 模式给底部 inset 让位。 */
+@property (nonatomic, assign) UIEdgeInsets textContainerInsets;
 
 // MARK: imperative commands
 - (void)setInitialContentJson:(NSString *)json;

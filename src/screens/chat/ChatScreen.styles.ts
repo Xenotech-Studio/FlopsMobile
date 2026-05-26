@@ -1,5 +1,5 @@
 import { Platform, StyleSheet } from 'react-native';
-import { SHADOW_COLOR, androidCircleFabOutline, shadowCircleButtonThemed } from '../../theme/shadows';
+import { shadowCircleButtonThemed, shadowMenu } from '../../theme/shadows';
 import { HEADER_CIRCLE_BTN_SIZE, CHAT_COMPOSER_SEND_BTN_SIZE } from '../../theme/layout';
 import { TASK_FONT_SIZE_TITLE } from '../../theme/typography';
 import type { AppColors } from '../../theme/appColors';
@@ -55,6 +55,38 @@ const COMPOSER_INPUT_PAD_BOTTOM_TALL =
   COMPOSER_PLUS_BTN_SIZE +
   COMPOSER_PLUS_TO_INPUT_GAP -
   COMPOSER_TALL_PAD_BOTTOM;
+
+/* ============================================================
+ * UITextView.textContainerInset / Android EditText.padding 四边（让 input 撑满整张 card,
+ * 文本视觉留白由 native 内 inset 给）。新写法的 callsite 不再用 wrapper View 叠 padding,
+ * 直接把这些值传给 FlowDocSlateAdapter.textContainerInset。
+ * ============================================================ */
+/** Short 模式（单行胶囊）四边 inset：
+ *  - left: 原 card.paddingH + composerInputArea.paddingLeft + composerInputShort.paddingH
+ *  - right: 原 card.paddingH + composerInputShort.paddingH
+ *  - top/bottom: 看着像在 40pt 胶囊里居中。
+ *    iOS: top 实测 16（lineHeight 在 UITextView 上行为 + 字形光学重心偏上需要更多 top）
+ *    Android: top 实测 8（EditText 的 gravity:CENTER_VERTICAL 已经帮忙做了一半几何居中,
+ *      只需要少量 top 补字形光学偏上） */
+export const COMPOSER_TEXT_INSET_SHORT = {
+  top: Platform.OS === 'ios' ? 16 : 8,
+  left:
+    COMPOSER_CARD_PADDING_H +
+    COMPOSER_INPUT_PAD_LEFT_SHORT +
+    COMPOSER_CARD_PADDING_H,
+  bottom: 9,
+  right: COMPOSER_CARD_PADDING_H + COMPOSER_CARD_PADDING_H,
+};
+/** Tall 模式（多行卡片）四边 inset：
+ *  - left/right: 原 card.paddingH + composerInputTall.paddingH (= 8 + 12 = 20)
+ *  - top: 原 card.paddingTop = 18
+ *  - bottom: 原 card.paddingBottom + composerInputAreaTall.paddingBottom = 4 + 44 = 48 */
+export const COMPOSER_TEXT_INSET_TALL = {
+  top: COMPOSER_TALL_PAD_TOP,
+  left: COMPOSER_CARD_PADDING_H + 12,
+  bottom: COMPOSER_TALL_PAD_BOTTOM + COMPOSER_INPUT_PAD_BOTTOM_TALL,
+  right: COMPOSER_CARD_PADDING_H + 12,
+};
 
 export function createChatStyles(c: AppColors) {
   return StyleSheet.create({
@@ -189,24 +221,26 @@ export function createChatStyles(c: AppColors) {
   /** ⋯ 圆按钮在没 conversationId 时灰化（MenuView 不能直接 disable，靠样式 + pointerEvents） */
   circleBtnDisabled: { opacity: 0.4 },
   /** Android ⋯ 菜单 popover：iOS 走 MenuView native，本组只给 Android 用。
-   *  backdrop = 整屏透明遮罩（点空白关）；卡片 absolute 锚定在右上角圆按钮下方。 */
+   *  backdrop = 整屏透明遮罩（点空白关）；卡片 absolute 锚定在右上角圆按钮下方。
+   *  设计跟 TodayScreen FAB 菜单同款：常驻 mount + SharedValue 驱动可见性,
+   *  圆角跟 ⋯ 圆按钮一致 (HEADER_CIRCLE_BTN_SIZE/2 = 26)，无 border，靠 shadowMenu
+   *  区分背景。 */
   convMenuBackdrop: {
-    flex: 1,
     backgroundColor: 'transparent',
+    zIndex: 9000,
+    elevation: 9000,
   },
   convMenuCard: {
     position: 'absolute',
-    minWidth: 200,
+    minWidth: 240,
     backgroundColor: c.surface,
-    borderRadius: 14,
-    paddingVertical: 4,
-    /* 立体感全交给阴影：iOS shadow* + Android elevation 12 + 共用 SHADOW_COLOR alpha。
-       描边去掉了，靠 surface 色 + 投影边缘渗光就够形状辨识。 */
-    shadowColor: SHADOW_COLOR,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 12,
+    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
+    overflow: 'hidden',
+    paddingVertical: 6,
+    paddingHorizontal: 18,
+    zIndex: 9999,
+    elevation: 9999,
+    ...shadowMenu,
   },
   convMenuItem: {
     flexDirection: 'row',
@@ -805,16 +839,7 @@ export function createChatStyles(c: AppColors) {
     fontSize: 16,
     color: c.textPrimary,
     /** iOS：无描边 + 与顶栏圆钮差异化的 offset0 阴影；Android：与顶栏圆钮同 androidCircleFabOutline */
-    ...(Platform.OS === 'ios'
-      ? {
-          shadowColor: SHADOW_COLOR,
-          shadowOffset: { width: 0, height: 0 },
-          shadowOpacity: 0.07,
-          shadowRadius: 14,
-        }
-      : Platform.OS === 'android'
-        ? androidCircleFabOutline(c, 2)
-        : {}),
+    ...shadowMenu,
   },
   /** 实心圆钮：`chatComposerSendBackground`（浅色柔灰深、深色仅略亮于 userBubble） */
   sendBtn: {
@@ -833,28 +858,24 @@ export function createChatStyles(c: AppColors) {
    *   - short：胶囊单行 [+ icon] [input]，仍走 inputRowInOverlay 的 padding
    *   - tall：圆角卡片两行，[input full-width] / [+ icon 单独一行]，模型 chips 仍在底部 absolute meta row
    * ============================================================ */
+  /* card 不再叠 padding 给文本视觉留白；那些 paddingH / paddingT/B 全移到 FlowDocSlateAdapter
+   * 的 textContainerInset 里（COMPOSER_TEXT_INSET_SHORT/TALL），让 native UITextView / EditText
+   * 自己撑满 card，自身 tap recognizer 覆盖整片可点区域 —— 卡片其它区域 tap 等效 input 自身 tap。
+   * card 仍保留 marginH/T/B 跟外屏边界拉开，alignItems:stretch（短）/ stretch 默认（长）让
+   * adapter 沿轴向撑满。+ 按钮仍是 absolute child 占左下角。 */
   composerCardShort: {
     position: 'relative',
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
     backgroundColor: c.inputBg,
     borderRadius: COMPOSER_PILL_SIZE / 2,
     minHeight: COMPOSER_PILL_SIZE,
     marginHorizontal: COMPOSER_ROW_PADDING_H,
     marginTop: 12,
     marginBottom: 18,
-    paddingHorizontal: COMPOSER_CARD_PADDING_H,
-    /** iOS 微阴影 + Android 描边，跟原 composerInput 视觉对齐 */
-    ...(Platform.OS === 'ios'
-      ? {
-          shadowColor: SHADOW_COLOR,
-          shadowOffset: { width: 0, height: 0 },
-          shadowOpacity: 0.07,
-          shadowRadius: 14,
-        }
-      : Platform.OS === 'android'
-        ? androidCircleFabOutline(c, 2)
-        : {}),
+    /** 跟今日页 searchInputBox 阴影规格对齐 —— 同款 shadowMenu（iOS opacity 0.1 radius 12 /
+     * Android elevation 12），两个屏视觉等阶 */
+    ...shadowMenu,
   },
   composerCardTall: {
     position: 'relative',
@@ -865,20 +886,7 @@ export function createChatStyles(c: AppColors) {
     marginHorizontal: COMPOSER_ROW_PADDING_H,
     marginTop: 12,
     marginBottom: 18,
-    paddingTop: COMPOSER_TALL_PAD_TOP,
-    paddingBottom: COMPOSER_TALL_PAD_BOTTOM,
-    /** 左右 padding 跟 short 一样小，让 + 不会比单行模式更靠右 */
-    paddingHorizontal: COMPOSER_CARD_PADDING_H,
-    ...(Platform.OS === 'ios'
-      ? {
-          shadowColor: SHADOW_COLOR,
-          shadowOffset: { width: 0, height: 0 },
-          shadowOpacity: 0.07,
-          shadowRadius: 14,
-        }
-      : Platform.OS === 'android'
-        ? androidCircleFabOutline(c, 2)
-        : {}),
+    ...shadowMenu,
   },
   /** Input-area：所有模式下都包住 inputWrapper（FlowDocSlateAdapter 的父级），保证
    *  adapter 跨 short/tall 切换时 React 节点位置一致 — 不卸载、firstResponder 不丢。
@@ -890,12 +898,11 @@ export function createChatStyles(c: AppColors) {
   composerCardShortGlass: {
     position: 'relative',
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
     minHeight: COMPOSER_PILL_SIZE,
     marginHorizontal: COMPOSER_ROW_PADDING_H,
     marginTop: 12,
     marginBottom: 18,
-    paddingHorizontal: COMPOSER_CARD_PADDING_H,
   },
   composerCardTallGlass: {
     position: 'relative',
@@ -903,9 +910,15 @@ export function createChatStyles(c: AppColors) {
     marginHorizontal: COMPOSER_ROW_PADDING_H,
     marginTop: 12,
     marginBottom: 18,
-    paddingTop: COMPOSER_TALL_PAD_TOP,
-    paddingBottom: COMPOSER_TALL_PAD_BOTTOM,
-    paddingHorizontal: COMPOSER_CARD_PADDING_H,
+  },
+  /** Adapter 撑满 card：alignSelf stretch（沿 flex 横轴 / 纵轴自动 stretch），flex 1 让它
+   *  在轴向也吃满。配合 FlowDocInput 内部 autoHeight 用 minHeight（不是 height）的改造,
+   *  adapter UIView 一方面跟着 native 测出的 content 高度走 minHeight，一方面允许 flex 父
+   *  容器把它拉得更大——所以 short 模式下 card minHeight:40 + flex stretch → adapter UIView
+   *  是 40pt，tall 模式 card 高度跟着 adapter content + 上下 inset 自然增长。 */
+  composerAdapterFill: {
+    flex: 1,
+    alignSelf: 'stretch',
   },
   composerInputAreaShort: {
     flexDirection: 'row',
@@ -925,11 +938,16 @@ export function createChatStyles(c: AppColors) {
     paddingHorizontal: COMPOSER_CARD_PADDING_H,
     /* FlowDocInput 高度 = native 测出的内容高度（约 1 行字号 × 1.6 ≈ 26dp），
      *  比 minHeight (40dp) 短，靠 justifyContent center 把它落到容器中。
-     *  paddingTop < paddingBottom 是有意为之：字体视觉重心高于几何中心
-     *  （descender < ascender 视觉权重），纯几何居中会显得偏下，
-     *  上下不对称 2dp 把视觉中心推回胶囊几何中心。 */
-    paddingTop: 2,
-    paddingBottom: 6,
+     *  Android: paddingTop < paddingBottom (2/6) 是有意为之 —— 字体视觉重心高于几何
+     *    中心（descender < ascender 视觉权重），Android 那侧 native 文本绘制按 baseline
+     *    对齐让单行视觉偏下，2dp 不对称把它推回几何中心。
+     *  iOS: 走对称 4/4。iOS 文本 baseline 处理跟 lineBox 几何中心已经一致，再叠不对称
+     *    padding 反而让文本看着偏下（用户实测）。 */
+    ...Platform.select({
+      ios: { paddingTop: 8, paddingBottom: 2 },
+      android: { paddingTop: 2, paddingBottom: 6 },
+      default: { paddingTop: 2, paddingBottom: 6 },
+    }),
     minHeight: COMPOSER_PILL_SIZE - 12,
     justifyContent: 'center',
   },

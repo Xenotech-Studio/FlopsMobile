@@ -175,6 +175,14 @@ export type FlowDocSlateAdapterProps = {
   placeholder?: string;
   placeholderColor?: string;
   editable?: boolean;
+  /** 透传给 FlowDocInput：UITextView.textContainerInset 四边，让 textView frame 撑满外层
+   *  view，文字视觉留白由 native 内 inset 给。详见 FlowDocInputProps.textContainerInset。 */
+  textContainerInset?: {
+    top?: number;
+    left?: number;
+    bottom?: number;
+    right?: number;
+  };
   style?: ViewStyle;
 };
 
@@ -214,6 +222,7 @@ export const FlowDocSlateAdapter = forwardRef(
         placeholder={props.placeholder}
         placeholderColor={props.placeholderColor}
         editable={props.editable}
+        textContainerInset={props.textContainerInset}
         onChangeContent={handleContent}
         onChangeSelection={props.onChangeSelection}
         onSplitRequest={handleSplit}

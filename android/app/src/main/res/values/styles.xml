@@ -1,7 +1,9 @@
 <resources>
 
-    <!-- Base application theme. -->
-    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <!-- 父 theme 由 react-native-edge-to-edge 提供，启用 Android edge-to-edge 模式
+         （status / nav bar 透明、content 延伸到屏幕边缘，符合 Android 15+ 强制要求）。
+         配合 react-native-keyboard-controller 一起处理 IME insets。 -->
+    <style name="AppTheme" parent="Theme.EdgeToEdge">
         <!-- Customize your theme here. -->
         <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
     </style>

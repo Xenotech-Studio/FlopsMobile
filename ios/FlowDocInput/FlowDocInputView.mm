@@ -20,7 +20,7 @@
 }
 @end
 
-@interface FlowDocInputView () <UITextViewDelegate>
+@interface FlowDocInputView () <UITextViewDelegate, UIGestureRecognizerDelegate>
 @property (nonatomic, strong) UITextView *textView;
 @property (nonatomic, strong) UILabel *placeholderLabel;
 /** 防止 setInitialContent 被多次应用（仅挂载时生效一次） */
@@ -71,6 +71,15 @@
     _textView.textColor = _textColor;
     [self addSubview:_textView];
 
+    /* 把 UITextView 自带的所有 gestureRecognizer 都装上 delegate，让它们在命中 UIControl
+       子树时 shouldReceiveTouch=NO —— UITextView frame 撑满 card 后，"+ 按钮" 等 sibling
+       UIControl 会落在 textView 的 hit-test 范围内；不过滤的话 textView 的 tap 也会在 + 上
+       fire（cursor 落到 + 几何投影到文本的位置），跟 + 自身 action 重叠。
+       UITextView 在 mount 后/属性变化时会动态加 / 换 gesture recognizer，所以 init 这里挂
+       一次，refreshTextViewGestureDelegates 在每次重要属性变化后再补挂一次（layoutSubviews
+       里也补一次兜底）。 */
+    [self refreshTextViewGestureDelegates];
+
     _placeholderLabel = [[UILabel alloc] init];
     _placeholderLabel.font = _textView.font;
     _placeholderLabel.textColor = _placeholderColor;
@@ -88,6 +97,60 @@
 - (void)layoutSubviews {
   [super layoutSubviews];
   [self refreshPlaceholderLayout];
+  [self maybeEmitContentSizeChange];
+  /* UITextView 在 layout 阶段可能动态增删 gesture recognizers（iOS 内部按需挂 selection /
+     magnifier 等手势）。每次 layout 补挂一次 delegate 兜底新出现的 recognizer。 */
+  [self refreshTextViewGestureDelegates];
+}
+
+// MARK: - UITextView gesture recognizer delegate setup
+
+/* 把 textView.gestureRecognizers 里所有未设 delegate 的 recognizer 设成 self（如果原来
+   有 delegate 就不动，避免破坏 UIKit 内部 selection 那套），然后我们的 delegate 方法
+   `shouldReceiveTouch:` 会按 UIControl 子树过滤。
+   只挂"未设 delegate"那批 recognizer 是关键 —— UITextView 自己内部的 selection recognizer
+   有它自己的 delegate（UITextSelectionInteraction 等），把我们的 delegate 强塞会破坏选择
+   逻辑。但 UITextView 顶层那个 cursor placement tap recognizer 通常无 delegate，可以接。 */
+- (void)refreshTextViewGestureDelegates {
+  for (UIGestureRecognizer *gr in self.textView.gestureRecognizers) {
+    if (gr.delegate == nil) {
+      gr.delegate = self;
+    }
+  }
+}
+
+/* tap 命中 + 按钮等 UIControl 子树时，让 textView 的 tap recognizer 跳过 — UIControl 自己
+   接 tap action，不被 textView 抢去 placeCursor。 */
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+       shouldReceiveTouch:(UITouch *)touch {
+  UIView *v = touch.view;
+  while (v != nil && v != self) {
+    if ([v isKindOfClass:[UIControl class]]) {
+      return NO;
+    }
+    v = v.superview;
+  }
+  return YES;
+}
+
+/* 跟外层任何 recognizer 都允许并发 — 比如 BouncyGlassCard / BouncyButton 的 tap，跟我们
+   UITextView 内部 selection 不冲突 */
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+       shouldRecognizeSimultaneouslyWithGestureRecognizer:
+           (UIGestureRecognizer *)otherGestureRecognizer {
+  return YES;
+}
+
+// MARK: - textContainerInsets
+
+- (void)setTextContainerInsets:(UIEdgeInsets)insets {
+  if (UIEdgeInsetsEqualToEdgeInsets(_textContainerInsets, insets)) return;
+  _textContainerInsets = insets;
+  self.textView.textContainerInset = insets;
+  /* placeholder 跟 textView 共享内 padding 位置——参考 refreshPlaceholderLayout 里 padLeft /
+     padTop 直接取 textContainerInset。这里 layout 一次让 placeholder 立刻跟着移。 */
+  [self refreshPlaceholderLayout];
+  /* textContainerInset 变化会改变可用 layout 区域 → 重新测内容尺寸 */
   [self maybeEmitContentSizeChange];
 }
 

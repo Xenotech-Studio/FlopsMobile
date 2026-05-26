@@ -92,6 +92,29 @@ class FlowDocInputViewManager : SimpleViewManager<FlowDocInputView>(),
     view.enterCreatesBlock = value
   }
 
+  /* textContainerInset 四边：等效 iOS UITextView.textContainerInset，让 EditText 视觉留白
+     由内部 padding 给，view 整体撑满外层 wrapper。Android 的 EditText.setPadding 是 px 单位,
+     需要把 dp 转 px。 */
+  @ReactProp(name = "textContainerInsetTop", defaultDouble = 0.0)
+  override fun setTextContainerInsetTop(view: FlowDocInputView, value: Double) {
+    view.setTextContainerInsetTopDp(value.toFloat())
+  }
+
+  @ReactProp(name = "textContainerInsetLeft", defaultDouble = 0.0)
+  override fun setTextContainerInsetLeft(view: FlowDocInputView, value: Double) {
+    view.setTextContainerInsetLeftDp(value.toFloat())
+  }
+
+  @ReactProp(name = "textContainerInsetBottom", defaultDouble = 0.0)
+  override fun setTextContainerInsetBottom(view: FlowDocInputView, value: Double) {
+    view.setTextContainerInsetBottomDp(value.toFloat())
+  }
+
+  @ReactProp(name = "textContainerInsetRight", defaultDouble = 0.0)
+  override fun setTextContainerInsetRight(view: FlowDocInputView, value: Double) {
+    view.setTextContainerInsetRightDp(value.toFloat())
+  }
+
   // MARK: - Commands (codegen interface methods)
 
   override fun insertPill(

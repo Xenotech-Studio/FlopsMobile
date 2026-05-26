@@ -61,6 +61,12 @@ type Props = {
   menuActions?: ReadonlyArray<AnimatedCircleButtonMenuAction>;
   /** 用户从 UIMenu 选中一条 action 时触发（仅 iOS 26+ glass + menuActions 非空时） */
   onMenuAction?: (actionId: string) => void;
+  /** iOS 26+ glass + menuActions 非空时：UIButton 即将弹出 UIMenu（touchDown 时序）。
+   *  callsite 可以借此做"让位"类的 UI 联动。其它路径（iOS<26 / Android / 无 menuActions）不发。
+   *  上层若要在 iOS<26 / Android 上做同款联动，自己监听 MenuView/Modal 的 onOpen 即可。 */
+  onMenuWillShow?: () => void;
+  /** menu 关闭（选项触发 / 外部 tap dismiss）后触发。与 onMenuWillShow 成对。仅 iOS 26+ glass。 */
+  onMenuDidDismiss?: () => void;
   /** iOS 26+ glass 路径下用 SF Symbol 作为按钮 icon，直接进 UIButton.configuration.image。
    *  好处：icon 是 UIButton native content 的一部分，系统 interactive glass scale + menu
    *  morph 时 icon 100% 跟动，绝不脱节。
@@ -171,6 +177,8 @@ function IosNativeBouncy({
   disabled,
   menuActions,
   onMenuAction,
+  onMenuWillShow,
+  onMenuDidDismiss,
   iosSfSymbol,
   iosNativeTitle,
   iosShowsSpinner,
@@ -189,6 +197,18 @@ function IosNativeBouncy({
       onMenuAction?.(e.nativeEvent.actionId);
     },
     [onMenuAction],
+  );
+  const handleNativeMenuWillShow = useCallback(
+    (_e: NativeSyntheticEvent<Readonly<{}>>) => {
+      onMenuWillShow?.();
+    },
+    [onMenuWillShow],
+  );
+  const handleNativeMenuDidDismiss = useCallback(
+    (_e: NativeSyntheticEvent<Readonly<{}>>) => {
+      onMenuDidDismiss?.();
+    },
+    [onMenuDidDismiss],
   );
   const finalStyle = IS_IOS_LIQUID_GLASS ? stripForGlass(style) : style;
   /* menuActions 仅在 iOS 26+ glass 路径上生效（原生 UIButton.menu）。其它情况上层应当走
@@ -240,6 +260,8 @@ function IosNativeBouncy({
       glassProminent={IS_IOS_LIQUID_GLASS ? !!iosGlassProminent : false}
       onBouncyPress={handleNativePress}
       onMenuAction={handleNativeMenuAction}
+      onMenuWillShow={handleNativeMenuWillShow}
+      onMenuDidDismiss={handleNativeMenuDidDismiss}
     >
       {shouldRenderChildren ? (
         hideChildrenForNativeContent ? (
@@ -264,7 +286,10 @@ function IosNativeBouncy({
 function AndroidWorkletBouncy({
   children,
   style,
-  pressScale = 1.12,
+  /* Android 默认 1.4（iOS 1.12）：RN press 反馈在 Android 上由 Reanimated worklet
+   * 自己驱动，没有系统级触觉/glass scale 加成，倍率不调大体感偏弱。圆形 view scale
+   * 各方向均匀放大不会失真；callsite 仍可覆盖。 */
+  pressScale = 1.4,
   onPress,
   disabled,
   hitSlop,

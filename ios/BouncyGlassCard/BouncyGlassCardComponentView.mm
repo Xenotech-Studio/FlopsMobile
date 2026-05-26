@@ -51,7 +51,8 @@ static UIColor *_bgc_uiColorFromHex(NSString *hex) {
   return [UIColor colorWithRed:r green:g blue:b alpha:a];
 }
 
-@interface BouncyGlassCardComponentView () <RCTBouncyGlassCardViewProtocol>
+@interface BouncyGlassCardComponentView () <RCTBouncyGlassCardViewProtocol,
+                                              UIGestureRecognizerDelegate>
 @end
 
 @implementation BouncyGlassCardComponentView {
@@ -144,7 +145,13 @@ static UIColor *_bgc_uiColorFromHex(NSString *hex) {
 }
 
 /* tap 识别 + onPress emit。cancelsTouchesInView = NO 让 touch 继续传到 children（比如
-   wrap 一个 TextInput 时 keyboard 还能弹出来）。 */
+   wrap 一个 TextInput 时 keyboard 还能弹出来）。
+   delegate.shouldRecognizeSimultaneouslyWith → YES 让本 recognizer 跟内部子 view 的手势
+   并发识别——典型场景：wrap UITextView 时，UITextView 内部一组 selection 手势（双击选词 /
+   三击选行 / 长按 magnifier / 拖选）跟我们的 outer tap 没有 requireToFail 关系；如果不走
+   simultaneous，outer tap recognize 完会 force-fail UITextView 那一组，用户感受到的就是
+   "选择不稳定 / 偶尔双击不出选词"。simultaneous=YES 后两边 recognizer 独立竞争状态机，
+   UITextView 选择手势完全恢复。 */
 - (void)refreshTap {
   if (_tapRecognizer != nil) {
     [_effectView removeGestureRecognizer:_tapRecognizer];
@@ -154,8 +161,33 @@ static UIColor *_bgc_uiColorFromHex(NSString *hex) {
     _tapRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self
                                                              action:@selector(handleTap)];
     _tapRecognizer.cancelsTouchesInView = NO;
+    _tapRecognizer.delegate = self;
     [_effectView addGestureRecognizer:_tapRecognizer];
   }
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+       shouldRecognizeSimultaneouslyWithGestureRecognizer:
+           (UIGestureRecognizer *)otherGestureRecognizer {
+  return YES;
+}
+
+/* 仅当 tap 命中"非交互区域"（卡片本身的 padding / 空白）时本 recognizer 才接 touch；
+   命中子 UITextView / UIControl (UIButton 等) 时直接 NO →让那些子组件用自己默认的 tap 语义
+   处理（光标落到点击位置 / 触发按钮 action），onPress 不会被多余触发。
+   典型场景：composer 卡片里 wrap 一个 UITextView + 一个绝对定位 + 按钮——文字区 tap 让
+   UITextView 自己处理 cursor placement / selection，+ 上 tap 让 UIButton 自己跑 action，
+   只有 padding 空白处 tap 才触发 onGlassPress（callsite 通常用来 focus 输入 / 跳到末尾）。 */
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+       shouldReceiveTouch:(UITouch *)touch {
+  UIView *v = touch.view;
+  while (v != nil && v != self) {
+    if ([v isKindOfClass:[UITextView class]] || [v isKindOfClass:[UIControl class]]) {
+      return NO;
+    }
+    v = v.superview;
+  }
+  return YES;
 }
 
 - (void)handleTap {

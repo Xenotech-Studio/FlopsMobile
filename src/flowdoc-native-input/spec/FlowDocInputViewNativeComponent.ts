@@ -86,6 +86,16 @@ interface NativeProps extends ViewProps {
   editable?: WithDefault<boolean, true>;
   /** Enter 是否当作"拆 block"语义：默认 true（paragraph/heading 等），code 块设 false */
   enterCreatesBlock?: WithDefault<boolean, true>;
+  /** UITextView.textContainerInset：让 native textView frame 撑满整张卡片 / 容器，文本视觉
+   *  留白通过 textContainerInset 给（不再靠外层 JS View 加 padding 把 textView 框小）。
+   *  好处：UITextView 自己的 tap recognizer 覆盖整片可点区域，"卡片其它区域 = 输入框延伸"
+   *  原生体感；callsite 不需要 JS 模拟 focusAtOffset(-1) 那种 hack。
+   *  + 按钮等内部 UIControl 子 view 通过 native 那侧的 gesture delegate 自动过滤（命中
+   *  UIControl 子树时不让 UITextView 的 tap recognizer 接 touch）。 */
+  textContainerInsetTop?: WithDefault<Double, 0>;
+  textContainerInsetLeft?: WithDefault<Double, 0>;
+  textContainerInsetBottom?: WithDefault<Double, 0>;
+  textContainerInsetRight?: WithDefault<Double, 0>;
   onChangeContent?: BubblingEventHandler<ChangeContentEvent>;
   onChangeSelection?: BubblingEventHandler<ChangeSelectionEvent>;
   onPillPress?: BubblingEventHandler<PillPressEvent>;

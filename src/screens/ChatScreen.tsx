@@ -7,7 +7,6 @@ import {
   StyleSheet,
   ScrollView,
   Keyboard,
-  KeyboardAvoidingView,
   Platform,
   Modal,
   PanResponder,
@@ -21,12 +20,19 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  useReanimatedKeyboardAnimation,
+} from 'react-native-keyboard-controller';
 import LinearGradient from 'react-native-linear-gradient';
 import Reanimated, {
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
+  withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -89,7 +95,12 @@ import {
   AnimatedCircleButton,
   IS_IOS_LIQUID_GLASS,
 } from '../components/AnimatedCircleButton';
-import { createChatStyles, COMPOSER_CARD_RADIUS } from './chat/ChatScreen.styles';
+import {
+  createChatStyles,
+  COMPOSER_CARD_RADIUS,
+  COMPOSER_TEXT_INSET_SHORT,
+  COMPOSER_TEXT_INSET_TALL,
+} from './chat/ChatScreen.styles';
 import { ThinkingBlockView } from './chat/ThinkingBlockView';
 import { ComposerContextRing } from './chat/ComposerContextRing';
 import { HistoryLoadingOverlay } from './chat/HistoryLoadingOverlay';
@@ -311,57 +322,37 @@ export function ChatScreen({
   const bottomOverlayHeight = gradientStripHeight + inputRowHeight;
   /** 列表底部留白，让内容可滚入渐变下方 */
   const scrollBottomPadding = bottomOverlayHeight + 12;
-  /* 键盘高度跟踪 —— bottomOverlay 是 position:absolute, bottom:0，KAV behavior=padding 不能推动
-   * absolute children（absolute 是相对父容器外框定位，padding 不影响）。两个平台都得手动加 bottom。
-   * KAV 仍然留着帮 ScrollView (flex:1) 自动缩小、避免历史消息卡到键盘后面。
+  /* 键盘避让（react-native-keyboard-controller frame-perfect 路径）。
+   * KAV (lib 版): 跟 RN 原生 KAV 同 API，但走 native frame timing (iOS UIKeyboardLayoutGuide /
+   * Android WindowInsetsCompat.Type.ime)。ScrollView (flex:1) 缩小、composer 抬升全程跟键盘
+   * 逐帧 sync，不再走 React render cycle，无 RN 0.84 / 新架构那波时序卡顿。
    *
-   * 用 SharedValue + Keyboard.addListener + withTiming：iOS keyboardWillShow 跟键盘动画同步 fire
-   * （带 duration），withTiming 跟着 → 同步丝滑；Android 只有 keyboardDidShow（动画结束后才 fire）,
-   * withTiming 在结束后再做 ~250ms 平滑插值——有轻微延迟但不是瞬移。
-   * 之前用过 useAnimatedKeyboard 但在 RN 0.84 / 新架构下 iOS 闪退、Android 抖（WindowInsets 跟
-   * layout race），干脆换成 JS 监听 + Reanimated 插值。 */
-  const kbHeightShared = useSharedValue(0);
-  /* JS 端的键盘开/关 state：用来做条件渲染（隐藏 meta row）+ 静态 style 覆盖（composer card
-   * marginBottom 从 18 → 8）。SharedValue 在 UI 线程，JSX 条件不能直接读它。 */
+   * useReanimatedKeyboardAnimation: keyboard frame SharedValue（height **负数** offset 语义,
+   * -300 = 键盘 300pt 高）。 */
+  const { height: kbAnimHeight } = useReanimatedKeyboardAnimation();
+  /* JS 端的键盘开/关 boolean：JSX conditional rendering 用（隐藏 meta row + composer card
+   * marginBottom 18→8）。SharedValue 在 UI 线程读不到 JSX 条件，所以保留这条 state，但只用
+   * Keyboard.addListener 切 boolean，不再驱动 SharedValue。 */
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   useEffect(() => {
     const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    /* 注意：跟 TodayScreen 不同，chat 这里不加 insets.bottom navBar 补偿——bottomOverlay 在
-     * scrollAndGradientWrap (flex:1) 内部，Android adjustResize 通过 flex 链让 wrapper 部分缩
-     * 小，等于自动补偿了 nav bar inset；再叠 +insets.bottom 会过度补偿，composer 离键盘太远。 */
-    const showSub = Keyboard.addListener(showEvt, (e) => {
-      const d = (e as { duration?: number }).duration ?? 250;
-      kbHeightShared.value = withTiming(e.endCoordinates.height, { duration: d });
-      setKeyboardOpen(true);
-    });
-    const hideSub = Keyboard.addListener(hideEvt, (e) => {
-      const d = (e as { duration?: number }).duration ?? 250;
-      kbHeightShared.value = withTiming(0, { duration: d });
-      setKeyboardOpen(false);
-    });
+    const showSub = Keyboard.addListener(showEvt, () => setKeyboardOpen(true));
+    const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardOpen(false));
     return () => {
       showSub.remove();
       hideSub.remove();
     };
-  }, [kbHeightShared, insets.bottom]);
-  /* bottomOverlay 的 bottom 偏移：
-   * - iOS：完全由 KAV behavior=padding 通过 scrollAndGradientWrap (flex:1) 缩小自动上浮（base
-   *   = 0，无 manual offset）。任何 JS 侧 withTiming 都跟 iOS 原生键盘动画曲线不同步，会感
-   *   觉卡片瞬移得比键盘快/慢——纯 KAV 才能 100% 原生 sync。代价是 card 离键盘距离 = 静态
-   *   marginBottom: 18，不能像 Android 收到 12pt。
-   * - Android：KAV behavior=undefined，KAV 不动，必须 manual lift（base = h）+ 额外 -6 偏移
-   *   让 card 视觉离键盘 12pt（marginBottom 18 + 偏移 6 = 12）。 */
+  }, []);
+  /* bottomOverlay 的 bottom 偏移：iOS 完全由 lib KAV 缩 scrollAndGradientWrap (flex:1) 自动上浮
+   * (base=0)；Android lib KAV 同样接管几何，base=0 即可（之前 RN KAV 在 Android adjustResize
+   * 下 absolute children 飘忽，那条手挂 h offset 是兜底）。lib 两端统一 native 接管。 */
   const kbBottomStyle = useAnimatedStyle(() => {
-    const h = kbHeightShared.value;
-    if (Platform.OS !== 'android') return { bottom: 0 };
-    const ratio = Math.min(h / 50, 1);
-    return { bottom: h - 6 * ratio };
+    return { bottom: 0 };
   });
-  /* Meta row 的淡出：opacity 跟键盘动画绑，键盘弹起 → 渐淡出消失。pointerEvents 由 keyboardOpen
-   * JS state 控制（瞬间切换 OK，因为不可见就不该接收 touch）。 */
+  /* Meta row 的淡出：opacity 跟键盘动画绑，键盘弹起 → 渐淡出消失。lib height 是负数，- 它转正。 */
   const kbMetaRowStyle = useAnimatedStyle(() => {
-    const h = kbHeightShared.value;
+    const h = -kbAnimHeight.value;
     const ratio = Math.min(h / 50, 1);
     return { opacity: 1 - ratio };
   });
@@ -438,6 +429,44 @@ export function ChatScreen({
   ]);
   const composerRefDataByKeyRef = useRef<Map<string, FlopsRef>>(new Map());
   const composerAdapterRef = useRef<FlowDocInputHandle | null>(null);
+  /* composer 是原生 FlowDocInputView（UITextView / EditText），不在 RN TextInputState 注册
+   * 表里——Keyboard.dismiss() 找不到 first responder，且会另起一条 keyboard-will-hide 通知
+   * 流跟 native blur 的键盘动画打架，所以这里只调 native blur。 */
+  const dismissComposer = useCallback(() => {
+    composerAdapterRef.current?.blur();
+  }, []);
+  const focusComposer = useCallback(() => {
+    composerAdapterRef.current?.focus();
+  }, []);
+  /* Android composer 卡片按下放大 —— 跟 TodayScreen 搜索框胶囊同款 RNGH LongPress + worklet
+   * spring scale。Tap 在 EditText 区域容易被 native gesture 抢 ownership 提前打断，所以
+   * 用 LongPress；minDuration(0) 立即 active，maxDistance / shouldCancelWhenOutside
+   * 放宽避免微移动触发 cancel。iOS 26 走 BouncyGlassCard 系统接管，不在这里管。 */
+  const composerPressScale = useSharedValue(1);
+  const composerPressAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: composerPressScale.value }],
+  }));
+  const composerTapGesture = useMemo(
+    () =>
+      Gesture.LongPress()
+        .minDuration(0)
+        .maxDistance(99999)
+        .shouldCancelWhenOutside(false)
+        .onStart(() => {
+          'worklet';
+          /* composer 卡片是横向较宽的圆角矩形，跟搜索框胶囊一样按 1.1 保守放大,
+           * 避免横向 resize 视觉失真；不跟圆按钮 1.4 等阶。 */
+          composerPressScale.value = withSpring(1.1, { mass: 1, stiffness: 400, damping: 40 });
+        })
+        .onFinalize((_e, success) => {
+          'worklet';
+          composerPressScale.value = withSpring(1, { mass: 1, stiffness: 220, damping: 14 });
+          if (success) {
+            runOnJS(focusComposer)();
+          }
+        }),
+    [focusComposer, composerPressScale],
+  );
   const [composerPickerOpen, setComposerPickerOpen] = useState(false);
   /** 编辑 Modal 内是否打开 picker（与主 composer 用同一个 modal 不同 ref 表） */
   const [editPickerOpen, setEditPickerOpen] = useState(false);
@@ -1743,18 +1772,36 @@ export function ChatScreen({
     }).start();
   }, [convMenuBtnScale]);
 
-  /** Android ⋯ 菜单走自绘 Modal popover */
+  /** Android ⋯ 菜单：常驻 mount + SharedValue 驱动 opacity/scale/pointerEvents，跟
+   *  TodayScreen FAB 菜单同款实现，消除 conditional mount / Modal 启动延迟。 */
   const [convMenuOpen, setConvMenuOpen] = useState(false);
-  /** 两端 ⋯ 菜单都用同一个 Modal popover：press 反馈由 AnimatedCircleButton 包，
-   *  这里只管开/关。AnimatedCircleButton 的 onPress 在松手时 fire（finger up），
-   *  正好满足"按住的时候可以一直按住、松手才打开菜单 + 触发弹跳"。 */
+  const convMenuShow = useSharedValue(0);
+  const convMenuCardAnimStyle = useAnimatedStyle(() => ({
+    opacity: convMenuShow.value,
+    transform: [{ scale: 0.1 + convMenuShow.value * 0.9 }],
+    /* 菜单从右上角"长出来"——锚点 = ⋯ 圆按钮位置（右上） */
+    transformOrigin: 'right top',
+    pointerEvents: convMenuShow.value > 0.5 ? 'auto' : 'none',
+  }));
+  const convMenuBackdropAnimStyle = useAnimatedStyle(() => ({
+    pointerEvents: convMenuShow.value > 0.5 ? 'auto' : 'none',
+  }));
+  /* ⋯ 圆按钮：菜单打开时缩小 + 淡出，视觉"被菜单吸收"。 */
+  const convMenuTriggerAnimStyle = useAnimatedStyle(() => ({
+    opacity: 1 - convMenuShow.value,
+    transform: [{ scale: 1 - convMenuShow.value * 0.2 }],
+  }));
+  /** 关键时序：SharedValue 先设（UI 线程立即动画），setState 后设（主线程 re-render
+   *  在后），open 80ms / close 100ms 用户感受瞬间。 */
   const openConvMenu = useCallback(() => {
     if (!conversationId) return;
+    convMenuShow.value = withTiming(1, { duration: 80 });
     setConvMenuOpen(true);
-  }, [conversationId]);
+  }, [conversationId, convMenuShow]);
   const closeConvMenu = useCallback(() => {
+    convMenuShow.value = withTiming(0, { duration: 100 });
     setConvMenuOpen(false);
-  }, []);
+  }, [convMenuShow]);
 
   const handleNewConversation = useCallback(async () => {
     if (loading) return;
@@ -2857,22 +2904,25 @@ export function ChatScreen({
             </Animated.View>
           </MenuView>
         ) : (
-          <AnimatedCircleButton
-            style={[styles.circleBtn, !conversationId && styles.circleBtnDisabled]}
-            onPress={openConvMenu}
-            disabled={!conversationId}
-          >
-            <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
-          </AnimatedCircleButton>
+          <Reanimated.View style={convMenuTriggerAnimStyle}>
+            <AnimatedCircleButton
+              style={[styles.circleBtn, !conversationId && styles.circleBtnDisabled]}
+              onPress={openConvMenu}
+              disabled={!conversationId}
+            >
+              <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
+            </AnimatedCircleButton>
+          </Reanimated.View>
         )}
       </View>
 
       <KeyboardAvoidingView
         style={styles.keyboardView}
-        /* Android 不传 behavior：AndroidManifest 已设 windowSoftInputMode=adjustResize，系统会
-         *  自己 resize window；再叠 KAV "height" 会双重处理，关键盘时残留高度不归零，composer
-         *  漂上去。iOS 必须 padding（没 adjustResize 等价物）。 */
-        behavior={Platform.select({ ios: 'padding', android: undefined })}
+        /* lib KAV 两端都用 'padding'：lib 内部用 WindowInsets.ime / UIKeyboardLayoutGuide 拿
+         *  键盘 frame，paddingBottom 由 lib worklet 直接驱动。Android 不再走 adjustResize
+         *  那条路（lib 不依赖它，传 undefined 会走 default no-op，content 完全不动），且
+         *  edge-to-edge 模式下 adjustResize 行为已被 fitsSystemWindows=false 改变。 */
+        behavior="padding"
         keyboardVerticalOffset={0}
       >
         {error ? (
@@ -2890,6 +2940,24 @@ export function ChatScreen({
               styles.scrollContent,
               { paddingTop: headerHeight + 20, paddingBottom: scrollBottomPadding },
             ]}
+            /* 点击触发：touchStart capture，绕过消息子组件（TouchableOpacity / RNGH）
+             * 抢 responder 导致 ScrollView 自身 onTouchStart 不 fire 的情形。
+             * 滚动触发：iOS 用 keyboardDismissMode='on-drag'（native interactive），
+             * Android 用 JS onScrollBeginDrag。
+             *
+             * [已知边缘 bug] iOS 上滚动 dismiss 时消息区会抖（持续到键盘动画结束）；
+             * 点击 dismiss 不抖。怀疑根因是 lib KAV behavior='padding' 在 dismiss 期间
+             * 缩 ScrollView frame，触底状态下 contentOffset 被强制修正引发跳动。
+             * 排除过：
+             *   - JS 侧重复调 Keyboard.dismiss()（去掉只留 native blur — 不改善）
+             *   - on-drag 跟 onScrollBeginDrag 显式 blur 并发（iOS 改 onScrollEndDrag — 不改善）
+             *   - UIScrollView 自动 keyboard contentInset（关 automaticallyAdjustKeyboardInsets
+             *     + contentInsetAdjustmentBehavior='never' — 不改善）
+             * 未来方向：把 KAV 的 padding 模式换成 ScrollView contentInset.bottom 动态跟键盘，
+             * 或者 bottomOverlay 改用 transform translateY 直接跟 kbAnimHeight 走、彻底不让
+             * KAV 缩 ScrollView frame。当前评估边缘 bug、性价比不高，先搁置。 */
+            onTouchStartCapture={dismissComposer}
+            onScrollBeginDrag={Platform.OS === 'android' ? dismissComposer : undefined}
             keyboardDismissMode="on-drag"
             onContentSizeChange={() => {
               if (shouldScrollToEndRef.current) {
@@ -3040,7 +3108,11 @@ export function ChatScreen({
             />
             <Pressable
               style={StyleSheet.absoluteFill}
-              onPress={() => scrollRef.current?.scrollToEnd({ animated: true })}
+              onPress={() => {
+                /* 渐变带 = 非 composer 区域，点这里也应该失焦（语义上跟点消息区一致）。 */
+                dismissComposer();
+                scrollRef.current?.scrollToEnd({ animated: true });
+              }}
               accessibilityRole="button"
               accessibilityLabel="滚动到对话底部"
             />
@@ -3198,6 +3270,13 @@ export function ChatScreen({
                    [card > inputArea > inputWrapper > FlowDocSlateAdapter]，
                    两模式只改外层 style；+ 按钮抽成 card 的 absolute child，screen 位置不动；
                    model / agent chips 永远在 card 外的绝对 meta row。 */
+                /* adapter 直接 mount 到 card 里，flex:1 alignSelf:stretch 让 native UITextView
+                 *  / EditText frame 撑满整张 card；文字视觉留白用 textContainerInset 给（不再
+                 *  靠外层 wrapper View 套 padding 把 textView 框小）。
+                 *  好处：UITextView / EditText 自己的 tap recognizer 覆盖整片可点区域,
+                 *  "卡片其它区域 = 输入框延伸"是原生 cursor placement 语义，不是 JS hack。
+                 *  + 按钮还是 card 的 absolute child；native gesture delegate 会自动 filter
+                 *  掉 UIControl 子树的 touch，不抢 + 按钮的 tap。 */
                 const adapter = (
                   <FlowDocSlateAdapter
                     key={composerRemountKey}
@@ -3215,29 +3294,15 @@ export function ChatScreen({
                     lineHeight={22}
                     pillMaxLabelTextWidth={100}
                     editable={!loading && !conversationHistoryLoading}
+                    textContainerInset={
+                      composerTall ? COMPOSER_TEXT_INSET_TALL : COMPOSER_TEXT_INSET_SHORT
+                    }
+                    style={styles.composerAdapterFill}
                   />
                 );
-                /* short / tall card 的「外壳」抽出来：iOS 26 走 BouncyGlassCard（玻璃材质 +
-                 *  系统折光），其它平台走原来的 View（bg + shadow / border）。inner 是 short/tall
-                 *  共享的 input area + 绝对 + 按钮。interactive=false：composer 主要靠键盘 focus
-                 *  使用，不想 tap 时整个卡片被 system scale 一下打断输入流。 */
                 const innerCardContent = (
                   <>
-                    <View
-                      style={
-                        composerTall
-                          ? styles.composerInputAreaTall
-                          : styles.composerInputAreaShort
-                      }
-                      pointerEvents="box-none"
-                    >
-                      <View
-                        style={composerTall ? styles.composerInputTall : styles.composerInputShort}
-                        pointerEvents="box-none"
-                      >
-                        {adapter}
-                      </View>
-                    </View>
+                    {adapter}
                     {/* + 按钮：card 的 absolute child；bottom:10 left:8 在 short / tall 都一样 */}
                     {renderPlusBtn}
                   </>
@@ -3261,12 +3326,23 @@ export function ChatScreen({
                         {innerCardContent}
                       </BouncyGlassCard>
                     ) : (
-                      <View
-                        style={composerTall ? styles.composerCardTall : styles.composerCardShort}
-                        pointerEvents="box-none"
-                      >
-                        {innerCardContent}
-                      </View>
+                      /* Android 路径：GestureDetector + Reanimated.View 包装做 LongPress
+                       * 触发的 press scale 动画。transform 是 visual-only 不影响 layout，
+                       * 所以不会破坏 FlowDocSlateAdapter 的 autoHeight 测量（autoHeight
+                       * 基于 view bounds）。pointerEvents='box-none' 保留——让 + 按钮等
+                       * 内部子节点（absolute）能照常接收 touch；GestureDetector 上方再
+                       * 接管整张卡片的 tap → focus 行为。 */
+                      <GestureDetector gesture={composerTapGesture}>
+                        <Reanimated.View
+                          style={[
+                            composerTall ? styles.composerCardTall : styles.composerCardShort,
+                            composerPressAnimStyle,
+                          ]}
+                          pointerEvents="box-none"
+                        >
+                          {innerCardContent}
+                        </Reanimated.View>
+                      </GestureDetector>
                     )}
                     {/* 模型 / 助手 chips：永远在 card 外的绝对 meta row。键盘弹起时由 kbMetaRowStyle
                      * 平滑淡出（opacity 1→0），pointerEvents 由 keyboardOpen JS state 控制（不可见
@@ -3479,29 +3555,31 @@ export function ChatScreen({
       }}
     />
 
-    {/* Android：⋯ 菜单的自绘 popover；iOS 走 MenuView 不需要本 Modal。 */}
+    {/* Android：⋯ 菜单。设计跟 TodayScreen FAB 菜单同款：
+     *  - 不用 Modal（消除 native dialog 启动延迟）
+     *  - 常驻 mount + SharedValue 驱动 opacity/scale/pointerEvents（不依赖 React re-render）
+     *  - 菜单卡片 transformOrigin: right top，从 ⋯ 按钮位置"向左向下长出来"
+     *  - backdrop 透明（不变暗），靠 shadowMenu 跟背景区分
+     *  - ⋯ 按钮在菜单打开时缩小 + 淡出，视觉"被菜单吸收" */}
     {Platform.OS === 'android' ? (
-    <Modal
-      visible={convMenuOpen}
-      transparent
-      animationType="fade"
-      statusBarTranslucent
-      onRequestClose={closeConvMenu}
-    >
-      <TouchableOpacity
-        style={styles.convMenuBackdrop}
-        activeOpacity={1}
-        onPress={closeConvMenu}
-      >
-        <View
+      <>
+        <Reanimated.View
+          style={[StyleSheet.absoluteFill, styles.convMenuBackdrop, convMenuBackdropAnimStyle]}
+        >
+          <Pressable style={StyleSheet.absoluteFill} onPress={closeConvMenu} />
+        </Reanimated.View>
+        <Reanimated.View
           style={[
             styles.convMenuCard,
             {
-              top: insets.top + 8 + HEADER_CIRCLE_BTN_SIZE + 6,
+              /* 跟 ⋯ 圆按钮同位置 + 略向下错开（按钮 top=insets.top+8，菜单 +4 偏移）,
+               * 菜单覆盖原按钮位置但向下露出一点点，配合 ⋯ 按钮淡出 + 菜单从右上长出来,
+               * 视觉是"按钮变成菜单"。 */
+              top: insets.top + 8 + 4,
               right: 16,
             },
+            convMenuCardAnimStyle,
           ]}
-          onStartShouldSetResponder={() => true}
         >
           <TouchableOpacity
             style={styles.convMenuItem}
@@ -3526,9 +3604,8 @@ export function ChatScreen({
             <Ionicons name="copy-outline" size={20} color={colors.textPrimary} />
             <Text style={styles.convMenuItemText}>复制诊断资料</Text>
           </TouchableOpacity>
-        </View>
-      </TouchableOpacity>
-    </Modal>
+        </Reanimated.View>
+      </>
     ) : null}
     </>
   );
