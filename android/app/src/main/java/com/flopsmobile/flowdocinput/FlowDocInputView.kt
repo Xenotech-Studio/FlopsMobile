@@ -130,21 +130,12 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
           }
         }
         emitContentChange()
-        /* RN Fabric / Yoga 的 view 高度是 JS explicit 给的（autoHeight 路径下 style.height），
-           Yoga 觉得"高度没变"就不调 onMeasure，那我们 post 的 maybeEmitContentSize 也不跑 ——
-           表现就是用户键入 2→3 行 text 实际换行了但 contentSize event 不报、card 不长。
-           这里强制对自身做一次 UNSPECIFIED-height measure 让 TextView 内部重建 Layout 反映
-           新行数，然后直接 emit。 */
-        post {
-          val w = measuredWidth
-          if (w > 0) {
-            measure(
-              MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY),
-              MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),
-            )
-          }
-          maybeEmitContentSize()
-        }
+        /* typed 触发的内部 invalidate 已经 update textLayout，post 一次直接读
+           layout.height emit 给 JS（autoHeight 路径 + tall 模式多行展开高度跟随）。
+           不要走 forced measure(UNSPECIFIED) —— EXACTLY ↔ UNSPECIFIED 的 spec 切换会让
+           EditText 内部用不同 paint metric 重建 textLayout，单行 typed 后文字 baseline
+           上挪 + 视觉缩小（曾经踩过这个坑）。 */
+        post { maybeEmitContentSize() }
       }
     })
 

@@ -26,13 +26,11 @@ import {
 } from 'react-native-keyboard-controller';
 import LinearGradient from 'react-native-linear-gradient';
 import Reanimated, {
-  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -446,27 +444,21 @@ export function ChatScreen({
   const composerPressAnimStyle = useAnimatedStyle(() => ({
     transform: [{ scale: composerPressScale.value }],
   }));
-  const composerTapGesture = useMemo(
-    () =>
-      Gesture.LongPress()
-        .minDuration(0)
-        .maxDistance(99999)
-        .shouldCancelWhenOutside(false)
-        .onStart(() => {
-          'worklet';
-          /* composer 卡片是横向较宽的圆角矩形，跟搜索框胶囊一样按 1.1 保守放大,
-           * 避免横向 resize 视觉失真；不跟圆按钮 1.4 等阶。 */
-          composerPressScale.value = withSpring(1.1, { mass: 1, stiffness: 400, damping: 40 });
-        })
-        .onFinalize((_e, success) => {
-          'worklet';
-          composerPressScale.value = withSpring(1, { mass: 1, stiffness: 220, damping: 14 });
-          if (success) {
-            runOnJS(focusComposer)();
-          }
-        }),
-    [focusComposer, composerPressScale],
-  );
+  /* composer 卡片按下放大用 RN raw onTouch* 而不是 RNGH（跟 TodayScreen 搜索框同样
+   * 理由：Gesture.Manual 不 activate 在 EditText activate native gesture 后会被
+   * cancel → spring 提前 down，按住保持不住放大）。raw onTouch* 独立于 responder
+   * system / native gesture ownership，FlowDocInputView 内部 cursor placement /
+   * 双击选词 / set selection 不被影响。 */
+  const onComposerTouchStart = useCallback(() => {
+    composerPressScale.value = withSpring(1.1, { mass: 1, stiffness: 400, damping: 40 });
+  }, [composerPressScale]);
+  const onComposerTouchEnd = useCallback(() => {
+    composerPressScale.value = withSpring(1, { mass: 1, stiffness: 220, damping: 14 });
+    focusComposer();
+  }, [composerPressScale, focusComposer]);
+  const onComposerTouchCancel = useCallback(() => {
+    composerPressScale.value = withSpring(1, { mass: 1, stiffness: 220, damping: 14 });
+  }, [composerPressScale]);
   const [composerPickerOpen, setComposerPickerOpen] = useState(false);
   /** 编辑 Modal 内是否打开 picker（与主 composer 用同一个 modal 不同 ref 表） */
   const [editPickerOpen, setEditPickerOpen] = useState(false);
@@ -912,12 +904,13 @@ export function ChatScreen({
     setAgentPickerOpen(false);
   }, []);
 
-  /** 主 composer 状态：可发送 / 是否含 pill / 文本总长度。
+  /** 主 composer 状态：可发送 / 是否含 pill / 文本总长度 / CJK 字符数。
    *  发送靠键盘 Return，没有发送按钮；这些 flags 给布局切换用。 */
   const composerStats = useMemo(() => {
     let hasContent = false;
     let hasPill = false;
     let textLen = 0;
+    let cjkCount = 0;
     for (const para of composerDoc) {
       for (const node of para.children) {
         const anyN = node as Record<string, unknown>;
@@ -927,19 +920,33 @@ export function ChatScreen({
           continue;
         }
         if (typeof anyN.text === 'string') {
-          textLen += anyN.text.length;
-          if (anyN.text.trim().length > 0) hasContent = true;
+          const text = anyN.text;
+          textLen += text.length;
+          /* CJK：U+3400-9FFF（统一汉字 + 扩展 A）+ U+F900-FAFF（兼容汉字）覆盖
+           * 常用中日韩文字。中文一字 ≈ 拉丁两字宽，单独计数用于切 tall 阈值。 */
+          for (const ch of text) {
+            const code = ch.codePointAt(0) ?? 0;
+            if (
+              (code >= 0x3400 && code <= 0x9fff) ||
+              (code >= 0xf900 && code <= 0xfaff)
+            ) {
+              cjkCount++;
+            }
+          }
+          if (text.trim().length > 0) hasContent = true;
         }
       }
     }
-    return { hasContent, hasPill, textLen };
+    return { hasContent, hasPill, textLen, cjkCount };
   }, [composerDoc]);
 
-  /** 切两行布局：有 pill / 多段 / 文本长度过 24。介乎"严格"和"宽松"之间的折中。 */
+  /** 切两行布局：有 pill / 多段 / CJK 字符 > 15 / 总长 > 30。CJK 字符宽度 ≈ 拉丁两字,
+   *  所以中文阈值收到 15、其它字符放到 30 让两种语境都自然换行。 */
   const composerTall =
     composerStats.hasPill ||
     composerDoc.length > 1 ||
-    composerStats.textLen > 24;
+    composerStats.cjkCount > 15 ||
+    composerStats.textLen > 30;
 
   const canSend = Boolean(
     session && composerStats.hasContent && !loading && !conversationHistoryLoading
@@ -3326,23 +3333,26 @@ export function ChatScreen({
                         {innerCardContent}
                       </BouncyGlassCard>
                     ) : (
-                      /* Android 路径：GestureDetector + Reanimated.View 包装做 LongPress
-                       * 触发的 press scale 动画。transform 是 visual-only 不影响 layout，
-                       * 所以不会破坏 FlowDocSlateAdapter 的 autoHeight 测量（autoHeight
-                       * 基于 view bounds）。pointerEvents='box-none' 保留——让 + 按钮等
-                       * 内部子节点（absolute）能照常接收 touch；GestureDetector 上方再
-                       * 接管整张卡片的 tap → focus 行为。 */
-                      <GestureDetector gesture={composerTapGesture}>
-                        <Reanimated.View
-                          style={[
-                            composerTall ? styles.composerCardTall : styles.composerCardShort,
-                            composerPressAnimStyle,
-                          ]}
+                      /* Reanimated.View 只做 transform wrapper（不持有 card 视觉 styles）,
+                       * inner View 保留 card 身份（bg / radius / shadow / margins）。
+                       * raw onTouch* 挂在 Reanimated.View 上：独立于 responder system 跟
+                       * native gesture ownership，native FlowDocInputView cursor placement /
+                       * 双击选词不被影响。 */
+                      <Reanimated.View
+                        collapsable={false}
+                        style={composerPressAnimStyle}
+                        pointerEvents="box-none"
+                        onTouchStart={onComposerTouchStart}
+                        onTouchEnd={onComposerTouchEnd}
+                        onTouchCancel={onComposerTouchCancel}
+                      >
+                        <View
+                          style={composerTall ? styles.composerCardTall : styles.composerCardShort}
                           pointerEvents="box-none"
                         >
                           {innerCardContent}
-                        </Reanimated.View>
-                      </GestureDetector>
+                        </View>
+                      </Reanimated.View>
                     )}
                     {/* 模型 / 助手 chips：永远在 card 外的绝对 meta row。键盘弹起时由 kbMetaRowStyle
                      * 平滑淡出（opacity 1→0），pointerEvents 由 keyboardOpen JS state 控制（不可见

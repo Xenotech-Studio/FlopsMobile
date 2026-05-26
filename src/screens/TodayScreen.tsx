@@ -48,11 +48,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import DraggableFlatList from 'react-native-draggable-flatlist';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import Animated, {
   interpolate,
-  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -603,34 +601,24 @@ export function TodayScreen() {
   const fabMenuBackdropAnimStyle = useAnimatedStyle(() => ({
     pointerEvents: fabMenuShow.value > 0.5 ? 'auto' : 'none',
   }));
-  const searchBoxTapGesture = useMemo(
-    () =>
-      /* 用 LongPress 而不是 Tap：Tap recognizer 对竞争敏感（max duration / max distance
-       * 限制严），Android EditText 在 touch hold 一会儿后会 claim ownership 用于
-       * cursor placement / selection，让 Tap 进入 FAIL → spring 被提前打断（用户的
-       * 观察：点输入框区域 "放大行为提前被打断"）。LongPress 本身被设计为持续到
-       * user release，更强势抢得过 EditText 内部 gesture。
-       * minDuration(0) 让它立即 active，不等 500ms；shouldCancelWhenOutside(false)
-       * 允许手指轻微移动不立刻 cancel。 */
-      Gesture.LongPress()
-        .minDuration(0)
-        .maxDistance(99999)
-        .shouldCancelWhenOutside(false)
-        .onStart(() => {
-          'worklet';
-          /* 胶囊横向 ~280pt，倍率不能跟圆按钮 1.4 等阶——1.1 已经能感觉到，再大宽度
-           * 放大会明显失真（"横向 resize 很夸张"）。 */
-          searchBoxPressScale.value = withSpring(1.1, { mass: 1, stiffness: 400, damping: 40 });
-        })
-        .onFinalize((_e, success) => {
-          'worklet';
-          searchBoxPressScale.value = withSpring(1, { mass: 1, stiffness: 220, damping: 14 });
-          if (success) {
-            runOnJS(onSearchPress)();
-          }
-        }),
-    [onSearchPress, searchBoxPressScale],
-  );
+  /* 搜索框胶囊按下放大用 RN raw onTouchStart/End/Cancel 而不是 RNGH gesture：
+   * Gesture.Manual + 不 activate 在 EditText activate 它自己的 native gesture 后会被
+   * cancel → spring 提前 down，按住保持不住放大状态。
+   * RN onTouch* 是 raw touch event，独立于 responder system 跟 native gesture
+   * ownership，child EditText cursor placement / 选词 不被影响，外层 view 仍能 raw
+   * 接到 touch event 驱动 spring。 */
+  const onSearchBoxTouchStart = useCallback(() => {
+    searchBoxPressScale.value = withSpring(1.1, { mass: 1, stiffness: 400, damping: 40 });
+  }, [searchBoxPressScale]);
+  const onSearchBoxTouchEnd = useCallback(() => {
+    searchBoxPressScale.value = withSpring(1, { mass: 1, stiffness: 220, damping: 14 });
+    /* imperative focus 是 safe no-op if already focused（native tap 已 focus）;
+     * 点搜索 icon 区域不在 EditText 上、native 不 focus 时由这步兜底。 */
+    onSearchPress();
+  }, [searchBoxPressScale, onSearchPress]);
+  const onSearchBoxTouchCancel = useCallback(() => {
+    searchBoxPressScale.value = withSpring(1, { mass: 1, stiffness: 220, damping: 14 });
+  }, [searchBoxPressScale]);
   /* close Fab 的 onPress 必须 useCallback 稳定引用 —— Android 路径的 AnimatedCircleButton
    * 用 RNGH `Gesture.Tap()` 包在 useMemo 里，依赖列表包含 onPress；inline 箭头函数每次 parent
    * re-render 都是新引用 → useMemo 失效 → Gesture.Tap 实例重建 → RNGH 内部状态被重置,
@@ -1045,33 +1033,31 @@ export function TodayScreen() {
                 </Animated.View>
               </BouncyGlassCard>
             ) : (
-              /* Android 路径胶囊按下放大：RNGH Gesture.Tap onBegin/onFinalize 在 UI 线程
-                 worklet 驱动 spring scale，不走 JS bridge，快速 tap 也能稳定 trigger
-                 出 spring 起始段。onEnd runOnJS(onSearchPress) 把业务回调切回 JS。 */
-              <GestureDetector gesture={searchBoxTapGesture}>
-                <Animated.View
-                  style={[styles.searchInputBox, styles.searchInputBoxFill, searchBoxPressAnimStyle]}
-                >
-                  <Ionicons name="search" size={18} color={colors.textMuted} />
-                  <Animated.View style={[styles.searchInputTextWrap, searchContentAnimatedStyle]}>
-                    <TextInput
-                      ref={searchInputRef}
-                      style={styles.searchInput}
-                      placeholder="搜索任务或对话"
-                      placeholderTextColor={colors.placeholder}
-                      returnKeyType="search"
-                      editable={!fabMenuOpen}
-                      /* Android：EditText 是 native focusable view，会自己吃自己区域内的
-                       * touch，导致 RNGH Gesture.Tap 在输入框区域 onBegin 不 fire = 按下
-                       * 放大失效。pointerEvents='none' 让 EditText 让出 hit-test，外层
-                       * GestureDetector 全权接管；focus 已经走 imperative searchInputRef
-                       * .focus()，不依赖 native touch。代价是 cursor 永远到末尾——对搜索
-                       * 场景 OK。键盘 IME 输入不走 hit-test，不受影响。 */
-                      pointerEvents={Platform.OS === 'android' ? 'none' : undefined}
-                    />
-                  </Animated.View>
+              /* Android 路径胶囊按下放大：用 RN raw onTouch* 而非 RNGH（gesture 在
+               * EditText activate native gesture 后会被 cancel → spring 提前 down，
+               * 按住无法保持放大）。raw onTouch* 独立于 responder system / gesture
+               * ownership，child EditText cursor placement / 选词不受影响。 */
+              <Animated.View
+                /* collapsable={false}：保证 host view 不被 Yoga fold 进 parent,
+                 * raw onTouch* event 才能稳定 dispatch 到这一层。 */
+                collapsable={false}
+                style={[styles.searchInputBox, styles.searchInputBoxFill, searchBoxPressAnimStyle]}
+                onTouchStart={onSearchBoxTouchStart}
+                onTouchEnd={onSearchBoxTouchEnd}
+                onTouchCancel={onSearchBoxTouchCancel}
+              >
+                <Ionicons name="search" size={18} color={colors.textMuted} />
+                <Animated.View style={[styles.searchInputTextWrap, searchContentAnimatedStyle]}>
+                  <TextInput
+                    ref={searchInputRef}
+                    style={styles.searchInput}
+                    placeholder="搜索任务或对话"
+                    placeholderTextColor={colors.placeholder}
+                    returnKeyType="search"
+                    editable={!fabMenuOpen}
+                  />
                 </Animated.View>
-              </GestureDetector>
+              </Animated.View>
             )}
           </Animated.View>
           {/* Fab + 菜单 —— dual Fab 叠放，按 searchFocused 切 wrapper opacity + pointerEvents：
