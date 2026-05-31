@@ -2602,6 +2602,23 @@ export function ChatScreen({
     return last;
   })();
 
+  /* 单趟预计算每条消息的 user 序号信息，替代 renderMessage 里对每条消息 messages.slice(0,idx).filter()
+   * 的 O(n²) 扫描（大对话每次重渲染都会跑 → 卡）。语义与原逻辑一致：
+   *  - userOrdinalIndex（仅 user 行）：本条是第几个 user（0-based）
+   *  - afterUserIndex（仅 assistant 行）：本条之前最近一个 user 的 0-based 序号 */
+  const ordinalInfo = useMemo(() => {
+    let userSeen = 0;
+    return messages.map((m) => {
+      const afterUserIndex = userSeen - 1;
+      let userOrdinalIndex = -1;
+      if (m.role === 'user') {
+        userOrdinalIndex = userSeen;
+        userSeen += 1;
+      }
+      return { userOrdinalIndex, afterUserIndex };
+    });
+  }, [messages]);
+
   const renderMessage = (msg: ChatMessage, idx: number) => {
     if (msg.role === 'error') {
       return (
@@ -2611,14 +2628,10 @@ export function ChatScreen({
       );
     }
     const isUser = msg.role === 'user';
-    const userOrdinalIndex = isUser
-      ? messages.slice(0, idx + 1).filter((m) => m.role === 'user').length - 1
-      : -1;
+    const userOrdinalIndex = isUser ? (ordinalInfo[idx]?.userOrdinalIndex ?? -1) : -1;
     const isLastAssistant = !isUser && msg.role === 'assistant' && idx === lastAssistantIdx;
     const afterUserIndex =
-      !isUser && msg.role === 'assistant'
-        ? messages.slice(0, idx).filter((m) => m.role === 'user').length - 1
-        : -1;
+      !isUser && msg.role === 'assistant' ? (ordinalInfo[idx]?.afterUserIndex ?? -1) : -1;
     let lastTextBlockIdx = -1;
     if (!isUser && msg.role === 'assistant' && msg.blocks?.length) {
       msg.blocks.forEach((b, i) => {

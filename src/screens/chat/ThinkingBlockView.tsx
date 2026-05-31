@@ -66,7 +66,7 @@ function formatLabel(seconds: number | null, closed: boolean): string {
   return closed ? `Thought for ${txt} s` : `Thinking for ${txt} s`;
 }
 
-export function ThinkingBlockView({
+function ThinkingBlockViewImpl({
   block,
   prevIsToolPackage = false,
   nextIsToolPackage = false,
@@ -182,6 +182,10 @@ export function ThinkingBlockView({
     </View>
   );
 }
+
+/* 默认 shallow memo 足够：props 只有 block(对象，completed 消息引用稳定) + 两个 bool，无函数 props。
+ * 流式时 block 引用变 → 正常刷新；其它消息重渲染时（如 toggle 工具卡片）引用不变 → 跳过。 */
+export const ThinkingBlockView = React.memo(ThinkingBlockViewImpl);
 
 function createStyles(c: AppColors) {
   return StyleSheet.create({

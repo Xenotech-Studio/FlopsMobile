@@ -210,7 +210,7 @@ type Props = {
   contentWrapperStyle?: ViewStyle;
 };
 
-export function MarkdownContent({
+function MarkdownContentImpl({
   text,
   showCopyButton = false,
   showRegenerateButton = false,
@@ -344,3 +344,25 @@ export function MarkdownContent({
     </View>
   );
 }
+
+/**
+ * memo 比较：只比"影响渲染的值 props"，忽略 onRegenerate / onCompressClick 的函数标识
+ * —— 它们在调用点是内联箭头（每次 render 新建），但行为只取决于稳定的 afterUserIndex / 稳定 useCallback，
+ * 忽略其标识是安全的。这样在工具卡片展开/折叠等不改 markdown 的重渲染里，未变的消息直接跳过、不重解析。
+ * 主题(colors)走 useAppTheme context，不受 memo 阻断，仍会刷新。
+ */
+function markdownPropsEqual(a: Props, b: Props): boolean {
+  return (
+    a.text === b.text &&
+    a.showCopyButton === b.showCopyButton &&
+    a.showRegenerateButton === b.showRegenerateButton &&
+    a.regenerateDisabled === b.regenerateDisabled &&
+    a.usageHint === b.usageHint &&
+    a.usageDetail === b.usageDetail &&
+    a.compressHint === b.compressHint &&
+    a.compressAriaLabel === b.compressAriaLabel &&
+    a.contentWrapperStyle === b.contentWrapperStyle
+  );
+}
+
+export const MarkdownContent = React.memo(MarkdownContentImpl, markdownPropsEqual);
