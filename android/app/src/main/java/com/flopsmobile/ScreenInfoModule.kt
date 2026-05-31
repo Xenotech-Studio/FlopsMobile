@@ -28,6 +28,46 @@ class ScreenInfoModule(reactContext: ReactApplicationContext) :
     }
   }
 
+  /**
+   * 同步版：让 JS 在首帧 render 时就拿到圆角，避免"先窄后宽"闪烁（异步版要等 Promise 下一 tick）。
+   * 主屏 render 时 activity 窗口已布局好、rootWindowInsets 可用，读取可靠；异常兜底 0。
+   */
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  fun getScreenCornerRadiusSync(): Double {
+    return try {
+      readCornerRadiusDp()
+    } catch (t: Throwable) {
+      0.0
+    }
+  }
+
+  /**
+   * 同步读底部导航栏 inset（dp）—— 供首帧 render 直接取，避免 safe-area-context 首帧上报 0、
+   * 底部避让"先贴底后上移"的闪。返回 -1 表示读不到（窗口未就绪等），JS 侧据此退回 safe-area 值。
+   * 注意 0 是合法值（全面屏手势模式 = 无导航条）。
+   */
+  @ReactMethod(isBlockingSynchronousMethod = true)
+  fun getBottomInsetSync(): Double {
+    return try {
+      readBottomInsetDp()
+    } catch (t: Throwable) {
+      -1.0
+    }
+  }
+
+  private fun readBottomInsetDp(): Double {
+    val activity = getCurrentActivity() ?: return -1.0
+    val insets = activity.window.decorView.rootWindowInsets ?: return -1.0
+    val px = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      insets.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom
+    } else {
+      @Suppress("DEPRECATION")
+      insets.systemWindowInsetBottom
+    }
+    val density = reactApplicationContext.resources.displayMetrics.density
+    return px / density.toDouble()
+  }
+
   private fun readCornerRadiusDp(): Double {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return 0.0
     val activity = getCurrentActivity() ?: return 0.0

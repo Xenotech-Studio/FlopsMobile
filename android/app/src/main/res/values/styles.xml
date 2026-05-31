@@ -6,6 +6,11 @@
     <style name="AppTheme" parent="Theme.EdgeToEdge">
         <!-- Customize your theme here. -->
         <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
+        <!-- 关掉系统给三键导航栏加的对比度 scrim（默认 true）。开着时系统会在透明导航栏后面
+             刷一层半透明保护底（浅色模式≈白、华为还带圆角），跟内容割裂成一条白带。关掉后导航栏
+             真正透明，App 自己铺到屏底的内容（聊天页底部渐变等）透过去显示，跟其它 app 一致。
+             导航栏本身（三个按钮 / 手势条）系统强制保留、删不掉，这里只是让它背景透明。 -->
+        <item name="enforceNavigationBarContrast">false</item>
     </style>
 
 </resources>

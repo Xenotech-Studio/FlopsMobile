@@ -85,7 +85,8 @@ import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { BouncyGlassCard } from '../components/BouncyGlassCard';
-import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
+import { HEADER_CIRCLE_BTN_SIZE, bottomInsetTotal } from '../theme/layout';
+import { getBottomInsetSync } from '../utils/screenInfo';
 import { chatInputOverlayGradient, toolPreviewFadeGradient } from '../theme/appColors';
 import { useAppTheme } from '../context/ThemeContext';
 import { HamburgerButton } from './shell/HamburgerButton';
@@ -316,10 +317,6 @@ export function ChatScreen({
   const gradientStripHeight = 48;
   /** 输入行高度（输入框+发送+底部留白，模型/助手条绝对叠在留白内，不把整块顶上去） */
   const inputRowHeight = 92;
-  /** 底部整块高度与改前一致：渐变 + 输入区（勿再加一行高度，否则输入框会整体上移） */
-  const bottomOverlayHeight = gradientStripHeight + inputRowHeight;
-  /** 列表底部留白，让内容可滚入渐变下方 */
-  const scrollBottomPadding = bottomOverlayHeight + 12;
   /* 键盘避让（react-native-keyboard-controller frame-perfect 路径）。
    * KAV (lib 版): 跟 RN 原生 KAV 同 API，但走 native frame timing (iOS UIKeyboardLayoutGuide /
    * Android WindowInsetsCompat.Type.ime)。ScrollView (flex:1) 缩小、composer 抬升全程跟键盘
@@ -342,11 +339,39 @@ export function ChatScreen({
       hideSub.remove();
     };
   }, []);
+  /* 底部 inset：edge-to-edge 下 SafeAreaView 不再吃 bottom（否则导航栏后面糊一条纯白 padding 带、
+   * 跟内容割裂）。改成把 inset 让给 bottomOverlay —— 渐变铺到屏幕物理底边、盖在透明导航栏后面，
+   * 输入簇 (bottomOverlayInner) 整块抬 navInset 避开三键导航 / 屏底。bottomInsetTotal 按设备安全区
+   * inset 自动给出总间距（含无真实安全区设备 —— 安卓无 bar、iOS home 键/方形屏 —— 的兜底下限+间距）。
+   * 键盘弹起时 lib KAV 已按 ime 高度抬升、导航栏被键盘盖住，这时 navInset 归零避免叠加偏高。 */
+  /* 底部 inset：safe-area-context 首帧上报 0（安卓 edge-to-edge 已知），会让 composer 先贴底再上移。
+   * 安卓用 native 同步值兜首帧（render 时窗口已就绪，可靠）；keyed on insets.bottom 重读以跟随导航模式
+   * 切换 / 转屏。iOS getBottomInsetSync 返回 null → 用 safe-area（配 initialWindowMetrics 已无首帧闪）。 */
+  const bottomInset = useMemo(() => {
+    const sync = getBottomInsetSync();
+    return sync != null ? sync : insets.bottom;
+  }, [insets.bottom]);
+  /** 键盘收起时输入簇要抬起的底部间距（导航栏 / 安全区）。不再依赖 keyboardOpen state —— 改由下面
+   *  navInsetAnimStyle 在 UI 线程随键盘高度插值，避免长对话页 React 重渲染慢导致"偏移非常延迟"。 */
+  const restingNavInset = bottomInsetTotal(bottomInset);
+  /** 底部整块高度：渐变 + 输入区 + 导航栏 inset（恒为 resting 值，不随键盘变 → 不触发重渲染） */
+  const bottomOverlayHeight = gradientStripHeight + inputRowHeight + restingNavInset;
+  /** 列表底部留白，让内容可滚入渐变下方 */
+  const scrollBottomPadding = bottomOverlayHeight + 12;
   /* bottomOverlay 的 bottom 偏移：iOS 完全由 lib KAV 缩 scrollAndGradientWrap (flex:1) 自动上浮
    * (base=0)；Android lib KAV 同样接管几何，base=0 即可（之前 RN KAV 在 Android adjustResize
    * 下 absolute children 飘忽，那条手挂 h offset 是兜底）。lib 两端统一 native 接管。 */
   const kbBottomStyle = useAnimatedStyle(() => {
     return { bottom: 0 };
+  });
+  /* 输入簇 (bottomOverlayInner) 的 bottom 偏移：纯 UI 线程，随键盘高度从 restingNavInset → 0 插值。
+   * 键盘抬升由 lib KAV 缩 scrollAndGradientWrap 出（已含键盘高度），这里再叠 max(0, restingNavInset
+   * - kbHeight)：键盘没盖住导航栏区时补足 navInset，盖住后归 0，净位置 = max(键盘高, restingNavInset)。
+   * 之前用 keyboardOpen state 驱动 navInset(48→0)，长对话页要等慢重渲染才偏移 → 明显延迟；改 worklet
+   * 跟 kbAnimHeight 逐帧同步，与重渲染解耦。 */
+  const navInsetAnimStyle = useAnimatedStyle(() => {
+    const kbHeight = -kbAnimHeight.value; // 0=收起，正值=键盘高度
+    return { bottom: Math.max(0, restingNavInset - kbHeight) };
   });
   /* Meta row 的淡出：opacity 跟键盘动画绑，键盘弹起 → 渐淡出消失。lib height 是负数，- 它转正。 */
   const kbMetaRowStyle = useAnimatedStyle(() => {
@@ -2844,7 +2869,9 @@ export function ChatScreen({
 
   return (
     <>
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    {/* edges 不含 'bottom'：bottom inset 交给 bottomOverlay 处理（见 navInset），
+        避免 SafeAreaView 在透明导航栏后面糊一条白 padding 带。 */}
+    <SafeAreaView style={styles.container} edges={[]}>
     <View style={styles.containerInner}>
       {canGoBack ? (
         <View
@@ -3129,7 +3156,7 @@ export function ChatScreen({
               accessibilityRole="button"
               accessibilityLabel="滚动到对话底部"
             />
-            <View style={styles.bottomOverlayInner} pointerEvents="box-none">
+            <Reanimated.View style={[styles.bottomOverlayInner, navInsetAnimStyle]} pointerEvents="box-none">
               {/* 输入区。short 模式：圆角胶囊一行，+ 内嵌左侧 + 输入填满；模型 / 助手 chips
                   走绝对定位的 meta row 贴在 composer 下面留白里。
                   tall 模式：圆角卡片两行，上面纯输入区，下面一行 [+ 按钮][model][agent]
@@ -3376,7 +3403,7 @@ export function ChatScreen({
                   </>
                 );
               })()}
-            </View>
+            </Reanimated.View>
           </Reanimated.View>
         </View>
       </KeyboardAvoidingView>

@@ -59,25 +59,11 @@ import { ProjectScreen } from '../ProjectScreen';
 import { DocsScreen } from '../DocsScreen';
 import { ChatScreen } from '../ChatScreen';
 import { subscribeClientOutdated } from '../../utils/clientCompatBus';
-import { getScreenCornerRadius } from '../../utils/screenInfo';
+import { getScreenCornerRadius, inferScreenCornerRadius } from '../../utils/screenInfo';
 import { SHADOW_COLOR } from '../../theme/shadows';
 
 /** 抽屉完全展开时主页面右侧保留的 peek 宽度 */
 const PEEK_WIDTH = 64;
-/** 主页面在最大展开时圆角的兜底值（无法推断屏幕圆角的设备） */
-const MAIN_RADIUS_FALLBACK = 24;
-/** 通过 safe-area top inset 推断 iOS 设备屏幕物理圆角；Android 用保守默认值。
- *  - top inset ≥ 59：灵动岛设备（iPhone 14 Pro+ / 15+ / 16）：屏幕圆角约 55pt
- *  - top inset ≥ 44：刘海设备（iPhone X – 14 普通 / iPhone 15）：屏幕圆角约 47pt
- *  - 其它（含 iPhone SE 等矩形屏）：0 */
-function inferScreenCornerRadius(topInset: number): number {
-  if (Platform.OS === 'ios') {
-    if (topInset >= 59) return 55;
-    if (topInset >= 44) return 47;
-    return 0;
-  }
-  return MAIN_RADIUS_FALLBACK;
-}
 /** 抽屉自身 dim 上限：progress=0 时最暗、progress=1 时全亮（参考 Claude app 的「刚拉开抽屉偏暗、展开到位才完全显形」效果） */
 const DRAWER_DIM_AT_CLOSED = 0.55;
 /** 左缘热区宽度。iOS 加宽到 40 让手指更容易触发（接近 iOS 原生返回手势的触发区）。 */
@@ -371,11 +357,13 @@ export function DrawerShell() {
   });
 
   /** 内层：borderRadius（内层 overflow:hidden 用来裁剪 children；shadow 不放这里）
-   *  整个抽屉过程恒定为设备物理圆角；关闭时主页面铺满屏幕，圆角跟设备自身的
-   *  屏幕圆角重合不可见，所以 progress=0 → 1 整段保持同一个值，不再插值。 */
+   *  圆角随 progress 从 0（关闭=方角）快速 ramp 到 mainRadiusOpen（打开=设备圆角）。
+   *  之前恒定为设备圆角、假设关闭铺满屏时跟物理屏圆角重合不可见——但方形屏手机没有物理圆角，
+   *  恒定值在关闭态就露出来了。改成关闭归 0：方形屏关闭=方角贴合屏幕；圆角屏关闭=方角内容被
+   *  系统物理圆角裁掉照样圆，打开时圆角匹配设备。ramp 区间小，离开 0 的一瞬即到位、视觉无突变。 */
   const animatedMainInnerStyle = useAnimatedStyle(() => {
     return {
-      borderRadius: mainRadiusOpen,
+      borderRadius: interpolate(progress.value, [0, 0.06], [0, mainRadiusOpen], 'clamp'),
     };
   });
 

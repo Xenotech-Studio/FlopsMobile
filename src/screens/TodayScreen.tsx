@@ -97,7 +97,9 @@ import { shadowCircleButtonThemed, shadowMenu, shadowSoft } from '../theme/shado
 import {
   HEADER_CIRCLE_BTN_SIZE,
   LIST_PADDING_BOTTOM_WITH_FOOTER,
+  bottomInsetTotal,
 } from '../theme/layout';
+import { isSquareScreen, getScreenCornerRadiusSync, getBottomInsetSync } from '../utils/screenInfo';
 import {
   TASK_FONT_SIZE_SMALL,
   TASK_FONT_SIZE_TITLE,
@@ -134,6 +136,14 @@ type ListRow = TaskItem;
 export function TodayScreen() {
   const navigation = useNavigation<Nav>();
   const insets = useSafeAreaInsets();
+  /* 底部 inset：safe-area-context 首帧上报 0（安卓 edge-to-edge 已知），会让底部避让"先贴底后上移"。
+   * 安卓用 native 同步值兜首帧（render 时窗口已就绪，可靠）；keyed on insets.bottom 重读以跟随导航
+   * 模式切换 / 转屏。iOS getBottomInsetSync 返回 null → 用 safe-area（配 initialWindowMetrics）。
+   * 下面所有底部间距 / SafeAreaView 下 padding 都用它，而不是直接用 insets.bottom。 */
+  const bottomInset = useMemo(() => {
+    const sync = getBottomInsetSync();
+    return sync != null ? sync : insets.bottom;
+  }, [insets.bottom]);
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { session } = useSession();
@@ -326,14 +336,20 @@ export function TodayScreen() {
    *  - no-kb: bottom:-8 paddingBottom:2，搜索框略侵入 home indicator 区。
    *  - kb-up: bottom:0 paddingBottom:12，row 距键盘顶 12pt。
    *  几何上 kbHeight 量级的整体上抬由 KAV 缩 kavInner 自动出。 */
+  /* searchWrap resting 态距屏底间距：SafeAreaView 的下 padding 已是 bottomInset（见下），这里只补
+   *  「目标总间距 - 已 pad 的部分」。bottomInsetTotal = max(inset, 下限)：有导航条/安全区的设备
+   *  extra=0（直接紧贴 inset，nav bar/单键条/home indicator 内部自带留白）；只有完全没有导航条
+   *  （inset≈0：安卓全面屏手势、iOS home 键/方形屏）才兜出下限，extra>0 避免搜索栏贴死屏底。 */
+  const searchWrapExtraBottom = bottomInsetTotal(bottomInset) - bottomInset;
   const kbSearchWrapStyle = useAnimatedStyle(() => {
     const h = -kbAnimHeight.value;
-    /* 无键盘 resting bottom = 0：让 searchWrap 停在 kavInner.bottom（= SafeAreaView content
-     *  底部），即 home indicator 上方。原 -8 让它沉进 safe area 区域，视觉上过于贴底。
-     *  键盘弹起时 bottom = 0、paddingBottom 12 让 row 离 kb 12pt（kavInner 由 lib KAV 缩到
-     *  kb 顶，searchWrap 跟 kavInner 底走）。 */
+    /* 无键盘 resting bottom = searchWrapExtraBottom：让 searchWrap 停在 kavInner.bottom（=
+     *  SafeAreaView content 底部）上方（无底部栏机型靠 extra 兜出间距）。原 -8 让它沉进 safe
+     *  area 区域，视觉上过于贴底。键盘弹起时 bottom→0、paddingBottom 12 让 row 离 kb 12pt
+     *  （kavInner 由 lib KAV 缩到 kb 顶，searchWrap 跟 kavInner 底走；此时导航栏被键盘盖住，
+     *  extra 也插值归零避免偏高）。 */
     return {
-      bottom: 0,
+      bottom: interpolate(h, [0, 30], [searchWrapExtraBottom, 0], 'clamp'),
       paddingBottom: interpolate(h, [0, 30], [2, 12], 'clamp'),
     };
   });
@@ -341,7 +357,7 @@ export function TodayScreen() {
   /* bottomFade 几何由 KAV 缩同步带动，静态 bottom -38 即可。 */
   const FADE_BOTTOM_BELOW_KAV = 38;
   const FADE_TOP_ABOVE_KAV = 68;
-  const FADE_SOLID_HEIGHT = Math.max(insets.bottom, 8);
+  const FADE_SOLID_HEIGHT = Math.max(bottomInset, 8);
   const kbBottomFadeStyle = useAnimatedStyle(() => {
     return { bottom: -FADE_BOTTOM_BELOW_KAV };
   });
@@ -518,11 +534,23 @@ export function TodayScreen() {
    *  挤掉 14pt），搜索框宽度跟着补回 28pt。 */
   const { width: windowWidth } = useWindowDimensions();
   const SEARCH_WRAP_PADDING_H = 26;
+  /** 方角屏 resting padding：对齐顶部圆钮（topBar paddingHorizontal = 16），不再做全宽 12。 */
+  const SEARCH_WRAP_PADDING_H_SQUARE = 16;
   const SEARCH_WRAP_PADDING_H_FOCUSED = 12;
   const SEARCH_ROW_GAP = 10;
+  /* 直角屏（屏幕物理圆角≈0：iPhone SE / 8 等矩形屏）：resting padding 用 16，跟顶部圆钮两边距对齐
+   * （圆角屏 resting 是 26、比顶部更内缩）。两种屏聚焦/键盘弹出都收到 12 widen，动画保留。
+   * 判据走屏幕圆角（跟 DrawerShell 同一套 inferScreenCornerRadius），而非长宽比 / 底部安全区。
+   * 注：Android 这里走 inference 的保守默认（非 0）→ 当作圆角屏；真有直角 Android 需另接 native 实测值。 */
+  /* Android 屏幕物理圆角（API 31+ native 同步实测；iOS / 旧 build 未重编为 null → isSquareScreen
+   * 走 topInset 推断）。同步取 → 首帧 render 就拿到正确值，不再"先窄后宽"闪。值设备固定、wrapper 内已缓存。 */
+  const squareScreen = isSquareScreen(insets.top, getScreenCornerRadiusSync());
+  const searchRestingPaddingH = squareScreen
+    ? SEARCH_WRAP_PADDING_H_SQUARE
+    : SEARCH_WRAP_PADDING_H;
   const searchExpandedWidth = Math.max(
     FAB_SIZE,
-    windowWidth - SEARCH_WRAP_PADDING_H * 2 - SEARCH_ROW_GAP - FAB_SIZE
+    windowWidth - searchRestingPaddingH * 2 - SEARCH_ROW_GAP - FAB_SIZE
   );
   const searchExpandedWidthFocused = Math.max(
     FAB_SIZE,
@@ -574,7 +602,7 @@ export function TodayScreen() {
     paddingHorizontal: interpolate(
       focusedProgress.value,
       [0, 1],
-      [SEARCH_WRAP_PADDING_H, SEARCH_WRAP_PADDING_H_FOCUSED]
+      [searchRestingPaddingH, SEARCH_WRAP_PADDING_H_FOCUSED]
     ),
   }));
   const onSearchPress = useCallback(() => {
@@ -839,8 +867,11 @@ export function TodayScreen() {
     </View>
   );
 
+  /* SafeAreaView edges 去掉 'bottom'：改用手动 paddingBottom = bottomInset（native 同步、首帧即正确），
+   * 避免 SafeAreaView 吃 safe-area 首帧 0 的 insets 导致"先贴底后上移"闪。bottomInset 在 iOS 仍跟随
+   * insets.bottom（键盘弹起时归 0、padding 自动消失，行为不变）。 */
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <SafeAreaView style={[styles.container, { paddingBottom: bottomInset }]} edges={[]}>
     <KeyboardAvoidingView
       style={styles.kavInner}
       /* lib KAV 两端都用 'padding'：lib 内部走 WindowInsets.ime（Android）/
@@ -1185,7 +1216,7 @@ export function TodayScreen() {
             style={[
               styles.fabMenuCard,
               {
-                bottom: Math.max(insets.bottom, 8) + 8,
+                bottom: Math.max(bottomInset, 8) + 8,
                 /* right 26 跟 FAB 右沿（searchWrap.paddingHorizontal）对齐 —— 菜单右边
                  * 不向内错开，跟 FAB 右沿一根垂直线。 */
                 right: 26,

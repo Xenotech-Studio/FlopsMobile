@@ -13,7 +13,7 @@ import {
   DarkTheme,
   DefaultTheme,
 } from '@react-navigation/native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { ThemeProvider, useAppTheme } from './src/context/ThemeContext';
 import { SessionProvider, useSession } from './src/context/SessionContext';
 import { TaskProvider } from './src/context/TaskContext';
@@ -93,7 +93,10 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <KeyboardProvider>
-        <SafeAreaProvider>
+        {/* initialMetrics：用原生模块初始化时同步读出的初始 insets 铺首帧，避免 insets 先 0 后更新
+            导致底部避让（composer / 搜索栏）"加载一下才到位"。后续 insets 变化（转屏 / 切导航模式）
+            仍由 provider 正常更新。 */}
+        <SafeAreaProvider initialMetrics={initialWindowMetrics}>
           <ThemeProvider>
             <SessionProvider>
               <PushTokenLifecycle />
