@@ -578,6 +578,18 @@ export type ContextSummary = {
   created_at?: string;
 };
 
+/** 会话消息窗口元数据（尾窗拉取时服务端返回 messages_window；对齐 web）。
+ *  - total: 整个会话的消息总数
+ *  - viewStart: 当前窗口首条在全量里的下标（= server returned_start）
+ *  - hasOlder: viewStart 之前是否还有更旧消息
+ *  - userCountBefore: raw[0..viewStart-1] 里非 isMeta 的 user 条数（把窗口内局部 user 序号还原成全局序号用） */
+export type MessageWindow = {
+  total: number;
+  viewStart: number;
+  hasOlder: boolean;
+  userCountBefore: number;
+};
+
 export type Conversation = {
   id: string;
   title?: string;
@@ -777,13 +789,38 @@ export async function runInboxStream(
 /**
  * 获取单个对话详情（含消息）：GET /api/conversations/:id
  */
+/** 首屏只拉尾部消息。web 用 400，但手机上 400 条带大工具结果的消息响应可达数 MB，JSON.parse +
+ *  解密 + 渲染都很慢（实测 504 条会话拉 400 → 解析+解密 4.3s、渲染 2.8s）。手机用更小的首窗，
+ *  滚到顶再分页补（CHAT_MESSAGES_LOAD_OLDER）。调这个数即可平衡"打开速度 vs 初始可见条数"。 */
+export const CHAT_MESSAGES_INITIAL_LIMIT = 80;
+/** 上滚加载更旧每批条数（对齐 web CHAT_MESSAGES_LOAD_OLDER / GET .../messages/before 的 limit）。 */
+export const CHAT_MESSAGES_LOAD_OLDER = 200;
+
+/** 从 API 响应里解析 messages_window 元数据；无（老 server / 全量返回）时返回 null。 */
+function parseMessageWindow(data: unknown): MessageWindow | null {
+  const mw = (data as { messages_window?: Record<string, unknown> } | null)?.messages_window;
+  if (mw && typeof mw.total === 'number') {
+    return {
+      total: mw.total,
+      viewStart: typeof mw.returned_start === 'number' ? mw.returned_start : 0,
+      hasOlder: !!mw.has_older,
+      userCountBefore: typeof mw.user_count_before === 'number' ? mw.user_count_before : 0,
+    };
+  }
+  return null;
+}
+
 export async function getConversation(
   session: Session,
-  conversationId: string
-): Promise<{ conversation: Conversation }> {
+  conversationId: string,
+  /** 不传 = 全量（保持老调用方行为）；路由打开会显式传 CHAT_MESSAGES_INITIAL_LIMIT 走尾窗 */
+  messagesLimit?: number
+): Promise<{ conversation: Conversation; messagesWindow: MessageWindow | null }> {
   const base = session.server_base_url;
   const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
-  const res = await fetchWithDebugLog(`${base}api/conversations/${conversationId}`, {
+  const limitQuery =
+    typeof messagesLimit === 'number' && messagesLimit > 0 ? `?messages_limit=${messagesLimit}` : '';
+  const res = await fetchWithDebugLog(`${base}api/conversations/${conversationId}${limitQuery}`, {
     method: 'GET',
     headers: authHeaders(session.access_token),
   });
@@ -798,6 +835,7 @@ export async function getConversation(
     title_ciphertext?: string;
     messages?: Array<Record<string, unknown>>;
   };
+  const tParse = typeof performance !== 'undefined' ? performance.now() : Date.now();
   // 加密对话：用本机 K_user 派生 K_conv 缓存 + 本地解密 messages + title
   if (conversation && conversation.encrypted && conversation.k_conv_blob) {
     try {
@@ -861,13 +899,59 @@ export async function getConversation(
     conversationId,
     /** fetch Promise resolve（RN 上通常接近首包+下载完成，不等同于纯 TTFB） */
     fetchAwaitMs: Math.round(t1 - t0),
+    /** 纯 JSON.parse（res.json()）耗时 */
+    jsonParseMs: Math.round(tParse - t1),
+    /** 解密 messages + title + agent 派生耗时 */
+    decryptMs: Math.round(t2 - tParse),
     resJsonParseMs: Math.round(t2 - t1),
     fetchPlusJsonMs: Math.round(t2 - t0),
     status: res.status,
     messageCount,
     hasActiveRun,
   });
-  return { conversation };
+  // messages_window 是响应顶层字段（conversation 即整个 JSON），尾窗时存在
+  return { conversation, messagesWindow: parseMessageWindow(conversation) };
+}
+
+/**
+ * 加载更旧消息（上滚分页）：GET /api/conversations/:id/messages/before?before_index=&limit=
+ * 返回的 older 消息密文用同会话已缓存的 K_conv 就地解密（对齐 web）。
+ * @returns older 已解密的 ConversationMessage[] + 新的窗口元数据
+ */
+export async function getMessagesBefore(
+  session: Session,
+  conversationId: string,
+  beforeIndex: number,
+  limit: number = CHAT_MESSAGES_LOAD_OLDER
+): Promise<{ messages: ConversationMessage[]; messagesWindow: MessageWindow | null }> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(
+    `${base}api/conversations/${conversationId}/messages/before?before_index=${beforeIndex}&limit=${limit}`,
+    { method: 'GET', headers: authHeaders(session.access_token) }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `加载更旧消息失败: ${res.status}`);
+  }
+  const data = (await res.json()) as {
+    messages?: Array<Record<string, unknown>>;
+    window?: Record<string, unknown>;
+  };
+  let older: ConversationMessage[] = Array.isArray(data.messages)
+    ? (data.messages as unknown as ConversationMessage[])
+    : [];
+  // 加密会话：用同会话已缓存的 K_conv 就地解密 older（初次 getConversation 已 setCachedKConv）
+  const kConv = getCachedKConv(conversationId);
+  if (kConv && older.length > 0) {
+    try {
+      older = older.map((m) => decryptMessageLocal(m as unknown as Record<string, unknown>, kConv) as unknown as ConversationMessage);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[encrypted conv mobile] older decrypt failed:', (e as Error)?.message || e);
+    }
+  }
+  // /messages/before 的窗口字段挂在 data.window 下（对齐 web）
+  return { messages: older, messagesWindow: parseMessageWindow({ messages_window: data.window }) };
 }
 
 /**

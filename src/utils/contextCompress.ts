@@ -235,6 +235,10 @@ export function resolveContextCompressDividerPlacement(p: {
   rawMessages: unknown;
   contextSummaries: unknown;
   activeContextSummaryId: string | null | undefined;
+  /** 尾窗模式：当前窗口首条在全量里的下标（= messageWindowMeta.viewStart）。不传 = 0（全量，旧行为）。 */
+  rawViewOffset?: number;
+  /** 尾窗模式：全量消息总数（= messageWindowMeta.total）。不传 = 用 arr.length（全量，旧行为）。 */
+  rawTotal?: number;
 }): ContextCompressDividerPlacement | null {
   const n =
     typeof p.messageCount === 'number' && Number.isFinite(p.messageCount) ? Math.floor(p.messageCount) : 0;
@@ -250,14 +254,41 @@ export function resolveContextCompressDividerPlacement(p: {
 
   const e = active.covers_exclusive_end;
   if (typeof e !== 'number' || !Number.isFinite(e)) return null;
-  const ei = Math.floor(e);
+  const ei = Math.floor(e); // 全局坐标：covers raw[0..ei-1]
 
-  if (ei <= 0 || ei >= arr.length) return null;
+  // 尾窗坐标系：arr 只是 [viewOffset, viewOffset+arr.length) 这一窗口；ei 是全局下标。
+  const viewOffset =
+    typeof p.rawViewOffset === 'number' && Number.isFinite(p.rawViewOffset) && p.rawViewOffset >= 0
+      ? Math.floor(p.rawViewOffset)
+      : 0;
+  const fullCount =
+    typeof p.rawTotal === 'number' && Number.isFinite(p.rawTotal) && p.rawTotal >= 0
+      ? Math.floor(p.rawTotal)
+      : arr.length;
 
-  const visual = rawCoversExclusiveEndToVisualPlacement(arr, ei);
-  if (!visual) return null;
+  if (ei <= 0 || ei >= fullCount) return null;
 
   const fullLocalBubbleCount = rawMessagesToLocal(arr).length;
+  const viewEnd = viewOffset + arr.length;
+  // 整个可见窗口都还在压缩区里（逐字起点在窗口之后）—— 不画分界
+  if (viewEnd <= ei) return null;
+  // 逐字起点在窗口之前 / 恰在窗首 —— 整窗都是逐字区，顶部画"上文已压缩"
+  if (viewOffset >= ei) {
+    return {
+      kind: 'beforeIndex',
+      insertBeforeIndex: 0,
+      activeSummary: active,
+      visibleCount: n,
+      fullCount,
+      fullLocalBubbleCount,
+      coversExclusiveEndRaw: ei,
+    };
+  }
+
+  // 逐字起点落在窗口内：把全局 ei 转成窗口内局部坐标再求 visual placement
+  const eLocal = ei - viewOffset;
+  const visual = rawCoversExclusiveEndToVisualPlacement(arr, eLocal);
+  if (!visual) return null;
 
   if (visual.kind === 'beforeBubble') {
     if (visual.insertBeforeIndex < n) {
@@ -266,7 +297,7 @@ export function resolveContextCompressDividerPlacement(p: {
         insertBeforeIndex: visual.insertBeforeIndex,
         activeSummary: active,
         visibleCount: n,
-        fullCount: arr.length,
+        fullCount,
         fullLocalBubbleCount,
         coversExclusiveEndRaw: ei,
       };
@@ -275,7 +306,7 @@ export function resolveContextCompressDividerPlacement(p: {
       kind: 'afterLastVisible',
       activeSummary: active,
       visibleCount: n,
-      fullCount: arr.length,
+      fullCount,
       fullLocalBubbleCount,
       coversExclusiveEnd: ei,
       localInsertBeforeIndex: visual.insertBeforeIndex,
@@ -290,7 +321,7 @@ export function resolveContextCompressDividerPlacement(p: {
         insertBeforeBlockIndex: visual.insertBeforeBlockIndex,
         activeSummary: active,
         visibleCount: n,
-        fullCount: arr.length,
+        fullCount,
         fullLocalBubbleCount,
         coversExclusiveEndRaw: ei,
       };
@@ -299,7 +330,7 @@ export function resolveContextCompressDividerPlacement(p: {
       kind: 'afterLastVisible',
       activeSummary: active,
       visibleCount: n,
-      fullCount: arr.length,
+      fullCount,
       fullLocalBubbleCount,
       coversExclusiveEnd: ei,
       localInsertBeforeIndex: visual.assistantMessageIndex,

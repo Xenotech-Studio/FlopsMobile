@@ -15,6 +15,8 @@
 		BD4D1323A34541AE9D36B8F1 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E3B4A7555B64545B90B5BFC /* SceneDelegate.swift */; };
 		F095001000000000000000A2 /* FlopsPushModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = F095001000000000000000A1 /* FlopsPushModule.swift */; };
 		F095001000000000000000A4 /* FlopsPushModule.m in Sources */ = {isa = PBXBuildFile; fileRef = F095001000000000000000A3 /* FlopsPushModule.m */; };
+		F095001000000000000000A8 /* FlopsCryptoModule.m in Sources */ = {isa = PBXBuildFile; fileRef = F095001000000000000000A7 /* FlopsCryptoModule.m */; };
+		F095001000000000000000AA /* FlopsCryptoModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = F095001000000000000000A9 /* FlopsCryptoModule.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,6 +34,8 @@
 		F095001000000000000000A1 /* FlopsPushModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FlopsPushModule.swift; path = FlopsMobile/FlopsPushModule.swift; sourceTree = "<group>"; };
 		F095001000000000000000A3 /* FlopsPushModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = FlopsPushModule.m; path = FlopsMobile/FlopsPushModule.m; sourceTree = "<group>"; };
 		F095001000000000000000A5 /* FlopsMobile.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = FlopsMobile.entitlements; path = FlopsMobile/FlopsMobile.entitlements; sourceTree = "<group>"; };
+		F095001000000000000000A7 /* FlopsCryptoModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = FlopsCryptoModule.m; path = FlopsMobile/FlopsCryptoModule.m; sourceTree = "<group>"; };
+		F095001000000000000000A9 /* FlopsCryptoModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FlopsCryptoModule.swift; path = FlopsMobile/FlopsCryptoModule.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -55,6 +59,8 @@
 				F095001000000000000000A1 /* FlopsPushModule.swift */,
 				F095001000000000000000A3 /* FlopsPushModule.m */,
 				F095001000000000000000A5 /* FlopsMobile.entitlements */,
+				F095001000000000000000A7 /* FlopsCryptoModule.m */,
+				F095001000000000000000A9 /* FlopsCryptoModule.swift */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
@@ -261,6 +267,8 @@
 				BD4D1323A34541AE9D36B8F1 /* SceneDelegate.swift in Sources */,
 				F095001000000000000000A2 /* FlopsPushModule.swift in Sources */,
 				F095001000000000000000A4 /* FlopsPushModule.m in Sources */,
+				F095001000000000000000AA /* FlopsCryptoModule.swift in Sources */,
+				F095001000000000000000A8 /* FlopsCryptoModule.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -295,7 +303,7 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 				VERSIONING_SYSTEM = "apple-generic";
 			};
 			name = Debug;
@@ -326,7 +334,7 @@
 				PRODUCT_NAME = FlopsMobile;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 				VERSIONING_SYSTEM = "apple-generic";
 			};
 			name = Release;

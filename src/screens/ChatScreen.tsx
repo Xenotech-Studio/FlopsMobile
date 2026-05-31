@@ -44,6 +44,8 @@ import {
   cancelConversation,
   submitSafetyDecision,
   getConversation,
+  getMessagesBefore,
+  CHAT_MESSAGES_INITIAL_LIMIT,
   getLayoutPreferences,
   getModelsConfig,
   selectModel,
@@ -58,6 +60,7 @@ import {
   type UsageRun,
   type AgentProfile,
   type ContextSummary,
+  type MessageWindow,
 } from '../api';
 import {
   rawMessagesToLocal,
@@ -390,6 +393,22 @@ export function ChatScreen({
   const [conversationTitle, setConversationTitle] = useState(params?.conversationTitle ?? '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [serverRawMessages, setServerRawMessages] = useState<ConversationMessage[]>([]);
+  /** 消息窗口元数据（尾窗拉取时由 getConversation/getMessagesBefore 返回）；null = 全量（无窗口）。
+   *  contextCompress 坐标变换 / regenerate 全局序号 / 滚到顶加载更旧 都读它。 */
+  const [messageWindowMeta, setMessageWindowMeta] = useState<MessageWindow | null>(null);
+  /** 最新值镜像 ref：供 handleRegenerate 等 useCallback 读 userCountBefore，不必进依赖。 */
+  const messageWindowMetaRef = useRef<MessageWindow | null>(null);
+  messageWindowMetaRef.current = messageWindowMeta;
+  /** 加载更旧分页用的 refs（滚动锚定 / 防抖）；serverRawMessages 镜像供 prepend 读最新值不进依赖。 */
+  const serverRawMessagesRef = useRef<ConversationMessage[]>([]);
+  const scrollOffsetYRef = useRef(0);
+  const scrollContentHeightRef = useRef(0);
+  /** prepend 更旧消息后用来把视口锚回原位置（避免内容在顶部增高导致跳动）。 */
+  const olderRestoreRef = useRef<{ prevHeight: number; prevOffsetY: number } | null>(null);
+  const loadingOlderRef = useRef(false);
+  serverRawMessagesRef.current = serverRawMessages;
+  /** 已完整 GET 加载过的会话 id：路由 effect 因别的依赖抖动 re-fire 时跳过重拉重解密（对齐 web）。 */
+  const loadedConversationIdRef = useRef<string | null>(null);
   const [contextSummaries, setContextSummaries] = useState<ContextSummary[]>([]);
   const [activeContextSummaryId, setActiveContextSummaryId] = useState('');
   /** 后端按需返回的上下文 L1 投影；composer 旁环形进度条算"已用比例"用 */
@@ -557,10 +576,16 @@ export function ChatScreen({
     sessionRef.current = session;
   }, [session]);
 
-  const applyConversationUsageState = useCallback((conversation: Conversation) => {
+  const applyConversationUsageState = useCallback(
+    (conversation: Conversation, messagesWindow?: MessageWindow | null) => {
     const raw =
       conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
     setServerRawMessages(raw);
+    /* 窗口元数据：所有"拉会话→应用到 state"的入口（路由打开 + 各 sync/resume）都经此函数，
+     * 在这里统一 setMessageWindowMeta，避免 7 处各写一遍。传 undefined 时不动（少数不带窗口的调用）。 */
+    if (messagesWindow !== undefined) {
+      setMessageWindowMeta(messagesWindow);
+    }
     setUsageStats(conversation.usage_stats ?? null);
     setUsageRuns(Array.isArray(conversation.usage_runs) ? conversation.usage_runs : []);
     const sums = conversation.context_summaries;
@@ -606,8 +631,11 @@ export function ChatScreen({
         rawMessages: serverRawMessages,
         contextSummaries,
         activeContextSummaryId,
+        // 尾窗模式：serverRawMessages 只是窗口，把 covers_exclusive_end 的全局坐标换算到窗口内
+        rawViewOffset: messageWindowMeta?.viewStart ?? 0,
+        rawTotal: messageWindowMeta?.total ?? serverRawMessages.length,
       }),
-    [messages.length, serverRawMessages, contextSummaries, activeContextSummaryId]
+    [messages.length, serverRawMessages, contextSummaries, activeContextSummaryId, messageWindowMeta]
   );
 
   const contextCompressScrollToAnchorTitle = '滚动到「摘要」位置（列表中间）';
@@ -1236,8 +1264,8 @@ export function ChatScreen({
             if (cid && cid === conversationIdRef.current && session) {
               void (async () => {
                 try {
-                  const { conversation } = await getConversation(session, cid);
-                  applyConversationUsageState(conversation);
+                  const { conversation, messagesWindow } = await getConversation(session, cid, CHAT_MESSAGES_INITIAL_LIMIT);
+                  applyConversationUsageState(conversation, messagesWindow);
                   const raw =
                     conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
                   let synced = rawMessagesToLocal(raw);
@@ -1418,8 +1446,8 @@ export function ChatScreen({
       const syncId = lastConvId;
       try {
         if (session) {
-          const { conversation } = await getConversation(session, syncId);
-          applyConversationUsageState(conversation);
+          const { conversation, messagesWindow } = await getConversation(session, syncId, CHAT_MESSAGES_INITIAL_LIMIT);
+          applyConversationUsageState(conversation, messagesWindow);
           const raw =
             conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
           let synced = rawMessagesToLocal(raw);
@@ -1619,17 +1647,21 @@ export function ChatScreen({
     let silentBackgroundAbort = false;
 
     try {
+      /* server 的 after_user_index 按全量会话的非-meta user 序号算；本地 afterUserIndex 是在
+       * 当前窗口(尾窗)上数的，要把窗口前缀里的 user 数(userCountBefore)补回去还原成全局序号。
+       * 非尾窗(全量)时 userCountBefore=0，等价旧行为。 */
+      const globalAfterUserIndex = afterUserIndex + (messageWindowMetaRef.current?.userCountBefore ?? 0);
       const regenStart: ChatV2StreamStart =
         editedMessage !== undefined
           ? {
               tag: 'regenerate',
-              after_user_index: afterUserIndex,
+              after_user_index: globalAfterUserIndex,
               message: editedMessage,
               ...(editedFlopsRefs && editedFlopsRefs.length > 0
                 ? { flops_refs: editedFlopsRefs }
                 : {}),
             }
-          : { tag: 'regenerate', after_user_index: afterUserIndex };
+          : { tag: 'regenerate', after_user_index: globalAfterUserIndex };
       const { streamDone, finalText, localBlocks, lastConvId } = await runV2WithHandlers({
         convId: conversationId,
         start: regenStart,
@@ -1639,8 +1671,8 @@ export function ChatScreen({
       const syncId = lastConvId;
       try {
         if (session) {
-          const { conversation } = await getConversation(session, syncId);
-          applyConversationUsageState(conversation);
+          const { conversation, messagesWindow } = await getConversation(session, syncId, CHAT_MESSAGES_INITIAL_LIMIT);
+          applyConversationUsageState(conversation, messagesWindow);
           const raw =
             conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
           let synced = rawMessagesToLocal(raw);
@@ -1895,8 +1927,8 @@ export function ChatScreen({
         });
         clearTimeout(timeout);
         try {
-          const { conversation } = await getConversation(session, lastConvId);
-          applyConversationUsageState(conversation);
+          const { conversation, messagesWindow } = await getConversation(session, lastConvId, CHAT_MESSAGES_INITIAL_LIMIT);
+          applyConversationUsageState(conversation, messagesWindow);
           const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
           let synced = rawMessagesToLocal(raw);
           const stillRunning = typeof conversation?.active_chat_v2_run_id === 'string' && conversation.active_chat_v2_run_id.trim();
@@ -1927,8 +1959,8 @@ export function ChatScreen({
           setError(e instanceof Error ? e.message : String(e));
         }
         try {
-          const { conversation } = await getConversation(session, cid);
-          applyConversationUsageState(conversation);
+          const { conversation, messagesWindow } = await getConversation(session, cid, CHAT_MESSAGES_INITIAL_LIMIT);
+          applyConversationUsageState(conversation, messagesWindow);
           const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
           let synced = rawMessagesToLocal(raw);
           const stillRunning = typeof conversation?.active_chat_v2_run_id === 'string' && conversation.active_chat_v2_run_id.trim();
@@ -1969,12 +2001,12 @@ export function ChatScreen({
       const sess = sessionRef.current;
       const cid = conversationIdRef.current;
       if (!sess || !cid || streamInFlightRef.current) return;
-      getConversation(sess, cid)
-        .then(({ conversation }) => {
+      getConversation(sess, cid, CHAT_MESSAGES_INITIAL_LIMIT)
+        .then(({ conversation, messagesWindow }) => {
           const rid = conversation?.active_chat_v2_run_id;
           const s = typeof rid === 'string' ? rid.trim() : '';
           if (!s) return;
-          applyConversationUsageState(conversation);
+          applyConversationUsageState(conversation, messagesWindow);
           const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
           setMessages(truncateMessagesAfterLastUser(rawMessagesToLocal(raw)));
           resumeV2Stream(s, cid);
@@ -2073,18 +2105,66 @@ export function ChatScreen({
     return () => clearInterval(id);
   }, [hasRunningExec]);
 
+  /* 滚到顶加载更旧（尾窗分页）：getMessagesBefore → prepend 到 serverRawMessages/messages → 更新窗口。
+   * 全程读 ref 取最新值（防 stale），不进依赖。prepend 前记录内容高度+偏移，onContentSizeChange 里
+   * 按高度增量把视口锚回原位（见那处）。loading（流式中）不分页，避免与 truncate/流式追加打架。 */
+  const loadOlderMessages = useCallback(async () => {
+    if (loadingOlderRef.current) return;
+    const meta = messageWindowMetaRef.current;
+    if (!meta || !meta.hasOlder) return;
+    const cid = conversationIdRef.current;
+    if (!session || !cid) return;
+    loadingOlderRef.current = true;
+    olderRestoreRef.current = {
+      prevHeight: scrollContentHeightRef.current,
+      prevOffsetY: scrollOffsetYRef.current,
+    };
+    try {
+      const { messages: older, messagesWindow: newWindow } = await getMessagesBefore(
+        session,
+        cid,
+        meta.viewStart
+      );
+      if (conversationIdRef.current !== cid) {
+        olderRestoreRef.current = null;
+        return;
+      }
+      if (older.length === 0) {
+        if (newWindow) setMessageWindowMeta(newWindow);
+        olderRestoreRef.current = null;
+        return;
+      }
+      const combined = [...older, ...serverRawMessagesRef.current];
+      setServerRawMessages(combined);
+      setMessages(rawMessagesToLocal(combined));
+      setMessageWindowMeta(newWindow ?? meta);
+    } catch (e) {
+      olderRestoreRef.current = null;
+      // eslint-disable-next-line no-console
+      console.warn('[chat] load older failed:', (e as Error)?.message || e);
+    } finally {
+      loadingOlderRef.current = false;
+    }
+  }, [session]);
+
   // 从历史对话列表进入时，根据路由参数加载对话
   useEffect(() => {
     const id = params?.conversationId;
     if (!id || !session) {
+      loadedConversationIdRef.current = null;
+      setConversationHistoryLoading(false);
+      return;
+    }
+    // 同一会话已加载过：effect 因别的依赖抖动 re-fire 时不重拉重解密、保留现有(可能已分页的)消息
+    if (loadedConversationIdRef.current === id) {
       setConversationHistoryLoading(false);
       return;
     }
     let cancelled = false;
     const gen = ++conversationRouteFetchGenRef.current;
     setConversationHistoryLoading(true);
-    getConversation(session, id)
-      .then(({ conversation }) => {
+    getConversation(session, id, CHAT_MESSAGES_INITIAL_LIMIT)
+      .then(({ conversation, messagesWindow }) => {
         if (cancelled || gen !== conversationRouteFetchGenRef.current) return;
         const tUi0 = perfNowMs();
         setConversationHistoryLoading(false);
@@ -2094,7 +2174,7 @@ export function ChatScreen({
         const rid = conversation?.active_chat_v2_run_id;
         const runId = typeof rid === 'string' ? rid.trim() : '';
         const tMap0 = perfNowMs();
-        applyConversationUsageState(conversation);
+        applyConversationUsageState(conversation, messagesWindow);
         let localMsgs = rawMessagesToLocal(raw);
         if (runId) {
           localMsgs = truncateMessagesAfterLastUser(localMsgs);
@@ -2103,6 +2183,7 @@ export function ChatScreen({
         setMessages(localMsgs);
         setConversationId(id);
         conversationIdRef.current = id;
+        loadedConversationIdRef.current = id; // 标记已完整加载，后续 dep 抖动跳过重拉
         setConversationTitle(conversation?.title?.trim() || '新对话');
         convProfileLog('ChatScreen.routeOpen.afterGet', {
           conversationId: id,
@@ -3012,7 +3093,18 @@ export function ChatScreen({
             onTouchStartCapture={dismissComposer}
             onScrollBeginDrag={Platform.OS === 'android' ? dismissComposer : undefined}
             keyboardDismissMode="on-drag"
-            onContentSizeChange={() => {
+            onContentSizeChange={(_w, h) => {
+              scrollContentHeightRef.current = h;
+              /* 加载更旧 prepend 后：内容在顶部增高，按高度增量把视口锚回原位，避免跳动。优先于 scrollToEnd。 */
+              const restore = olderRestoreRef.current;
+              if (restore) {
+                olderRestoreRef.current = null;
+                const delta = h - restore.prevHeight;
+                if (delta > 0) {
+                  scrollRef.current?.scrollTo({ y: restore.prevOffsetY + delta, animated: false });
+                }
+                return;
+              }
               if (shouldScrollToEndRef.current) {
                 shouldScrollToEndRef.current = false;
                 const animated = scrollToEndAnimatedRef.current;
@@ -3027,6 +3119,15 @@ export function ChatScreen({
                 }
               }
             }}
+            /* 滚到顶附近(<160)且还有更旧 → 触发分页加载。同时记录 offset 供 prepend 锚定。 */
+            onScroll={(e) => {
+              const y = e.nativeEvent.contentOffset.y;
+              scrollOffsetYRef.current = y;
+              if (y <= 160 && messageWindowMetaRef.current?.hasOlder && !loadingOlderRef.current && !loading) {
+                void loadOlderMessages();
+              }
+            }}
+            scrollEventThrottle={16}
             keyboardShouldPersistTaps="handled"
           >
             <View ref={chatContentWrapRef} style={styles.chatContentWrap} collapsable={false}>

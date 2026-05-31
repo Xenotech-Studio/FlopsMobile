@@ -18,8 +18,20 @@
 
 import { sha256 } from '@noble/hashes/sha2.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
+import { NativeModules } from 'react-native';
 import argon2 from 'react-native-argon2';
 import forge from 'node-forge';
+
+/** 原生 AES-GCM 解密模块（FlopsCryptoModule，Android/iOS）。所有解密走它（forge 在 Hermes 上慢）：
+ *  - decryptAesGcmUtf8：明文按 UTF-8 文本返回（消息/标题/SSE 等 JSON）；
+ *  - decryptAesGcmBase64：明文按 base64 字节返回（二进制：密钥解包等，供底层 aesGcmDecrypt 用）。
+ *  旧 build 未含该模块时为 undefined → 自动回退 forge。 */
+const flopsCryptoNative:
+  | {
+      decryptAesGcmUtf8?: (keyB64: string, blobB64: string) => string | null;
+      decryptAesGcmBase64?: (keyB64: string, blobB64: string) => string | null;
+    }
+  | undefined = NativeModules.FlopsCrypto;
 
 declare const global: { crypto?: { getRandomValues?: (a: Uint8Array) => Uint8Array } };
 declare class TextEncoder { encode(s: string): Uint8Array }
@@ -316,6 +328,8 @@ export function generateKUser(): Uint8Array {
 }
 
 /** AES-256-GCM 加密。输出 nonce(12) || ct || tag(16)。 */
+/* AES-256-GCM（node-forge）。注：大批量消息解密走原生 FlopsCrypto（见 decryptMessageLocal），
+ * 这里的 JS 实现用于 title / agent / SSE chunk / 原生不可用时的兜底。布局：nonce(12) || ct || tag(16)。 */
 export function aesGcmEncrypt(plaintext: Uint8Array, key: Uint8Array): Uint8Array {
   if (key.length !== KEY_LEN) throw new TypeError(`key must be ${KEY_LEN} bytes`);
   const nonce = new Uint8Array(NONCE_LEN);
@@ -338,6 +352,12 @@ export function aesGcmEncrypt(plaintext: Uint8Array, key: Uint8Array): Uint8Arra
 export function aesGcmDecrypt(blob: Uint8Array, key: Uint8Array): Uint8Array {
   if (key.length !== KEY_LEN) throw new TypeError(`key must be ${KEY_LEN} bytes`);
   if (blob.length < NONCE_LEN + TAG_LEN) throw new Error('blob too short');
+  // 优先原生（返回 base64 明文字节，二进制安全）；不可用/失败回退下面的 forge
+  const nativeB64 = flopsCryptoNative?.decryptAesGcmBase64;
+  if (nativeB64) {
+    const ptB64 = nativeB64(bytesToBase64Local(key), bytesToBase64Local(blob));
+    if (ptB64 != null) return base64ToBytesLocal(ptB64);
+  }
   const nonce = blob.subarray(0, NONCE_LEN);
   const tag = blob.subarray(blob.length - TAG_LEN);
   const ct = blob.subarray(NONCE_LEN, blob.length - TAG_LEN);
@@ -422,14 +442,24 @@ export function decryptMessageLocal(
     ['reasoning_content', 'reasoning_content_ciphertext'],
     ['reasoning_seconds', 'reasoning_seconds_ciphertext'],
   ];
+  // 原生可用时把 key 编一次 base64 复用（批量消息解密走原生，避免 forge 在 Hermes 上的数秒开销）
+  const nativeDecrypt = flopsCryptoNative?.decryptAesGcmUtf8;
+  const keyB64 = nativeDecrypt ? bytesToBase64Local(kConvBytes) : null;
   for (const [plain, ct] of fields) {
     if (typeof out[ct] !== 'string') continue;
     const blobB64 = out[ct] as string;
     delete out[ct];
     try {
-      const blob = base64ToBytesLocal(blobB64);
-      const pt = aesGcmDecrypt(blob, kConvBytes);
-      out[plain] = JSON.parse(new TextDecoder().decode(pt));
+      let ptStr: string | null = null;
+      // 原生 AES-GCM（同步），明文直接是 UTF-8 JSON 文本
+      if (nativeDecrypt && keyB64 != null) {
+        ptStr = nativeDecrypt(keyB64, blobB64) ?? null;
+      }
+      // 原生不可用 / 返回失败 → forge 兜底
+      if (ptStr == null) {
+        ptStr = new TextDecoder().decode(aesGcmDecrypt(base64ToBytesLocal(blobB64), kConvBytes));
+      }
+      out[plain] = JSON.parse(ptStr);
     } catch (e) {
       out[plain] = `[encrypted ${plain} — decrypt failed: ${(e as Error)?.message || e}]`;
     }
