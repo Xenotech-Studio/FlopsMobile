@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 /**
- * yarn dev [ios|android] [real] [--quick]: start Metro + run app.
+ * yarn dev [ios|android] [real] ["<Simulator Name>"] [--quick]: start Metro + run app.
  * --quick: 跳过清理 cache（不传 --reset-cache）。
  * 端口被占用时自动递增到下一可用端口，不再交互确认。
  * real (空格分隔，跟在 platform 后)：
  *   - android real：优先选第一台 USB/wifi 真机（adb，排除 emulator-*），未找到报错
  *   - ios real：找第一台连接的 iPhone/iPad（xcrun xctrace），未找到报错
+ * 模拟器名（任意非 platform/real/--quick 的位置参数，含空格请加引号）：
+ *   - 仅 iOS 模拟器生效，覆盖 rn-dev.config.json 的 ios.simulator。
+ *     例：yarn dev ios "iPhone 16 Pro"
  * Platform: 1) yarn dev <ios|android>  2) rn-dev.config.json (per OS)  3) OS default.
  */
 const path = require('path');
@@ -131,6 +134,18 @@ const platformArg = argv.find((a) =>
   VALID_PLATFORMS.includes(a) || a === 'ios:real' || a === 'android:real'
 );
 const wantReal = argv.includes('real');
+/* 模拟器名：第一个「既不是 platform token、也不是 real / --quick / 冒号形式」的位置参数。
+ * 含空格的名字（如 "iPhone 16 Pro"）shell 会作为单个 argv 传进来。仅 iOS 模拟器用，透传给 run-app.js。 */
+const simulatorName =
+  argv.find(
+    (a) =>
+      !a.startsWith('-') &&
+      a !== 'real' &&
+      a !== platformArg &&
+      !VALID_PLATFORMS.includes(a) &&
+      a !== 'ios:real' &&
+      a !== 'android:real'
+  ) || null;
 const configPlatform = getPlatformFromConfig();
 const isDarwin = process.platform === 'darwin';
 const osDefault = isDarwin ? 'ios' : 'android';
@@ -155,7 +170,12 @@ resolveMetroPort().then((port) => {
   const { result } = concurrently(
     [
       { command: `react-native start --port ${port}${cacheFlag}`, name: 'metro' },
-      { command: `node ${JSON.stringify(runAppScript)} ${target} ${port}`, name: target },
+      {
+        command: `node ${JSON.stringify(runAppScript)} ${target} ${port}${
+          simulatorName ? ` ${JSON.stringify(simulatorName)}` : ''
+        }`,
+        name: target,
+      },
     ],
     {
       prefix: 'name',

@@ -2,7 +2,7 @@
 /**
  * Waits for Metro to be ready, then runs react-native run-ios or run-android.
  * Used by yarn dev so the app launches after the packager is up.
- * iOS: reads rn-dev.config.json "ios.simulator" for --simulator "Device Name".
+ * iOS: --simulator "Device Name"，优先用 argv[4]（命令行传入），否则读 rn-dev.config.json "ios.simulator"。
  */
 const path = require('path');
 const os = require('os');
@@ -11,6 +11,8 @@ const { spawn, execSync } = require('child_process');
 
 const target = process.argv[2] || 'ios'; // ios | ios:real | android | android:real
 const METRO_PORT = parseInt(process.argv[3] || process.env.METRO_PORT || '8081', 10);
+/** 可选：命令行传入的 iOS 模拟器名（argv[4]），覆盖 rn-dev.config.json 的 ios.simulator。 */
+const SIMULATOR_OVERRIDE = (process.argv[4] || '').trim() || null;
 const POLL_INTERVAL_MS = 800;
 const METRO_WAIT_TIMEOUT_MS = 60000;
 
@@ -41,6 +43,35 @@ function getIosSimulator() {
     if (typeof name === 'string' && name.trim()) return name.trim();
   } catch (_) {}
   return null;
+}
+
+/**
+ * 把模拟器名解析成唯一 UDID。
+ * 为什么不直接用 RN CLI 的 `--simulator <name>`：当系统里有多台同名模拟器（如两台 "iPhone 16 Pro"）
+ * 或已有别的模拟器处于 Booted 状态时，CLI 的按名匹配会挑到已 booted 的那台（哪怕名字不符），导致装错机。
+ * 改成精确匹配名字 → 拿 UDID → 传 `--udid`，CLI 必装到这台。同名多台时优先已 Booted 的，其次第一台。
+ * @returns {{udid:string, booted:boolean}|null}
+ */
+function resolveSimulatorUdid(name) {
+  try {
+    const json = execSync('xcrun simctl list devices available --json', {
+      encoding: 'utf8',
+    });
+    const data = JSON.parse(json);
+    const matches = [];
+    for (const runtime of Object.keys(data.devices || {})) {
+      for (const dev of data.devices[runtime] || []) {
+        // isAvailable 已被 --json available 过滤，这里只按名字精确匹配（避免 "16 Pro" 命中 "16 Pro Max"）
+        if (dev.name === name) {
+          matches.push({ udid: dev.udid, booted: dev.state === 'Booted' });
+        }
+      }
+    }
+    if (matches.length === 0) return null;
+    return matches.find((m) => m.booted) || matches[0];
+  } catch (_) {
+    return null;
+  }
 }
 
 /**
@@ -258,9 +289,27 @@ function run() {
       args.push('--udid', device.udid);
       console.log(`[ios:real] 使用真机: ${device.name} (${device.udid})`);
     } else {
-      const simulator = getIosSimulator();
+      const simulator = SIMULATOR_OVERRIDE || getIosSimulator();
       if (simulator) {
-        args.push('--simulator', simulator);
+        const src = SIMULATOR_OVERRIDE ? '命令行' : 'rn-dev.config.json';
+        const resolved = resolveSimulatorUdid(simulator);
+        if (resolved) {
+          // 用 UDID 而非名字：避免同名多台 / 已 booted 别的机时 CLI 装错机
+          args.push('--udid', resolved.udid);
+          console.log(
+            `[ios] 使用模拟器(${src}): ${simulator} → ${resolved.udid}${
+              resolved.booted ? ' (已 Booted)' : ''
+            }`
+          );
+        } else {
+          // 没在可用模拟器里精确匹配到名字：退回按名传给 CLI，并提示
+          console.warn(
+            `[ios] 未找到名为 "${simulator}" 的可用模拟器（来源：${src}）。\n` +
+              '       退回 --simulator 按名匹配（可能装到已 booted 的其它机）。\n' +
+              '       可用 `xcrun simctl list devices available` 查看确切名字。'
+          );
+          args.push('--simulator', simulator);
+        }
       }
     }
   }
