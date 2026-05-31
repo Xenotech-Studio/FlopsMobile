@@ -292,11 +292,11 @@ export function createChatStyles(c: AppColors) {
     paddingHorizontal: CHAT_SCROLL_PADDING_H,
     paddingVertical: 20,
     paddingBottom: 32,
-    alignItems: 'center',
-  },
-  chatContentWrap: {
+    // 内容列居中、限宽 380（原来靠内层 chatContentWrap 实现；为了让 maintainVisibleContentPosition
+    // 能逐条锚定消息，消息必须是 ScrollView 内容的直接子节点 → 把限宽/居中挪到 contentContainer 自身）。
     width: '100%',
     maxWidth: 380,
+    alignSelf: 'center',
   },
   emptyStage: {
     flex: 1,

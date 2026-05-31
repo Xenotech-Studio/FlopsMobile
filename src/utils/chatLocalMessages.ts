@@ -39,10 +39,16 @@ export type StreamBlock =
       cwd?: string;
     };
 
-export type ChatMessage =
+export type ChatMessage = (
   | { role: 'user'; content: string; flops_refs?: FlopsRef[] }
   | { role: 'assistant'; content: string; blocks?: StreamBlock[] }
-  | { role: 'error'; content: string };
+  | { role: 'error'; content: string }
+) & {
+  /** 本条本地消息在「当前窗口 serverRawMessages」里的起始 raw 下标。
+   *  渲染时配合 messageWindow.viewStart 得到不随 prepend/append 漂移的全局 key
+   *  （维持 maintainVisibleContentPosition 的视图身份）。流式/乐观插入的消息可能无此值。 */
+  _key?: number;
+};
 
 function parseToolResult(msg: ConversationMessage): unknown {
   if (!msg || msg.role !== 'tool') return null;
@@ -159,6 +165,8 @@ export function rawMessagesToLocalWithUsageMap(raw: ConversationMessage[]): RawM
     const one = coalesceAssistantTurn(assistantGroup);
     if (one) {
       const localIdx = messages.length;
+      // 该 assistant 轮的起始 raw 下标（窗口内），用于稳定全局 key
+      one._key = groupRawIndices.length > 0 ? groupRawIndices[0] : undefined;
       messages.push(one);
       for (const ri of groupRawIndices) {
         rawToLocalAssistantIndex.set(ri, localIdx);
@@ -181,8 +189,8 @@ export function rawMessagesToLocalWithUsageMap(raw: ConversationMessage[]): RawM
       );
       messages.push(
         refs.length > 0
-          ? { role: 'user', content, flops_refs: refs }
-          : { role: 'user', content },
+          ? { role: 'user', content, flops_refs: refs, _key: i }
+          : { role: 'user', content, _key: i },
       );
       continue;
     }

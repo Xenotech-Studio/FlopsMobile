@@ -403,9 +403,11 @@ export function ChatScreen({
   const serverRawMessagesRef = useRef<ConversationMessage[]>([]);
   const scrollOffsetYRef = useRef(0);
   const scrollContentHeightRef = useRef(0);
-  /** prepend 更旧消息后用来把视口锚回原位置（避免内容在顶部增高导致跳动）。 */
-  const olderRestoreRef = useRef<{ prevHeight: number; prevOffsetY: number } | null>(null);
   const loadingOlderRef = useRef(false);
+  /** 防抖:顶部触发过一次加载后置 true，直到用户滚离顶部(y>300)才重新武装，避免一次滚动连环触发多批。 */
+  const nearTopTriggeredRef = useRef(false);
+  /** 加载更旧时顶部转圈（state 驱动渲染；loadingOlderRef 用于防抖，不触发 re-render）。 */
+  const [loadingOlder, setLoadingOlder] = useState(false);
   serverRawMessagesRef.current = serverRawMessages;
   /** 已完整 GET 加载过的会话 id：路由 effect 因别的依赖抖动 re-fire 时跳过重拉重解密（对齐 web）。 */
   const loadedConversationIdRef = useRef<string | null>(null);
@@ -543,8 +545,7 @@ export function ChatScreen({
   const scrollRef = useRef<ScrollView>(null);
   /** ScrollView 可视区域高度，用于把摘要分界滚到竖直方向居中 */
   const scrollViewportHeightRef = useRef(0);
-  const chatContentWrapRef = useRef<View>(null);
-  /** 摘要分界行原生节点，用于 measureLayout 相对 chatContentWrap 得到可 scrollTo 的偏移 */
+  /** 摘要分界行原生节点，用于 measureLayout 相对 ScrollView 内容容器得到可 scrollTo 的偏移 */
   const contextCompressAnchorRef = useRef<View>(null);
   /** 流式文件卡片(半折叠)内部 ScrollView 引用，保持视图跟随最后几行 */
   const fileToolPreviewScrollRefs = useRef<Record<string, ScrollView | null>>({});
@@ -640,20 +641,18 @@ export function ChatScreen({
 
   const contextCompressScrollToAnchorTitle = '滚动到「摘要」位置（列表中间）';
 
-  const scrollContentPaddingTop = headerHeight + 20;
-
   const scrollToContextCompressAnchor = useCallback(() => {
     const divider = contextCompressAnchorRef.current;
-    const wrap = chatContentWrapRef.current;
     const sv = scrollRef.current;
-    if (!divider || !wrap || !sv) return;
+    // 去掉 chatContentWrap 后，measureLayout 的参照改用 ScrollView 内容容器节点（即 contentContainerStyle
+    // 那个 View）。相对它的 top 已含 contentContainer 的 paddingTop，等于该分界在滚动内容里的偏移。
+    const innerNode = sv?.getInnerViewNode?.();
+    if (!divider || !sv || innerNode == null) return;
     const runMeasure = () => {
-      // Fabric：measureLayout 的参照必须是原生 View 节点
       divider.measureLayout(
-        wrap,
+        innerNode,
         (_left, top, _width, height) => {
-          const dividerTopInContent = scrollContentPaddingTop + top;
-          const dividerCenter = dividerTopInContent + Math.max(0, height) / 2;
+          const dividerCenter = top + Math.max(0, height) / 2;
           let viewportH = scrollViewportHeightRef.current;
           if (!(viewportH > 0)) {
             viewportH = Dimensions.get('window').height * 0.45;
@@ -669,7 +668,7 @@ export function ChatScreen({
     requestAnimationFrame(() => {
       InteractionManager.runAfterInteractions(runMeasure);
     });
-  }, [scrollContentPaddingTop]);
+  }, []);
 
   const usageByAssistantIdx = useMemo(() => {
     const m: Record<number, UsageStats> = {};
@@ -2115,35 +2114,30 @@ export function ChatScreen({
     const cid = conversationIdRef.current;
     if (!session || !cid) return;
     loadingOlderRef.current = true;
-    olderRestoreRef.current = {
-      prevHeight: scrollContentHeightRef.current,
-      prevOffsetY: scrollOffsetYRef.current,
-    };
+    setLoadingOlder(true); // 顶部转圈（绝对定位 overlay，不占内容高度→不影响锚定）
     try {
       const { messages: older, messagesWindow: newWindow } = await getMessagesBefore(
         session,
         cid,
         meta.viewStart
       );
-      if (conversationIdRef.current !== cid) {
-        olderRestoreRef.current = null;
-        return;
-      }
+      if (conversationIdRef.current !== cid) return;
       if (older.length === 0) {
         if (newWindow) setMessageWindowMeta(newWindow);
-        olderRestoreRef.current = null;
         return;
       }
       const combined = [...older, ...serverRawMessagesRef.current];
+      /* prepend 后保持可见位置交给 ScrollView 的 maintainVisibleContentPosition（原生帧级维持），
+       * 无需手动 scrollTo —— 顶部插入更早消息时，当前可见消息自动稳在原位。 */
       setServerRawMessages(combined);
       setMessages(rawMessagesToLocal(combined));
       setMessageWindowMeta(newWindow ?? meta);
     } catch (e) {
-      olderRestoreRef.current = null;
       // eslint-disable-next-line no-console
       console.warn('[chat] load older failed:', (e as Error)?.message || e);
     } finally {
       loadingOlderRef.current = false;
+      setLoadingOlder(false);
     }
   }, [session]);
 
@@ -2701,9 +2695,16 @@ export function ChatScreen({
   }, [messages]);
 
   const renderMessage = (msg: ChatMessage, idx: number) => {
+    /* 稳定全局 key：viewStart + 该消息窗口内起始 raw 下标 = 不随 prepend/append 漂移的全局位置。
+     * 让 maintainVisibleContentPosition 能跨「加载更旧」认出同一条视图、把它钉在原位。
+     * （无 _key 的流式/乐观消息退回下标 key —— 它们在最底部，不参与顶部锚定。） */
+    const stableKey =
+      msg._key != null
+        ? `m${(messageWindowMeta?.viewStart ?? 0) + msg._key}`
+        : `${msg.role}-${idx}`;
     if (msg.role === 'error') {
       return (
-        <View key={`err-${idx}`} style={styles.errorWrap}>
+        <View key={stableKey} style={styles.errorWrap}>
           <Text style={styles.errorText}>{msg.content}</Text>
         </View>
       );
@@ -2753,7 +2754,7 @@ export function ChatScreen({
 
     const bubble = (
       <View
-        key={`${msg.role}-${idx}`}
+        key={stableKey}
         style={[styles.bubbleWrap, isUser ? styles.userBubbleWrap : styles.assistantBubbleWrap]}
       >
         <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
@@ -2916,7 +2917,7 @@ export function ChatScreen({
 
     if (isUser) {
       return (
-        <React.Fragment key={`frag-user-${idx}`}>
+        <React.Fragment key={`frag-${stableKey}`}>
           {ccPl?.kind === 'beforeIndex' && ccPl.insertBeforeIndex === idx ? (
             <ContextCompressDividerRow
               activeSummary={ccPl.activeSummary}
@@ -3095,16 +3096,7 @@ export function ChatScreen({
             keyboardDismissMode="on-drag"
             onContentSizeChange={(_w, h) => {
               scrollContentHeightRef.current = h;
-              /* 加载更旧 prepend 后：内容在顶部增高，按高度增量把视口锚回原位，避免跳动。优先于 scrollToEnd。 */
-              const restore = olderRestoreRef.current;
-              if (restore) {
-                olderRestoreRef.current = null;
-                const delta = h - restore.prevHeight;
-                if (delta > 0) {
-                  scrollRef.current?.scrollTo({ y: restore.prevOffsetY + delta, animated: false });
-                }
-                return;
-              }
+              /* 加载更旧的锚定已交给 maintainVisibleContentPosition（原生帧级维持），这里只管触底滚动。 */
               if (shouldScrollToEndRef.current) {
                 shouldScrollToEndRef.current = false;
                 const animated = scrollToEndAnimatedRef.current;
@@ -3123,14 +3115,26 @@ export function ChatScreen({
             onScroll={(e) => {
               const y = e.nativeEvent.contentOffset.y;
               scrollOffsetYRef.current = y;
-              if (y <= 160 && messageWindowMetaRef.current?.hasOlder && !loadingOlderRef.current && !loading) {
+              // 离开顶部 → 重新武装（下次滚到顶才再触发，避免一次滚动在顶部附近连环触发多批）
+              if (y > 300) nearTopTriggeredRef.current = false;
+              if (
+                y <= 160 &&
+                !nearTopTriggeredRef.current &&
+                messageWindowMetaRef.current?.hasOlder &&
+                !loadingOlderRef.current &&
+                !loading
+              ) {
+                nearTopTriggeredRef.current = true;
                 void loadOlderMessages();
               }
             }}
             scrollEventThrottle={16}
             keyboardShouldPersistTaps="handled"
+            /* 加载更旧消息时，原生维持当前可见消息的位置（帧级、绘制前调好 offset）→ 顶部插入更早内容
+             * 时可见内容稳在原位、不抖不跳。要求消息是本 ScrollView 内容的直接子节点（已去掉 chatContentWrap）。
+             * minIndexForVisible:1 以首个可见消息的下一条为锚，避开最顶一条在边缘时的抖动。 */
+            maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
           >
-            <View ref={chatContentWrapRef} style={styles.chatContentWrap} collapsable={false}>
             <FlowDocItemMetaProvider
               conversationId={conversationId}
               serverBaseUrl={session.server_base_url}
@@ -3240,7 +3244,6 @@ export function ChatScreen({
                 <Text style={styles.reloadPendingText}>服务器热更新中，稍后将继续…</Text>
               </View>
             ) : null}
-            </View>
           </ScrollView>
           <HistoryLoadingOverlay
             visible={conversationHistoryLoading}
@@ -3249,6 +3252,22 @@ export function ChatScreen({
             overlayStyle={styles.historyLoadingOverlay}
             spinnerColor={colors.textSecondary}
           />
+          {/* 加载更旧消息的顶部转圈：绝对定位 overlay（不占内容高度，不影响 prepend 锚定）。 */}
+          {loadingOlder ? (
+            <View
+              style={{
+                position: 'absolute',
+                top: headerHeight + 8,
+                left: 0,
+                right: 0,
+                alignItems: 'center',
+                zIndex: 20,
+              }}
+              pointerEvents="none"
+            >
+              <ActivityIndicator size="small" color={colors.textSecondary} />
+            </View>
+          ) : null}
           {/* 底部整块贴屏底：渐变铺满整块并延伸到底，输入行叠在渐变底部，无单独白底；点渐变区（未点到输入/发送）可滚到底。
               用 Reanimated.View + kbBottomStyle 让 bottom 在键盘动画中逐帧跟随。 */}
           <Reanimated.View style={[styles.bottomOverlay, { height: bottomOverlayHeight }, kbBottomStyle]}>

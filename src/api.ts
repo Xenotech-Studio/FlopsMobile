@@ -792,9 +792,9 @@ export async function runInboxStream(
 /** 首屏只拉尾部消息。web 用 400，但手机上 400 条带大工具结果的消息响应可达数 MB，JSON.parse +
  *  解密 + 渲染都很慢（实测 504 条会话拉 400 → 解析+解密 4.3s、渲染 2.8s）。手机用更小的首窗，
  *  滚到顶再分页补（CHAT_MESSAGES_LOAD_OLDER）。调这个数即可平衡"打开速度 vs 初始可见条数"。 */
-export const CHAT_MESSAGES_INITIAL_LIMIT = 80;
-/** 上滚加载更旧每批条数（对齐 web CHAT_MESSAGES_LOAD_OLDER / GET .../messages/before 的 limit）。 */
-export const CHAT_MESSAGES_LOAD_OLDER = 200;
+export const CHAT_MESSAGES_INITIAL_LIMIT = 40;
+/** 上滚加载更旧每批条数（GET .../messages/before 的 limit）。与首窗一致，每批都 40。 */
+export const CHAT_MESSAGES_LOAD_OLDER = 40;
 
 /** 从 API 响应里解析 messages_window 元数据；无（老 server / 全量返回）时返回 null。 */
 function parseMessageWindow(data: unknown): MessageWindow | null {
