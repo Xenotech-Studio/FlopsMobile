@@ -544,10 +544,15 @@ export function ChatScreen({
     setActiveContextSummaryId(typeof aid === 'string' ? aid.trim() : '');
     const proj = conversation.context_projection_l1;
     setContextProjectionL1(proj && typeof proj === 'object' ? proj : null);
-    setConversationMeta({
+    const nextMeta = {
       bound_agent_id: typeof conversation.bound_agent_id === 'string' ? conversation.bound_agent_id : undefined,
       agent_profile: conversation.agent_profile,
-    });
+    };
+    /* 同步写 ref：路由打开/前台恢复时会在同 microtask 里紧接调 resumeV2Stream → runV2WithHandlers
+       同步读 conversationMetaRef，靠 useEffect 镜像太晚——会漏掉 agentEncryption，导致加密 agent
+       的 chat_v2 POST 缺 k_agent_wire，server 返 400。 */
+    conversationMetaRef.current = nextMeta;
+    setConversationMeta(nextMeta);
   }, []);
 
   const rawToLocalAssistantIndex = useMemo(
@@ -1823,6 +1828,7 @@ export function ChatScreen({
     setActiveContextSummaryId('');
     setUsageStats(null);
     setUsageRuns([]);
+    conversationMetaRef.current = null;
     setConversationMeta(null);
     try {
       if (session) {
