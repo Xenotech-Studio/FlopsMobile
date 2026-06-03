@@ -548,7 +548,7 @@ function readPartialJsonStringValueAtKey(
 
 export type FlowDocPatchEdit = { oldString: string; newString: string; replaceAll: boolean };
 
-/** patch_doc_as_md 流式：从 edits 数组中解析已出现的 old_string / new_string（可未闭合） */
+/** doc_patch_as_md 流式：从 edits 数组中解析已出现的 old_string / new_string（可未闭合） */
 function tryParsePartialPatchDocEdits(rawStr: string): FlowDocPatchEdit[] {
   const edits: FlowDocPatchEdit[] = [];
   if (typeof rawStr !== 'string' || !rawStr.trim()) return edits;
@@ -601,10 +601,10 @@ export function formatFlowDocCardHeaderWithVerb(verb: string, resolvedName: stri
 
 export type EditDocAsMdArgs = { docId: string; oldString: string; newString: string; replaceAll: boolean };
 
-/** FlowDoc edit_doc_as_md（与 Web parseEditDocAsMdArgs 一致） */
+/** FlowDoc doc_edit_as_md（与 Web parseEditDocAsMdArgs 一致） */
 export function parseEditDocAsMdArgs(block: { tool_name?: string; arguments?: unknown }): EditDocAsMdArgs {
   const empty: EditDocAsMdArgs = { docId: '', oldString: '', newString: '', replaceAll: false };
-  if (!block || block.tool_name !== 'edit_doc_as_md') return empty;
+  if (!block || block.tool_name !== 'doc_edit_as_md') return empty;
   const raw = block.arguments;
   const rawStr = typeof raw === 'string' ? raw : '';
   const keys = ['doc_id', 'old_string', 'new_string'];
@@ -630,10 +630,10 @@ export function parseEditDocAsMdArgs(block: { tool_name?: string; arguments?: un
 
 export type PatchDocAsMdArgs = { docId: string; edits: FlowDocPatchEdit[] };
 
-/** FlowDoc patch_doc_as_md（与 Web parsePatchDocAsMdArgs 一致） */
+/** FlowDoc doc_patch_as_md（与 Web parsePatchDocAsMdArgs 一致） */
 export function parsePatchDocAsMdArgs(block: { tool_name?: string; arguments?: unknown }): PatchDocAsMdArgs {
   const empty: PatchDocAsMdArgs = { docId: '', edits: [] };
-  if (!block || block.tool_name !== 'patch_doc_as_md') return empty;
+  if (!block || block.tool_name !== 'doc_patch_as_md') return empty;
   const raw = block.arguments;
   try {
     const obj =
@@ -662,10 +662,10 @@ export function parsePatchDocAsMdArgs(block: { tool_name?: string; arguments?: u
 
 export type WriteDocAsMdArgs = { docId: string; markdown: string };
 
-/** FlowDoc write_doc_as_md（与 Web parseWriteDocAsMdArgs 一致） */
+/** FlowDoc doc_write_as_md（与 Web parseWriteDocAsMdArgs 一致） */
 export function parseWriteDocAsMdArgs(block: { tool_name?: string; arguments?: unknown }): WriteDocAsMdArgs {
   const empty: WriteDocAsMdArgs = { docId: '', markdown: '' };
-  if (!block || block.tool_name !== 'write_doc_as_md') return empty;
+  if (!block || block.tool_name !== 'doc_write_as_md') return empty;
   const raw = block.arguments;
   const rawStr = typeof raw === 'string' ? raw : '';
   try {
@@ -684,7 +684,7 @@ export function parseWriteDocAsMdArgs(block: { tool_name?: string; arguments?: u
   }
 }
 
-/** read_doc / get_doc_tree 等：从参数取 doc_id（含流式半成品） */
+/** doc_read / doc_get_tree 等：从参数取 doc_id（含流式半成品） */
 export function parseFlowDocIdFromArgs(block: { arguments?: unknown }): string {
   const raw = block.arguments;
   if (raw == null || raw === '') return '';
@@ -700,7 +700,7 @@ export function parseFlowDocIdFromArgs(block: { arguments?: unknown }): string {
   }
 }
 
-/** get_doc_tree：root_id */
+/** doc_get_tree：root_id */
 export function parseGetDocTreeRootIdFromArgs(block: { arguments?: unknown }): string {
   const raw = block.arguments;
   if (raw == null || raw === '') return '';

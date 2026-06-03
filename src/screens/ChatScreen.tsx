@@ -2277,7 +2277,7 @@ export function ChatScreen({
     setToolCardViewMode((prev) => ({ ...prev, [cardKey]: mode }));
   }, []);
 
-  /** 与 Web/Desktop 一致：read_page_subagent、文件卡片、exec、FlowDoc 写/编/树 默认半展开；read_doc、search_engine 等默认折叠 */
+  /** 与 Web/Desktop 一致：read_page_subagent、文件卡片、exec、FlowDoc 写/编/树 默认半展开；doc_read、search_engine 等默认折叠 */
   function getDefaultToolCardViewMode(toolName: string): 'collapsed' | 'preview' {
     if (
       toolName === 'read_page_subagent' ||
@@ -2286,13 +2286,13 @@ export function ChatScreen({
       toolName === 'local_edit_file' ||
       toolName === 'local_exec_command' ||
       toolName === 'local_delete' ||
-      toolName === 'get_doc_tree' ||
-      toolName === 'edit_doc_as_md' ||
-      toolName === 'patch_doc_as_md' ||
-      toolName === 'write_doc_as_md'
+      toolName === 'doc_get_tree' ||
+      toolName === 'doc_edit_as_md' ||
+      toolName === 'doc_patch_as_md' ||
+      toolName === 'doc_write_as_md'
     )
       return 'preview';
-    if (toolName === 'read_doc') return 'collapsed';
+    if (toolName === 'doc_read') return 'collapsed';
     /* search_engine 等与 Desktop getDefaultToolCardViewMode 一致，默认 collapsed */
     return 'collapsed';
   }
@@ -2636,19 +2636,19 @@ export function ChatScreen({
     if (block.tool_name === 'search_engine') {
       return renderSearchEngineToolCard(block, key);
     }
-    if (block.tool_name === 'edit_doc_as_md') {
+    if (block.tool_name === 'doc_edit_as_md') {
       return renderFlowDocEditToolCard(block, key);
     }
-    if (block.tool_name === 'patch_doc_as_md') {
+    if (block.tool_name === 'doc_patch_as_md') {
       return renderFlowDocPatchToolCard(block, key);
     }
-    if (block.tool_name === 'write_doc_as_md') {
+    if (block.tool_name === 'doc_write_as_md') {
       return renderFlowDocWriteToolCard(block, key);
     }
-    if (block.tool_name === 'read_doc') {
+    if (block.tool_name === 'doc_read') {
       return renderFlowDocReadToolCard(block, key);
     }
-    if (block.tool_name === 'get_doc_tree') {
+    if (block.tool_name === 'doc_get_tree') {
       return renderFlowDocGetTreeToolCard(block, key);
     }
 
