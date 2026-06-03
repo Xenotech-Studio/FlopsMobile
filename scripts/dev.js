@@ -5,7 +5,7 @@
  * 端口被占用时自动递增到下一可用端口，不再交互确认。
  * real (空格分隔，跟在 platform 后)：
  *   - android real：优先选第一台 USB/wifi 真机（adb，排除 emulator-*），未找到报错
- *   - ios real：找第一台连接的 iPhone/iPad（xcrun xctrace），未找到报错
+ *   - ios real：找连接的 iOS 真机（xcrun xctrace），优先 iPhone、没 iPhone 才用 iPad，未找到报错
  * ipad / iphone（替代 platform token）：等价于 ios:real，但按设备类型过滤真机。
  *   - yarn dev ipad   → 找第一台连接的 iPad（隐含 real，无需再写 real）
  *   - yarn dev iphone → 找第一台连接的 iPhone（隐含 real）

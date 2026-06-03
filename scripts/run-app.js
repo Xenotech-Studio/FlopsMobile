@@ -79,7 +79,8 @@ function resolveSimulatorUdid(name) {
  * 真机行格式 `Name (Version) (UDID)`（两组括号），Mac 行只有 `Name (UDID)`（一组括号），
  * 模拟器在 "== Simulators ==" 段，过滤掉。
  * @param {'ipad'|'iphone'|null} kind 设备类型过滤：'ipad' 只挑 iPad、'iphone' 只挑 iPhone、
- *   null（默认）iPhone/iPad 都接受、返回第一台。用于 `yarn dev ipad` / `yarn dev iphone`。
+ *   null（默认 = `yarn dev ios real`）iPhone/iPad 都接受，但**优先 iPhone**，只有在没有
+ *   任何 iPhone 真机时才退回用 iPad（避免同时插 iPad+iPhone 时随缘抓到 iPad）。
  * @returns {{ name: string, udid: string } | null}
  */
 function getFirstRealIosDevice(kind = null) {
@@ -87,6 +88,9 @@ function getFirstRealIosDevice(kind = null) {
     const out = execSync('xcrun xctrace list devices', { encoding: 'utf8' });
     const lines = out.split(/\r?\n/);
     let inDevicesSection = false;
+    /* 先收集所有候选，再按优先级挑：kind=null 时优先 iPhone、iPad 兜底。 */
+    let firstIphone = null;
+    let firstIpad = null;
     for (const line of lines) {
       if (line.startsWith('== Devices ==')) {
         inDevicesSection = true;
@@ -107,12 +111,19 @@ function getFirstRealIosDevice(kind = null) {
       /* 白名单：name 必须含 iPhone 或 iPad（RN run-ios 不支持 Apple Watch / TV / Vision Pro）。
          之前用「跳过 Apple Watch」黑名单结果实际跑出来还是选中了 Watch UDID（可能 name 里有
          非常规空格 / 编码差异让 regex 失效），白名单更稳。 */
-      if (!/iPhone|iPad/i.test(name)) continue;
+      const isIpad = /iPad/i.test(name);
+      const isIphone = /iPhone/i.test(name);
+      if (!isIphone && !isIpad) continue;
       // kind 过滤：指定了 ipad / iphone 就只接受对应类型，跳过另一类。
-      if (kind === 'ipad' && !/iPad/i.test(name)) continue;
-      if (kind === 'iphone' && !/iPhone/i.test(name)) continue;
-      return { name, udid };
+      if (kind === 'ipad' && !isIpad) continue;
+      if (kind === 'iphone' && !isIphone) continue;
+      if (kind) return { name, udid }; // 显式指定类型：第一台即可
+      // kind=null：分类记录第一台，循环结束后按优先级返回。
+      if (isIphone && !firstIphone) firstIphone = { name, udid };
+      else if (isIpad && !firstIpad) firstIpad = { name, udid };
     }
+    // kind=null：优先 iPhone，没有 iPhone 才退回 iPad。
+    return firstIphone || firstIpad;
   } catch (_) {
     /* xctrace 不可用或解析失败 → 返回 null，调用方报错给用户 */
   }
