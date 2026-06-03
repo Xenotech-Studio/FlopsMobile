@@ -104,6 +104,7 @@ import {
   COMPOSER_TEXT_INSET_TALL,
 } from './chat/ChatScreen.styles';
 import { ThinkingBlockView } from './chat/ThinkingBlockView';
+import { TaskEventCardView } from './chat/TaskEventCardView';
 import { ComposerContextRing } from './chat/ComposerContextRing';
 import { HistoryLoadingOverlay } from './chat/HistoryLoadingOverlay';
 import { mergeToolResultChunk } from '../utils/toolResultPatch';
@@ -256,7 +257,8 @@ function modelDropdownPriceLine(
 function truncateMessagesAfterLastUser(messages: ChatMessage[]): ChatMessage[] {
   let lastUserIdx = -1;
   for (let i = 0; i < messages.length; i++) {
-    if (messages[i].role === 'user') lastUserIdx = i;
+    // task_event（后台任务灰条）按边界保留，避免流式时被截掉
+    if (messages[i].role === 'user' || messages[i].role === 'task_event') lastUserIdx = i;
   }
   if (lastUserIdx < 0) return messages;
   return messages.slice(0, lastUserIdx + 1);
@@ -1597,24 +1599,42 @@ export function ChatScreen({
 
   const handleRegenerate = useCallback(
     async (
-      afterUserIndex: number,
+      afterUserIndex: number | null,
       editedMessage?: string,
       editedFlopsRefs?: FlopsRef[],
+      reprocessTaskId?: string,
     ) => {
-      if (!session || !conversationId || conversationHistoryLoading || afterUserIndex == null) return;
+      const reprocTid = typeof reprocessTaskId === 'string' ? reprocessTaskId.trim() : '';
+      if (
+        !session ||
+        !conversationId ||
+        conversationHistoryLoading ||
+        (afterUserIndex == null && !reprocTid)
+      )
+        return;
       if (editedMessage === undefined && loading) return;
       if (editedMessage !== undefined && loading) {
         await handleStop();
       }
       setMessages((prev) => {
-        let userCount = 0;
         let keepThroughIdx = -1;
-        for (let i = 0; i < prev.length; i++) {
-          if (prev[i].role === 'user') {
-            userCount++;
-            if (userCount === afterUserIndex + 1) {
+        if (reprocTid) {
+          for (let i = 0; i < prev.length; i++) {
+            const m = prev[i] as { role?: string; task_event?: { task_id?: string } };
+            if (m?.role === 'task_event' && m?.task_event && m.task_event.task_id === reprocTid) {
               keepThroughIdx = i;
               break;
+            }
+          }
+        } else {
+          let userCount = 0;
+          for (let i = 0; i < prev.length; i++) {
+            if (prev[i].role === 'user') {
+              userCount++;
+              if (userCount === (afterUserIndex as number) + 1) {
+                keepThroughIdx = i;
+                break;
+              }
             }
           }
         }
@@ -1649,9 +1669,11 @@ export function ChatScreen({
       /* server 的 after_user_index 按全量会话的非-meta user 序号算；本地 afterUserIndex 是在
        * 当前窗口(尾窗)上数的，要把窗口前缀里的 user 数(userCountBefore)补回去还原成全局序号。
        * 非尾窗(全量)时 userCountBefore=0，等价旧行为。 */
-      const globalAfterUserIndex = afterUserIndex + (messageWindowMetaRef.current?.userCountBefore ?? 0);
-      const regenStart: ChatV2StreamStart =
-        editedMessage !== undefined
+      const globalAfterUserIndex =
+        (afterUserIndex as number) + (messageWindowMetaRef.current?.userCountBefore ?? 0);
+      const regenStart: ChatV2StreamStart = reprocTid
+        ? { tag: 'regenerate', regenerate_after_task_id: reprocTid }
+        : editedMessage !== undefined
           ? {
               tag: 'regenerate',
               after_user_index: globalAfterUserIndex,
@@ -2709,6 +2731,22 @@ export function ChatScreen({
         </View>
       );
     }
+    if (msg.role === 'task_event') {
+      // 触发：对话流里独立全宽灰条卡（穿插事件走 assistant blocks 内联，不带"重新处理"）
+      const tEvTid = msg.task_event && msg.task_event.task_id ? String(msg.task_event.task_id) : '';
+      return (
+        <TaskEventCardView
+          key={stableKey}
+          taskEvent={msg.task_event}
+          content={msg.content}
+          variant="trigger"
+          onReprocess={
+            tEvTid ? () => handleRegenerate(null, undefined, undefined, tEvTid) : undefined
+          }
+          reprocessDisabled={!conversationId || loading || conversationHistoryLoading}
+        />
+      );
+    }
     const isUser = msg.role === 'user';
     const userOrdinalIndex = isUser ? (ordinalInfo[idx]?.userOrdinalIndex ?? -1) : -1;
     const isLastAssistant = !isUser && msg.role === 'assistant' && idx === lastAssistantIdx;
@@ -2774,6 +2812,16 @@ export function ChatScreen({
                       key={`msg-think-${idx}-${bi}`}
                       prevIsToolPackage={prevBlock != null && isToolPackageNavBlock(prevBlock)}
                       nextIsToolPackage={nextBlock != null && isToolPackageNavBlock(nextBlock)}
+                    />
+                  );
+                }
+                if (block.type === 'task_event') {
+                  return (
+                    <TaskEventCardView
+                      key={`msg-taskevent-${idx}-${bi}`}
+                      taskEvent={block.task_event}
+                      content={block.content}
+                      variant="injection"
                     />
                   );
                 }
@@ -3208,6 +3256,16 @@ export function ChatScreen({
                             key={`stream-think-${bi}`}
                             prevIsToolPackage={prevBlock != null && isToolPackageNavBlock(prevBlock)}
                             nextIsToolPackage={nextBlock != null && isToolPackageNavBlock(nextBlock)}
+                          />
+                        );
+                      }
+                      if (block.type === 'task_event') {
+                        return (
+                          <TaskEventCardView
+                            key={`stream-taskevent-${bi}`}
+                            taskEvent={block.task_event}
+                            content={block.content}
+                            variant="injection"
                           />
                         );
                       }
