@@ -59,10 +59,19 @@ import { TodayScreen } from '../TodayScreen';
 import { ProjectScreen } from '../ProjectScreen';
 import { DocsScreen } from '../DocsScreen';
 import { ChatScreen } from '../ChatScreen';
+import Ionicons from 'react-native-vector-icons/Ionicons';
+import { AnimatedCircleButton } from '../../components/AnimatedCircleButton';
 import { subscribeClientOutdated } from '../../utils/clientCompatBus';
 import { getScreenCornerRadius, inferScreenCornerRadius } from '../../utils/screenInfo';
 import { SHADOW_COLOR } from '../../theme/shadows';
 import { useResponsive } from '../../hooks/useResponsive';
+import { MainPaneNavigator } from '../../navigation/MainPaneNavigator';
+import {
+  MainPaneProvider,
+  useMainPaneController,
+  useMainPaneIsSecondary,
+  type MainPaneController,
+} from './MainPaneContext';
 
 /** 抽屉完全展开时主页面右侧保留的 peek 宽度 */
 const PEEK_WIDTH = 64;
@@ -99,10 +108,32 @@ function triggerDrawerHaptic() {
   ReactNativeHapticFeedback.trigger('impactLight', { enableVibrateFallback: true });
 }
 
-/** sidebarShell 侧栏收/展的布局过渡时长（ms）。Reanimated LinearTransition 在原生 UI 线程插值
- *  侧栏宽度（0↔SIDEBAR_WIDTH）与主区 frame，只跑一次 Yoga（切 state 那刻），插值帧全在原生层——
- *  不像「每帧改 width」那样每帧重排右侧重列表，所以丝滑。 */
+/** sidebarShell 侧栏收/展的布局过渡时长（ms）。Reanimated 在原生 UI 线程逐帧插值侧栏宽度（0↔SIDEBAR_WIDTH），
+ *  主区 flex 自适应。直接写 shared value、不经 React → 零延迟。 */
 const SIDEBAR_ANIM_DURATION = 280;
+
+/** 分界线切换钮：纵向胶囊（窄而高）。展开时骑在分界线上；折叠时离屏左缘 DIVIDER_TOGGLE_MARGIN 完整显示。 */
+const DIVIDER_TOGGLE_W = 26;
+const DIVIDER_TOGGLE_H = 56;
+const DIVIDER_TOGGLE_MARGIN = 12;
+
+/** 在 MainPaneProvider 内部抓取 controller（填进 ref 供 setActive 驱动）+ 把"是否二级页"上报给
+ *  DrawerShell（决定分界线切换钮是否显示）。侧栏在 Provider 外面，靠这个 grabber 桥接。不渲染 UI。 */
+function MainPaneControllerGrabber({
+  targetRef,
+  onSecondaryChange,
+}: {
+  targetRef: React.MutableRefObject<MainPaneController | null>;
+  onSecondaryChange: (v: boolean) => void;
+}) {
+  const ctrl = useMainPaneController();
+  targetRef.current = ctrl;
+  const isSecondary = useMainPaneIsSecondary();
+  useEffect(() => {
+    onSecondaryChange(isSecondary);
+  }, [isSecondary, onSecondaryChange]);
+  return null;
+}
 
 export function DrawerShell() {
   const { width: winWidth } = useWindowDimensions();
@@ -149,6 +180,15 @@ export function DrawerShell() {
    *  零延迟：直接写 shared value、不经 React 重渲染（跟手机版抽屉同思路）。 */
   const sidebarAnimWidth = useSharedValue(sidebarDefaultOpen ? sidebarWidth : 0);
   const sidebarAnimStyle = useAnimatedStyle(() => ({ width: sidebarAnimWidth.value }));
+  /** 纵向胶囊切换钮位置：展开时 left = 侧栏宽 − 半钮宽 → 中心骑在分界线上；
+   *  折叠时（侧栏宽趋 0）被 DIVIDER_TOGGLE_MARGIN 托住 → 整个胶囊完整显示、离屏左缘有段距离。
+   *  Math.max 让两态间随宽度连续过渡。 */
+  const dividerToggleStyle = useAnimatedStyle(() => ({
+    left: Math.max(
+      DIVIDER_TOGGLE_MARGIN,
+      sidebarAnimWidth.value - DIVIDER_TOGGLE_W / 2,
+    ),
+  }));
   /** 开合：UI 线程逐帧动画宽度（零延迟）+ setState 仅记逻辑态（旋转/DocBodyView/toggle 读）。 */
   const applySidebarOpen = useCallback(
     (next: boolean) => {
@@ -183,11 +223,18 @@ export function DrawerShell() {
      animatedProps→box-none 已经不需要，前者改成 BackHandler 直接读 progress.value 也不需要。
      现在所有开/关判定都走 progress.value（UI 线程真实位置），JS state 完全多余。 */
 
-  /** active 顶层页 */
+  /** active 顶层页（compact 用；sidebarShell 下导航由主区嵌套栈接管，active 仅用于 DrawerContent 高亮） */
   const [active, setActive] = useState<DrawerActive>({ kind: 'today' });
 
   /** ProfileSheet 引用 */
   const profileSheetRef = useRef<BottomSheetModal>(null);
+
+  /** sidebarShell：主区嵌套栈控制器（由 Provider 内的 grabber 填入）。compact 下保持 null。
+   *  侧栏在 navigator 外面，靠这个 ref 驱动主区 push/reset。 */
+  const mainPaneControllerRef = useRef<MainPaneController | null>(null);
+  /** sidebarShell：主区当前是否停在二级页（对话等）。分界线切换钮只在二级页显示——
+   *  一级页左上角汉堡已能开合侧栏，二级页左上角是返回键才需要这个钮兜底。grabber 上报。 */
+  const [mainPaneSecondary, setMainPaneSecondary] = useState(false);
 
   /** 主页面 translateX 最大值 = 屏宽 - peek */
   const maxTranslateX = winWidth - PEEK_WIDTH;
@@ -270,6 +317,29 @@ export function DrawerShell() {
     (next: DrawerActive) => {
       setActive(next);
       if (sidebarShell) {
+        /* sidebarShell：导航交给主区嵌套栈（push/reset，带右滑入动画 + 可返回），
+         *  而不是原地 remount。今日/文档/项目 = reset 栈底；对话 = 在今日上 push。 */
+        const ctrl = mainPaneControllerRef.current;
+        if (ctrl) {
+          switch (next.kind) {
+            case 'today':
+              ctrl.goToday();
+              break;
+            case 'docs':
+              ctrl.goDocs();
+              break;
+            case 'project':
+              ctrl.goProject(next.projectId, next.projectName);
+              break;
+            case 'chat':
+              ctrl.openChat({
+                conversationId: next.conversationId,
+                conversationTitle: next.conversationTitle,
+                createEncrypted: next.createEncrypted,
+              });
+              break;
+          }
+        }
         triggerDrawerHaptic();
         applySidebarOpen(sidebarDefaultOpen);
       } else {
@@ -521,20 +591,59 @@ export function DrawerShell() {
   if (sidebarShell) {
     return (
       <DrawerProvider value={handle}>
-        <View style={[styles.root, styles.sidebarShellRoot, { backgroundColor: colors.drawerBackground }]}>
-          <Animated.View
-            style={[styles.sidebar, sidebarAnimStyle, { borderRightColor: colors.borderMuted }]}
-          >
-            <View style={{ width: sidebarWidth, flex: 1 }}>
-              <DrawerContent />
+        <MainPaneProvider>
+          {/* grabber：把主区嵌套栈 controller 填进 ref，供 setActiveAndClose 驱动 push/reset */}
+          <MainPaneControllerGrabber
+            targetRef={mainPaneControllerRef}
+            onSecondaryChange={setMainPaneSecondary}
+          />
+          <View style={[styles.root, styles.sidebarShellRoot, { backgroundColor: colors.drawerBackground }]}>
+            <Animated.View
+              style={[styles.sidebar, sidebarAnimStyle, { borderRightColor: colors.borderMuted }]}
+            >
+              <View style={{ width: sidebarWidth, flex: 1 }}>
+                <DrawerContent />
+              </View>
+            </Animated.View>
+            {/* 主区：嵌套 stack navigator —— 点对话等在主区内右滑入盖住、可左滑/返回，侧栏不动 */}
+            <View style={[styles.sidebarMain, { backgroundColor: colors.chatScreenBackground }]}>
+              <MainPaneNavigator />
             </View>
-          </Animated.View>
-          <View style={[styles.sidebarMain, { backgroundColor: colors.chatScreenBackground }]}>
-            {activeElement}
           </View>
-        </View>
-        {/* ProfileSheet 仍由本层 host；侧栏底栏头像通过 ref 调起 */}
-        <ProfileSheet sheetRef={profileSheetRef} />
+
+          {/* 骑在分界线上的纵向胶囊切换钮：跟随 sidebarAnimWidth 移动，折叠时离屏左缘有间距完整显示。
+           *  仅二级页（对话等）显示——一级页左上角汉堡已能开合侧栏，二级页左上角是返回键才需要它兜底。
+           *  用 AnimatedCircleButton → iOS 26+ 走 Liquid Glass material（跟顶角圆钮同款质感，
+           *  系统自带投影 + 按压缩放）；iOS<26/Android 走 bouncy fallback，由 children Ionicons 渲染。
+           *  形状（胶囊尺寸/圆角）由 dividerToggleBtn style 决定。 */}
+          {mainPaneSecondary ? (
+          <Animated.View
+            style={[
+              styles.dividerToggle,
+              dividerToggleStyle,
+            ]}
+          >
+            <AnimatedCircleButton
+              style={styles.dividerToggleBtn}
+              onPress={toggle}
+              /* 触摸响应区比视觉胶囊大一圈（不改显示尺寸）：四周各扩 16pt，窄胶囊也好点中。 */
+              hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
+              iosSfSymbol={{
+                /* 三横线（菜单）图标，小一号。 */
+                name: 'line.3.horizontal',
+                size: 11,
+                color: colors.textSecondary,
+              }}
+            >
+              {/* iOS<26 / Android fallback：reorder-three 比 menu 三横线更窄。 */}
+              <Ionicons name="reorder-three" size={15} color={colors.textSecondary} />
+            </AnimatedCircleButton>
+          </Animated.View>
+          ) : null}
+
+          {/* ProfileSheet 仍由本层 host；侧栏底栏头像通过 ref 调起 */}
+          <ProfileSheet sheetRef={profileSheetRef} />
+        </MainPaneProvider>
       </DrawerProvider>
     );
   }
@@ -653,6 +762,22 @@ const styles = StyleSheet.create({
   sidebarMain: {
     flex: 1,
     overflow: 'hidden',
+  },
+  /** 分界线切换钮容器：绝对定位，left 由 dividerToggleStyle 动画（跟侧栏宽度走），zIndex 盖在两栏之上。
+   *  纵向居中：top 50% + marginTop −半钮高，让钮中心落在屏幕竖直中点。 */
+  dividerToggle: {
+    position: 'absolute',
+    top: '50%',
+    marginTop: -DIVIDER_TOGGLE_H / 2,
+    zIndex: 100,
+  },
+  /** 纵向胶囊本体：窄而高，borderRadius = 半宽 → 上下半圆胶囊形。 */
+  dividerToggleBtn: {
+    width: DIVIDER_TOGGLE_W,
+    height: DIVIDER_TOGGLE_H,
+    borderRadius: DIVIDER_TOGGLE_W / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   drawerBack: {
     ...StyleSheet.absoluteFillObject,

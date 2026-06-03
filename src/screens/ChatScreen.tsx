@@ -301,6 +301,9 @@ export type ChatScreenProps = {
   conversationTitleOverride?: string;
   /** true 时：新建对话走加密路径（POST /api/conversations 带 encrypted+k_conv_blob） */
   createEncrypted?: boolean;
+  /** iPad 主区嵌套栈模式：用 conversationIdOverride（同 inDrawer），但 header 左上角按"能否返回"决定
+   *  显示返回箭头还是汉堡——push 进来的对话显示返回箭头（pop 回今日/上一页），栈底则汉堡（开合侧栏）。 */
+  mainPane?: boolean;
 };
 
 export function ChatScreen({
@@ -308,6 +311,7 @@ export function ChatScreen({
   conversationIdOverride,
   conversationTitleOverride,
   createEncrypted = false,
+  mainPane = false,
 }: ChatScreenProps = {}) {
   const { session } = useSession();
   const insets = useSafeAreaInsets();
@@ -382,13 +386,14 @@ export function ChatScreen({
     const ratio = Math.min(h / 50, 1);
     return { opacity: 1 - ratio };
   });
-  /** drawer 模式下用 props 覆盖；stack-push 模式下读 route.params */
-  const params: ChatRouteParams | undefined = inDrawer
-    ? {
-        conversationId: conversationIdOverride,
-        conversationTitle: conversationTitleOverride,
-      }
-    : ((route.params ?? undefined) as ChatRouteParams | undefined);
+  /** drawer / mainPane 模式下用 props 覆盖；stack-push 模式下读 route.params */
+  const params: ChatRouteParams | undefined =
+    inDrawer || mainPane
+      ? {
+          conversationId: conversationIdOverride,
+          conversationTitle: conversationTitleOverride,
+        }
+      : ((route.params ?? undefined) as ChatRouteParams | undefined);
   const [conversationId, setConversationId] = useState(params?.conversationId ?? '');
   const [conversationTitle, setConversationTitle] = useState(params?.conversationTitle ?? '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -2592,8 +2597,12 @@ export function ChatScreen({
     );
   }
 
-  /** drawer 模式下不渲染返回，由 HamburgerButton 顶替；同时左缘 PanResponder 不挂，避免与 DrawerShell 左缘手势重叠 */
-  const canGoBack = !inDrawer && navigation.canGoBack();
+  /** drawer 模式下不渲染返回，由 HamburgerButton 顶替；同时左缘 PanResponder 不挂，避免与 DrawerShell 左缘手势重叠。
+   *  mainPane（iPad 主区嵌套栈）：能否返回看 nested navigation.canGoBack()，但左缘手势交给嵌套 stack 自带的
+   *  swipe-back（gestureEnabled），不挂这里的手动 PanResponder（避免双份手势 / 与侧栏左缘冲突）。 */
+  const canGoBack = (!inDrawer || mainPane) && navigation.canGoBack();
+  /** 是否挂手动左缘 PanResponder：只有 iPhone 全屏 push 模式（非 inDrawer、非 mainPane）才需要。 */
+  const useManualEdgeBack = canGoBack && !mainPane && !inDrawer;
   const leftEdgePan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -2968,7 +2977,7 @@ export function ChatScreen({
         避免 SafeAreaView 在透明导航栏后面糊一条白 padding 带。 */}
     <SafeAreaView style={styles.container} edges={[]}>
     <View style={styles.containerInner}>
-      {canGoBack ? (
+      {useManualEdgeBack ? (
         <View
           style={styles.leftEdgeGesture}
           {...leftEdgePan.panHandlers}
@@ -2981,7 +2990,9 @@ export function ChatScreen({
           topSolidHeight={insets.top + 8}
           gradientBaseHex={colors.chatScreenBackground}
         />
-        {inDrawer ? (
+        {/* inDrawer（compact 覆盖式抽屉顶层）= 永远汉堡；否则能返回就显返回箭头（mainPane pop 嵌套栈 /
+         *  iPhone pop 根栈），不能返回（mainPane 栈底）兜底汉堡。 */}
+        {inDrawer || (mainPane && !canGoBack) ? (
           <HamburgerButton />
         ) : canGoBack ? (
           <AnimatedCircleButton
