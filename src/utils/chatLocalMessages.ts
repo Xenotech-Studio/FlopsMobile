@@ -12,8 +12,30 @@ export type ToolResult = {
   exit_code?: number;
 };
 
+export type TaskEventPayload = {
+  status?: string;
+  exit_code?: number;
+  runtime_seconds?: number;
+  description?: string;
+  command?: string;
+  cwd?: string;
+  log_path?: string;
+  log_size_bytes?: number;
+  log_tail?: string;
+  log_tail_truncated?: boolean;
+  task_id?: string;
+  device_id?: string;
+  ended_at?: string;
+};
+
 export type StreamBlock =
   | { type: 'text'; content: string }
+  | {
+      type: 'task_event';
+      content: string;
+      task_event: TaskEventPayload | null;
+      arrival?: string;
+    }
   | {
       type: 'thinking';
       content: string;
@@ -42,6 +64,7 @@ export type StreamBlock =
 export type ChatMessage = (
   | { role: 'user'; content: string; flops_refs?: FlopsRef[] }
   | { role: 'assistant'; content: string; blocks?: StreamBlock[] }
+  | { role: 'task_event'; content: string; task_event: TaskEventPayload | null; arrival?: string }
   | { role: 'error'; content: string }
 ) & {
   /** 本条本地消息在「当前窗口 serverRawMessages」里的起始 raw 下标。
@@ -121,6 +144,12 @@ export function coalesceAssistantTurn(messages: ConversationMessage[]): ChatMess
       i++;
     } else if (msg.role === 'tool') {
       i++;
+    } else if (
+      msg.role === 'user' &&
+      (msg as unknown as { kind?: unknown }).kind === 'task_event'
+    ) {
+      blocks.push(taskEventToBlock(msg));
+      i++;
     } else {
       i++;
     }
@@ -152,6 +181,50 @@ export function rawUserMessageIsMetaOnly(msg: ConversationMessage | null | undef
   return false;
 }
 
+/** 后台任务完成事件（isMeta user + kind=task_event）：不进 LLM 视角，渲染成全宽灰条 */
+export function rawUserMessageIsTaskEvent(msg: ConversationMessage | null | undefined): boolean {
+  if (!msg || msg.role !== 'user') return false;
+  if ((msg as unknown as { kind?: unknown }).kind !== 'task_event') return false;
+  if (isTruthyMetaFlag(msg.isMeta)) return true;
+  const md = msg.metadata;
+  if (md && typeof md === 'object' && isTruthyMetaFlag(md.isMeta)) return true;
+  return false;
+}
+
+function taskEventPayloadOf(msg: ConversationMessage): TaskEventPayload | null {
+  const te = (msg as unknown as { task_event?: unknown }).task_event;
+  return te && typeof te === 'object' ? (te as TaskEventPayload) : null;
+}
+
+function arrivalOf(msg: ConversationMessage): string {
+  const a = (msg as unknown as { arrival?: unknown }).arrival;
+  return typeof a === 'string' ? a : '';
+}
+
+/** task_event → 独立气泡（触发：自成 turn 头） */
+function taskEventToLocal(msg: ConversationMessage): ChatMessage {
+  return {
+    role: 'task_event',
+    content: typeof msg.content === 'string' ? msg.content : '',
+    task_event: taskEventPayloadOf(msg),
+    arrival: arrivalOf(msg) || 'trigger',
+  };
+}
+
+/** task_event → assistant turn 内 inline block（穿插） */
+function taskEventToBlock(msg: ConversationMessage): StreamBlock {
+  return {
+    type: 'task_event',
+    content: typeof msg.content === 'string' ? msg.content : '',
+    task_event: taskEventPayloadOf(msg),
+    arrival: arrivalOf(msg) || 'injection',
+  };
+}
+
+function rawTaskEventIsInjection(msg: ConversationMessage): boolean {
+  return rawUserMessageIsTaskEvent(msg) && arrivalOf(msg) === 'injection';
+}
+
 /**
  * 单次遍历生成本地消息列表与 raw→assistant 下标映射（供 usage_runs 对齐）。
  */
@@ -181,6 +254,17 @@ export function rawMessagesToLocalWithUsageMap(raw: ConversationMessage[]): RawM
     if (!msg || typeof msg.role !== 'string') continue;
     if (msg.role === 'system') continue;
     if (msg.role === 'user') {
+      if (rawUserMessageIsTaskEvent(msg)) {
+        // 穿插：并入当前 assistant turn 成 inline block；触发：独立 turn 头
+        if (rawTaskEventIsInjection(msg) && assistantGroup.length > 0) {
+          assistantGroup.push(msg);
+          groupRawIndices.push(i);
+          continue;
+        }
+        flushAssistant();
+        messages.push({ ...taskEventToLocal(msg), _key: i });
+        continue;
+      }
       if (rawUserMessageIsMetaOnly(msg)) continue;
       flushAssistant();
       const content = typeof msg.content === 'string' ? msg.content : '';

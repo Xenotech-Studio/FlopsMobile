@@ -1194,7 +1194,14 @@ const CHAT_V2_RECONNECT_DELAY_MS = 500;
 
 export type ChatV2StreamStart =
   | { tag: 'new_message'; message: string; flops_refs?: unknown[] }
-  | { tag: 'regenerate'; after_user_index: number; message?: string; flops_refs?: unknown[] }
+  | {
+      tag: 'regenerate';
+      after_user_index?: number;
+      /** P1d：trigger task_event 的"重新处理"——按 task_id 锚定（与 after_user_index 二选一） */
+      regenerate_after_task_id?: string;
+      message?: string;
+      flops_refs?: unknown[];
+    }
   | { tag: 'resume'; run_id: string };
 
 export type StreamChatV2LoopOptions = {
@@ -1396,7 +1403,9 @@ export async function streamChatV2Loop(
     } else if (start.tag === 'regenerate') {
       body = {
         regenerate: true,
-        after_user_index: start.after_user_index,
+        ...(start.regenerate_after_task_id
+          ? { regenerate_after_task_id: start.regenerate_after_task_id }
+          : { after_user_index: start.after_user_index }),
         ...(typeof start.message === 'string' && start.message.length > 0 ? { message: start.message } : {}),
         ...(Array.isArray(start.flops_refs) && start.flops_refs.length > 0
           ? { flops_refs: start.flops_refs }
