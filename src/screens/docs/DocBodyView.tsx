@@ -29,6 +29,7 @@ import { decodeFlowDocSnapshotToDocument } from '../../flowdoc-native-input/yjsT
 import { useSession } from '../../context/SessionContext';
 import { useAppTheme } from '../../context/ThemeContext';
 import type { AppColors } from '../../theme/appColors';
+import { useResponsive, READING_MAX_WIDTH } from '../../hooks/useResponsive';
 
 const EMPTY_DOC: FlowDocDocument = [
   { type: 'paragraph', children: [{ text: '' }] },
@@ -61,6 +62,8 @@ export const DocBodyView = React.forwardRef<DocBodyViewHandle, DocBodyViewProps>
     const { session } = useSession();
     const { colors } = useAppTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
+    /** 宽屏（iPad）：正文限到舒适 measure 居中，两侧留白，避免行宽过长难读（沉浸阅读）。 */
+    const { expanded } = useResponsive();
 
     const isSupported = SUPPORTED_TYPES.has(docType);
 
@@ -152,7 +155,13 @@ export const DocBodyView = React.forwardRef<DocBodyViewHandle, DocBodyViewProps>
     }
 
     return (
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[
+          styles.scrollContent,
+          expanded && styles.scrollContentWide,
+        ]}
+      >
         <FlowDocBlocks document={doc ?? EMPTY_DOC} editable={false} />
       </ScrollView>
     );
@@ -166,6 +175,15 @@ function createStyles(c: AppColors) {
       paddingHorizontal: 16,
       paddingVertical: 12,
       paddingBottom: 64,
+    },
+    /** 宽屏沉浸阅读：限宽居中 + 更宽松的横向 / 纵向留白 */
+    scrollContentWide: {
+      width: '100%',
+      maxWidth: READING_MAX_WIDTH,
+      alignSelf: 'center',
+      paddingHorizontal: 40,
+      paddingTop: 24,
+      paddingBottom: 96,
     },
     centered: {
       flex: 1,

@@ -47,6 +47,7 @@ import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
+  withTiming,
 } from 'react-native-reanimated';
 import type { BottomSheetModal } from '@gorhom/bottom-sheet';
 import type { DrawerActive } from '../../navigation/types';
@@ -61,6 +62,7 @@ import { ChatScreen } from '../ChatScreen';
 import { subscribeClientOutdated } from '../../utils/clientCompatBus';
 import { getScreenCornerRadius, inferScreenCornerRadius } from '../../utils/screenInfo';
 import { SHADOW_COLOR } from '../../theme/shadows';
+import { useResponsive } from '../../hooks/useResponsive';
 
 /** 抽屉完全展开时主页面右侧保留的 peek 宽度 */
 const PEEK_WIDTH = 64;
@@ -97,10 +99,19 @@ function triggerDrawerHaptic() {
   ReactNativeHapticFeedback.trigger('impactLight', { enableVibrateFallback: true });
 }
 
+/** sidebarShell 侧栏收/展的布局过渡时长（ms）。Reanimated LinearTransition 在原生 UI 线程插值
+ *  侧栏宽度（0↔SIDEBAR_WIDTH）与主区 frame，只跑一次 Yoga（切 state 那刻），插值帧全在原生层——
+ *  不像「每帧改 width」那样每帧重排右侧重列表，所以丝滑。 */
+const SIDEBAR_ANIM_DURATION = 280;
+
 export function DrawerShell() {
   const { width: winWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const { colors } = useAppTheme();
+  /** iPad 全屏（横竖通用）：用 push 式、可收起/展开的侧栏外壳（同一棵树，旋转只改宽度，不 remount）。
+   *  窄宽度（iPhone / iPad 分屏）→ sidebarShell=false → 走下方手机覆盖式动画抽屉（支持 Split View）。
+   *  sidebarDefaultOpen：横屏默认展开、竖屏默认收起；旋转时此值翻转，下方 effect 把侧栏动画到对应默认态。 */
+  const { sidebarShell, sidebarDefaultOpen, sidebarWidth } = useResponsive();
 
   /** Android 通过 native module 异步读出来的屏幕物理圆角；iOS 始终为 0（走 inferScreenCornerRadius 查表兜底） */
   const [nativeCornerRadius, setNativeCornerRadius] = useState(0);
@@ -120,8 +131,43 @@ export function DrawerShell() {
     [nativeCornerRadius, insets.top]
   );
 
-  /** 抽屉展开比例：0 = 关闭，1 = 完全展开。reanimated shared value，UI 线程驱动动画。 */
+  /** 抽屉展开比例：0 = 关闭，1 = 完全展开。reanimated shared value，UI 线程驱动动画。
+   *  仅 compact（手机覆盖式抽屉）用。 */
   const progress = useSharedValue(0);
+
+  /** ── sidebarShell（iPad 原生 push 侧栏）专用 ──
+   *  开合走双轨：
+   *   1) imperative command `setOpen`（原生立刻起 UIView 动画，不等 React 重渲染）→ 零延迟。
+   *   2) React state `sidebarOpen`（异步更新，只记逻辑态：给主区显式宽度、旋转 effect、汉堡 toggle 读）。
+   *  原生侧用「prop==当前态就不重复动画」去重，所以两轨同时改不会动两次。
+   *  初值跟随当前默认态（横屏开 / 竖屏关），首帧即正确。 */
+  const [sidebarOpen, setSidebarOpen] = useState(sidebarDefaultOpen);
+
+  /** ── iPad push 侧栏：UI 线程逐帧驱动侧栏宽度（最接近 Web `transition: width` 的 RN 做法）──
+   *  sidebarAnimWidth 是侧栏当前宽度（px），由 Reanimated 在 UI 线程逐帧 withTiming 插值，
+   *  绑到侧栏容器的 width（useAnimatedStyle）。主区 flex:1 自动吃剩余 → 跟着重排。
+   *  零延迟：直接写 shared value、不经 React 重渲染（跟手机版抽屉同思路）。 */
+  const sidebarAnimWidth = useSharedValue(sidebarDefaultOpen ? sidebarWidth : 0);
+  const sidebarAnimStyle = useAnimatedStyle(() => ({ width: sidebarAnimWidth.value }));
+  /** 开合：UI 线程逐帧动画宽度（零延迟）+ setState 仅记逻辑态（旋转/DocBodyView/toggle 读）。 */
+  const applySidebarOpen = useCallback(
+    (next: boolean) => {
+      sidebarAnimWidth.value = withTiming(next ? sidebarWidth : 0, {
+        duration: SIDEBAR_ANIM_DURATION,
+      });
+      setSidebarOpen(next);
+    },
+    [sidebarAnimWidth, sidebarWidth]
+  );
+  /** 旋转（横竖切换）时把侧栏带到新的默认态：横屏→展开、竖屏→收起。
+   *  动画宽度 + 逻辑 state 都跟到默认态。 */
+  useEffect(() => {
+    if (!sidebarShell) return;
+    sidebarAnimWidth.value = withTiming(sidebarDefaultOpen ? sidebarWidth : 0, {
+      duration: SIDEBAR_ANIM_DURATION,
+    });
+    setSidebarOpen(sidebarDefaultOpen);
+  }, [sidebarShell, sidebarDefaultOpen, sidebarAnimWidth, sidebarWidth]);
   /** 「commit armed」状态：translation 当前是否过了 commit 阈值。
    *  - true → release 就会 commit；onUpdate 在过线一刻 fire haptic
    *  - false → release 不 commit；onUpdate 在退线一刻 fire haptic（反悔反馈）
@@ -150,13 +196,32 @@ export function DrawerShell() {
    *  spring 不需要 completion callback。 */
   const open = useCallback(() => {
     triggerDrawerHaptic();
-    progress.value = withSpring(1, SPRING_CONFIG);
-  }, [progress]);
+    /** sidebarShell：命令原生立刻展开 push 侧栏（零延迟）；compact：拉开覆盖式抽屉（reanimated）。 */
+    if (sidebarShell) {
+      applySidebarOpen(true);
+    } else {
+      progress.value = withSpring(1, SPRING_CONFIG);
+    }
+  }, [progress, sidebarShell, applySidebarOpen]);
 
   const close = useCallback(() => {
     triggerDrawerHaptic();
-    progress.value = withSpring(0, SPRING_CONFIG);
-  }, [progress]);
+    if (sidebarShell) {
+      applySidebarOpen(false);
+    } else {
+      progress.value = withSpring(0, SPRING_CONFIG);
+    }
+  }, [progress, sidebarShell, applySidebarOpen]);
+
+  /** 切换开合。汉堡按钮用它。sidebarShell 走原生 command（零延迟）；compact 走 progress（读 UI 线程真实位置）。 */
+  const toggle = useCallback(() => {
+    triggerDrawerHaptic();
+    if (sidebarShell) {
+      applySidebarOpen(!sidebarOpen);
+    } else {
+      progress.value = withSpring(progress.value > 0.5 ? 0 : 1, SPRING_CONFIG);
+    }
+  }, [progress, sidebarShell, applySidebarOpen, sidebarOpen]);
 
   const presentProfileSheet = useCallback(() => {
     profileSheetRef.current?.present();
@@ -197,13 +262,21 @@ export function DrawerShell() {
     }, [open, close, progress])
   );
 
-  /** DrawerContent 点条目：切顶层页 + 关抽屉 */
+  /** DrawerContent 点条目：切顶层页，然后收侧栏。
+   *  - compact：关闭覆盖式抽屉。
+   *  - sidebarShell：回到当前朝向的默认态——横屏默认展开（保持展开、不收）、竖屏默认收起（收回去，
+   *    像抽屉那样点完即收）。即「点条目后回到这个朝向本来的样子」。 */
   const setActiveAndClose = useCallback(
     (next: DrawerActive) => {
       setActive(next);
-      close();
+      if (sidebarShell) {
+        triggerDrawerHaptic();
+        applySidebarOpen(sidebarDefaultOpen);
+      } else {
+        close();
+      }
     },
-    [close]
+    [close, sidebarShell, sidebarDefaultOpen, applySidebarOpen]
   );
 
   /** 左缘开抽屉手势：常挂载，靠下方 openGestureWrapperProps 按 progress 切 pointerEvents 启停 */
@@ -403,11 +476,12 @@ export function DrawerShell() {
     () => ({
       open,
       close,
+      toggle,
       active,
       setActive: setActiveAndClose,
       presentProfileSheet,
     }),
-    [open, close, active, setActiveAndClose, presentProfileSheet]
+    [open, close, toggle, active, setActiveAndClose, presentProfileSheet]
   );
 
   /** 渲染 active 顶层页：用 key 强制 unmount/remount（user 定的「不保留状态」） */
@@ -437,6 +511,33 @@ export function DrawerShell() {
         );
     }
   }, [active]);
+
+  /* ── sidebarShell（iPad 全屏，横竖通用）：实验版——UI 线程逐帧驱动宽度 + 主区 flex reflow ──
+   *  row 容器：侧栏宽度由 sidebarAnimStyle（Reanimated UI 线程逐帧 width）驱动；主区 flex:1 自动吃剩余。
+   *  每帧侧栏宽度变 → Yoga 在 UI 线程重算 → 主区内容跟着 reflow（最接近 Web `transition:width`）。
+   *  这就是要实测的：主区内容（轻页面 vs ChatScreen 长列表）逐帧 reflow 扛不扛得住 60fps。
+   *  零延迟：直接写 shared value，不经 React。横屏默认展开 / 竖屏默认收起，汉堡 toggle。
+   *  侧栏内容定宽 sidebarWidth + overflow:hidden：收起时容器宽→0 裁切滑出，DrawerContent 不被压缩塌陷。 */
+  if (sidebarShell) {
+    return (
+      <DrawerProvider value={handle}>
+        <View style={[styles.root, styles.sidebarShellRoot, { backgroundColor: colors.drawerBackground }]}>
+          <Animated.View
+            style={[styles.sidebar, sidebarAnimStyle, { borderRightColor: colors.borderMuted }]}
+          >
+            <View style={{ width: sidebarWidth, flex: 1 }}>
+              <DrawerContent />
+            </View>
+          </Animated.View>
+          <View style={[styles.sidebarMain, { backgroundColor: colors.chatScreenBackground }]}>
+            {activeElement}
+          </View>
+        </View>
+        {/* ProfileSheet 仍由本层 host；侧栏底栏头像通过 ref 调起 */}
+        <ProfileSheet sheetRef={profileSheetRef} />
+      </DrawerProvider>
+    );
+  }
 
   return (
     <DrawerProvider value={handle}>
@@ -538,6 +639,21 @@ export function DrawerShell() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  /** sidebarShell：左侧栏 + 右主区，横向排列 */
+  sidebarShellRoot: {
+    flexDirection: 'row',
+  },
+  /** push 侧栏：width 在 0↔SIDEBAR_WIDTH 间切换（Reanimated LinearTransition 原生插值）；overflow:hidden 让收起时内容被裁切不溢出。
+   *  右侧 hairline 分隔；背景沿用 drawerBackground（root 已铺）。 */
+  sidebar: {
+    overflow: 'hidden',
+    borderRightWidth: StyleSheet.hairlineWidth,
+  },
+  /** sidebarShell 右主区：吃掉剩余宽度，overflow:hidden 裁掉内容圆角/越界 */
+  sidebarMain: {
+    flex: 1,
+    overflow: 'hidden',
+  },
   drawerBack: {
     ...StyleSheet.absoluteFillObject,
   },

@@ -212,6 +212,11 @@ export function TodayScreen() {
   /* ---------- 对话段 ---------- */
   const [convList, setConvList] = useState<ConversationListItem[]>([]);
   const [convLoading, setConvLoading] = useState(false);
+  /** 客户端分页：footer 只渲染前 convVisibleCount 条对话，滚到底每次 +CONV_PAGE_SIZE。
+   *  根因——之前 convList 全量 .map() 渲染在 footer（零虚拟化），几百条对话一次性 mount → 卡。
+   *  纯客户端切片：滚动位置不跳变（footer 尾部追加内容，已有项偏移不变，自然向下延伸）。iOS/Android 同生效。 */
+  const CONV_PAGE_SIZE = 10;
+  const [convVisibleCount, setConvVisibleCount] = useState(CONV_PAGE_SIZE);
   const [chatV2RunningByConv, setChatV2RunningByConv] = useState<Record<string, boolean>>({});
   const [chatV2UnreadByConv, setChatV2UnreadByConv] = useState<Record<string, boolean>>({});
   const [deleteConvTarget, setDeleteConvTarget] = useState<ConversationListItem | null>(null);
@@ -223,6 +228,8 @@ export function TodayScreen() {
       const { conversations } = await listConversations(session);
       const rows = conversations ?? [];
       setConvList(rows);
+      /** 重新拉取（首次 / 下拉刷新）→ 可见数回到首页大小，从头分页。 */
+      setConvVisibleCount(CONV_PAGE_SIZE);
       setChatV2RunningByConv((prev) => {
         const next = { ...prev };
         rows.forEach((c) => {
@@ -533,6 +540,11 @@ export function TodayScreen() {
   /* 计算 search 长条态目标宽度。focused 态把 searchWrap 两侧 padding 从 26 收到 12（左右各
    *  挤掉 14pt），搜索框宽度跟着补回 28pt。 */
   const { width: windowWidth } = useWindowDimensions();
+  /** 本屏容器实际宽度（onLayout 实测）。手机/iPhone = 全屏宽；iPad 侧栏模式下 TodayScreen 处在
+   *  主区 pane 里 = 全屏宽−侧栏。底部搜索框宽度按它算（而非 windowWidth），否则在主区里会按全屏宽
+   *  算、右侧戳出 pane。未量到时（首帧）回退 windowWidth。 */
+  const [containerWidth, setContainerWidth] = useState(0);
+  const layoutWidth = containerWidth > 0 ? containerWidth : windowWidth;
   const SEARCH_WRAP_PADDING_H = 26;
   /** 方角屏 resting padding：对齐顶部圆钮（topBar paddingHorizontal = 16），不再做全宽 12。 */
   const SEARCH_WRAP_PADDING_H_SQUARE = 16;
@@ -550,11 +562,11 @@ export function TodayScreen() {
     : SEARCH_WRAP_PADDING_H;
   const searchExpandedWidth = Math.max(
     FAB_SIZE,
-    windowWidth - searchRestingPaddingH * 2 - SEARCH_ROW_GAP - FAB_SIZE
+    layoutWidth - searchRestingPaddingH * 2 - SEARCH_ROW_GAP - FAB_SIZE
   );
   const searchExpandedWidthFocused = Math.max(
     FAB_SIZE,
-    windowWidth - SEARCH_WRAP_PADDING_H_FOCUSED * 2 - SEARCH_ROW_GAP - FAB_SIZE
+    layoutWidth - SEARCH_WRAP_PADDING_H_FOCUSED * 2 - SEARCH_ROW_GAP - FAB_SIZE
   );
 
   /* 整个搜索胶囊（不止 TextInput 那一块）点哪都能进输入态。BouncyGlassCard / 非 glass 路径
@@ -792,6 +804,14 @@ export function TodayScreen() {
     </View>
   );
 
+  /** 当前可见对话切片 + 是否还有更多 */
+  const visibleConvs = convList.slice(0, convVisibleCount);
+  const hasMoreConvs = convVisibleCount < convList.length;
+  /** 滚到底：再放出一页对话。纯切片，无网络；位置不跳变（尾部追加）。 */
+  const loadMoreConvs = useCallback(() => {
+    setConvVisibleCount((n) => (n < convList.length ? n + CONV_PAGE_SIZE : n));
+  }, [convList.length]);
+
   /** 列表尾：[结束今天 | 新建任务] 同行 + 对话段 */
   const ListFooter = (
     <View style={styles.footerWrap}>
@@ -828,38 +848,47 @@ export function TodayScreen() {
           <Text style={styles.convEmptyText}>暂无历史对话</Text>
         </View>
       ) : (
-        convList.map((c) => (
-          <TouchableOpacity
-            key={c.id}
-            style={styles.convRow}
-            onPress={() => onConvPress(c)}
-            onLongPress={() => setDeleteConvTarget(c)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.convRowMain}>
-              <View style={styles.convRowTitle}>
-                <Text style={styles.convRowText} numberOfLines={1}>
-                  {(c.title && c.title.trim()) || '新对话'}
-                </Text>
-                {chatV2RunningByConv[c.id] ? (
-                  <InboxRunSpinner />
-                ) : chatV2UnreadByConv[c.id] ? (
-                  <InboxUnreadCheck />
+        <>
+          {visibleConvs.map((c) => (
+            <TouchableOpacity
+              key={c.id}
+              style={styles.convRow}
+              onPress={() => onConvPress(c)}
+              onLongPress={() => setDeleteConvTarget(c)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.convRowMain}>
+                <View style={styles.convRowTitle}>
+                  <Text style={styles.convRowText} numberOfLines={1}>
+                    {(c.title && c.title.trim()) || '新对话'}
+                  </Text>
+                  {chatV2RunningByConv[c.id] ? (
+                    <InboxRunSpinner />
+                  ) : chatV2UnreadByConv[c.id] ? (
+                    <InboxUnreadCheck />
+                  ) : null}
+                </View>
+                {c.updated_at ? (
+                  <Text style={styles.convRowMeta} numberOfLines={1}>
+                    {formatTime(c.updated_at)}
+                  </Text>
                 ) : null}
               </View>
-              {c.updated_at ? (
-                <Text style={styles.convRowMeta} numberOfLines={1}>
-                  {formatTime(c.updated_at)}
-                </Text>
-              ) : null}
+              <Ionicons
+                name="chevron-forward"
+                size={18}
+                color={colors.textMuted}
+              />
+            </TouchableOpacity>
+          ))}
+          {/* 还有更多：占位加载行（滚到底由 onEndReached 触发 loadMoreConvs 放出下一页）。
+           *  渲染占位即代表"正在补充"，下一页几乎瞬时（纯切片），所以这就是过渡态。 */}
+          {hasMoreConvs ? (
+            <View style={styles.convLoading}>
+              <ActivityIndicator size="small" color={colors.primary} />
             </View>
-            <Ionicons
-              name="chevron-forward"
-              size={18}
-              color={colors.textMuted}
-            />
-          </TouchableOpacity>
-        ))
+          ) : null}
+        </>
       )}
 
       {/* 留出空间不让搜索框遮内容 */}
@@ -871,7 +900,15 @@ export function TodayScreen() {
    * 避免 SafeAreaView 吃 safe-area 首帧 0 的 insets 导致"先贴底后上移"闪。bottomInset 在 iOS 仍跟随
    * insets.bottom（键盘弹起时归 0、padding 自动消失，行为不变）。 */
   return (
-    <SafeAreaView style={[styles.container, { paddingBottom: bottomInset }]} edges={[]}>
+    <SafeAreaView
+      style={[styles.container, { paddingBottom: bottomInset }]}
+      edges={[]}
+      /* 量本屏容器实际宽度：iPad 侧栏模式下 = 主区 pane 宽（非全屏），底部搜索框据此算宽，避免戳出 pane。 */
+      onLayout={(e) => {
+        const w = e.nativeEvent.layout.width;
+        if (w > 0 && w !== containerWidth) setContainerWidth(w);
+      }}
+    >
     <KeyboardAvoidingView
       style={styles.kavInner}
       /* lib KAV 两端都用 'padding'：lib 内部走 WindowInsets.ime（Android）/
@@ -963,6 +1000,9 @@ export function TodayScreen() {
           )}
           onScroll={Platform.OS === 'ios' ? handleScroll : undefined}
           scrollEventThrottle={16}
+          /* 滚到底放出下一页对话（footer 里的对话段分页）。0.5 = 距底半屏即触发，提前补充更顺滑。 */
+          onEndReached={loadMoreConvs}
+          onEndReachedThreshold={0.5}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}

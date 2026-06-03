@@ -13,6 +13,8 @@ import type { DrawerActive } from '../../navigation/types';
 export type DrawerHandle = {
   open: () => void;
   close: () => void;
+  /** 切换抽屉/侧栏开合。compact 覆盖式抽屉与 iPad push 侧栏通用——汉堡按钮调它。 */
+  toggle: () => void;
   active: DrawerActive;
   setActive: (a: DrawerActive) => void;
   presentProfileSheet: () => void;

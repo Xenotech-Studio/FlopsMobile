@@ -9,13 +9,14 @@ import { HeaderCircleButton } from '../../components/HeaderCircleButton';
 import { useDrawer } from './DrawerContext';
 
 export function HamburgerButton() {
-  const { open } = useDrawer();
+  const { toggle } = useDrawer();
+  /** 始终显示：compact 用它开覆盖式抽屉；iPad sidebarShell 用它收起/展开 push 侧栏。 */
   return (
     <HeaderCircleButton
       ionicon="menu-outline"
       sfSymbol="line.3.horizontal"
       iconSize={26}
-      onPress={open}
+      onPress={toggle}
       hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
     />
   );

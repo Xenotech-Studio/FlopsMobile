@@ -6,6 +6,10 @@
  * real (空格分隔，跟在 platform 后)：
  *   - android real：优先选第一台 USB/wifi 真机（adb，排除 emulator-*），未找到报错
  *   - ios real：找第一台连接的 iPhone/iPad（xcrun xctrace），未找到报错
+ * ipad / iphone（替代 platform token）：等价于 ios:real，但按设备类型过滤真机。
+ *   - yarn dev ipad   → 找第一台连接的 iPad（隐含 real，无需再写 real）
+ *   - yarn dev iphone → 找第一台连接的 iPhone（隐含 real）
+ *   （模拟器不区分类型：要指定模拟器直接用 yarn dev ios "<Simulator Name>"。）
  * 模拟器名（任意非 platform/real/--quick 的位置参数，含空格请加引号）：
  *   - 仅 iOS 模拟器生效，覆盖 rn-dev.config.json 的 ios.simulator。
  *     例：yarn dev ios "iPhone 16 Pro"
@@ -130,6 +134,9 @@ const quick = argv.includes('--quick');
  *   yarn dev android:real    (兼容)
  * 内部统一规范化成 'ios' / 'android' / 'ios:real' / 'android:real' 传给 run-app.js。 */
 const VALID_PLATFORMS = ['ios', 'android'];
+/* ipad / iphone 是 iOS 真机的「设备类型」别名：隐含 ios:real，并按类型过滤连接的真机。
+ * 透传给 run-app.js 的是环境变量 FLOPS_IOS_DEVICE_KIND（'ipad' / 'iphone'）。 */
+const deviceKindArg = argv.find((a) => a === 'ipad' || a === 'iphone') || null;
 const platformArg = argv.find((a) =>
   VALID_PLATFORMS.includes(a) || a === 'ios:real' || a === 'android:real'
 );
@@ -142,6 +149,9 @@ const simulatorName =
       !a.startsWith('-') &&
       a !== 'real' &&
       a !== platformArg &&
+      a !== deviceKindArg &&
+      a !== 'ipad' &&
+      a !== 'iphone' &&
       !VALID_PLATFORMS.includes(a) &&
       a !== 'ios:real' &&
       a !== 'android:real'
@@ -151,7 +161,10 @@ const isDarwin = process.platform === 'darwin';
 const osDefault = isDarwin ? 'ios' : 'android';
 
 let target;
-if (platformArg === 'ios:real' || platformArg === 'android:real') {
+if (deviceKindArg) {
+  // yarn dev ipad / iphone：隐含 iOS 真机，类型靠 FLOPS_IOS_DEVICE_KIND 过滤。
+  target = 'ios:real';
+} else if (platformArg === 'ios:real' || platformArg === 'android:real') {
   // 老形式冒号已经带 real 后缀
   target = platformArg;
 } else {
@@ -164,6 +177,12 @@ if (target === 'android' || target === 'android:real') {
 }
 
 const runAppScript = path.resolve(__dirname, 'run-app.js');
+
+/* iOS 真机类型过滤透传给 run-app.js。concurrently 启动的子进程继承父进程 env，
+ * 所以在这里设到 process.env 即可（run-app.js 读 FLOPS_IOS_DEVICE_KIND）。 */
+if (deviceKindArg) {
+  process.env.FLOPS_IOS_DEVICE_KIND = deviceKindArg;
+}
 
 resolveMetroPort().then((port) => {
   const cacheFlag = quick ? '' : ' --reset-cache';

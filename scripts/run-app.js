@@ -75,12 +75,14 @@ function resolveSimulatorUdid(name) {
 }
 
 /**
- * 找第一台连接的 iOS 真机（iPhone/iPad）。用 `xcrun xctrace list devices` 解析；
+ * 找第一台连接的 iOS 真机。用 `xcrun xctrace list devices` 解析；
  * 真机行格式 `Name (Version) (UDID)`（两组括号），Mac 行只有 `Name (UDID)`（一组括号），
  * 模拟器在 "== Simulators ==" 段，过滤掉。
+ * @param {'ipad'|'iphone'|null} kind 设备类型过滤：'ipad' 只挑 iPad、'iphone' 只挑 iPhone、
+ *   null（默认）iPhone/iPad 都接受、返回第一台。用于 `yarn dev ipad` / `yarn dev iphone`。
  * @returns {{ name: string, udid: string } | null}
  */
-function getFirstRealIosDevice() {
+function getFirstRealIosDevice(kind = null) {
   try {
     const out = execSync('xcrun xctrace list devices', { encoding: 'utf8' });
     const lines = out.split(/\r?\n/);
@@ -106,6 +108,9 @@ function getFirstRealIosDevice() {
          之前用「跳过 Apple Watch」黑名单结果实际跑出来还是选中了 Watch UDID（可能 name 里有
          非常规空格 / 编码差异让 regex 失效），白名单更稳。 */
       if (!/iPhone|iPad/i.test(name)) continue;
+      // kind 过滤：指定了 ipad / iphone 就只接受对应类型，跳过另一类。
+      if (kind === 'ipad' && !/iPad/i.test(name)) continue;
+      if (kind === 'iphone' && !/iPhone/i.test(name)) continue;
       return { name, udid };
     }
   } catch (_) {
@@ -197,42 +202,56 @@ function maybeNukeDerivedDataAfterPodInstall() {
 }
 
 /**
- * iOS 防御性清理 #3：如果 React-Core-prebuilt 的 React.xcframework 模拟器 slice 是空的，
+ * iOS 防御性清理 #3：如果 React-Core-prebuilt 的 React.xcframework 缺失或某个 slice 被切空，
  * 自动跑 `pod install` 重新拉回来。
  *
- * 缘起：RNDeps 的 variant swap 脚本（Debug/Release 切换）在 build 中断 / 上次构建报错时
- * 会把 React.xcframework 切空（ios-arm64_x86_64-simulator/* 目录被清掉）但没复原。下次
- * build 直接报 `React.xcframework/ios-arm64_x86_64-simulator/*: No such file or directory`,
- * 看起来很吓人实则只需要 pod install 一下就好。
+ * 缘起（两类残留，本函数都覆盖）：
+ *  1. RNDeps 的 variant swap 脚本（Debug/Release 切换）在 build 中断 / 上次构建报错时会把某个
+ *     slice 切空（如 `ios-arm64_x86_64-simulator/*` 目录被清掉）但没复原。
+ *  2. 一次 Release/app-store 归档（yarn build ios testflight）后，整个 React.xcframework 可能被
+ *     清掉只剩 `.last_build_configuration` 标记文件。之后跑模拟器没事（用不到 device slice），
+ *     第一次跑真机才暴露缺 `ios-arm64`（device）slice。
+ *  两种都表现为 build 报 `React.xcframework/<slice>/*: No such file or directory`,
+ *  看起来很吓人实则只需要 pod install 一下就好。
  *
- * 这个函数自动检测 + 自动修。检查 simulator slice 目录是否存在且非空；空就 pod install。
+ * 检测策略：xcframework 根目录必须存在，且 device(ios-arm64) + simulator(ios-arm64_x86_64-simulator)
+ * 两个关键 slice 都存在且非空。健康的 pod install 这两个 slice 一定都在，所以缺任一即判定要修。
+ * （maccatalyst slice 不参与判定——我们不构建 Catalyst。）
  */
 function maybeRepairReactXcframework() {
-  const sliceDir = path.resolve(
+  const xcframeworkDir = path.resolve(
     __dirname,
     '..',
     'ios',
     'Pods',
     'React-Core-prebuilt',
     'React.xcframework',
-    'ios-arm64_x86_64-simulator',
   );
-  let needsRepair = false;
-  if (!fs.existsSync(sliceDir)) {
-    needsRepair = true;
-  } else {
+  /** 非空目录检查：目录存在且至少有一个条目。缺失 / 读不了 / 空都算「坏」。 */
+  const isNonEmptyDir = (dir) => {
     try {
-      const entries = fs.readdirSync(sliceDir);
-      if (entries.length === 0) needsRepair = true;
+      return fs.existsSync(dir) && fs.readdirSync(dir).length > 0;
     } catch {
-      needsRepair = true;
+      return false;
+    }
+  };
+
+  /** 必须健在的 slice：device + simulator。任一缺失/空 → 需要修。 */
+  const requiredSlices = ['ios-arm64', 'ios-arm64_x86_64-simulator'];
+  let reason = null;
+  if (!fs.existsSync(xcframeworkDir)) {
+    reason = 'React.xcframework 整个目录缺失（多见于上次 Release/TestFlight 归档后）';
+  } else {
+    const missing = requiredSlices.filter(
+      (slice) => !isNonEmptyDir(path.join(xcframeworkDir, slice))
+    );
+    if (missing.length > 0) {
+      reason = `React.xcframework slice 缺失/为空：${missing.join(', ')}（上次 build 被 RNDeps variant swap 切空了没复原）`;
     }
   }
-  if (!needsRepair) return;
+  if (!reason) return;
 
-  console.log(
-    '[ios] React.xcframework 模拟器 slice 为空（上次 build 被 RNDeps variant swap 切空了没复原），自动 pod install 修复…'
-  );
+  console.log(`[ios] ${reason}，自动 pod install 修复…`);
   const iosDir = path.resolve(__dirname, '..', 'ios');
   try {
     execSync('pod install', { cwd: iosDir, stdio: 'inherit' });
@@ -275,11 +294,14 @@ function run() {
     maybeNukeDerivedDataAfterPodInstall();
     args.push('--mode', 'Debug');
     if (target === 'ios:real') {
-      const device = getFirstRealIosDevice();
+      /** 设备类型过滤（yarn dev ipad / iphone）。dev.js 通过环境变量传入。 */
+      const deviceKind = (process.env.FLOPS_IOS_DEVICE_KIND || '').toLowerCase() || null;
+      const device = getFirstRealIosDevice(deviceKind);
       if (!device) {
+        const kindLabel = deviceKind === 'ipad' ? ' iPad' : deviceKind === 'iphone' ? ' iPhone' : '';
         console.error(
-          '\n[ios:real] 未检测到 iOS 真机。请确认：\n' +
-            '  1) iPhone/iPad 通过 USB 连上 Mac，且已在设备上「信任此电脑」\n' +
+          `\n[ios:real] 未检测到已连接的${kindLabel || ' iOS'}真机。请确认：\n` +
+            `  1)${kindLabel || ' iPhone/iPad'} 通过 USB 连上 Mac，且已在设备上「信任此电脑」\n` +
             '  2) Xcode 里已设过 development team / signing\n' +
             '  3) `xcrun xctrace list devices` 能列出该设备\n' +
             '或者用 yarn dev ios 跑模拟器。'
