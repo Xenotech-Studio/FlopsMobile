@@ -1104,11 +1104,15 @@ function createStyles(c: AppColors) {
       justifyContent: 'space-between',
       height: 60,
     },
-    /* iOS 26+ native UITabBar：320pt 宽 + 52pt 高。靠 BouncyTabBar 内部 autoresizingMask 自适应
-       （不要在 .mm 里加 layoutSubviews 强制 _tabBar.frame=self.bounds——会打断 iOS 26 floating pill
-       的自管理高度，导致高度塌陷）。 */
+    /* iOS 26+ native UITabBar：高 52pt；宽度走 flex:1 + maxWidth:320 自适应。
+       为什么不写死 width:320——窄屏（iPhone 13/14/15 非 Pro = 390pt）行宽只有 ~368，
+       320(tab)+60(FAB)=380 放不下，space-between 会把 FAB 挤出行右沿 ~12pt（看着 FAB 贴右边）。
+       flex:1 让 tab 吃掉「FAB 之外的剩余宽」，maxWidth:320 让宽屏（≥402pt）仍保持原来的 320 观感。
+       宽度自适应不影响高度——BouncyTabBar 内部 autoresizingMask 处理（别在 .mm 里加 layoutSubviews
+       强制 _tabBar.frame=self.bounds——会打断 iOS 26 floating pill 的自管理高度，导致高度塌陷）。 */
     nativeTabs: {
-      width: 320,
+      flex: 1,
+      maxWidth: 320,
       height: 52,
     },
     /* iOS < 26 / Android fallback：tabCapsuleFlex 这个样式已经废弃但保留兼容现有
