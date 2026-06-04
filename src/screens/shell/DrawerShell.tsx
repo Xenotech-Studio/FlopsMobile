@@ -41,6 +41,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Extrapolation,
   interpolate,
+  interpolateColor,
   runOnJS,
   useAnimatedProps,
   useAnimatedReaction,
@@ -62,7 +63,7 @@ import { ChatScreen } from '../ChatScreen';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { AnimatedCircleButton } from '../../components/AnimatedCircleButton';
 import { subscribeClientOutdated } from '../../utils/clientCompatBus';
-import { getScreenCornerRadius, inferScreenCornerRadius } from '../../utils/screenInfo';
+import { getScreenCornerRadius, inferScreenCornerRadius, isSquareScreen } from '../../utils/screenInfo';
 import { SHADOW_COLOR } from '../../theme/shadows';
 import { useResponsive } from '../../hooks/useResponsive';
 import { MainPaneNavigator } from '../../navigation/MainPaneNavigator';
@@ -73,10 +74,23 @@ import {
   type MainPaneController,
 } from './MainPaneContext';
 
-/** 抽屉完全展开时主页面右侧保留的 peek 宽度 */
-const PEEK_WIDTH = 64;
+/** 抽屉（左侧）展开宽度 —— 设计主值：抽屉宽度多少由这里定，右页露出多少 = 屏宽 − 此值（剩下的）。 */
+const DRAWER_WIDTH = 300;
+/** 右页至少保留的 peek 下限：窄屏上抽屉不至于吃满整屏，始终留一条可点空白/滑回。 */
+const MIN_PEEK_WIDTH = 56;
+/** 方形 / 近似方形屏（无物理圆角，按现有规则 detected===0）抽屉拉开卡片用的固定圆角。 */
+const SQUARE_SCREEN_CARD_RADIUS = 50;
+/** 右页卡片边缘描边全开时的颜色：Android 描边渲染更实更明显，用更淡的值。 */
+const MAIN_EDGE_COLOR_OPEN = Platform.OS === 'android' ? 'rgba(0,0,0,0.04)' : 'rgba(0,0,0,0.10)';
 /** 抽屉自身 dim 上限：progress=0 时最暗、progress=1 时全亮（参考 Claude app 的「刚拉开抽屉偏暗、展开到位才完全显形」效果） */
 const DRAWER_DIM_AT_CLOSED = 0.55;
+/** 主页面（露出的右页）蒙白上限：progress=1（抽屉全开）时最白、progress=0 时全清。
+ *  抽屉态下右页蒙一层半透明白「褪到背景」，凸显焦点在抽屉、右页是待返回的背景。 */
+const MAIN_DIM_AT_OPEN = 0.6;
+/** 抽屉内容限宽 = 露出区宽 − 此值。设 0：容器右缘正好贴右页左缘，灰框左右留白都由 DrawerContent 内的
+ *  scrollContent.paddingHorizontal(16) 提供 → 灰框离屏左缘 / 离右页边缘相等(各 16)。
+ *  露出区宽 = maxTranslateX = min(DRAWER_WIDTH, winWidth − MIN_PEEK_WIDTH)。对话标题靠 numberOfLines 在此宽度内省略。 */
+const DRAWER_CONTENT_RIGHT_GAP = 2;
 /** 左缘热区宽度。iOS 加宽到 40 让手指更容易触发（接近 iOS 原生返回手势的触发区）。 */
 const LEFT_EDGE_STRIP_WIDTH = Platform.OS === 'android' ? 56 : 40;
 /** 抽屉 commit 阈值：translation 或 velocity 任一过就 commit。对齐 iOS 原生返回手势体感:
@@ -164,11 +178,18 @@ export function DrawerShell() {
     };
   }, []);
 
-  /** 主页面完全展开时的圆角：优先用 native 实测（仅 Android 12+），否则用 inferScreenCornerRadius 查表兜底 */
-  const mainRadiusOpen = useMemo(
-    () => (nativeCornerRadius > 0 ? nativeCornerRadius : inferScreenCornerRadius(insets.top)),
-    [nativeCornerRadius, insets.top]
-  );
+  /** 主页面完全展开时的圆角：优先用 native 实测（仅 Android 12+），否则用 inferScreenCornerRadius 查表兜底。
+   *  方形 / 近似方形屏（按现有判定规则 detected===0，无物理圆角）：抽屉拉开的卡片不用真实圆角(=0 方角难看)，
+   *  改用固定值 SQUARE_SCREEN_CARD_RADIUS(50)。圆角屏仍用真实测得/查表值。 */
+  const mainRadiusOpen = useMemo(() => {
+    /* 方形/近似方形屏判定走跟今日页搜索框「全宽」同一套 isSquareScreen（圆角 < 20）——
+       关键：不能只看 detected===0，因为 Android native 实测会回一个很小的真实圆角(>0 但 <20)，
+       那种屏搜索框是全宽的、卡片也该用固定 50，而不是那个小真实圆角。 */
+    if (isSquareScreen(insets.top, nativeCornerRadius > 0 ? nativeCornerRadius : null)) {
+      return SQUARE_SCREEN_CARD_RADIUS;
+    }
+    return nativeCornerRadius > 0 ? nativeCornerRadius : inferScreenCornerRadius(insets.top);
+  }, [nativeCornerRadius, insets.top]);
 
   /** 抽屉展开比例：0 = 关闭，1 = 完全展开。reanimated shared value，UI 线程驱动动画。
    *  仅 compact（手机覆盖式抽屉）用。 */
@@ -322,8 +343,11 @@ export function DrawerShell() {
    *  一级页左上角汉堡已能开合侧栏，二级页左上角是返回键才需要这个钮兜底。grabber 上报。 */
   const [mainPaneSecondary, setMainPaneSecondary] = useState(false);
 
-  /** 主页面 translateX 最大值 = 屏宽 - peek */
-  const maxTranslateX = winWidth - PEEK_WIDTH;
+  /** 主页面 translateX 最大值 = 抽屉宽度（设计主值 DRAWER_WIDTH），即抽屉露出区宽度。
+   *  窄屏夹断：抽屉宽不超过「屏宽 − 最小 peek」，保证右页始终留一条可点/可滑回的空白。 */
+  const maxTranslateX = Math.min(DRAWER_WIDTH, winWidth - MIN_PEEK_WIDTH);
+  /** 抽屉内容限宽：露出区宽 − 右留白。DrawerContent 包在此宽度里，高亮/标题按露出区布局，不戳右页背后。 */
+  const drawerContentWidth = maxTranslateX - DRAWER_CONTENT_RIGHT_GAP;
 
   /** 打开 / 关闭操作。haptic 立即触发 + progress spring 动画。没 JS state 要同步，
    *  spring 不需要 completion callback。 */
@@ -592,9 +616,22 @@ export function DrawerShell() {
    *  系统物理圆角裁掉照样圆，打开时圆角匹配设备。ramp 区间小，离开 0 的一瞬即到位、视觉无突变。 */
   const animatedMainInnerStyle = useAnimatedStyle(() => {
     return {
-      borderRadius: interpolate(progress.value, [0, 0.06], [0, mainRadiusOpen], 'clamp'),
+      /* 全开圆角偷偷比屏幕物理圆角大 5%：让卡片圆弧在视觉上「包住」屏幕圆角，两道弧不贴太近显局促。 */
+      borderRadius: interpolate(progress.value, [0, 0.06], [0, mainRadiusOpen * 1.05], 'clamp'),
+      /* 边缘描边：随 progress 从透明渐显到比阴影略重的黑，凸显右页卡片边。关闭态透明 → 全屏时不露线。
+         Android 描边渲染更实/更明显，用更淡的值（iOS 0.10 / Android 0.04）。 */
+      borderColor: interpolateColor(
+        progress.value,
+        [0, 0.06, 1],
+        ['rgba(0,0,0,0)', MAIN_EDGE_COLOR_OPEN, MAIN_EDGE_COLOR_OPEN]
+      ),
     };
   });
+
+  /** 主页面 dim：抽屉越开右页越暗（progress=0 全亮、=1 最暗）。叠在右页内容上、不吞 touch。 */
+  const animatedMainDimStyle = useAnimatedStyle(() => ({
+    opacity: progress.value * MAIN_DIM_AT_OPEN,
+  }));
 
   /** iOS：主页面阴影随 progress 平滑显隐（progress=0 完全无阴影，progress 一离开 0 就拉到峰值）。
    *  参考 Claude app：阴影很柔和、低不透明，仅作边缘层次提示而不是强黑边。 */
@@ -603,7 +640,7 @@ export function DrawerShell() {
       shadowOpacity: interpolate(
         progress.value,
         [0, 0.05, 1],
-        [0, 0.08, 0.08],
+        [0, 0.10, 0.10],
         Extrapolation.CLAMP
       ),
     };
@@ -763,7 +800,8 @@ export function DrawerShell() {
          *  从 progress=1 滑到 0.5 这刻祖先 view 失活会打断进行中的 pan，造成跨阈值卡顿。 */}
         <View style={styles.drawerBack} pointerEvents="box-none">
           <GestureDetector gesture={closeGestureOnDrawer}>
-            <View style={StyleSheet.absoluteFill}>
+            {/* 限宽到露出区：高亮/标题按露出宽度布局，不再戳到右页背后，标题提前省略。 */}
+            <View style={[styles.drawerContentClip, { width: drawerContentWidth }]}>
               <DrawerContent />
             </View>
           </GestureDetector>
@@ -784,8 +822,8 @@ export function DrawerShell() {
               ? [
                   {
                     shadowColor: SHADOW_COLOR,
-                    shadowOffset: { width: -1, height: 0 },
-                    shadowRadius: 8,
+                    shadowOffset: { width: -2, height: 0 },
+                    shadowRadius: 4,
                   },
                   animatedShadowStyle,
                 ]
@@ -807,6 +845,12 @@ export function DrawerShell() {
             ]}
           >
             {activeElement}
+
+            {/* 主页面 dim：抽屉越开右页越暗，凸显焦点在抽屉。pointerEvents none 不挡下方手势捕获层。 */}
+            <Animated.View
+              style={[styles.mainDim, animatedMainDimStyle]}
+              pointerEvents="none"
+            />
 
             {/* 透明手势捕获层：抽屉开时接管点击关 + 左滑关。
              *  pointerEvents 用 useAnimatedProps 跟 progress.value 在 UI 线程切，progress > 0.5
@@ -880,6 +924,7 @@ const styles = StyleSheet.create({
     width: DIVIDER_TOGGLE_W,
     height: DIVIDER_TOGGLE_H,
     borderRadius: DIVIDER_TOGGLE_W / 2,
+    borderCurve: 'continuous',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -901,10 +946,29 @@ const styles = StyleSheet.create({
   mainOuter: {
     ...StyleSheet.absoluteFillObject,
   },
-  /** 内层：承载 borderRadius + overflow:hidden 来裁剪 children；shadow 不放这里 */
+  /** 内层：承载 borderRadius + overflow:hidden 来裁剪 children；shadow 不放这里。
+   *  borderWidth 常驻、borderColor 由 animatedMainInnerStyle 随 progress 渐显（关闭态透明）。 */
   mainInner: {
     flex: 1,
     overflow: 'hidden',
+    /* Android 边线渲染更实，用 hairline；iOS 用 1pt。颜色由 animatedMainInnerStyle 渐显。 */
+    borderWidth: Platform.OS === 'android' ? StyleSheet.hairlineWidth : 1,
+    borderColor: 'rgba(0,0,0,0)',
+    /* iOS continuous corner curve（squircle）：圆弧↔直线 G2 连续过渡，跟系统圆角同质感。
+       默认 'circular' 是正圆弧、交接处曲率突变，看着「不够顺」。Android 忽略此 prop。 */
+    borderCurve: 'continuous',
+  },
+  /** 抽屉本体限宽容器：钉左缘、撑满高、宽度由 drawerContentWidth 指定（露出区 − 右留白）。 */
+  drawerContentClip: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+  },
+  /** 主页面蒙白遮罩：铺满右页、纯白、opacity 由 animatedMainDimStyle 跟 progress 走（抽屉态褪到背景） */
+  mainDim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#fff',
   },
   drawerDim: {
     ...StyleSheet.absoluteFillObject,

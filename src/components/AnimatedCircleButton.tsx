@@ -304,6 +304,10 @@ function AndroidWorkletBouncy({
     let g = Gesture.Tap()
       .enabled(!disabled)
       .maxDuration(10000)
+      /* maxDistance 放大：按下后手指在按钮范围内略微移动不要判定 tap 失败而回弹缩小——
+       * 跟 iOS legacy（touchesMoved 不动、保持放大）一致。只在手指真正离开按钮(shouldCancelWhenOutside
+       * 默认 true)或松手时才结束。父级 ScrollView/Pan 抢走手势仍会 cancel → onFinalize 正常回弹。 */
+      .maxDistance(10000)
       .onBegin(() => {
         'worklet';
         scale.value = withSpring(pressScale, PRESS_SPRING);

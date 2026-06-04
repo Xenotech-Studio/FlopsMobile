@@ -1,6 +1,11 @@
 import { Platform, StyleSheet } from 'react-native';
 import { shadowCircleButtonThemed, shadowMenu } from '../../theme/shadows';
-import { HEADER_CIRCLE_BTN_SIZE, CHAT_COMPOSER_SEND_BTN_SIZE } from '../../theme/layout';
+import {
+  HEADER_CIRCLE_BTN_SIZE,
+  CHAT_COMPOSER_SEND_BTN_SIZE,
+  COMPOSER_PILL_SIZE,
+  COMPOSER_CARD_RADIUS,
+} from '../../theme/layout';
 import { TASK_FONT_SIZE_TITLE } from '../../theme/typography';
 import type { AppColors } from '../../theme/appColors';
 
@@ -20,11 +25,8 @@ const COMPOSER_META_ROW_PADDING_RIGHT = 32;
  * Composer 设计语言：所有跟单行胶囊高度（COMPOSER_PILL_SIZE）相关的
  * padding / inset 都从这里派生，改了主值其它自动跟。
  * ============================================================ */
-/** 主胶囊高度 = 顶栏圆钮直径，全局视觉锚点。改这个值会带动 + 内嵌、padding 等。 */
-const COMPOSER_PILL_SIZE = HEADER_CIRCLE_BTN_SIZE + 0;
-/** Card 圆角 = 半个胶囊高度（short 模式整体是 capsule、tall 模式上下两端也是相同半径）。
- *  iOS 26 BouncyGlassCard 的 cornerRadius prop 用这个值，跟 short/tall View 的 borderRadius 一致。 */
-export const COMPOSER_CARD_RADIUS = COMPOSER_PILL_SIZE / 2;
+/** Card 圆角（= COMPOSER_PILL_SIZE/2）。从 layout 统一常量 re-export，跟今日页搜索框 / FAB 同一套。 */
+export { COMPOSER_CARD_RADIUS };
 /** 内嵌 + / ⏹ 圆钮尺寸 */
 const COMPOSER_PLUS_BTN_SIZE = 32;
 /** + center 到 card 上 / 下 / 左 三边的距离 = COMPOSER_PILL_SIZE / 2；
@@ -832,8 +834,8 @@ export function createChatStyles(c: AppColors) {
   composerInput: {
     flex: 1,
     backgroundColor: c.inputBg,
-    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
-    minHeight: HEADER_CIRCLE_BTN_SIZE,
+    borderRadius: COMPOSER_CARD_RADIUS,
+    minHeight: COMPOSER_PILL_SIZE,
     paddingHorizontal: 20,
     paddingVertical: 14,
     fontSize: 16,

@@ -15,12 +15,14 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 import { shadowFabThemed } from '../theme/shadows';
+import { COMPOSER_PILL_SIZE } from '../theme/layout';
 import {
   AnimatedCircleButton,
   type AnimatedCircleButtonMenuAction,
 } from './AnimatedCircleButton';
 
-export const FAB_SIZE = 52;
+/** FAB 直径 = 底部漂浮 UI 统一尺寸（composer 胶囊 / 今日页搜索框同一套）。 */
+export const FAB_SIZE = COMPOSER_PILL_SIZE;
 
 type Props = {
   ionicon: string;

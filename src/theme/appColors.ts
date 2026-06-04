@@ -120,7 +120,7 @@ export function withLightPlatformListCanvas(
     backgroundSecondary: LIGHT_LIST_CANVAS_ANDROID,
     chatScreenBackground: LIGHT_LIST_CANVAS_ANDROID,
     conversationListBackground: LIGHT_LIST_CANVAS_ANDROID,
-    drawerBackground: LIGHT_DRAWER_CANVAS_ANDROID,
+    /* 抽屉背景不再单独加深，跟 iOS 一致（用基础 LIGHT_DRAWER_CANVAS_IOS） */
     headerBarBottomBorderColor: colors.androidCircleFabHairline,
   };
 }

@@ -12,12 +12,28 @@ import { Platform } from 'react-native';
  * 注：composer 胶囊高度（COMPOSER_PILL_SIZE，定义在 ChatScreen.styles.ts）
  *     在此基础上 +6 让 composer 略大于圆钮，输入区比按钮更显眼。
  */
-export const HEADER_CIRCLE_BTN_SIZE = 52;
+export const HEADER_CIRCLE_BTN_SIZE = 48;
 
 /**
- * 聊天发送钮直径：稍大于 {@link HEADER_CIRCLE_BTN_SIZE}，深色实心钮视觉更重故略放大一圈。
+ * 角钮内图标尺寸：由 {@link HEADER_CIRCLE_BTN_SIZE} 乘常数算出，跟按钮直径联动——
+ * 改按钮大小时图标自动等比缩放，不用各处手填数字。
+ *  - Ionicons（iOS<26 / Android 渲染）：≈ 0.42 × 直径
+ *  - SF Symbol（iOS26 glass 原生 icon）：≈ 0.31 × 直径（系统 nav button 一贯偏小）
+ */
+export const HEADER_CIRCLE_IONICON_SIZE = Math.round(HEADER_CIRCLE_BTN_SIZE * 0.42);
+export const HEADER_CIRCLE_SF_ICON_SIZE = Math.round(HEADER_CIRCLE_BTN_SIZE * 0.31);
+
+/**
+ * 聊天发送钮直径：深色实心钮视觉更重故略放大一圈。
  */
 export const CHAT_COMPOSER_SEND_BTN_SIZE = 48;
+
+/**
+ * 底部漂浮 UI 统一高度 + 圆角锚点：chat composer 单行胶囊、今日页底部搜索框、FAB 都用这一套，
+ * 视觉语言一致。**独立于 {@link HEADER_CIRCLE_BTN_SIZE}**（顶栏圆钮）——改顶栏钮直径不影响底部这套。
+ */
+export const COMPOSER_PILL_SIZE = 52;
+export const COMPOSER_CARD_RADIUS = COMPOSER_PILL_SIZE / 2;
 
 /** 任务列表：第一行距离 header 下方的额外间距（iOS / 默认） */
 export const LIST_TOP_EXTRA_BASE = 5;
@@ -67,5 +83,5 @@ export const TASK_ROW_PADDING_VERTICAL = 14;
 /** 任务行：左侧内边距 */
 export const TASK_ROW_PADDING_LEFT = 16;
 
-/** 任务行：右侧内边距（略大以免文字贴边） */
-export const TASK_ROW_PADDING_RIGHT = 44;
+/** 任务行：右侧内边距（行内，叠加在外层 list paddingHorizontal 之上；够防贴边即可，不必过大） */
+export const TASK_ROW_PADDING_RIGHT = 18;

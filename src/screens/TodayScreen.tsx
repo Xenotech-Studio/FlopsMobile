@@ -83,6 +83,7 @@ import { filterTasksByStatusLevel } from '../utils/taskFilters';
 import { BlurHeaderBackground, BlurFooterBackground } from '../components/BlurHeaderBackground';
 import { PullToRefreshRing } from '../components/PullToRefreshRing';
 import { InboxRunSpinner, InboxUnreadCheck } from '../components/InboxListIndicators';
+import { ConversationRow } from '../components/ConversationRow';
 import { HamburgerButton } from './shell/HamburgerButton';
 import {
   AnimatedCircleButton,
@@ -96,6 +97,10 @@ import type { AppColors } from '../theme/appColors';
 import { shadowCircleButtonThemed, shadowMenu, shadowSoft } from '../theme/shadows';
 import {
   HEADER_CIRCLE_BTN_SIZE,
+  HEADER_CIRCLE_IONICON_SIZE,
+  HEADER_CIRCLE_SF_ICON_SIZE,
+  COMPOSER_PILL_SIZE,
+  COMPOSER_CARD_RADIUS,
   LIST_PADDING_BOTTOM_WITH_FOOTER,
   bottomInsetTotal,
 } from '../theme/layout';
@@ -103,6 +108,7 @@ import { isSquareScreen, getScreenCornerRadiusSync, getBottomInsetSync } from '.
 import {
   TASK_FONT_SIZE_SMALL,
   TASK_FONT_SIZE_TITLE,
+  TASK_FONT_SIZE_BODY,
 } from '../theme/typography';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -812,22 +818,16 @@ export function TodayScreen() {
     setConvVisibleCount((n) => (n < convList.length ? n + CONV_PAGE_SIZE : n));
   }, [convList.length]);
 
-  /** 列表尾：[结束今天 | 新建任务] 同行 + 对话段 */
+  /** 列表尾：[结束今天]（新建任务已去掉，走右下角 FAB）+ 对话段 */
   const ListFooter = (
     <View style={styles.footerWrap}>
-      <View style={styles.taskActionRow}>
-        {showEndToday ? (
-          <TouchableOpacity style={styles.endTodayBtn} onPress={endToday} activeOpacity={0.8}>
+      {showEndToday ? (
+        <View style={styles.taskActionRow}>
+          <AnimatedCircleButton iosForceWorklet style={styles.endTodayBtn} onPress={endToday}>
             <Text style={styles.endTodayText}>结束今天</Text>
-          </TouchableOpacity>
-        ) : (
-          <View />
-        )}
-        <TouchableOpacity style={styles.pillBtn} onPress={onCreateTask} activeOpacity={0.85}>
-          <Ionicons name="add" size={20} color={colors.onPrimary} />
-          <Text style={styles.pillBtnText}>新建任务</Text>
-        </TouchableOpacity>
-      </View>
+          </AnimatedCircleButton>
+        </View>
+      ) : null}
 
       <View style={styles.sectionRow}>
         <Text style={styles.sectionTitle}>对话</Text>
@@ -850,36 +850,15 @@ export function TodayScreen() {
       ) : (
         <>
           {visibleConvs.map((c) => (
-            <TouchableOpacity
+            <ConversationRow
               key={c.id}
-              style={styles.convRow}
+              title={(c.title && c.title.trim()) || '新对话'}
+              timeLabel={c.updated_at ? formatTime(c.updated_at) : null}
+              running={chatV2RunningByConv[c.id]}
+              unread={chatV2UnreadByConv[c.id]}
               onPress={() => onConvPress(c)}
               onLongPress={() => setDeleteConvTarget(c)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.convRowMain}>
-                <View style={styles.convRowTitle}>
-                  <Text style={styles.convRowText} numberOfLines={1}>
-                    {(c.title && c.title.trim()) || '新对话'}
-                  </Text>
-                  {chatV2RunningByConv[c.id] ? (
-                    <InboxRunSpinner />
-                  ) : chatV2UnreadByConv[c.id] ? (
-                    <InboxUnreadCheck />
-                  ) : null}
-                </View>
-                {c.updated_at ? (
-                  <Text style={styles.convRowMeta} numberOfLines={1}>
-                    {formatTime(c.updated_at)}
-                  </Text>
-                ) : null}
-              </View>
-              <Ionicons
-                name="chevron-forward"
-                size={18}
-                color={colors.textMuted}
-              />
-            </TouchableOpacity>
+            />
           ))}
           {/* 还有更多：占位加载行（滚到底由 onEndReached 触发 loadMoreConvs 放出下一页）。
            *  渲染占位即代表"正在补充"，下一页几乎瞬时（纯切片），所以这就是过渡态。 */}
@@ -950,9 +929,9 @@ export function TodayScreen() {
         <AnimatedCircleButton
           style={styles.headerCircleBtn}
           onPress={onCalendarPress}
-          iosSfSymbol={{ name: 'calendar', size: 16, color: colors.textSecondary }}
+          iosSfSymbol={{ name: 'calendar', size: HEADER_CIRCLE_SF_ICON_SIZE, color: colors.textSecondary }}
         >
-          <Ionicons name="calendar-outline" size={22} color={colors.textSecondary} />
+          <Ionicons name="calendar-outline" size={HEADER_CIRCLE_IONICON_SIZE} color={colors.textSecondary} />
         </AnimatedCircleButton>
       </View>
 
@@ -1082,7 +1061,7 @@ export function TodayScreen() {
             {IS_IOS_LIQUID_GLASS ? (
               <BouncyGlassCard
                 style={[styles.searchInputBoxGlass, styles.searchInputBoxFill]}
-                cornerRadius={26}
+                cornerRadius={COMPOSER_CARD_RADIUS}
                 interactive
                 /* 整个胶囊点哪都进输入态 —— TextInput 物理区域比胶囊小（左边 icon 占
                    一部分），点 icon 区或左边空白本来 TextInput 抓不到 focus。BouncyGlassCard
@@ -1343,9 +1322,10 @@ function createStyles(c: AppColors) {
       alignItems: 'center',
       justifyContent: 'space-between',
       marginVertical: 8,
+      paddingHorizontal: 18,
     },
     sectionTitle: { fontSize: 14, fontWeight: '600', color: c.textSecondary },
-    errorBar: { backgroundColor: c.errorBg, padding: 12, borderRadius: 8, marginBottom: 8 },
+    errorBar: { backgroundColor: c.errorBg, padding: 12, borderRadius: 8, marginBottom: 8, marginHorizontal: 18 },
     errorText: { fontSize: 14, color: c.danger, textAlign: 'center' },
     taskEmpty: { paddingVertical: 32, alignItems: 'center' },
     taskEmptyText: {
@@ -1353,23 +1333,24 @@ function createStyles(c: AppColors) {
       fontSize: TASK_FONT_SIZE_SMALL,
       color: c.placeholder,
     },
-    /** 整列表横向缩进 22pt（footerWrap/headerWrap 原本各自 16；统一收到容器一级，让
-     *  "今日 X 个任务"段头、各任务行、结束今天/新建任务行、"对话"段头与各 conv 行
-     *  全部对齐到 x=22，跟顶栏左上角圆形汉堡按钮（x=16 起）左沿对齐 + 圆形视觉权重 ~6。
-     *  ProjectScreen 同类列表为 20，这里略再深一档。 */
-    listContent: { paddingHorizontal: 22, paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
+    /** 列表不做页面级横向 padding（=0）：每类内容各自 padding 16，任务行全宽顶到两端
+     *  （按下高亮也整条铺满），圆环靠卡片自身默认内边距(16)落在 x=16，跟段标题/对话行同一线。 */
+    listContent: { paddingHorizontal: 0, paddingBottom: LIST_PADDING_BOTTOM_WITH_FOOTER },
     footerWrap: { paddingTop: 12 },
     taskActionRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'space-between',
+      justifyContent: 'flex-start',
       marginBottom: 12,
+      paddingHorizontal: 18,
     },
     endTodayBtn: {
+      height: HEADER_CIRCLE_BTN_SIZE,
       paddingHorizontal: 20,
-      paddingVertical: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
       backgroundColor: c.surface,
-      borderRadius: 20,
+      borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
       borderWidth: 1,
       borderColor: c.androidCircleFabHairline,
       ...Platform.select({ ios: { ...shadowSoft } }),
@@ -1386,13 +1367,16 @@ function createStyles(c: AppColors) {
       alignItems: 'center',
       gap: 8,
       paddingVertical: 12,
+      paddingHorizontal: 16,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: c.conversationListSeparator,
     },
     convRowMain: { flex: 1, minWidth: 0 },
     convRowTitle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    convRowText: { flex: 1, minWidth: 0, fontSize: 15, color: c.textPrimary, fontWeight: '500' },
-    convRowMeta: { fontSize: 12, color: c.textMuted, marginTop: 2 },
+    /* 字号/字重跟上方任务标题一致（TASK_FONT_SIZE_BODY=17 / 400） */
+    convRowText: { flex: 1, minWidth: 0, fontSize: TASK_FONT_SIZE_BODY, color: c.textPrimary, fontWeight: '400' },
+    /* 灰色跟任务副标题同一个灰（c.placeholder），而非更深的 textMuted */
+    convRowMeta: { fontSize: 12, color: c.placeholder, marginTop: 2 },
     refreshIndicatorFixed: {
       position: 'absolute',
       left: 0,
@@ -1443,7 +1427,7 @@ function createStyles(c: AppColors) {
     /* searchInputAnim：搜索框外层 wrapper，宽度由 searchBoxAnimatedStyle 单方驱动（不
        走 flex）。height 跟 FAB 等高 (52pt)，菜单打开收成 52pt 圆。flexShrink:0 防止
        搜索框被 searchRow 的 flex layout 二次压缩，跟 animated width 打架。 */
-    searchInputAnim: { height: 52, flexShrink: 0, justifyContent: 'center' },
+    searchInputAnim: { height: COMPOSER_PILL_SIZE, flexShrink: 0, justifyContent: 'center' },
     /* searchInputBoxFill：让内部 BouncyGlassCard / View 撑满 searchInputAnim 的宽度（动画
        驱动），而不是 flex:1（跟 parent flex 抢宽）。 */
     searchInputBoxFill: { width: '100%' },
@@ -1481,8 +1465,8 @@ function createStyles(c: AppColors) {
       alignItems: 'center',
       paddingLeft: 17,
       paddingRight: 14,
-      height: 52,
-      borderRadius: 26,
+      height: COMPOSER_PILL_SIZE,
+      borderRadius: COMPOSER_CARD_RADIUS,
       backgroundColor: c.surface,
       ...shadowMenu,
     },
@@ -1495,7 +1479,7 @@ function createStyles(c: AppColors) {
       alignItems: 'center',
       paddingLeft: 17,
       paddingRight: 14,
-      height: 52,
+      height: COMPOSER_PILL_SIZE,
     },
     searchInput: {
       flex: 1,

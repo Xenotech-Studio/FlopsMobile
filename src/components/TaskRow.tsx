@@ -80,6 +80,9 @@ type TaskRowProps = {
   onToggleCompletion: () => void;
   /** 今日页拖拽排序。500ms 可拖拽（iOS 直接进拖拽，Android 移动后拖拽）；同时开始剩余 500ms 计时，无大幅移动则满 1000ms 出菜单。 */
   drag?: () => void;
+  /** 行左内边距覆盖：list 自带 paddingHorizontal 的页面（今日页）传小值让圆环对齐内容左缘；
+   *  list 无内边距的页面（项目页）不传，用卡片自身默认 16。长按预览卡片也走默认 16。 */
+  rowPaddingLeft?: number;
 };
 
 /** 直接拖拽前需按住的最短时间（ms） */
@@ -97,6 +100,7 @@ export function TaskRow({
   onPress,
   onToggleCompletion,
   drag,
+  rowPaddingLeft,
 }: TaskRowProps) {
   const { colors } = useAppTheme();
   const rowDragReadyStyle = useMemo(
@@ -282,6 +286,7 @@ export function TaskRow({
             onRingPress={handleToggle}
             priorityLabel={priority ? priorityLabels[priority] : null}
             priorityColor={priority ? priorityColors[priority] : null}
+            rowPaddingLeft={rowPaddingLeft}
           />
         </TouchableOpacity>
       </View>

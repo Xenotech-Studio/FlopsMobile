@@ -51,7 +51,7 @@ import {
   type ConversationListItem,
   type FlowtaskFolder,
 } from '../api';
-import { InboxRunSpinner, InboxUnreadCheck } from '../components/InboxListIndicators';
+import { ConversationRow } from '../components/ConversationRow';
 import type { RootStackParamList } from '../navigation/types';
 import { fetchTasks, type TaskItem } from '../taskApi';
 import { TaskRow } from '../components/TaskRow';
@@ -580,28 +580,14 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
                       </View>
                     ) : (
                       visibleConvs.map((c) => (
-                        <TouchableOpacity
+                        <ConversationRow
                           key={c.id}
-                          style={styles.convRow}
+                          title={(c.title && c.title.trim()) || '新对话'}
+                          timeLabel={c.updated_at ? formatConvTime(c.updated_at) : null}
+                          running={c.chat_v2_running}
+                          unread={c.chat_v2_unread}
                           onPress={() => onConvPress(c)}
-                          activeOpacity={0.7}
-                        >
-                          <View style={styles.convRowTitle}>
-                            <Text style={styles.convRowText} numberOfLines={1}>
-                              {(c.title && c.title.trim()) || '新对话'}
-                            </Text>
-                            {c.chat_v2_running ? (
-                              <InboxRunSpinner />
-                            ) : c.chat_v2_unread ? (
-                              <InboxUnreadCheck />
-                            ) : null}
-                          </View>
-                          {c.updated_at ? (
-                            <Text style={styles.convRowMeta} numberOfLines={1}>
-                              {formatConvTime(c.updated_at)}
-                            </Text>
-                          ) : null}
-                        </TouchableOpacity>
+                        />
                       ))
                     )}
                   </ScrollView>
@@ -1033,7 +1019,8 @@ function createStyles(c: AppColors) {
     /** ScrollView 自身 flex:1 占固定空间 —— 外层尺寸跟内容长短无关，从根上断掉「内容增减
      *  触发父 layout pass → 上面 folder tabs 行抖动」的链路。 */
     convScrollOuter: { flex: 1 },
-    convScrollContent: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 120 },
+    /* paddingHorizontal 0：对话行(ConversationRow)自带 16，跟今日页同一套（行全宽 + 自 padding）。 */
+    convScrollContent: { paddingHorizontal: 0, paddingTop: 4, paddingBottom: 120 },
     convRow: {
       paddingVertical: 12,
       borderBottomWidth: StyleSheet.hairlineWidth,

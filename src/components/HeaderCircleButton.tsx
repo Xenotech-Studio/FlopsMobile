@@ -22,7 +22,11 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 import { shadowCircleButtonThemed } from '../theme/shadows';
-import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
+import {
+  HEADER_CIRCLE_BTN_SIZE,
+  HEADER_CIRCLE_IONICON_SIZE,
+  HEADER_CIRCLE_SF_ICON_SIZE,
+} from '../theme/layout';
 import {
   AnimatedCircleButton,
   type AnimatedCircleButtonMenuAction,
@@ -33,9 +37,9 @@ type Props = {
   ionicon: string;
   /** SF Symbol 名字（iOS 26+ glass 路径走这条；callsite 需保证 iOS 17+ 支持的 symbol） */
   sfSymbol: string;
-  /** Ionicons 渲染 size。默认 22（HEADER_CIRCLE_BTN_SIZE 内目视舒适尺寸） */
+  /** Ionicons 渲染 size。默认由按钮直径算出（HEADER_CIRCLE_IONICON_SIZE），跟按钮联动 */
   iconSize?: number;
-  /** SF Symbol 渲染 point size。默认 16（系统 nav button 一贯尺寸） */
+  /** SF Symbol 渲染 point size。默认由按钮直径算出（HEADER_CIRCLE_SF_ICON_SIZE） */
   sfSymbolSize?: number;
   /** Icon 颜色，默认 colors.textSecondary（hex 字符串，SF Symbol 用同一值） */
   color?: string;
@@ -55,8 +59,8 @@ type Props = {
 export function HeaderCircleButton({
   ionicon,
   sfSymbol,
-  iconSize = 22,
-  sfSymbolSize = 16,
+  iconSize = HEADER_CIRCLE_IONICON_SIZE,
+  sfSymbolSize = HEADER_CIRCLE_SF_ICON_SIZE,
   color,
   onPress,
   disabled,
