@@ -1070,9 +1070,12 @@ export function ChatScreen({
 
       const appendThinkingChunk = (chunk: string) => {
         if (!chunk) return;
-        const last = localBlocks[localBlocks.length - 1];
+        const lastIdx = localBlocks.length - 1;
+        const last = localBlocks[lastIdx];
         if (last && last.type === 'thinking' && !last.closed) {
-          last.content += chunk;
+          // 必须替换成新对象（而非原地 += content）：ThinkingBlockView 是 React.memo，
+          // 同引用会被 shallow compare 跳过 → 只显示第一个 token。
+          localBlocks[lastIdx] = { ...last, content: last.content + chunk };
         } else {
           localBlocks.push({
             type: 'thinking',
@@ -1085,9 +1088,10 @@ export function ChatScreen({
       };
 
       const closeOpenThinking = () => {
-        const last = localBlocks[localBlocks.length - 1];
+        const lastIdx = localBlocks.length - 1;
+        const last = localBlocks[lastIdx];
         if (last && last.type === 'thinking' && !last.closed) {
-          last.closed = true;
+          localBlocks[lastIdx] = { ...last, closed: true };
           syncBlocks();
         }
       };
