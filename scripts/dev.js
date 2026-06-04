@@ -24,35 +24,41 @@ const projectRoot = path.resolve(__dirname, '..');
 const configPath = path.join(projectRoot, 'rn-dev.config.json');
 const DEFAULT_METRO_PORT = 8081;
 
-function isPortInUse(port) {
+/* 端口可用性检测：用「实际 try-listen 绑定」而非 connect 探测。
+ * 原因：connect 探测（连不上=空闲）只能看「现在有没有 listener」，从探测到 Metro 真正 listen
+ * 之间有几秒窗口——两个 yarn dev 同时跑会都探测到 8081 空闲、都去用，第二个 Metro listen 才失败。
+ * try-listen 绑成功立刻释放并返回 true：既准确识别「已被占用」，窗口也比 connect 小得多。 */
+function canBindPort(port) {
   return new Promise((resolve) => {
-    const socket = new net.Socket();
-    const onDone = (inUse) => {
-      socket.destroy();
-      resolve(inUse);
-    };
-    socket.setTimeout(300);
-    socket.on('connect', () => onDone(true));
-    socket.on('timeout', () => onDone(false));
-    socket.on('error', () => onDone(false));
-    socket.connect(port, '127.0.0.1');
+    const server = net.createServer();
+    server.once('error', () => resolve(false)); // EADDRINUSE 等 → 不可用
+    server.once('listening', () => {
+      server.close(() => resolve(true));
+    });
+    /* 不指定 host：绑到通配地址（IPv6 :: + IPv4 0.0.0.0），跟 Metro 实际监听一致。
+       之前绑 '127.0.0.1'（仅 IPv4）会误判：Metro 监听 ':::8081'（IPv6 通配），IPv4 检测能绑成功
+       → 误以为空闲 → 第二个 dev 也用 8081 → Metro 绑 IPv6 时 EADDRINUSE。 */
+    server.listen(port);
   });
 }
 
 function findFreePort(startFrom) {
   return (async () => {
     for (let p = startFrom; p < 65535; p++) {
-      if (!(await isPortInUse(p))) return p;
+      if (await canBindPort(p)) return p;
     }
     return null;
   })();
 }
 
 function resolveMetroPort() {
-  return isPortInUse(DEFAULT_METRO_PORT).then((inUse) => {
-    if (!inUse) return DEFAULT_METRO_PORT;
+  /* 起始端口加一点随机抖动：两个 dev 几乎同秒启动时，从不同端口开始找，进一步降低撞车概率。
+   * 8081 默认仍优先（单开时端口稳定）；只有 8081 被占才进抖动搜索。 */
+  return canBindPort(DEFAULT_METRO_PORT).then((free) => {
+    if (free) return DEFAULT_METRO_PORT;
     console.log(`[dev] 端口 ${DEFAULT_METRO_PORT} 已被占用，自动寻找下一可用端口…`);
-    return findFreePort(DEFAULT_METRO_PORT + 1).then((port) => {
+    const jitterStart = DEFAULT_METRO_PORT + 1 + Math.floor(Math.random() * 8);
+    return findFreePort(jitterStart).then((port) => {
       if (port == null) {
         console.error('[dev] 未找到可用端口。\n');
         process.exit(1);
@@ -186,7 +192,7 @@ if (deviceKindArg) {
 
 resolveMetroPort().then((port) => {
   const cacheFlag = quick ? '' : ' --reset-cache';
-  const { result } = concurrently(
+  const { result, commands } = concurrently(
     [
       { command: `react-native start --port ${port}${cacheFlag}`, name: 'metro' },
       {
@@ -199,8 +205,49 @@ resolveMetroPort().then((port) => {
     {
       prefix: 'name',
       prefixLength: 8,
+      /* run-app 装完 app 就成功退出（不是常驻），所以不能 on 'success'——那会顺手杀掉 Metro。
+         只在某条命令失败时联动清理。killOthersOn 是新 API（killOthers 已废弃）。 */
+      killOthersOn: ['failure'],
+      restartTries: 0,
     }
   );
+
+  /* 关键：dev.js 退出时（无论什么原因）把 concurrently 起的子进程（尤其常驻的 Metro）一并杀掉，
+     不留僵尸 Metro 占端口 / 不留孤儿 dev 进程。
+     覆盖所有退出路径：
+       - SIGINT  = Ctrl-C
+       - SIGTERM = kill / 编辑器停止
+       - SIGHUP  = 关终端窗口 / shell 退出（这条是产生孤儿的主因——之前没处理，
+                   关窗口时 dev.js 收不到/没处理 SIGHUP，子进程脱离终端被 launchd 收养成孤儿）
+       - exit    = 兜底，任何正常/异常退出都再清一次 */
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    try {
+      commands.forEach((c) => c.kill('SIGTERM'));
+    } catch (_) {}
+  };
+  const onSignalExit = (code) => () => {
+    cleanup();
+    process.exit(code);
+  };
+  process.on('SIGINT', onSignalExit(130));
+  process.on('SIGTERM', onSignalExit(143));
+  process.on('SIGHUP', onSignalExit(129));
+  process.on('exit', cleanup); // 同步兜底：进程真正退出前最后清一次
+
+  /* 父进程死亡看门狗：信号不一定可靠（尤其暴力关终端 / 父被 SIGKILL 时子收不到 SIGHUP），
+     这是兜底——轮询自己的 ppid，一旦变成 1（= 原 shell 死了、被 launchd 收养 = 我成了孤儿），
+     立刻 cleanup + 退出。这正是之前那个 ppid=1 孤儿 dev 进程的场景，看门狗能主动自杀清掉。 */
+  const startPpid = process.ppid;
+  const orphanWatch = setInterval(() => {
+    if (process.ppid !== startPpid || process.ppid === 1) {
+      cleanup();
+      process.exit(129);
+    }
+  }, 2000);
+  orphanWatch.unref(); // 不让看门狗本身阻止进程正常退出
 
   result
     .then(() => process.exit(0))

@@ -75,55 +75,84 @@ function resolveSimulatorUdid(name) {
 }
 
 /**
- * 找第一台连接的 iOS 真机。用 `xcrun xctrace list devices` 解析；
+ * 用 devicectl 拿每台设备的连接方式（USB 插线 vs WiFi）。
+ * xctrace 不区分 transport，但 devicectl 的 JSON 有 connectionProperties.transportType
+ * （'wired' = 插线、'localNetwork' = WiFi）。返回「插线设备 UDID 集合」，选设备时插线优先。
+ * @returns {Set<string>} 插线设备的 UDID（大写）集合；拿不到则空集（退化为不区分）。
+ */
+function getWiredUdidSet() {
+  const wired = new Set();
+  try {
+    /* --json-output - 直接输出到 stdout，避免写临时文件的竞态（之前用临时文件时，首次 devicectl
+       冷启动文件可能还没落地就被读 → 拿到空集 → 插线优先失效）。execSync 同步拿全 stdout。 */
+    const stdout = execSync('xcrun devicectl list devices --json-output -', {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const data = JSON.parse(stdout);
+    const devs = (data && data.result && data.result.devices) || [];
+    for (const d of devs) {
+      const tp = d.connectionProperties && d.connectionProperties.transportType;
+      const udid = d.hardwareProperties && d.hardwareProperties.udid;
+      if (tp === 'wired' && typeof udid === 'string') wired.add(udid.toUpperCase());
+    }
+  } catch (_) {
+    /* devicectl 不可用 / 解析失败 → 空集，调用方退化为「不区分插线」的原有顺序 */
+  }
+  return wired;
+}
+
+/**
+ * 找一台连接的 iOS 真机。用 `xcrun xctrace list devices` 解析候选；
  * 真机行格式 `Name (Version) (UDID)`（两组括号），Mac 行只有 `Name (UDID)`（一组括号），
  * 模拟器在 "== Simulators ==" 段，过滤掉。
- * @param {'ipad'|'iphone'|null} kind 设备类型过滤：'ipad' 只挑 iPad、'iphone' 只挑 iPhone、
- *   null（默认 = `yarn dev ios real`）iPhone/iPad 都接受，但**优先 iPhone**，只有在没有
- *   任何 iPhone 真机时才退回用 iPad（避免同时插 iPad+iPhone 时随缘抓到 iPad）。
+ * 选择优先级：**先按 kind（类型）筛，再插线(wired) 优先于 WiFi，最后才看列出顺序**。
+ * @param {'ipad'|'iphone'|null} kind 'ipad' 只挑 iPad、'iphone' 只挑 iPhone、
+ *   null（默认 = `yarn dev ios real`）iPhone/iPad 都接受，但**优先 iPhone**，没 iPhone 才退回 iPad。
  * @returns {{ name: string, udid: string } | null}
  */
 function getFirstRealIosDevice(kind = null) {
   try {
+    const wiredSet = getWiredUdidSet();
     const out = execSync('xcrun xctrace list devices', { encoding: 'utf8' });
     const lines = out.split(/\r?\n/);
     let inDevicesSection = false;
-    /* 先收集所有候选，再按优先级挑：kind=null 时优先 iPhone、iPad 兜底。 */
-    let firstIphone = null;
-    let firstIpad = null;
+    /* 收集全部匹配候选（带 isIpad/isIphone/wired 标记），最后统一按优先级挑。 */
+    const candidates = [];
     for (const line of lines) {
       if (line.startsWith('== Devices ==')) {
         inDevicesSection = true;
         continue;
       }
       if (line.startsWith('== ')) {
-        // 进入下个 section（Simulators / Devices Offline 等），停止扫描
         inDevicesSection = false;
         continue;
       }
       if (!inDevicesSection) continue;
-      // 匹配真机：name (version) (UDID)。Mac 只有一组括号、不匹配。
-      // Apple Watch 也会出现在这里但 RN 跑不上去，按 iPhone/iPad 名字大致过滤。
       const m = line.match(/^(.+?) \([\d.]+\) \(([0-9A-Fa-f-]+)\)\s*$/);
       if (!m) continue;
       const name = m[1].trim();
       const udid = m[2];
-      /* 白名单：name 必须含 iPhone 或 iPad（RN run-ios 不支持 Apple Watch / TV / Vision Pro）。
-         之前用「跳过 Apple Watch」黑名单结果实际跑出来还是选中了 Watch UDID（可能 name 里有
-         非常规空格 / 编码差异让 regex 失效），白名单更稳。 */
+      /* 白名单：name 必须含 iPhone 或 iPad（RN run-ios 不支持 Apple Watch / TV / Vision Pro）。 */
       const isIpad = /iPad/i.test(name);
       const isIphone = /iPhone/i.test(name);
       if (!isIphone && !isIpad) continue;
-      // kind 过滤：指定了 ipad / iphone 就只接受对应类型，跳过另一类。
       if (kind === 'ipad' && !isIpad) continue;
       if (kind === 'iphone' && !isIphone) continue;
-      if (kind) return { name, udid }; // 显式指定类型：第一台即可
-      // kind=null：分类记录第一台，循环结束后按优先级返回。
-      if (isIphone && !firstIphone) firstIphone = { name, udid };
-      else if (isIpad && !firstIpad) firstIpad = { name, udid };
+      candidates.push({ name, udid, isIpad, isIphone, wired: wiredSet.has(udid.toUpperCase()) });
     }
-    // kind=null：优先 iPhone，没有 iPhone 才退回 iPad。
-    return firstIphone || firstIpad;
+    if (candidates.length === 0) return null;
+    /* 排序优先级：
+       1. kind=null 时 iPhone 优先于 iPad（isIphone 在前）；kind 指定时此项无差别。
+       2. 插线(wired) 优先于 WiFi。
+       3. 其余保持 xctrace 列出顺序（稳定）。 */
+    candidates.sort((a, b) => {
+      if (kind == null && a.isIphone !== b.isIphone) return a.isIphone ? -1 : 1;
+      if (a.wired !== b.wired) return a.wired ? -1 : 1;
+      return 0;
+    });
+    const chosen = candidates[0];
+    return { name: chosen.name, udid: chosen.udid };
   } catch (_) {
     /* xctrace 不可用或解析失败 → 返回 null，调用方报错给用户 */
   }
@@ -304,6 +333,11 @@ function run() {
     maybeRepairReactXcframework();
     maybeNukeDerivedDataAfterPodInstall();
     args.push('--mode', 'Debug');
+    /* 关键：把 Metro 端口传给 iOS build。run-ios --port N 会把 RCT_METRO_PORT=N 注入 app build，
+       让装上去的 app 连这个端口的 Metro（而不是写死 8081）。不传的话多个 yarn dev 的 iOS app
+       都去连 8081 → 串台 / Fast Refresh 连错 Metro。--no-packager：我们用外层 concurrently 起的
+       Metro，不让 run-ios 自己再起一个（避免重复 Metro / 抢端口）。 */
+    args.push('--port', String(METRO_PORT), '--no-packager');
     if (target === 'ios:real') {
       /** 设备类型过滤（yarn dev ipad / iphone）。dev.js 通过环境变量传入。 */
       const deviceKind = (process.env.FLOPS_IOS_DEVICE_KIND || '').toLowerCase() || null;
