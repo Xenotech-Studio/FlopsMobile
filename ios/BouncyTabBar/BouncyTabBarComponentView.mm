@@ -77,6 +77,13 @@ static UIColor *_bsc_uiColorFromHex(NSString *hex) {
     _tabBar.frame = self.bounds;
     _tabBar.autoresizingMask =
         UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    /* iPad 高度塌陷根因：iPad 是 horizontal regular size class，iOS 26 floating UITabBar 在
+       regular 下走「退化/紧凑」布局（不是 iPhone 那种 floating pill）→ 高度被压扁。
+       用 iOS 17+ traitOverrides 把内部 UITabBar 强制成 compact horizontalSizeClass，
+       让它在 iPad 上也按 iPhone 的 floating pill 渲染。 */
+    if (@available(iOS 17.0, *)) {
+      _tabBar.traitOverrides.horizontalSizeClass = UIUserInterfaceSizeClassCompact;
+    }
     /* 标准 UITabBar 默认有顶部 hairline；iOS 13+ 用 UITabBarAppearance 控制。我们这里
        不强行去线——iOS 26 Liquid Glass 模式下系统会接管整套外观；iOS 15..25 留默认。 */
     [self addSubview:_tabBar];

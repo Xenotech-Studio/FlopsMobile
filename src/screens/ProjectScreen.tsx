@@ -82,6 +82,7 @@ import {
 } from '../components/AnimatedCircleButton';
 import { Fab } from '../components/Fab';
 import { NativeTabBar } from '../components/NativeTabBar';
+import { useResponsive } from '../hooks/useResponsive';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 
@@ -114,6 +115,8 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
   const navigation = useNavigation<Nav>();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  /** iPad 主区更宽，底部 tab/FAB 两侧需要更大边距（手机的 paddingLeft 太贴边）。 */
+  const { sidebarShell } = useResponsive();
   const insets = useSafeAreaInsets();
   const {
     tasks,
@@ -743,6 +746,8 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
         style={[
           styles.bottomBar,
           { paddingBottom: Math.max(insets.bottom, 12) + 4 },
+          /* iPad 主区宽，左右各加大边距让 tab 胶囊不贴左、FAB 不贴右。 */
+          sidebarShell && { paddingLeft: 8, paddingRight: 32 },
         ]}
       >
         <View style={styles.bottomRow}>
@@ -1099,9 +1104,9 @@ function createStyles(c: AppColors) {
       justifyContent: 'space-between',
       height: 60,
     },
-    /* iOS 26+ native UITabBar：320pt 宽（4 tab × ~80pt 给每 tab 留点透气空间）+ 52pt 高
-       （比 FAB 的 60pt 小 8pt，靠 bottomRow.alignItems: 'flex-end' tab 底跟 FAB 底对齐、
-       顶部少一截就行）。320 + FAB 60 = 380 < iPhone 17 Pro 内容宽 394，不溢出。 */
+    /* iOS 26+ native UITabBar：320pt 宽 + 52pt 高。靠 BouncyTabBar 内部 autoresizingMask 自适应
+       （不要在 .mm 里加 layoutSubviews 强制 _tabBar.frame=self.bounds——会打断 iOS 26 floating pill
+       的自管理高度，导致高度塌陷）。 */
     nativeTabs: {
       width: 320,
       height: 52,

@@ -153,6 +153,7 @@ import { FlowDocPatchCard } from './chat-cards/FlowDocPatchCard';
 import { FlowDocWriteCard } from './chat-cards/FlowDocWriteCard';
 import { FlowDocReadCard } from './chat-cards/FlowDocReadCard';
 import { FlowDocGetTreeCard } from './chat-cards/FlowDocGetTreeCard';
+import { useResponsive, READING_MAX_WIDTH } from '../hooks/useResponsive';
 
 type ToolBlock = Extract<StreamBlock, { type: 'tool' }>;
 
@@ -322,6 +323,8 @@ export function ChatScreen({
 }: ChatScreenProps = {}) {
   const { session } = useSession();
   const insets = useSafeAreaInsets();
+  /** 宽屏（iPad）下消息列限宽放大到桌面级（READING_MAX_WIDTH），而非手机的窄列（styles.scrollContent 写死 380）。 */
+  const { expanded: wideChat } = useResponsive();
   const route = useRoute();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Chat'>>();
   const { colors, isDark } = useAppTheme();
@@ -3318,6 +3321,8 @@ export function ChatScreen({
             contentContainerStyle={[
               styles.scrollContent,
               { paddingTop: headerHeight + 20, paddingBottom: scrollBottomPadding },
+              /* 宽屏：消息列限宽放大到桌面级（仍居中、两侧留白），覆盖 styles.scrollContent 的窄列 380。 */
+              wideChat && { maxWidth: READING_MAX_WIDTH },
             ]}
             /* 点击触发：touchStart capture，绕过消息子组件（TouchableOpacity / RNGH）
              * 抢 responder 导致 ScrollView 自身 onTouchStart 不 fire 的情形。
