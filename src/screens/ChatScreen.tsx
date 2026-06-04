@@ -1286,6 +1286,34 @@ export function ChatScreen({
             // 收到服务端推送 → 撤掉对应乐观钉，避免重复
             setLiveInjections((p) => p.filter((it) => it.text !== injContent));
           }
+          if ((event as { type?: string }).type === 'send_queue_trigger') {
+            // P2：流式中途消费待发队首作为 trigger 用户回合 → 定格当前 assistant 回合 + 加 user 气泡
+            //      + 重置流式累积块（done 再 reload 纠正）+ 移除已消费待发条
+            const ev = event as { content?: string; metadata?: Record<string, unknown> };
+            const tc = typeof ev.content === 'string' ? ev.content : '';
+            const assistantBlocks = [...localBlocks];
+            const assistantText = finalText;
+            if (assistantBlocks.length > 0 || assistantText.trim()) {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  role: 'assistant',
+                  content: assistantText.trim() || '(empty response)',
+                  blocks: assistantBlocks.length ? assistantBlocks : undefined,
+                },
+              ]);
+            }
+            const _refs = ev.metadata && Array.isArray((ev.metadata as { flops_refs?: unknown }).flops_refs)
+              ? ((ev.metadata as { flops_refs?: FlopsRef[] }).flops_refs as FlopsRef[])
+              : undefined;
+            setMessages((prev) => [
+              ...prev,
+              _refs && _refs.length ? { role: 'user', content: tc, flops_refs: _refs } : { role: 'user', content: tc },
+            ]);
+            localBlocks.length = 0;
+            syncBlocks();
+            setSendQueue((q) => q.filter((it) => it.text !== tc));
+          }
           if (event.type === 'history_revision') {
             const ev = event as { conversation_id?: string };
             const cid = String(ev.conversation_id || streamTargetRef.current || '').trim();
