@@ -73,6 +73,7 @@ import {
   type StreamBlock,
   type ChatMessage,
   type ToolResult,
+  type TaskEventPayload,
 } from '../utils/chatLocalMessages';
 import {
   formatUsageTiny,
@@ -1288,6 +1289,17 @@ export function ChatScreen({
             syncBlocks();
             // 收到服务端推送 → 撤掉对应乐观钉，避免重复
             setLiveInjections((p) => p.filter((it) => it.text !== injContent));
+          }
+          if ((event as { type?: string }).type === 'task_event') {
+            // 活跃 run 期间穿插进来的后台任务事件（成功/失败一视同仁）→ 实时内联卡片
+            const ev = event as { content?: string; task_event?: TaskEventPayload; arrival?: string };
+            localBlocks.push({
+              type: 'task_event',
+              task_event: ev.task_event ?? null,
+              content: typeof ev.content === 'string' ? ev.content : '',
+              arrival: ev.arrival === 'trigger' ? 'trigger' : 'injection',
+            });
+            syncBlocks();
           }
           if ((event as { type?: string }).type === 'send_queue_trigger') {
             // P2：流式中途消费待发队首作为 trigger 用户回合 → 定格当前 assistant 回合 + 加 user 气泡
