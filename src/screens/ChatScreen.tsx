@@ -104,7 +104,7 @@ import {
   COMPOSER_TEXT_INSET_TALL,
 } from './chat/ChatScreen.styles';
 import { ThinkingBlockView } from './chat/ThinkingBlockView';
-import { TaskEventCardView } from './chat/TaskEventCardView';
+import { TaskEventCardView, UserInjectionInline } from './chat/TaskEventCardView';
 import { ComposerContextRing } from './chat/ComposerContextRing';
 import { HistoryLoadingOverlay } from './chat/HistoryLoadingOverlay';
 import { mergeToolResultChunk } from '../utils/toolResultPatch';
@@ -1262,6 +1262,16 @@ export function ChatScreen({
                 }
               }
             }
+            syncBlocks();
+          }
+          if ((event as { type?: string }).type === 'user_injection') {
+            // P2 用户「立刻穿插」流式推来 → 内联进当前工作块
+            const ev = event as { content?: string };
+            localBlocks.push({
+              type: 'user_injection',
+              content: typeof ev.content === 'string' ? ev.content : '',
+              arrival: 'injection',
+            });
             syncBlocks();
           }
           if (event.type === 'history_revision') {
@@ -2834,6 +2844,9 @@ export function ChatScreen({
                     />
                   );
                 }
+                if (block.type === 'user_injection') {
+                  return <UserInjectionInline key={`msg-userinj-${idx}-${bi}`} content={block.content} />;
+                }
                 return block.type === 'text' ? (
                   <React.Fragment key={bi}>
                     {ccInside && ccBlockInsert === bi && bi < blocks.length ? (
@@ -3279,6 +3292,9 @@ export function ChatScreen({
                             variant="injection"
                           />
                         );
+                      }
+                      if (block.type === 'user_injection') {
+                        return <UserInjectionInline key={`stream-userinj-${bi}`} content={block.content} />;
                       }
                       return block.type === 'text' ? (
                         <View
