@@ -147,8 +147,11 @@ const platformArg = argv.find((a) =>
   VALID_PLATFORMS.includes(a) || a === 'ios:real' || a === 'android:real'
 );
 const wantReal = argv.includes('real');
-/* 模拟器名：第一个「既不是 platform token、也不是 real / --quick / 冒号形式」的位置参数。
- * 含空格的名字（如 "iPhone 16 Pro"）shell 会作为单个 argv 传进来。仅 iOS 模拟器用，透传给 run-app.js。 */
+/* 引号位置参数：第一个「既不是 platform token、也不是 real / --quick / 冒号形式」的参数。
+ * 含空格的名字（如 "iPhone 16 Pro"）shell 会作为单个 argv 传进来。两用，透传给 run-app.js：
+ *   - 模拟器模式（yarn dev ios "iPhone 16 Pro"）：当模拟器名。
+ *   - 真机模式（yarn dev iphone "Steven" / yarn dev ios real "Haowen"）：当真机名子串过滤，
+ *     区分同类型多台真机（两台 iPhone 各跑一个 dev）。 */
 const simulatorName =
   argv.find(
     (a) =>
@@ -189,6 +192,11 @@ const runAppScript = path.resolve(__dirname, 'run-app.js');
 if (deviceKindArg) {
   process.env.FLOPS_IOS_DEVICE_KIND = deviceKindArg;
 }
+
+/* 把本 dev 会话的 pid 透传给 run-app.js，用作「设备占用锁」的 owner pid。
+ * run-app 是短命进程（装完 app 就退出），不能用它的 pid 当锁主——它退出锁就失效、设备被误判空闲。
+ * dev.js 活整个会话（Metro 在跑），用它的 pid 当锁主：会话活着 = 设备被占；会话死 = 锁自动失效。 */
+process.env.FLOPS_DEV_SESSION_PID = String(process.pid);
 
 resolveMetroPort().then((port) => {
   const cacheFlag = quick ? '' : ' --reset-cache';

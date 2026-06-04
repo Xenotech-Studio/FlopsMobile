@@ -102,20 +102,149 @@ function getWiredUdidSet() {
   return wired;
 }
 
+/* ── 设备占用锁（让多个 yarn dev 自动避让，各占一台真机）──
+ * 一台真机同一时刻只能被一个 dev 用。系统层面没有「设备被占用」标志，所以自己用 lockfile 记：
+ * 选中设备后在锁目录写 <udid>.lock（内含本进程 pid）；下一个 dev 选机时跳过「锁存在且 pid 还活着」
+ * 的设备。dev 退出删锁；pid 已死的陈旧锁视为无效（自愈，不会永久占着）。 */
+const DEVICE_LOCK_DIR = path.join(os.tmpdir(), 'flops-dev-device-locks');
+
+function lockPathFor(udid) {
+  return path.join(DEVICE_LOCK_DIR, `${udid.toUpperCase()}.lock`);
+}
+
+/** 某 pid 是否还活着（kill 0 探测，不真发信号）。 */
+function pidAlive(pid) {
+  if (!pid || Number.isNaN(pid)) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM'; // EPERM = 存在但无权限（仍算活着）；ESRCH = 不存在
+  }
+}
+
+/** 锁主 pid = dev 会话 pid（dev.js 经 env 传入）；拿不到则退回本进程 pid（兜底）。 */
+function lockOwnerPid() {
+  const sid = parseInt(process.env.FLOPS_DEV_SESSION_PID || '', 10);
+  return Number.isNaN(sid) ? process.pid : sid;
+}
+
+/** 该 udid 是否被「别的活着的 dev 会话」占用。陈旧锁（owner pid 死）顺手删掉。 */
+function isDeviceLockedByOther(udid) {
+  const lp = lockPathFor(udid);
+  let raw;
+  try {
+    raw = fs.readFileSync(lp, 'utf8');
+  } catch (_) {
+    return false; // 没锁文件 = 空闲
+  }
+  const pid = parseInt(String(raw).trim(), 10);
+  if (pid === lockOwnerPid()) return false; // 自己会话的锁
+  if (pidAlive(pid)) return true; // 别的活会话占着
+  /* 陈旧锁（owner 会话已死）→ 清掉，视为空闲 */
+  try { fs.unlinkSync(lp); } catch (_) {}
+  return false;
+}
+
+/** 抢占某设备：写锁，owner = dev 会话 pid。
+ * 不在 run-app 退出时删锁——run-app 是短命的（装完就退），锁要活到整个 dev 会话结束。
+ * 释放靠 isDeviceLockedByOther 的陈旧检测：dev 会话 pid 死了，下个 dev 选机时自动清掉。 */
+function acquireDeviceLock(udid) {
+  try {
+    fs.mkdirSync(DEVICE_LOCK_DIR, { recursive: true });
+    fs.writeFileSync(lockPathFor(udid), String(lockOwnerPid()));
+  } catch (_) {
+    /* 锁写失败不致命：退化为不避让 */
+  }
+}
+
+/* ── build 串行锁（同一时刻只允许一个 xcodebuild）──
+ * 多个 yarn dev 同时 build 会撞同一个 DerivedData 的 build.db（SQLite，单写）→
+ * "database is locked ... two concurrent builds" → exit 65。
+ * 用一个全局锁文件串行化：要 build 先抢锁，抢不到就等前一个 build 完，避免并发撞 db。
+ * 锁内写「本 run-app 的 pid + 时间戳」；陈旧锁（持有进程已死 / 超时）自动接管，防死锁。 */
+const BUILD_LOCK_FILE = path.join(os.tmpdir(), 'flops-dev-xcodebuild.lock');
+const BUILD_LOCK_STALE_MS = 20 * 60 * 1000; // 20 分钟没释放视为陈旧（全量 build 也够了）
+
+function readBuildLock() {
+  try {
+    const raw = fs.readFileSync(BUILD_LOCK_FILE, 'utf8');
+    const [pidStr, tsStr] = String(raw).trim().split(/\s+/);
+    return { pid: parseInt(pidStr, 10), ts: parseInt(tsStr, 10) || 0 };
+  } catch (_) {
+    return null;
+  }
+}
+
+/** 尝试原子抢锁：成功返回 true。用 'wx'（O_EXCL）保证只有一个进程能创建成功。 */
+function tryAcquireBuildLock() {
+  try {
+    const fd = fs.openSync(BUILD_LOCK_FILE, 'wx'); // wx = 文件已存在则抛错
+    fs.writeSync(fd, `${process.pid} ${Date.now()}`);
+    fs.closeSync(fd);
+    return true;
+  } catch (e) {
+    if (e.code !== 'EEXIST') return false;
+    /* 锁已存在：检查是否陈旧（持有进程死了 / 超时）→ 接管 */
+    const cur = readBuildLock();
+    const stale =
+      !cur || !pidAlive(cur.pid) || Date.now() - cur.ts > BUILD_LOCK_STALE_MS;
+    if (stale) {
+      try {
+        fs.writeFileSync(BUILD_LOCK_FILE, `${process.pid} ${Date.now()}`);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    return false;
+  }
+}
+
+function releaseBuildLock() {
+  try {
+    const cur = readBuildLock();
+    if (cur && cur.pid === process.pid) fs.unlinkSync(BUILD_LOCK_FILE);
+  } catch (_) {}
+}
+
+/** 等到能 build 为止（串行）。第一次等待时打印提示。 */
+async function waitForBuildLock() {
+  let waited = false;
+  while (!tryAcquireBuildLock()) {
+    if (!waited) {
+      waited = true;
+      const cur = readBuildLock();
+      console.log(
+        `[build] 另一个 build 正在进行${cur ? `（pid ${cur.pid}）` : ''}，等它完成再开始（避免 build.db 锁冲突）…`
+      );
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  /* 进程异常退出也要释放锁，否则别的 dev 会一直等到陈旧超时 */
+  process.on('exit', releaseBuildLock);
+  process.on('SIGINT', () => { releaseBuildLock(); process.exit(130); });
+  process.on('SIGTERM', () => { releaseBuildLock(); process.exit(143); });
+  process.on('SIGHUP', () => { releaseBuildLock(); process.exit(129); });
+}
+
 /**
  * 找一台连接的 iOS 真机。用 `xcrun xctrace list devices` 解析候选；
  * 真机行格式 `Name (Version) (UDID)`（两组括号），Mac 行只有 `Name (UDID)`（一组括号），
  * 模拟器在 "== Simulators ==" 段，过滤掉。
- * 选择优先级：**先按 kind（类型）筛，再插线(wired) 优先于 WiFi，最后才看列出顺序**。
+ * 选择优先级：**先按 kind（类型）+ nameFilter（名字子串）筛，再插线(wired) 优先于 WiFi，最后才看列出顺序**。
  * @param {'ipad'|'iphone'|null} kind 'ipad' 只挑 iPad、'iphone' 只挑 iPhone、
  *   null（默认 = `yarn dev ios real`）iPhone/iPad 都接受，但**优先 iPhone**，没 iPhone 才退回 iPad。
+ * @param {string|null} nameFilter 设备名子串（大小写无关）。非空时只保留名字含它的设备
+ *   —— 用来区分同类型多台真机（如两台 iPhone 用 "Steven" / "Haowen" 各选一台）。
  * @returns {{ name: string, udid: string } | null}
  */
-function getFirstRealIosDevice(kind = null) {
+function getFirstRealIosDevice(kind = null, nameFilter = null) {
   try {
     const wiredSet = getWiredUdidSet();
     const out = execSync('xcrun xctrace list devices', { encoding: 'utf8' });
     const lines = out.split(/\r?\n/);
+    const nf = nameFilter ? nameFilter.toLowerCase() : null;
     let inDevicesSection = false;
     /* 收集全部匹配候选（带 isIpad/isIphone/wired 标记），最后统一按优先级挑。 */
     const candidates = [];
@@ -139,14 +268,25 @@ function getFirstRealIosDevice(kind = null) {
       if (!isIphone && !isIpad) continue;
       if (kind === 'ipad' && !isIpad) continue;
       if (kind === 'iphone' && !isIphone) continue;
-      candidates.push({ name, udid, isIpad, isIphone, wired: wiredSet.has(udid.toUpperCase()) });
+      if (nf && !name.toLowerCase().includes(nf)) continue;
+      candidates.push({
+        name,
+        udid,
+        isIpad,
+        isIphone,
+        wired: wiredSet.has(udid.toUpperCase()),
+        locked: isDeviceLockedByOther(udid), // 已被别的 dev 占用
+      });
     }
     if (candidates.length === 0) return null;
     /* 排序优先级：
-       1. kind=null 时 iPhone 优先于 iPad（isIphone 在前）；kind 指定时此项无差别。
-       2. 插线(wired) 优先于 WiFi。
-       3. 其余保持 xctrace 列出顺序（稳定）。 */
+       1. 未被占用(locked=false) 优先 —— 多个 dev 自动避让，各占一台。
+       2. kind=null 时 iPhone 优先于 iPad（isIphone 在前）；kind 指定时此项无差别。
+       3. 插线(wired) 优先于 WiFi。
+       4. 其余保持 xctrace 列出顺序（稳定）。
+       注：全被占用时仍返回第一台（不硬阻塞——比如只有一台设备、反复 dev 同一台是合理的）。 */
     candidates.sort((a, b) => {
+      if (a.locked !== b.locked) return a.locked ? 1 : -1;
       if (kind == null && a.isIphone !== b.isIphone) return a.isIphone ? -1 : 1;
       if (a.wired !== b.wired) return a.wired ? -1 : 1;
       return 0;
@@ -323,6 +463,8 @@ function run() {
   const env = { ...process.env };
   if (target === 'ios' || target === 'ios:real') {
     env.RCT_NO_LAUNCH_PACKAGER = '1';
+    /* Metro 端口经下面 run-ios 的 --extra-params FLOPS_METRO_PORT=N（xcodebuild build setting）注入，
+       Info.plist $(FLOPS_METRO_PORT) 展开 → AppDelegate 运行时设 RCT_jsLocation。详见 args 处注释。 */
   }
 
   const runTarget =
@@ -333,26 +475,35 @@ function run() {
     maybeRepairReactXcframework();
     maybeNukeDerivedDataAfterPodInstall();
     args.push('--mode', 'Debug');
-    /* 关键：把 Metro 端口传给 iOS build。run-ios --port N 会把 RCT_METRO_PORT=N 注入 app build，
-       让装上去的 app 连这个端口的 Metro（而不是写死 8081）。不传的话多个 yarn dev 的 iOS app
-       都去连 8081 → 串台 / Fast Refresh 连错 Metro。--no-packager：我们用外层 concurrently 起的
-       Metro，不让 run-ios 自己再起一个（避免重复 Metro / 抢端口）。 */
+    /* --no-packager：我们用外层 concurrently 起的 Metro，不让 run-ios 自己再起一个。
+       --port：用于 run-ios 的 launch 阶段；真正决定 app 连哪个端口的是下面的 FLOPS_METRO_PORT。
+       --extra-params FLOPS_METRO_PORT=N：作为 xcodebuild build setting 覆盖传入，Info.plist 的
+       $(FLOPS_METRO_PORT) 展开成本端口，AppDelegate(DEBUG) 据此设 RCT_jsLocation=localhost:N，
+       让 app 连自己那个 Metro。这是 prebuilt React-Core 下唯一可行的「每实例独立端口」机制
+       （RCT_METRO_PORT C 宏写死在 prebuilt 里，env/--port 都改不动）。 */
     args.push('--port', String(METRO_PORT), '--no-packager');
+    args.push('--extra-params', `FLOPS_METRO_PORT=${METRO_PORT}`);
     if (target === 'ios:real') {
       /** 设备类型过滤（yarn dev ipad / iphone）。dev.js 通过环境变量传入。 */
       const deviceKind = (process.env.FLOPS_IOS_DEVICE_KIND || '').toLowerCase() || null;
-      const device = getFirstRealIosDevice(deviceKind);
+      /** 真机名过滤：real 模式下命令行的引号参数当「设备名子串」用，区分同类型多台真机
+       *  （如两台 iPhone：yarn dev iphone "Steven" / yarn dev iphone "Haowen"）。 */
+      const nameFilter = SIMULATOR_OVERRIDE;
+      const device = getFirstRealIosDevice(deviceKind, nameFilter);
       if (!device) {
         const kindLabel = deviceKind === 'ipad' ? ' iPad' : deviceKind === 'iphone' ? ' iPhone' : '';
+        const nameLabel = nameFilter ? `（名字含 "${nameFilter}"）` : '';
         console.error(
-          `\n[ios:real] 未检测到已连接的${kindLabel || ' iOS'}真机。请确认：\n` +
+          `\n[ios:real] 未检测到已连接的${kindLabel || ' iOS'}真机${nameLabel}。请确认：\n` +
             `  1)${kindLabel || ' iPhone/iPad'} 通过 USB 连上 Mac，且已在设备上「信任此电脑」\n` +
             '  2) Xcode 里已设过 development team / signing\n' +
             '  3) `xcrun xctrace list devices` 能列出该设备\n' +
+            (nameFilter ? `  4) 名字确实含 "${nameFilter}"（区分大小写无关）\n` : '') +
             '或者用 yarn dev ios 跑模拟器。'
         );
         process.exit(1);
       }
+      acquireDeviceLock(device.udid); // 占用本机，让后续 dev 自动避让到下一台
       args.push('--udid', device.udid);
       console.log(`[ios:real] 使用真机: ${device.name} (${device.udid})`);
     } else {
@@ -394,14 +545,26 @@ function run() {
     }
   }
 
-  const child = spawn('npx', args, {
-    stdio: 'inherit',
-    env,
-    shell: true,
-  });
-  child.on('exit', (code, signal) => {
-    process.exit(code !== null ? code : signal ? 1 : 0);
-  });
+  /* iOS：build 前抢全局 build 锁（串行化 xcodebuild，避免多 dev 撞 build.db）。
+     Android 不需要（Gradle 自己有 build 锁、且各 dev 可并行）。 */
+  const needsBuildLock = target === 'ios' || target === 'ios:real';
+  const spawnBuild = () => {
+    const child = spawn('npx', args, {
+      stdio: 'inherit',
+      env,
+      shell: true,
+    });
+    child.on('exit', (code, signal) => {
+      if (needsBuildLock) releaseBuildLock(); // build/install/launch 完成，放锁让下一个 dev build
+      process.exit(code !== null ? code : signal ? 1 : 0);
+    });
+  };
+
+  if (needsBuildLock) {
+    waitForBuildLock().then(spawnBuild);
+  } else {
+    spawnBuild();
+  }
 }
 
 (async () => {

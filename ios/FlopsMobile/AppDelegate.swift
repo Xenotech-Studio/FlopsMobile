@@ -144,9 +144,30 @@ class ReactNativeDelegate: RCTDefaultReactNativeFactoryDelegate {
 
   override func bundleURL() -> URL? {
 #if DEBUG
-    RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: "index")
+    /* 多开支持：每个 yarn dev 用独立 Metro 端口（dev 脚本注入 build setting FLOPS_METRO_PORT，
+       经 Info.plist 键 FlopsMetroPort 展开到 app）。运行时把它写进 RCTBundleURLProvider 的
+       jsLocation（NSUserDefaults RCT_jsLocation），让本 app 连自己那个端口的 Metro。
+       为什么不用 RCT_METRO_PORT：它是编进 prebuilt React-Core 的 C 宏（写死 8081），改不动；
+       jsLocation 是运行时覆盖，prebuilt 也认。没配置 / 为占位符时不设，退回默认 8081。 */
+    if let port = Bundle.main.object(forInfoDictionaryKey: "FlopsMetroPort") as? String,
+       !port.isEmpty,
+       port != "$(FLOPS_METRO_PORT)",
+       port != "8081" {
+      /* 真机必须连「开发机局域网 IP」，不能用 localhost（真机上 localhost=设备自己）。
+         RN build 时把开发机 IP 写进了 bundle 的 ip.txt（guessPackagerHost 用的同一个）；
+         读它 + 我们的端口拼成 jsLocation，这样真机能连到、且端口正确。
+         读不到 ip.txt（模拟器场景）就退回 localhost。 */
+      var host = "localhost"
+      if let ipPath = Bundle.main.path(forResource: "ip", ofType: "txt"),
+         let ip = try? String(contentsOfFile: ipPath, encoding: .utf8) {
+        let trimmed = ip.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { host = trimmed }
+      }
+      RCTBundleURLProvider.sharedSettings().jsLocation = "\(host):\(port)"
+    }
+    return RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: "index")
 #else
-    Bundle.main.url(forResource: "main", withExtension: "jsbundle")
+    return Bundle.main.url(forResource: "main", withExtension: "jsbundle")
 #endif
   }
 }

@@ -87,5 +87,10 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
+	<!-- 多开 Metro 端口：从 build setting FLOPS_METRO_PORT 展开（dev 脚本注入）。
+	     AppDelegate(DEBUG) 读它写 RCT_jsLocation，让 app 连自己那个端口的 Metro。
+	     未注入时展开为字面量 "$(FLOPS_METRO_PORT)"，AppDelegate 会忽略、退回默认 8081。 -->
+	<key>FlopsMetroPort</key>
+	<string>$(FLOPS_METRO_PORT)</string>
 </dict>
 </plist>
