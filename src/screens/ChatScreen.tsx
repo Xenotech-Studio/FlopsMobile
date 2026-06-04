@@ -42,6 +42,10 @@ import {
   createConversation,
   streamChatV2Loop,
   cancelConversation,
+  enqueueSendQueue,
+  getSendQueue,
+  deleteSendQueueItem,
+  injectSendQueueItem,
   submitSafetyDecision,
   getConversation,
   getMessagesBefore,
@@ -533,6 +537,11 @@ export function ChatScreen({
   const [v2ResumeUiActive, setV2ResumeUiActive] = useState(false);
   const [streamingText, setStreamingText] = useState('');
   const [streamStatus, setStreamStatus] = useState('');
+  /** P2 待发队列（agent 在跑时用户发的消息排这里，服务端存、多端可见）+ 立刻穿插乐观钉 */
+  const [sendQueue, setSendQueue] = useState<Array<{ id: string; text: string; pending?: boolean }>>(
+    [],
+  );
+  const [liveInjections, setLiveInjections] = useState<Array<{ id: string; text: string }>>([]);
   /** server SIGTERM 期间收到 v2_reload_pending：消息流末尾显示「服务器热更新中」banner，
    *  下一次 fetch 收到任意非 reload_pending 事件时清掉。 */
   const [reloadPending, setReloadPending] = useState(false);
@@ -1267,12 +1276,15 @@ export function ChatScreen({
           if ((event as { type?: string }).type === 'user_injection') {
             // P2 用户「立刻穿插」流式推来 → 内联进当前工作块
             const ev = event as { content?: string };
+            const injContent = typeof ev.content === 'string' ? ev.content : '';
             localBlocks.push({
               type: 'user_injection',
-              content: typeof ev.content === 'string' ? ev.content : '',
+              content: injContent,
               arrival: 'injection',
             });
             syncBlocks();
+            // 收到服务端推送 → 撤掉对应乐观钉，避免重复
+            setLiveInjections((p) => p.filter((it) => it.text !== injContent));
           }
           if (event.type === 'history_revision') {
             const ev = event as { conversation_id?: string };
@@ -1395,7 +1407,98 @@ export function ChatScreen({
     [session, applyConversationUsageState]
   );
 
+  // ---- P2 待发队列：agent 在跑时回车发消息 → 排队（不打断当前 run）/ 立刻穿插 ----
+  const _extractQueueText = useCallback((content: unknown): string => {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      return content
+        .filter(
+          (p): p is { type: string; text: string } =>
+            !!p && typeof p === 'object' && (p as { type?: string }).type === 'text' &&
+            typeof (p as { text?: unknown }).text === 'string',
+        )
+        .map((p) => p.text)
+        .join('');
+    }
+    return '';
+  }, []);
+  const fetchSendQueue = useCallback(
+    async (cid?: string) => {
+      const id = String(cid || conversationIdRef.current || '').trim();
+      if (!id || !session) return;
+      try {
+        const items = await getSendQueue(session, id);
+        if (String(conversationIdRef.current || '').trim() !== id) return;
+        setSendQueue(items.map((m) => ({ id: m.id, text: _extractQueueText(m.content) })));
+      } catch {
+        /* ignore */
+      }
+    },
+    [session, _extractQueueText],
+  );
+  /** 入队当前 composer 内容（agent 跑时回车走这里）。乐观显示 + 失败回滚。 */
+  const enqueueCurrentComposer = useCallback(async () => {
+    const id = String(conversationIdRef.current || '').trim();
+    if (!id || !session) return;
+    const { content: rawContent, flops_refs } = serializeSlateDocumentToUserMessage(
+      composerDoc,
+      composerRefDataByKeyRef.current,
+    );
+    const text = rawContent.trim();
+    if (!text && flops_refs.length === 0) return;
+    setComposerDoc([{ type: 'paragraph', children: [{ text: '' }] }]);
+    composerRefDataByKeyRef.current = new Map();
+    setComposerRemountKey((n) => n + 1);
+    const tempId = `tmp-${Date.now()}`;
+    setSendQueue((q) => [...q, { id: tempId, text, pending: true }]);
+    try {
+      const { id: newId } = await enqueueSendQueue(session, id, text, flops_refs);
+      setSendQueue((q) => q.map((it) => (it.id === tempId ? { id: newId || tempId, text } : it)));
+    } catch (e) {
+      setSendQueue((q) => q.filter((it) => it.id !== tempId));
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [session, composerDoc]);
+  const deleteQueueItem = useCallback(
+    async (itemId: string) => {
+      const id = String(conversationIdRef.current || '').trim();
+      setSendQueue((q) => q.filter((it) => it.id !== itemId));
+      if (!id || !session || !itemId || itemId.startsWith('tmp-')) return;
+      try {
+        await deleteSendQueueItem(session, id, itemId);
+      } catch {
+        /* ignore */
+      }
+    },
+    [session],
+  );
+  /** 把某条待发改为「立刻穿插」：移出队列 → 注入当前活跃 run（乐观钉在流式末尾）。 */
+  const injectQueueItem = useCallback(
+    async (itemId: string) => {
+      const id = String(conversationIdRef.current || '').trim();
+      if (!id || !session || !itemId || itemId.startsWith('tmp-')) return;
+      let injText = '';
+      setSendQueue((q) => {
+        const found = q.find((it) => it.id === itemId);
+        if (found) injText = found.text || '';
+        return q.filter((it) => it.id !== itemId);
+      });
+      if (injText) setLiveInjections((p) => [...p, { id: itemId, text: injText }]);
+      try {
+        await injectSendQueueItem(session, id, itemId);
+      } catch {
+        /* ignore */
+      }
+    },
+    [session],
+  );
+
   const handleSendMessage = useCallback(async () => {
+    // P2：agent 在跑时回车 → 入待发队列（不打断当前 run）
+    if (loading && session && composerStats.hasContent && conversationIdRef.current) {
+      void enqueueCurrentComposer();
+      return;
+    }
     if (!session || !composerStats.hasContent || loading || conversationHistoryLoading) return;
     /* 序列化 composerDoc → content（pill 还原为 mention_text）+ flops_refs（按 pill 出现顺序） */
     const { content: rawContent, flops_refs } = serializeSlateDocumentToUserMessage(
@@ -1540,7 +1643,35 @@ export function ChatScreen({
     runV2WithHandlers,
     applyConversationUsageState,
     draftAgentId,
+    enqueueCurrentComposer,
   ]);
+
+  // 打开对话 / 流式起止时同步待发队列；流结束清掉乐观穿插钉
+  useEffect(() => {
+    if (conversationId) void fetchSendQueue(conversationId);
+    else setSendQueue([]);
+    if (!loading) setLiveInjections([]);
+  }, [conversationId, loading, fetchSendQueue]);
+  // 持久化的穿插用户消息（user_injection block）到达 messages 后移除对应乐观钉，避免重复
+  useEffect(() => {
+    setLiveInjections((prev) => {
+      if (prev.length === 0) return prev;
+      const persisted = new Set<string>();
+      for (const m of messages) {
+        const blocks = (m as { blocks?: Array<{ type?: string; content?: unknown }> })?.blocks;
+        if ((m as { role?: string })?.role === 'assistant' && Array.isArray(blocks)) {
+          for (const b of blocks) {
+            if (b && b.type === 'user_injection') {
+              persisted.add(typeof b.content === 'string' ? b.content : '');
+            }
+          }
+        }
+      }
+      if (persisted.size === 0) return prev;
+      const next = prev.filter((it) => !persisted.has(it.text));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [messages]);
 
   const handleStop = useCallback(async () => {
     setError('');
@@ -3319,6 +3450,11 @@ export function ChatScreen({
                       <MarkdownContent text={streamingText || streamBubblePlaceholderText} />
                     </View>
                   ) : null}
+                  {liveInjections.length > 0
+                    ? liveInjections.map((inj) => (
+                        <UserInjectionInline key={`live-inj-${inj.id}`} content={inj.text} />
+                      ))
+                    : null}
                 </View>
               </View>
             ) : null}
@@ -3375,6 +3511,56 @@ export function ChatScreen({
               accessibilityLabel="滚动到对话底部"
             />
             <Reanimated.View style={[styles.bottomOverlayInner, navInsetAnimStyle]} pointerEvents="box-none">
+              {/* P2 待发队列：agent 在跑时回车发的消息排这里，逐条自动发；可对某条立刻穿插或删除 */}
+              {sendQueue.length > 0 ? (
+                <View
+                  style={{ marginHorizontal: 12, marginBottom: 6, gap: 4 }}
+                  pointerEvents="box-none"
+                >
+                  {sendQueue.map((it) => (
+                    <View
+                      key={it.id}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 8,
+                        backgroundColor: colors.surfaceMuted,
+                        borderRadius: 10,
+                        borderWidth: 1,
+                        borderColor: colors.borderMuted,
+                        paddingVertical: 6,
+                        paddingHorizontal: 10,
+                        opacity: it.pending ? 0.6 : 1,
+                      }}
+                    >
+                      <Text
+                        numberOfLines={1}
+                        style={{ flex: 1, fontSize: 13, color: colors.textBody }}
+                      >
+                        {it.text || '（空）'}
+                      </Text>
+                      {loading ? (
+                        <TouchableOpacity
+                          onPress={() => injectQueueItem(it.id)}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          accessibilityLabel="立刻穿插"
+                        >
+                          <Text style={{ fontSize: 12, fontWeight: '600', color: colors.accentPurple }}>
+                            穿插
+                          </Text>
+                        </TouchableOpacity>
+                      ) : null}
+                      <TouchableOpacity
+                        onPress={() => deleteQueueItem(it.id)}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        accessibilityLabel="移除待发消息"
+                      >
+                        <Ionicons name="close" size={16} color={colors.textSecondary} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
               {/* 输入区。short 模式：圆角胶囊一行，+ 内嵌左侧 + 输入填满；模型 / 助手 chips
                   走绝对定位的 meta row 贴在 composer 下面留白里。
                   tall 模式：圆角卡片两行，上面纯输入区，下面一行 [+ 按钮][model][agent]

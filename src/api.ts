@@ -973,6 +973,93 @@ export async function deleteConversation(
 }
 
 /**
+ * P2 待发队列：agent 在跑时用户发的消息排队（服务端存、多端可见），本段 run 收尾时自动按序发；
+ * 也可对某条「立刻穿插」注入当前活跃 run。加密对话：content 用 K_conv 加密后落盘（明文不出端）。
+ */
+export async function enqueueSendQueue(
+  session: Session,
+  conversationId: string,
+  message: unknown,
+  flopsRefs?: unknown[]
+): Promise<{ id: string }> {
+  const base = session.server_base_url;
+  const body: Record<string, unknown> = { message };
+  if (Array.isArray(flopsRefs) && flopsRefs.length > 0) body.flops_refs = flopsRefs;
+  const kConv = getCachedKConv(conversationId);
+  if (kConv) {
+    try {
+      const pub = await getTransportPubkeyMobile(base);
+      body.k_conv_wire = wrapKConvForWire(kConv, pub);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[send_queue mobile] wrap K_conv failed:', (e as Error)?.message || e);
+    }
+  }
+  const res = await fetchWithDebugLog(`${base}api/conversations/${conversationId}/send_queue`, {
+    method: 'POST',
+    headers: { ...authHeaders(session.access_token), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `入队失败: ${res.status}`);
+  }
+  const data = (await res.json()) as { id?: string };
+  return { id: String(data.id || '') };
+}
+
+/** 列出待发队列；加密对话用同会话已缓存的 K_conv 就地解密 content（对齐 web/desktop）。 */
+export async function getSendQueue(
+  session: Session,
+  conversationId: string
+): Promise<Array<{ id: string; content: unknown }>> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/conversations/${conversationId}/send_queue`, {
+    method: 'GET',
+    headers: authHeaders(session.access_token),
+  });
+  if (!res.ok) return [];
+  const data = (await res.json()) as { items?: Array<Record<string, unknown>> };
+  let items = Array.isArray(data.items) ? data.items : [];
+  const kConv = getCachedKConv(conversationId);
+  if (kConv && items.length > 0) {
+    try {
+      items = items.map((m) => decryptMessageLocal(m, kConv) as Record<string, unknown>);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[send_queue mobile] decrypt failed:', (e as Error)?.message || e);
+    }
+  }
+  return items.map((m) => ({ id: String(m.id || ''), content: m.content }));
+}
+
+export async function deleteSendQueueItem(
+  session: Session,
+  conversationId: string,
+  itemId: string
+): Promise<void> {
+  const base = session.server_base_url;
+  await fetchWithDebugLog(`${base}api/conversations/${conversationId}/send_queue/${itemId}`, {
+    method: 'DELETE',
+    headers: authHeaders(session.access_token),
+  }).catch(() => undefined);
+}
+
+/** 立刻穿插：移出待发队列 → 注入当前活跃 run（content 已加密落盘，无需再带 wire）。 */
+export async function injectSendQueueItem(
+  session: Session,
+  conversationId: string,
+  itemId: string
+): Promise<void> {
+  const base = session.server_base_url;
+  await fetchWithDebugLog(`${base}api/conversations/${conversationId}/send_queue/${itemId}/inject`, {
+    method: 'POST',
+    headers: { ...authHeaders(session.access_token), 'Content-Type': 'application/json' },
+    body: '{}',
+  }).catch(() => undefined);
+}
+
+/**
  * 创建会话：POST /api/conversations（可选 body.bound_agent_id，与 FlopsWeb 一致）
  */
 export async function createConversation(
