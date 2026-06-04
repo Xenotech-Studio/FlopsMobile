@@ -541,6 +541,9 @@ export function ChatScreen({
   const [sendQueue, setSendQueue] = useState<Array<{ id: string; text: string; pending?: boolean }>>(
     [],
   );
+  /** sendQueue 最新镜像：injectQueueItem 同步取被点项文本（不能靠 setSendQueue updater 副作用，那是异步的） */
+  const sendQueueRef = useRef<Array<{ id: string; text: string; pending?: boolean }>>([]);
+  sendQueueRef.current = sendQueue;
   const [liveInjections, setLiveInjections] = useState<Array<{ id: string; text: string }>>([]);
   /** server SIGTERM 期间收到 v2_reload_pending：消息流末尾显示「服务器热更新中」banner，
    *  下一次 fetch 收到任意非 reload_pending 事件时清掉。 */
@@ -1505,12 +1508,10 @@ export function ChatScreen({
     async (itemId: string) => {
       const id = String(conversationIdRef.current || '').trim();
       if (!id || !session || !itemId || itemId.startsWith('tmp-')) return;
-      let injText = '';
-      setSendQueue((q) => {
-        const found = q.find((it) => it.id === itemId);
-        if (found) injText = found.text || '';
-        return q.filter((it) => it.id !== itemId);
-      });
+      // 同步从 ref 取文本（不能靠 setSendQueue updater 副作用，那是异步的，乐观钉会拿不到文本）
+      const found = sendQueueRef.current.find((it) => it.id === itemId);
+      const injText = found ? found.text || '' : '';
+      setSendQueue((q) => q.filter((it) => it.id !== itemId));
       if (injText) setLiveInjections((p) => [...p, { id: itemId, text: injText }]);
       try {
         await injectSendQueueItem(session, id, itemId);
