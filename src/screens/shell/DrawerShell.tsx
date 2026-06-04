@@ -116,6 +116,14 @@ const SIDEBAR_ANIM_DURATION = 280;
 const DIVIDER_TOGGLE_W = 26;
 const DIVIDER_TOGGLE_H = 56;
 const DIVIDER_TOGGLE_MARGIN = 12;
+/** 拖动拦截带：在手柄那段高度（比胶囊稍高，留点冗余）覆盖返回手势触发区，吃掉这段 Y 的横向拖，
+ *  让返回手势在此收不到 → 拖手柄开/关侧栏不被返回手势抢（区域划分，无时序竞争）。
+ *  返回手势触发区是「主区左缘往右 ~50pt」（展开态主区左缘=分界线）。带要从分界线左边一点一直盖到
+ *  分界线右边 > 50pt，所以左伸 LEFT 一点、右伸够远；总宽 = LEFT + RIGHT。 */
+const EDGE_INTERCEPT_H = DIVIDER_TOGGLE_H + 48;
+const EDGE_INTERCEPT_LEFT = 24; // 分界线左侧覆盖（含手柄左半）
+const EDGE_INTERCEPT_RIGHT = 64; // 分界线右侧覆盖（盖满返回手势触发区 ~50pt + 冗余）
+const EDGE_INTERCEPT_W = EDGE_INTERCEPT_LEFT + EDGE_INTERCEPT_RIGHT;
 
 /** 在 MainPaneProvider 内部抓取 controller（填进 ref 供 setActive 驱动）+ 把"是否二级页"上报给
  *  DrawerShell（决定分界线切换钮是否显示）。侧栏在 Provider 外面，靠这个 grabber 桥接。不渲染 UI。 */
@@ -189,6 +197,13 @@ export function DrawerShell() {
       sidebarAnimWidth.value - DIVIDER_TOGGLE_W / 2,
     ),
   }));
+  /** 拖动拦截带的位置：跟手柄/分界线同步移动（不再钉死屏左缘）。
+   *  分界线左侧 EDGE_INTERCEPT_LEFT、右侧 EDGE_INTERCEPT_RIGHT（盖满返回手势触发区）。
+   *  折叠态 → 在左缘；展开态 → 在分界线，「中间这块」可拖关，且把分界线右边的返回触发区也盖住。
+   *  clamp 到 0：折叠态 left 不为负，带紧贴屏左缘。 */
+  const edgeInterceptStyle = useAnimatedStyle(() => ({
+    left: Math.max(0, sidebarAnimWidth.value - EDGE_INTERCEPT_LEFT),
+  }));
   /** 开合：UI 线程逐帧动画宽度（零延迟）+ setState 仅记逻辑态（旋转/DocBodyView/toggle 读）。 */
   const applySidebarOpen = useCallback(
     (next: boolean) => {
@@ -208,6 +223,77 @@ export function DrawerShell() {
     });
     setSidebarOpen(sidebarDefaultOpen);
   }, [sidebarShell, sidebarDefaultOpen, sidebarAnimWidth, sidebarWidth]);
+
+  /** ── 手柄拖动开合侧栏（完全跟手，类 iOS 抽屉手势）──
+   *  拖动时 sidebarAnimWidth 直接跟手指走（UI 线程逐帧）；松手按位置过半 + 速度 flick 吸附到 0 / 满开。
+   *  只在 sidebarShell 生效；手势挂在手柄外层 GestureDetector（见 render）。 */
+  /** 手势起始时的侧栏宽度（手柄随侧栏移动，需记起点再叠加 translationX）。 */
+  const dragStartWidth = useSharedValue(0);
+  /** 把最终态同步回 JS state（spring 落位后），供主区宽度 / DocBodyView / 旋转读。 */
+  const settleSidebarState = useCallback(
+    (open: boolean) => {
+      setSidebarOpen(open);
+    },
+    [],
+  );
+  /** 手指落在手柄上时关掉主区返回手势、松手恢复——靠落点区分「拖手柄开侧栏」vs「页面左缘返回」，
+   *  两者都保留。手柄折叠时正好在屏左缘、与返回手势触发区重叠，不这么做拖动会被返回手势抢走。 */
+  const setMainPaneSwipeBack = useCallback((enabled: boolean) => {
+    mainPaneControllerRef.current?.setSwipeBackEnabled(enabled);
+  }, []);
+  /** 拖动开合的 Pan 构造器：调一次返回一个独立实例。GestureDetector 不能把同一个 Gesture 对象挂到
+   *  两个挂载点（内部 handlerTag 冲突），手柄 + 左缘拦截带各需一个实例，所以工厂化。
+   *  SharedValue（dragStartWidth）跨实例共享——同一时刻只可能一条拖动在跑，状态合用没问题。 */
+  const buildHandlePan = useCallback(
+    (immediate: boolean) =>
+      Gesture.Pan()
+        /* 手柄实例：activeOffsetX±6 → 纯 tap（toggle）/纵向滑不被抢。
+         *  拦截带实例（immediate）：±2 近乎落手即激活 → 抢在主区返回手势挪动卡片之前夺权，
+         *  避免「页面先动一下」。拦截带是透明专用区、没有 tap 要保，可以激进。 */
+        .activeOffsetX(immediate ? [-2, 2] : [-6, 6])
+        .failOffsetY([-12, 12])
+        .onBegin(() => {
+          'worklet';
+          dragStartWidth.value = sidebarAnimWidth.value;
+          /* 手指一落手柄就禁用返回手势 → 横向拖只开侧栏、不会触发返回。 */
+          runOnJS(setMainPaneSwipeBack)(false);
+        })
+        .onUpdate((e) => {
+          'worklet';
+          /* 完全跟手：起始宽度 + 手指横向位移，clamp 到 [0, sidebarWidth]。 */
+          const w = dragStartWidth.value + e.translationX;
+          sidebarAnimWidth.value = Math.max(0, Math.min(sidebarWidth, w));
+        })
+        .onEnd((e) => {
+          'worklet';
+          /* 吸附：速度过 flick 阈值按方向定；否则按是否过半。 */
+          const flickOpen = e.velocityX > SWIPE_VELOCITY_THRESHOLD;
+          const flickClose = e.velocityX < -SWIPE_VELOCITY_THRESHOLD;
+          const open = flickOpen
+            ? true
+            : flickClose
+              ? false
+              : sidebarAnimWidth.value > sidebarWidth / 2;
+          sidebarAnimWidth.value = withSpring(open ? sidebarWidth : 0, {
+            ...SPRING_CONFIG,
+            velocity: e.velocityX,
+          });
+          runOnJS(settleSidebarState)(open);
+        })
+        .onFinalize(() => {
+          'worklet';
+          /* 手势结束（含 cancel）恢复返回手势。 */
+          runOnJS(setMainPaneSwipeBack)(true);
+        }),
+    [dragStartWidth, sidebarAnimWidth, sidebarWidth, settleSidebarState, setMainPaneSwipeBack],
+  );
+  /** 手柄本体的拖动手势实例（保留 tap 共存阈值）。 */
+  const handlePanGesture = useMemo(() => buildHandlePan(false), [buildHandlePan]);
+  /** 拦截带的拖动手势实例（独立 handlerTag，近乎落手即激活，抢在返回手势挪卡片前夺权）。 */
+  const edgeInterceptGesture = useMemo(() => buildHandlePan(true), [buildHandlePan]);
+  /** 整个侧栏的拖动手势实例：在侧栏区域横向滑也能开合（跟手柄一致）。
+   *  activeOffsetX±6 + failOffsetY 保证：tap 列表项、纵向 scroll DrawerContent 都不被抢，只有明确横向拖才接管。 */
+  const sidebarPanGesture = useMemo(() => buildHandlePan(false), [buildHandlePan]);
   /** 「commit armed」状态：translation 当前是否过了 commit 阈值。
    *  - true → release 就会 commit；onUpdate 在过线一刻 fire haptic
    *  - false → release 不 commit；onUpdate 在退线一刻 fire haptic（反悔反馈）
@@ -598,13 +684,16 @@ export function DrawerShell() {
             onSecondaryChange={setMainPaneSecondary}
           />
           <View style={[styles.root, styles.sidebarShellRoot, { backgroundColor: colors.drawerBackground }]}>
-            <Animated.View
-              style={[styles.sidebar, sidebarAnimStyle, { borderRightColor: colors.borderMuted }]}
-            >
-              <View style={{ width: sidebarWidth, flex: 1 }}>
-                <DrawerContent />
-              </View>
-            </Animated.View>
+            {/* 整个侧栏也接横向拖动开合（跟手柄一致）：activeOffsetX 保证 tap 列表项 / 纵向 scroll 不被抢。 */}
+            <GestureDetector gesture={sidebarPanGesture}>
+              <Animated.View
+                style={[styles.sidebar, sidebarAnimStyle, { borderRightColor: colors.borderMuted }]}
+              >
+                <View style={{ width: sidebarWidth, flex: 1 }}>
+                  <DrawerContent />
+                </View>
+              </Animated.View>
+            </GestureDetector>
             {/* 主区：嵌套 stack navigator —— 点对话等在主区内右滑入盖住、可左滑/返回，侧栏不动 */}
             <View style={[styles.sidebarMain, { backgroundColor: colors.chatScreenBackground }]}>
               <MainPaneNavigator />
@@ -617,28 +706,43 @@ export function DrawerShell() {
            *  系统自带投影 + 按压缩放）；iOS<26/Android 走 bouncy fallback，由 children Ionicons 渲染。
            *  形状（胶囊尺寸/圆角）由 dividerToggleBtn style 决定。 */}
           {mainPaneSecondary ? (
-          <Animated.View
-            style={[
-              styles.dividerToggle,
-              dividerToggleStyle,
-            ]}
-          >
-            <AnimatedCircleButton
-              style={styles.dividerToggleBtn}
-              onPress={toggle}
-              /* 触摸响应区比视觉胶囊大一圈（不改显示尺寸）：四周各扩 16pt，窄胶囊也好点中。 */
-              hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
-              iosSfSymbol={{
-                /* 三横线（菜单）图标，小一号。 */
-                name: 'line.3.horizontal',
-                size: 11,
-                color: colors.textSecondary,
-              }}
+          <>
+            {/* 左缘拦截带：在手柄那段高度，左缘放一条横向拖动手势区（跟手柄同一套 handlePanGesture）。
+             *  它把这段 Y 的左缘 touch 接住 → 主区返回手势在此收不到 → 拖动只开侧栏、不返回（区域划分，
+             *  无时序竞争，比 onBegin 临时禁用更可靠）。仅折叠态需要（展开态手柄已离开左缘），但常驻无害：
+             *  展开态它在左缘、拖它一样是开合侧栏的有效区。pointerEvents 由 GestureDetector 接管。 */}
+            <GestureDetector gesture={edgeInterceptGesture}>
+              <Animated.View style={[styles.edgeIntercept, edgeInterceptStyle]} />
+            </GestureDetector>
+
+            <Animated.View
+              style={[
+                styles.dividerToggle,
+                dividerToggleStyle,
+              ]}
             >
-              {/* iOS<26 / Android fallback：reorder-three 比 menu 三横线更窄。 */}
-              <Ionicons name="reorder-three" size={15} color={colors.textSecondary} />
-            </AnimatedCircleButton>
-          </Animated.View>
+              {/* 外层 GestureDetector 接拖动手势（完全跟手开合）；内层 AnimatedCircleButton 接 tap（toggle）。
+               *  Pan 用 activeOffsetX 只在横向拖动时激活 → 纯 tap 不被抢、仍触发 toggle；原生 glass 按钮的
+               *  touch 由按钮处理，横向拖被外层 Pan 接管。 */}
+              <GestureDetector gesture={handlePanGesture}>
+                <AnimatedCircleButton
+                  style={styles.dividerToggleBtn}
+                  onPress={toggle}
+                  /* 触摸响应区比视觉胶囊大不少（不改显示尺寸）：四周各扩 28pt，窄胶囊也好点中、好拖。 */
+                  hitSlop={{ top: 28, bottom: 28, left: 28, right: 28 }}
+                  iosSfSymbol={{
+                    /* 三横线（菜单）图标，小一号。 */
+                    name: 'line.3.horizontal',
+                    size: 11,
+                    color: colors.textSecondary,
+                  }}
+                >
+                  {/* iOS<26 / Android fallback：reorder-three 比 menu 三横线更窄。 */}
+                  <Ionicons name="reorder-three" size={15} color={colors.textSecondary} />
+                </AnimatedCircleButton>
+              </GestureDetector>
+            </Animated.View>
+          </>
           ) : null}
 
           {/* ProfileSheet 仍由本层 host；侧栏底栏头像通过 ref 调起 */}
@@ -778,6 +882,17 @@ const styles = StyleSheet.create({
     borderRadius: DIVIDER_TOGGLE_W / 2,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  /** 拖动拦截带：手柄那段高度（竖直居中）、以分界线/手柄为中心的一条横向带，透明。left 由 edgeInterceptStyle
+   *  动画跟随侧栏宽度——折叠态在左缘（接走返回手势触发区）、展开态在分界线（中间这块可拖关）。
+   *  承载 edgeInterceptGesture。zIndex 低于手柄、但高于主区内容。 */
+  edgeIntercept: {
+    position: 'absolute',
+    top: '50%',
+    marginTop: -EDGE_INTERCEPT_H / 2,
+    width: EDGE_INTERCEPT_W,
+    height: EDGE_INTERCEPT_H,
+    zIndex: 99,
   },
   drawerBack: {
     ...StyleSheet.absoluteFillObject,

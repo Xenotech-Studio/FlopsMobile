@@ -20,6 +20,7 @@ import { CommonActions, useFocusEffect } from '@react-navigation/native';
 export type MainPaneNavRef = {
   dispatch: (action: unknown) => void;
   navigate: (name: string, params?: object) => void;
+  setOptions: (options: { gestureEnabled?: boolean }) => void;
 };
 
 type BindFn = (nav: MainPaneNavRef) => void;
@@ -40,6 +41,9 @@ export type MainPaneController = {
     conversationTitle?: string;
     createEncrypted?: boolean;
   }) => void;
+  /** 临时开关主区当前屏的返回手势（swipe-back）。拖手柄开侧栏时先关、松手再开，
+   *  避免左缘手柄拖动被返回手势抢走。 */
+  setSwipeBackEnabled: (enabled: boolean) => void;
 };
 
 const ControllerContext = createContext<MainPaneController | null>(null);
@@ -102,6 +106,9 @@ export function MainPaneProvider({ children }: { children: React.ReactNode }) {
             ],
           }),
         );
+      },
+      setSwipeBackEnabled: (enabled) => {
+        navRef.current?.setOptions({ gestureEnabled: enabled });
       },
     }),
     [],
