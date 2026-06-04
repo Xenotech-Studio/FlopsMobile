@@ -36,6 +36,7 @@ export type StreamBlock =
       task_event: TaskEventPayload | null;
       arrival?: string;
     }
+  | { type: 'user_injection'; content: string; arrival?: string }
   | {
       type: 'thinking';
       content: string;
@@ -150,6 +151,9 @@ export function coalesceAssistantTurn(messages: ConversationMessage[]): ChatMess
     ) {
       blocks.push(taskEventToBlock(msg));
       i++;
+    } else if (msg.role === 'user' && arrivalOf(msg) === 'injection') {
+      blocks.push(userInjectionToBlock(msg));
+      i++;
     } else {
       i++;
     }
@@ -225,6 +229,25 @@ function rawTaskEventIsInjection(msg: ConversationMessage): boolean {
   return rawUserMessageIsTaskEvent(msg) && arrivalOf(msg) === 'injection';
 }
 
+/** P2 真实用户消息的「立刻穿插」：role=user、arrival=injection、非 task_event */
+function rawUserMessageIsInjection(msg: ConversationMessage): boolean {
+  return (
+    !!msg &&
+    msg.role === 'user' &&
+    (msg as unknown as { kind?: unknown }).kind !== 'task_event' &&
+    arrivalOf(msg) === 'injection'
+  );
+}
+
+/** 穿插用户消息 → assistant turn 内 inline block */
+function userInjectionToBlock(msg: ConversationMessage): StreamBlock {
+  return {
+    type: 'user_injection',
+    content: typeof msg.content === 'string' ? msg.content : '',
+    arrival: 'injection',
+  };
+}
+
 /**
  * 单次遍历生成本地消息列表与 raw→assistant 下标映射（供 usage_runs 对齐）。
  */
@@ -254,6 +277,12 @@ export function rawMessagesToLocalWithUsageMap(raw: ConversationMessage[]): RawM
     if (!msg || typeof msg.role !== 'string') continue;
     if (msg.role === 'system') continue;
     if (msg.role === 'user') {
+      if (rawUserMessageIsInjection(msg) && assistantGroup.length > 0) {
+        // P2 用户穿插：并入当前 assistant turn 成 inline block
+        assistantGroup.push(msg);
+        groupRawIndices.push(i);
+        continue;
+      }
       if (rawUserMessageIsTaskEvent(msg)) {
         // 穿插：并入当前 assistant turn 成 inline block；触发：独立 turn 头
         if (rawTaskEventIsInjection(msg) && assistantGroup.length > 0) {

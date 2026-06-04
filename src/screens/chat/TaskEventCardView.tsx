@@ -161,6 +161,47 @@ function TaskEventCardViewImpl({
 
 export const TaskEventCardView = React.memo(TaskEventCardViewImpl);
 
+/** P2 用户「立刻穿插」：assistant 工作块内的内联用户消息条（区别于独立 user 气泡） */
+function UserInjectionInlineImpl({ content }: { content?: string }) {
+  const { colors } = useAppTheme();
+  const text = typeof content === 'string' ? content : '';
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        gap: 8,
+        alignItems: 'center',
+        marginVertical: 2,
+        paddingVertical: 6,
+        paddingHorizontal: 10,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: colors.borderMuted,
+        backgroundColor: colors.surfaceMuted,
+      }}
+    >
+      <Text
+        style={{
+          fontSize: 11,
+          fontWeight: '600',
+          color: colors.onUserBubble,
+          backgroundColor: colors.userBubble,
+          borderRadius: 4,
+          paddingHorizontal: 6,
+          paddingVertical: 1,
+          overflow: 'hidden',
+        }}
+      >
+        穿插
+      </Text>
+      <Text style={{ flex: 1, fontSize: 13, color: colors.textBody }} selectable>
+        {text}
+      </Text>
+    </View>
+  );
+}
+export const UserInjectionInline = React.memo(UserInjectionInlineImpl);
+
 function createStyles(c: AppColors) {
   return StyleSheet.create({
     row: { width: '100%', marginVertical: 2 },
