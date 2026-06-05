@@ -225,12 +225,12 @@ function taskEventToBlock(msg: ConversationMessage): StreamBlock {
   };
 }
 
-function rawTaskEventIsInjection(msg: ConversationMessage): boolean {
+export function rawTaskEventIsInjection(msg: ConversationMessage): boolean {
   return rawUserMessageIsTaskEvent(msg) && arrivalOf(msg) === 'injection';
 }
 
 /** P2 真实用户消息的「立刻穿插」：role=user、arrival=injection、非 task_event */
-function rawUserMessageIsInjection(msg: ConversationMessage): boolean {
+export function rawUserMessageIsInjection(msg: ConversationMessage): boolean {
   return (
     !!msg &&
     msg.role === 'user' &&

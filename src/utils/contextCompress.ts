@@ -7,6 +7,9 @@ import {
   coalesceAssistantTurn,
   rawMessagesToLocal,
   rawUserMessageIsMetaOnly,
+  rawUserMessageIsInjection,
+  rawUserMessageIsTaskEvent,
+  rawTaskEventIsInjection,
   type ChatMessage,
 } from './chatLocalMessages';
 
@@ -46,6 +49,26 @@ export function mapRawMessageIndexToLocalBubbleIndex(raw: ConversationMessage[] 
     if (!msg || typeof msg.role !== 'string') continue;
     if (msg.role === 'system') continue;
     if (msg.role === 'user') {
+      // 分类顺序必须与 rawMessagesToLocalWithUsageMap 完全一致，否则气泡下标错位、分界线被错算到末尾。
+      if (rawUserMessageIsInjection(msg) && assistantGroup.length > 0) {
+        // P2 用户穿插：并入当前 assistant 气泡（flush 时由组内统一 set）
+        assistantGroup.push(msg);
+        groupRawIndices.push(i);
+        continue;
+      }
+      if (rawUserMessageIsTaskEvent(msg)) {
+        // 注意：task_event 自带 isMeta=true，若先判 meta-only 会被整条吞掉，与 render 不一致
+        if (rawTaskEventIsInjection(msg) && assistantGroup.length > 0) {
+          assistantGroup.push(msg);
+          groupRawIndices.push(i);
+          continue;
+        }
+        // 触发：独立灰条气泡（这里只关心计数与下标，内容用占位）
+        flushAssistant();
+        bubbles.push({ role: 'user', content: '' });
+        map.set(i, bubbles.length - 1);
+        continue;
+      }
       if (rawUserMessageIsMetaOnly(msg)) continue;
       flushAssistant();
       const content = typeof msg.content === 'string' ? msg.content : '';
