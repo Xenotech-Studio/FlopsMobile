@@ -378,7 +378,12 @@ export function createChatStyles(c: AppColors) {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    minHeight: 36,
+    /* 单行折叠卡：高度+圆角统一到「穿插后台信号」卡（task_event：paddingVertical 7 / horizontal 12 / radius 8）。
+       覆盖 toolCard 的 padding:14 与 radius:12（展开态才需要那么大）；去掉 minHeight 36 让高度由 padding+单行文字决定。 */
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: c.surfaceMuted,
     minWidth: 0,
   },
   toolCardCollapsedPressed: { backgroundColor: c.borderMuted },

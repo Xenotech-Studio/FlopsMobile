@@ -172,8 +172,9 @@ function UserInjectionInlineImpl({ content }: { content?: string }) {
         gap: 8,
         alignItems: 'center',
         marginVertical: 2,
-        paddingVertical: 6,
-        paddingHorizontal: 10,
+        /* 高度统一到「穿插后台信号」卡（task_event head：paddingVertical 7 / horizontal 12） */
+        paddingVertical: 7,
+        paddingHorizontal: 12,
         borderRadius: 8,
         borderWidth: 1,
         borderColor: colors.borderMuted,

@@ -3615,9 +3615,10 @@ export function ChatScreen({
               {/* P2 待发队列：agent 在跑时回车发的消息排这里，逐条自动发；可对某条立刻穿插或删除 */}
               {sendQueue.length > 0 ? (
                 <View
-                  style={{ marginHorizontal: 12, marginBottom: 6, gap: 4 }}
+                  style={{ marginHorizontal: 12, marginBottom: 8, gap: 6 }}
                   pointerEvents="box-none"
                 >
+                  {/* 待发队列：参考 web —— 虚线边框卡片 + 文字 + 「穿插」/「×」描边胶囊按钮 */}
                   {sendQueue.map((it) => (
                     <View
                       key={it.id}
@@ -3625,18 +3626,20 @@ export function ChatScreen({
                         flexDirection: 'row',
                         alignItems: 'center',
                         gap: 8,
-                        backgroundColor: colors.surfaceMuted,
-                        borderRadius: 10,
+                        backgroundColor: colors.surface,
+                        borderRadius: 14,
                         borderWidth: 1,
+                        borderStyle: 'dashed',
                         borderColor: colors.borderMuted,
-                        paddingVertical: 6,
-                        paddingHorizontal: 10,
+                        paddingVertical: 10,
+                        paddingLeft: 14,
+                        paddingRight: 8,
                         opacity: it.pending ? 0.6 : 1,
                       }}
                     >
                       <Text
-                        numberOfLines={1}
-                        style={{ flex: 1, fontSize: 13, color: colors.textBody }}
+                        numberOfLines={2}
+                        style={{ flex: 1, fontSize: 14, lineHeight: 20, color: colors.textBody }}
                       >
                         {it.text || '（空）'}
                       </Text>
@@ -3645,8 +3648,17 @@ export function ChatScreen({
                           onPress={() => injectQueueItem(it.id)}
                           hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                           accessibilityLabel="立刻穿插"
+                          activeOpacity={0.7}
+                          style={{
+                            paddingVertical: 5,
+                            paddingHorizontal: 12,
+                            borderRadius: 9,
+                            borderWidth: 1,
+                            borderColor: colors.borderMuted,
+                            backgroundColor: colors.surfaceMuted,
+                          }}
                         >
-                          <Text style={{ fontSize: 12, fontWeight: '600', color: colors.accentPurple }}>
+                          <Text style={{ fontSize: 13, fontWeight: '600', color: colors.accentPurple }}>
                             穿插
                           </Text>
                         </TouchableOpacity>
@@ -3655,6 +3667,17 @@ export function ChatScreen({
                         onPress={() => deleteQueueItem(it.id)}
                         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                         accessibilityLabel="移除待发消息"
+                        activeOpacity={0.7}
+                        style={{
+                          width: 30,
+                          height: 30,
+                          borderRadius: 9,
+                          borderWidth: 1,
+                          borderColor: colors.borderMuted,
+                          backgroundColor: colors.surfaceMuted,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
                       >
                         <Ionicons name="close" size={16} color={colors.textSecondary} />
                       </TouchableOpacity>
