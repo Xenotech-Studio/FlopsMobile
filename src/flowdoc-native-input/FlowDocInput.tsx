@@ -51,6 +51,8 @@ export type FlowDocInputHandle = {
   ) => void;
   removePill: (refKey: string) => void;
   setContent: (content: FlowDocContent) => void;
+  /** 清空内容（= setContent([])）。语义上等价但语义更明确，供 chat composer 发送后清空用 */
+  clear: () => void;
   /** 给当前选区加 mark。color 用 value 传 hex；布尔型 mark 不需要 value */
   applyMark: (mark: FlowDocMarkName, value?: string) => void;
   removeMark: (mark: FlowDocMarkName) => void;
@@ -137,6 +139,13 @@ export const FlowDocInput = forwardRef(
       setContent: (content) => {
         if (!nativeRef.current) return;
         NativeCommands.setContent(nativeRef.current, JSON.stringify(content));
+      },
+      clear: () => {
+        if (!nativeRef.current) return;
+        /* 空文档 = 空 contentJson 数组；native applyContentJson 解析 [] → 清空 attributedText。
+           走 setContent 命令而不是靠 keyed-remount 重读 initialContent —— Fabric view 回收 +
+           initialContentApplied 守卫让 remount 清空不可靠，imperative 是可靠路径。 */
+        NativeCommands.setContent(nativeRef.current, '[]');
       },
       applyMark: (mark, value = '') => {
         if (!nativeRef.current) return;

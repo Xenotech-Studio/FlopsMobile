@@ -252,6 +252,13 @@
 - (void)setEditable:(BOOL)editable {
   _editable = editable;
   self.textView.editable = editable;
+  /* editable=NO 时（chat composer 在 agent 跑时）把 textView 的 userInteractionEnabled 关掉，
+     让覆盖在 card 上的 RN 兄弟按钮（"停止"键）能收到 tap —— 它不是 UITextView 的子 view，
+     gestureRecognizer:shouldReceiveTouch: 那套 UIControl 过滤够不到它，唯一可靠办法是让
+     textView 整体不拦 touch、让 touch 穿透到上层 RN 按钮。
+     副作用评估：本 composer textView scrollEnabled=NO（高度由 JS autoHeight 驱动），非编辑态
+     既不能编辑也不需要滚动，关交互无功能损失；恢复 editable=YES 时重新打开。 */
+  self.textView.userInteractionEnabled = editable;
 }
 
 - (void)refreshAllPillStyles {

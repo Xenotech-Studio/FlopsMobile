@@ -1498,7 +1498,11 @@ export function ChatScreen({
     if (!text && flops_refs.length === 0) return;
     setComposerDoc([{ type: 'paragraph', children: [{ text: '' }] }]);
     composerRefDataByKeyRef.current = new Map();
-    setComposerRemountKey((n) => n + 1);
+    /* 可靠清空：imperative 命令直接清 native 内容。不再 bump composerRemountKey 强制 remount——
+       Fabric view 回收 + initialContentApplied 守卫让 remount 重读空 initialContent 不可靠（旧文本
+       残留）；保持同一 native view + setContent('[]') 是可靠路径。composerRemountKey 仍保留给
+       "切页回来重建输入框"那个独立场景用。 */
+    composerAdapterRef.current?.clear();
     const tempId = `tmp-${Date.now()}`;
     setSendQueue((q) => [...q, { id: tempId, text, pending: true }]);
     try {
@@ -1558,7 +1562,11 @@ export function ChatScreen({
     /* 清空 composer：把 SlateDocument 重置为单段空 paragraph，refDataByKey 清空，再 bump key 强制 remount native */
     setComposerDoc([{ type: 'paragraph', children: [{ text: '' }] }]);
     composerRefDataByKeyRef.current = new Map();
-    setComposerRemountKey((n) => n + 1);
+    /* 可靠清空：imperative 命令直接清 native 内容。不再 bump composerRemountKey 强制 remount——
+       Fabric view 回收 + initialContentApplied 守卫让 remount 重读空 initialContent 不可靠（旧文本
+       残留）；保持同一 native view + setContent('[]') 是可靠路径。composerRemountKey 仍保留给
+       "切页回来重建输入框"那个独立场景用。 */
+    composerAdapterRef.current?.clear();
     setError('');
     setLoading(true);
     setStreamingText('');
