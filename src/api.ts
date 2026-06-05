@@ -1279,6 +1279,27 @@ export async function streamChat(
 const CHAT_V2_RECONNECT_MAX = 20;
 const CHAT_V2_RECONNECT_DELAY_MS = 500;
 
+/** server 409：重生成的不是最新一条非-meta user 消息，继续会丢中间所有消息，需客户端确认后带
+ *  confirm_non_latest_regenerate=true 重试。携带 detail 供 UI 弹确认框展示影响范围。 */
+export type NonLatestRegenerateDetail = {
+  error: 'non_latest_regenerate_requires_confirm';
+  message?: string;
+  after_user_index?: number;
+  latest_user_index?: number;
+  target_preview?: string;
+  latest_preview?: string;
+  messages_to_drop?: number;
+  total_messages?: number;
+};
+export class NonLatestRegenerateConfirmError extends Error {
+  detail: NonLatestRegenerateDetail;
+  constructor(detail: NonLatestRegenerateDetail) {
+    super(detail.message || '重新生成会丢失中间消息，需确认');
+    this.name = 'NonLatestRegenerateConfirmError';
+    this.detail = detail;
+  }
+}
+
 export type ChatV2StreamStart =
   | { tag: 'new_message'; message: string; flops_refs?: unknown[] }
   | {
@@ -1288,6 +1309,8 @@ export type ChatV2StreamStart =
       regenerate_after_task_id?: string;
       message?: string;
       flops_refs?: unknown[];
+      /** 重生成的不是最新一条 user 消息时，server 409 要求确认（会丢中间消息）；用户确认后带 true 重试 */
+      confirm_non_latest_regenerate?: boolean;
     }
   | { tag: 'resume'; run_id: string };
 
@@ -1497,6 +1520,7 @@ export async function streamChatV2Loop(
         ...(Array.isArray(start.flops_refs) && start.flops_refs.length > 0
           ? { flops_refs: start.flops_refs }
           : {}),
+        ...(start.confirm_non_latest_regenerate ? { confirm_non_latest_regenerate: true } : {}),
       };
     } else {
       body = { subscribe_only: true, run_id: v2RunId, replay_from: 0 };
@@ -1565,7 +1589,20 @@ export async function streamChatV2Loop(
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      const detail = (err as { detail?: string }).detail || `请求失败: ${res.status}`;
+      const rawDetail = (err as { detail?: unknown }).detail;
+      /* 非最新重生成需确认：detail 是结构化对象（{error, message, messages_to_drop, ...}），
+         抛专用错误让上层弹确认框，而不是当成"已有进行中回复"。 */
+      if (
+        res.status === 409 &&
+        !isReconnect &&
+        rawDetail &&
+        typeof rawDetail === 'object' &&
+        (rawDetail as { error?: string }).error === 'non_latest_regenerate_requires_confirm'
+      ) {
+        throw new NonLatestRegenerateConfirmError(rawDetail as NonLatestRegenerateDetail);
+      }
+      const detail =
+        (typeof rawDetail === 'string' ? rawDetail : undefined) || `请求失败: ${res.status}`;
       if (res.status === 409 && !isReconnect) {
         throw new Error('该对话已有进行中的回复，请等待结束或稍后重试');
       }

@@ -42,6 +42,7 @@ import {
   createConversation,
   streamChatV2Loop,
   cancelConversation,
+  NonLatestRegenerateConfirmError,
   enqueueSendQueue,
   getSendQueue,
   deleteSendQueueItem,
@@ -1805,6 +1806,8 @@ export function ChatScreen({
       editedMessage?: string,
       editedFlopsRefs?: FlopsRef[],
       reprocessTaskId?: string,
+      /** 用户已确认"非最新重生成会丢中间消息" → 带 confirm 重试（见 catch 里 409 处理） */
+      confirmNonLatest?: boolean,
     ) => {
       const reprocTid = typeof reprocessTaskId === 'string' ? reprocessTaskId.trim() : '';
       if (
@@ -1873,8 +1876,9 @@ export function ChatScreen({
        * 非尾窗(全量)时 userCountBefore=0，等价旧行为。 */
       const globalAfterUserIndex =
         (afterUserIndex as number) + (messageWindowMetaRef.current?.userCountBefore ?? 0);
+      const confirmFlag = confirmNonLatest ? { confirm_non_latest_regenerate: true } : {};
       const regenStart: ChatV2StreamStart = reprocTid
-        ? { tag: 'regenerate', regenerate_after_task_id: reprocTid }
+        ? { tag: 'regenerate', regenerate_after_task_id: reprocTid, ...confirmFlag }
         : editedMessage !== undefined
           ? {
               tag: 'regenerate',
@@ -1883,8 +1887,9 @@ export function ChatScreen({
               ...(editedFlopsRefs && editedFlopsRefs.length > 0
                 ? { flops_refs: editedFlopsRefs }
                 : {}),
+              ...confirmFlag,
             }
-          : { tag: 'regenerate', after_user_index: globalAfterUserIndex };
+          : { tag: 'regenerate', after_user_index: globalAfterUserIndex, ...confirmFlag };
       const { streamDone, finalText, localBlocks, lastConvId } = await runV2WithHandlers({
         convId: conversationId,
         start: regenStart,
@@ -1925,7 +1930,45 @@ export function ChatScreen({
       }
     } catch (e) {
       clearTimeout(timeout);
-      if (e && (e as { name?: string }).name === 'AbortError' && pausedByBackgroundRef.current) {
+      if (e instanceof NonLatestRegenerateConfirmError) {
+        /* 非最新重生成需确认：本地已乐观截断了消息——取消时从服务器拉回原状复原；
+           确认则带 confirm 重试（会真正丢弃中间消息）。 */
+        const d = e.detail;
+        const drop = d.messages_to_drop ?? 0;
+        const resync = () => {
+          if (!session || !conversationId) return;
+          getConversation(session, conversationId, CHAT_MESSAGES_INITIAL_LIMIT)
+            .then(({ conversation, messagesWindow }) => {
+              applyConversationUsageState(conversation, messagesWindow);
+              const raw =
+                conversation?.messages && Array.isArray(conversation.messages)
+                  ? conversation.messages
+                  : [];
+              setMessages(rawMessagesToLocal(raw));
+            })
+            .catch(() => {});
+        };
+        Alert.alert(
+          '重新生成会丢失消息',
+          `这不是最新的消息，继续会丢弃它之后的 ${drop} 条消息（不可恢复）。确定继续吗？`,
+          [
+            { text: '取消', style: 'cancel', onPress: resync },
+            {
+              text: '继续',
+              style: 'destructive',
+              onPress: () => {
+                void handleRegenerate(
+                  afterUserIndex,
+                  editedMessage,
+                  editedFlopsRefs,
+                  reprocessTaskId,
+                  true,
+                );
+              },
+            },
+          ],
+        );
+      } else if (e && (e as { name?: string }).name === 'AbortError' && pausedByBackgroundRef.current) {
         pausedByBackgroundRef.current = false;
         silentBackgroundAbort = true;
       } else if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
