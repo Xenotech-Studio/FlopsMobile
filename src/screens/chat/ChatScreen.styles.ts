@@ -77,7 +77,12 @@ export const COMPOSER_TEXT_INSET_SHORT = {
     COMPOSER_INPUT_PAD_LEFT_SHORT +
     COMPOSER_CARD_PADDING_H,
   bottom: 9,
-  right: COMPOSER_CARD_PADDING_H + COMPOSER_CARD_PADDING_H,
+  /* iOS 右侧有发送/停止键（跟右半圆同心）→ 右 inset 镜像左侧，给文字让位不被按钮压住；
+     其它平台右边没按钮，保持原来的小 inset。 */
+  right:
+    Platform.OS === 'ios'
+      ? COMPOSER_CARD_PADDING_H + COMPOSER_INPUT_PAD_LEFT_SHORT + COMPOSER_CARD_PADDING_H
+      : COMPOSER_CARD_PADDING_H + COMPOSER_CARD_PADDING_H,
 };
 /** Tall 模式（多行卡片）四边 inset：
  *  - left/right: 原 card.paddingH + composerInputTall.paddingH (= 8 + 12 = 20)
@@ -965,6 +970,18 @@ export function createChatStyles(c: AppColors) {
     position: 'absolute',
     bottom: COMPOSER_PLUS_BTN_INSET,
     left: COMPOSER_PLUS_BTN_INSET,
+    width: COMPOSER_PLUS_BTN_SIZE,
+    height: COMPOSER_PLUS_BTN_SIZE,
+    borderRadius: COMPOSER_PLUS_BTN_SIZE / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 5,
+  },
+  /** 发送/停止键（iOS）：跟 + 镜像，靠右、跟右半圆同心。 */
+  composerSendBtnAbsolute: {
+    position: 'absolute',
+    bottom: COMPOSER_PLUS_BTN_INSET,
+    right: COMPOSER_PLUS_BTN_INSET,
     width: COMPOSER_PLUS_BTN_SIZE,
     height: COMPOSER_PLUS_BTN_SIZE,
     borderRadius: COMPOSER_PLUS_BTN_SIZE / 2,

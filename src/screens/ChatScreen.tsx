@@ -3669,22 +3669,63 @@ export function ChatScreen({
                   发送统一靠键盘 Return（FlowDocSlateAdapter.onSubmitOnEnter） — 没有发送按钮。
                   loading 时把 + 换成 ⏹ 停止键。 */}
               {(() => {
+                /* iOS：右侧加发送/停止键（对齐桌面/web）→ 左侧 + 永远只做"引用文档"，不再兼任停止。
+                   其它平台保持原样（+ 在 loading 时兼任停止，因为没有右侧键）。 */
+                const showSendBtn = Platform.OS === 'ios';
                 const renderPlusBtn = (
                   <TouchableOpacity
                     style={styles.composerPlusBtnAbsolute}
-                    onPress={loading ? handleStop : () => setComposerPickerOpen(true)}
-                    disabled={!loading && (!session || conversationHistoryLoading)}
-                    accessibilityLabel={loading ? '停止' : '引用 FlowDoc 文档'}
+                    onPress={
+                      loading && !showSendBtn
+                        ? handleStop
+                        : () => setComposerPickerOpen(true)
+                    }
+                    disabled={
+                      (showSendBtn || !loading) && (!session || conversationHistoryLoading)
+                    }
+                    accessibilityLabel={
+                      loading && !showSendBtn ? '停止' : '引用 FlowDoc 文档'
+                    }
                     activeOpacity={0.7}
                     hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                   >
                     <Ionicons
-                      name={loading ? 'stop' : 'add'}
+                      name={loading && !showSendBtn ? 'stop' : 'add'}
                       size={22}
-                      color={loading ? colors.danger : colors.textSecondary}
+                      color={loading && !showSendBtn ? colors.danger : colors.textSecondary}
                     />
                   </TouchableOpacity>
                 );
+                /* 右下角发送键（仅 iOS，跟右侧半圆同心）：
+                   - 运行中且内容为空 → 停止键（handleStop）
+                   - 否则 → 发送键（handleSendMessage；idle=发送 / 运行中有内容=入待发队列）
+                   - idle 且无内容 → 发送禁用（灰） */
+                const sendIsStop = loading && !composerStats.hasContent;
+                const sendDisabled =
+                  !sendIsStop &&
+                  (!session || conversationHistoryLoading || !composerStats.hasContent);
+                const renderSendBtn = showSendBtn ? (
+                  <TouchableOpacity
+                    style={styles.composerSendBtnAbsolute}
+                    onPress={sendIsStop ? handleStop : handleSendMessage}
+                    disabled={sendDisabled}
+                    accessibilityLabel={sendIsStop ? '停止' : '发送'}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
+                    <Ionicons
+                      name={sendIsStop ? 'stop' : 'arrow-up'}
+                      size={22}
+                      color={
+                        sendIsStop
+                          ? colors.danger
+                          : sendDisabled
+                            ? colors.placeholder
+                            : colors.accentPurple
+                      }
+                    />
+                  </TouchableOpacity>
+                ) : null;
                 const renderChips = session ? (
                   <>
                     <TouchableOpacity
@@ -3848,8 +3889,10 @@ export function ChatScreen({
                 const innerCardContent = (
                   <>
                     {adapter}
-                    {/* + 按钮：card 的 absolute child；bottom:10 left:8 在 short / tall 都一样 */}
+                    {/* + 按钮：card 的 absolute child；跟左侧半圆同心 */}
                     {renderPlusBtn}
+                    {/* 发送/停止键（iOS）：card 的 absolute child；跟右侧半圆同心 */}
+                    {renderSendBtn}
                   </>
                 );
                 return (
