@@ -33,6 +33,10 @@ const COMPOSER_PLUS_BTN_SIZE = 32;
  *  对应 + 边沿到 card 边沿的 inset。绝对定位的 `bottom` / `left` 都用这个。 */
 const COMPOSER_PLUS_BTN_INSET =
   (COMPOSER_PILL_SIZE - COMPOSER_PLUS_BTN_SIZE) / 2;
+/** 发送/停止键比 + 略大（实色圆钮视觉更重）；icon 不跟着变大。跟右半圆同心 → inset 按自身尺寸算。 */
+const COMPOSER_SEND_BTN_SIZE = 38;
+const COMPOSER_SEND_BTN_INSET =
+  (COMPOSER_PILL_SIZE - COMPOSER_SEND_BTN_SIZE) / 2;
 /** + 右沿到输入区 cursor 左边缘的视觉间距 */
 const COMPOSER_PLUS_TO_INPUT_GAP = 6;
 /** Card 整体水平 padding（short / tall 同值）；inputShort 内部还有自己的 paddingH = 同值 */
@@ -77,11 +81,11 @@ export const COMPOSER_TEXT_INSET_SHORT = {
     COMPOSER_INPUT_PAD_LEFT_SHORT +
     COMPOSER_CARD_PADDING_H,
   bottom: 9,
-  /* iOS 右侧有发送/停止键（跟右半圆同心）→ 右 inset 镜像左侧，给文字让位不被按钮压住；
+  /* iOS 右侧有发送/停止键（跟右半圆同心）→ 右 inset 按发送键几何让位（按钮右沿 + GAP），文字不被压住；
      其它平台右边没按钮，保持原来的小 inset。 */
   right:
     Platform.OS === 'ios'
-      ? COMPOSER_CARD_PADDING_H + COMPOSER_INPUT_PAD_LEFT_SHORT + COMPOSER_CARD_PADDING_H
+      ? COMPOSER_SEND_BTN_INSET + COMPOSER_SEND_BTN_SIZE + COMPOSER_PLUS_TO_INPUT_GAP
       : COMPOSER_CARD_PADDING_H + COMPOSER_CARD_PADDING_H,
 };
 /** Tall 模式（多行卡片）四边 inset：
@@ -980,11 +984,11 @@ export function createChatStyles(c: AppColors) {
   /** 发送/停止键（iOS）：跟 + 镜像，靠右、跟右半圆同心。 */
   composerSendBtnAbsolute: {
     position: 'absolute',
-    bottom: COMPOSER_PLUS_BTN_INSET,
-    right: COMPOSER_PLUS_BTN_INSET,
-    width: COMPOSER_PLUS_BTN_SIZE,
-    height: COMPOSER_PLUS_BTN_SIZE,
-    borderRadius: COMPOSER_PLUS_BTN_SIZE / 2,
+    bottom: COMPOSER_SEND_BTN_INSET,
+    right: COMPOSER_SEND_BTN_INSET,
+    width: COMPOSER_SEND_BTN_SIZE,
+    height: COMPOSER_SEND_BTN_SIZE,
+    borderRadius: COMPOSER_SEND_BTN_SIZE / 2,
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 5,

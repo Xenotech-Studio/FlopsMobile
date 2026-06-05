@@ -3706,7 +3706,17 @@ export function ChatScreen({
                   (!session || conversationHistoryLoading || !composerStats.hasContent);
                 const renderSendBtn = showSendBtn ? (
                   <TouchableOpacity
-                    style={styles.composerSendBtnAbsolute}
+                    style={[
+                      styles.composerSendBtnAbsolute,
+                      /* 跟 web 一致：亮色=黑底白 icon，暗色反之（白底黑 icon）——用随主题翻转的
+                         textPrimary(底)+surface(icon) 自动得到。禁用：灰底白 icon（surfaceMuted 太浅
+                         显不出白 icon，用中性灰 placeholder 作底）。 */
+                      {
+                        backgroundColor: sendDisabled
+                          ? '#a3a3a3' /* 中性灰（R=G=B），非 placeholder 的偏蓝冷灰 */
+                          : colors.textPrimary,
+                      },
+                    ]}
                     onPress={sendIsStop ? handleStop : handleSendMessage}
                     disabled={sendDisabled}
                     accessibilityLabel={sendIsStop ? '停止' : '发送'}
@@ -3715,14 +3725,8 @@ export function ChatScreen({
                   >
                     <Ionicons
                       name={sendIsStop ? 'stop' : 'arrow-up'}
-                      size={22}
-                      color={
-                        sendIsStop
-                          ? colors.danger
-                          : sendDisabled
-                            ? colors.placeholder
-                            : colors.accentPurple
-                      }
+                      size={sendIsStop ? 15 : 20}
+                      color={sendDisabled ? '#ffffff' : colors.surface}
                     />
                   </TouchableOpacity>
                 ) : null;
@@ -3879,7 +3883,8 @@ export function ChatScreen({
                     /** 跟用户消息气泡 styles.userText 对齐：16 / 22 */
                     lineHeight={22}
                     pillMaxLabelTextWidth={100}
-                    editable={!loading && !conversationHistoryLoading}
+                    /* agent 跑动时也可编辑：P2 待发队列 / 穿插消息需要 run 中输入。只在历史加载中禁用。 */
+                    editable={!conversationHistoryLoading}
                     textContainerInset={
                       composerTall ? COMPOSER_TEXT_INSET_TALL : COMPOSER_TEXT_INSET_SHORT
                     }

@@ -119,18 +119,20 @@
   }
 }
 
-/* tap 命中 + 按钮等 UIControl 子树时，让 textView 的 tap recognizer 跳过 — UIControl 自己
-   接 tap action，不被 textView 抢去 placeCursor。 */
+/* tap 命中"非本 textView 子树"的 view 时，让 textView 的 tap recognizer 跳过 —— 这样覆盖在
+   card 上的 RN 兄弟按钮（停止/发送/+，它们不是 UIControl 也不在 textView 子树里）能拿到 tap，
+   textView 不去抢着 placeCursor。命中 textView 自己/其子 view 才接（正常光标定位）。
+   （之前只过滤 UIControl，RN TouchableOpacity 不是 UIControl 漏网，故改成"非子树即让位"。） */
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
        shouldReceiveTouch:(UITouch *)touch {
   UIView *v = touch.view;
-  while (v != nil && v != self) {
-    if ([v isKindOfClass:[UIControl class]]) {
-      return NO;
+  while (v != nil) {
+    if (v == self.textView) {
+      return YES; // 命中 textView 本身或其子 view → 正常接管（光标定位 / 选择）
     }
     v = v.superview;
   }
-  return YES;
+  return NO; // 一路到根都没经过本 textView → 是覆盖的兄弟 view（RN 按钮等），让位
 }
 
 /* 跟外层任何 recognizer 都允许并发 — 比如 BouncyGlassCard / BouncyButton 的 tap，跟我们
@@ -252,13 +254,11 @@
 - (void)setEditable:(BOOL)editable {
   _editable = editable;
   self.textView.editable = editable;
-  /* editable=NO 时（chat composer 在 agent 跑时）把 textView 的 userInteractionEnabled 关掉，
-     让覆盖在 card 上的 RN 兄弟按钮（"停止"键）能收到 tap —— 它不是 UITextView 的子 view，
-     gestureRecognizer:shouldReceiveTouch: 那套 UIControl 过滤够不到它，唯一可靠办法是让
-     textView 整体不拦 touch、让 touch 穿透到上层 RN 按钮。
-     副作用评估：本 composer textView scrollEnabled=NO（高度由 JS autoHeight 驱动），非编辑态
-     既不能编辑也不需要滚动，关交互无功能损失；恢复 editable=YES 时重新打开。 */
-  self.textView.userInteractionEnabled = editable;
+  /* 不再用 userInteractionEnabled=editable 关掉整个 textView —— 那会让 agent 跑动时无法点击
+     输入框打字（P2 待发队列 / 穿插消息需要 run 中也能输入）。覆盖在 card 上的 RN 兄弟按钮
+     （停止/发送键）能收到 tap 改由 gestureRecognizer:shouldReceiveTouch: 处理：命中非本
+     textView 子树的 view 时让 textView 的 tap 让位（见该 delegate）。 */
+  self.textView.userInteractionEnabled = YES;
 }
 
 - (void)refreshAllPillStyles {
