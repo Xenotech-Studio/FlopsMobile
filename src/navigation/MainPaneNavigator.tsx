@@ -17,12 +17,14 @@ import React, { useEffect } from 'react';
 import {
   createStackNavigator,
   type StackScreenProps,
+  type StackCardInterpolationProps,
 } from '@react-navigation/stack';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import { TodayScreen } from '../screens/TodayScreen';
 import { ProjectScreen } from '../screens/ProjectScreen';
 import { DocsScreen } from '../screens/DocsScreen';
 import { ChatScreen } from '../screens/ChatScreen';
+import { DocPreviewScreen } from '../screens/docs/DocPreviewScreen';
 import { useAppTheme } from '../context/ThemeContext';
 import type { MainPaneNavRef } from '../screens/shell/MainPaneContext';
 import {
@@ -36,6 +38,8 @@ export type MainPaneParamList = {
   Project: { projectId: string; projectName?: string };
   Docs: undefined;
   Chat: { conversationId?: string; conversationTitle?: string; createEncrypted?: boolean } | undefined;
+  /** 文档下钻预览页（iPad 主区内整页右滑入）：只携带 id，正文/子项由 docsTreeStore 解析。 */
+  DocPreview: { id: string };
 };
 
 const MainPaneStack = createStackNavigator<MainPaneParamList>();
@@ -51,6 +55,48 @@ function noAnimationInterpolator() {
 const instantTransitionSpec = {
   open: { animation: 'timing' as const, config: { duration: 0 } },
   close: { animation: 'timing' as const, config: { duration: 0 } },
+};
+
+/** 右侧滑入：新页从屏幕右缘（layouts.screen.width）平移到 0，盖住当前页（原生 push 风）。
+ *  默认是瞬切（一级页由侧栏 reset 切换），所以二级 push 页（DocPreview）要单独覆盖这条。 */
+function rightCardStyleInterpolator({ current, layouts }: StackCardInterpolationProps) {
+  return {
+    cardStyle: {
+      transform: [
+        {
+          translateX: current.progress.interpolate({
+            inputRange: [0, 1],
+            outputRange: [layouts.screen.width, 0],
+          }),
+        },
+      ],
+    },
+  };
+}
+/** push 滑入用的 spring（沿用 Chat 曾用的参数：硬挺、无回弹，接近原生 push 的手感）。 */
+const slideTransitionSpec = {
+  open: {
+    animation: 'spring' as const,
+    config: {
+      stiffness: 1000,
+      damping: 500,
+      mass: 3,
+      overshootClamping: true,
+      restDisplacementThreshold: 0.01,
+      restSpeedThreshold: 0.01,
+    },
+  },
+  close: {
+    animation: 'spring' as const,
+    config: {
+      stiffness: 1000,
+      damping: 500,
+      mass: 3,
+      overshootClamping: true,
+      restDisplacementThreshold: 0.01,
+      restSpeedThreshold: 0.01,
+    },
+  },
 };
 
 /** 每个 wrapper 屏挂载时把 nested navigation 绑到共享 ref（供侧栏驱动）+ focus 时声明是否二级页
@@ -100,6 +146,13 @@ function ChatRoute({ route }: StackScreenProps<MainPaneParamList, 'Chat'>) {
   );
 }
 
+/** 文档下钻预览：push 出来的二级页（主区左上角是返回键 → 报告 isSecondary=true，
+ *  DrawerShell 据此显示分界线切换钮）。route.params.id 桥接给 DocPreviewScreen。 */
+function DocPreviewRoute({ route }: StackScreenProps<MainPaneParamList, 'DocPreview'>) {
+  useBindNav(true);
+  return <DocPreviewScreen id={route.params.id} />;
+}
+
 export function MainPaneNavigator() {
   const { colors } = useAppTheme();
   return (
@@ -119,6 +172,16 @@ export function MainPaneNavigator() {
       {/* Chat 也是顶级页：沿用默认瞬切（noAnimationInterpolator + instantTransitionSpec），
           跟 Today/Project/Docs 一样直接切入、不滑入。 */}
       <MainPaneStack.Screen name="Chat" component={ChatRoute} />
+      {/* 文档下钻预览：覆盖默认瞬切 → 右滑入 + spring + 左缘滑回（原生 push 风）。 */}
+      <MainPaneStack.Screen
+        name="DocPreview"
+        component={DocPreviewRoute}
+        options={{
+          cardStyleInterpolator: rightCardStyleInterpolator,
+          transitionSpec: slideTransitionSpec,
+          gestureEnabled: true,
+        }}
+      />
     </MainPaneStack.Navigator>
   );
 }

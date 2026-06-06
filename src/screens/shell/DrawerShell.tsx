@@ -195,6 +195,11 @@ export function DrawerShell() {
    *  仅 compact（手机覆盖式抽屉）用。 */
   const progress = useSharedValue(0);
 
+  /** 让位左缘开抽屉手势：文档板块（DocsScreen）focus 时置 true → iOS 左缘 strip 失活，
+   *  把屏幕左缘让给文档自己的左缘手势（目录里开全局 / 预览里露目录），且不吞文档折叠点击。
+   *  其余页面 strip 照常（保持原灵敏度）。仅 compact iOS strip 受影响。 */
+  const openGestureSuppressed = useSharedValue(false);
+
   /** ── sidebarShell（iPad 原生 push 侧栏）专用 ──
    *  开合走双轨：
    *   1) imperative command `setOpen`（原生立刻起 UIView 动画，不等 React 重渲染）→ 零延迟。
@@ -397,6 +402,14 @@ export function DrawerShell() {
     profileSheetRef.current?.present();
   }, []);
 
+  /** 文档抽屉式预览调它让位/恢复左缘开抽屉手势(写 shared value，UI 线程即时生效)。 */
+  const setOpenGestureSuppressed = useCallback(
+    (suppressed: boolean) => {
+      openGestureSuppressed.value = suppressed;
+    },
+    [openGestureSuppressed]
+  );
+
   /** 服务器 426：Android 上自动 present ProfileSheet（sheet 内部也订阅总线，会同步打开 about modal）。
    *  iOS 不自动 present —— iOS 的 UpgradeRequiredOverlay 只展示「我知道了」，用户可手动进 Profile 看横幅。 */
   useEffect(() => {
@@ -472,7 +485,7 @@ export function DrawerShell() {
     [close, sidebarShell, sidebarDefaultOpen, applySidebarOpen]
   );
 
-  /** 左缘开抽屉手势：常挂载，靠下方 openGestureWrapperProps 按 progress 切 pointerEvents 启停 */
+  /** 左缘开抽屉手势：常挂载在覆盖手势条上，靠 openGestureWrapperProps 按 progress 切 pointerEvents 启停。 */
   const openGesture = useMemo(
     () =>
       Gesture.Pan()
@@ -670,7 +683,12 @@ export function DrawerShell() {
     () => ({ pointerEvents: progress.value > 0.5 ? ('auto' as const) : ('none' as const) }),
   );
   const openGestureWrapperProps = useAnimatedProps(
-    () => ({ pointerEvents: progress.value < 0.5 ? ('box-only' as const) : ('none' as const) }),
+    () => ({
+      pointerEvents:
+        progress.value < 0.5 && !openGestureSuppressed.value
+          ? ('box-only' as const)
+          : ('none' as const),
+    }),
   );
   /* drawerBack 固定 pointerEvents='box-none'：drawerBack 自己不吞 touch（drawer 关闭时
    *  mainOuter 完全覆盖屏幕在上层先接 touch，不会穿透），里面 GestureDetector 永远 live。
@@ -686,8 +704,9 @@ export function DrawerShell() {
       active,
       setActive: setActiveAndClose,
       presentProfileSheet,
+      setOpenGestureSuppressed,
     }),
-    [open, close, toggle, active, setActiveAndClose, presentProfileSheet]
+    [open, close, toggle, active, setActiveAndClose, presentProfileSheet, setOpenGestureSuppressed]
   );
 
   /** 渲染 active 顶层页：用 key 强制 unmount/remount（user 定的「不保留状态」） */
@@ -879,21 +898,12 @@ export function DrawerShell() {
           </Animated.View>
         </Animated.View>
 
-        {/* 左缘开抽屉手势条：仅 iOS 挂载。
-         *  - iOS 没有"系统左缘 = 返回"约定，pan 是唯一的左缘开抽屉入口。
-         *  - Android 改成完全靠 BackHandler 接住系统返回（含左缘滑动）→ open()，
-         *    省掉这条 strip 跟 SystemGestureExclusionView，避免 strip 跟其它点击
-         *    区域抢手势（曾经盖过 HamburgerButton 触发"点不动"那个 bug）；
-         *    代价是 Android 失去 drag-to-peek 的跟手反馈，按下放手才弹开。 */}
+        {/* 左缘开抽屉手势条：仅 iOS 挂载。文档板块 focus 时由 openGestureSuppressed 让位（strip 失活），
+         *  把左缘交给文档自己的手势；其余页面照常用这条 strip 开抽屉（保持原灵敏度）。 */}
         {Platform.OS === 'ios' ? (
           <GestureDetector gesture={openGesture}>
             <Animated.View
-              style={[
-                styles.leftEdge,
-                { width: LEFT_EDGE_STRIP_WIDTH },
-              ]}
-              /* pointerEvents 用 useAnimatedProps 跟 progress.value 在 UI 线程切：progress < 0.5
-               * 即激活（box-only），过半就让位给 closeGesture。GestureDetector 持续 attached。 */
+              style={[styles.leftEdge, { width: LEFT_EDGE_STRIP_WIDTH }]}
               animatedProps={openGestureWrapperProps}
               collapsable={false}
             />

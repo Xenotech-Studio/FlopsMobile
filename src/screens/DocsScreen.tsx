@@ -1,10 +1,17 @@
 /**
  * DocsScreen —— 抽屉里"文档"条目对应的顶层页（替代旧 DocsHomeScreen）。
  *
- * 与旧版相比：
- *  - 删除内部左缘 sidebar + backdrop + 左缘开 sidebar 手势（这套由抽屉接管）。
- *  - header 左上角放两个圆钮：[汉堡（开抽屉）] + [目录（开 DocsTreeSheet）]，右上角"更多"菜单保留。
- *  - 主区行为保留：默认选根 folder → FolderView；选中 doc → DocBodyView；其余 DocBodyView 占位。
+ * 现版（真·整页导航）：
+ *  - 顶级界面 = 文档树（DocsSidebar，带缩进 + 文件夹 chevron 行内展开/收起）。
+ *  - 点任意条目（文件夹或文档）→ push 一个全新的 DocPreview 页（整页右滑入，原生风），而不是旧的
+ *    "主区横向面板栈内部平移"。下钻/返回都交给 React Navigation：
+ *      · compact（iPhone）：DocsScreen 直接挂在 RootNavigator 的 Main 下，useNavigation 解析到 RootStack
+ *        → push('DocPreview') 走 RootStack 上注册的那条（原生栈默认右滑入）。
+ *      · iPad：DocsScreen 是 MainPaneNavigator 里的 DocsRoute，useNavigation 解析到嵌套 stack
+ *        → push('DocPreview') 走 MainPaneNavigator 上注册的那条（自定义 rightCardStyleInterpolator 右滑入）。
+ *    两边都用同一句 navigation.push('DocPreview', { id })，按平台自动解析到对应栈。
+ *  - header：汉堡（开抽屉/侧栏）+ 标题"文档" + 右上角"更多"（3s 长按 secret → SlateRNSpike；刷新文档树）。
+ *  - 每次加载树成功后写入 docsTreeStore，供 DocPreview 在任意深度按 id 解析项 + 子项。
  */
 import React, {
   useCallback,
@@ -21,60 +28,94 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
 import { getFlowDocTree, type FlowDocTreeItem } from '../api';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
-import { DocsTreeSheet } from '../components/DocsTreeSheet';
+import { DocsSidebar } from './docs/DocsSidebar';
+import { docsTreeStore } from './docs/docsTreeStore';
+import { CompactDocsPreviewOverlay } from './docs/CompactDocsPreviewOverlay';
+import Animated, {
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+} from 'react-native-reanimated';
+import { useResponsive } from '../hooks/useResponsive';
+import { useDrawer } from './shell/DrawerContext';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 import type { RootStackParamList } from '../navigation/types';
 import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
 import { shadowCircleButtonThemed, shadowMenu } from '../theme/shadows';
 import { TASK_FONT_SIZE_TITLE } from '../theme/typography';
-import { FolderView } from './docs/FolderView';
-import { DocBodyView, type DocBodyViewHandle } from './docs/DocBodyView';
 import { HamburgerButton } from './shell/HamburgerButton';
-import { HeaderCircleButton } from '../components/HeaderCircleButton';
 
+/** DocsScreen 在 compact 下跑在 RootStack、iPad 下跑在 MainPane 嵌套栈；这里按 RootStack 类型标注，
+ *  push('DocPreview') 用 as never 兼容两栈（两栈都注册了 DocPreview，运行时按平台解析）。 */
 type Nav = NativeStackNavigationProp<RootStackParamList>;
-const FOLDER_LIKE_TYPES = new Set(['folder', 'cooperateInbox']);
 
 export function DocsScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<Nav>();
   const { session } = useSession();
   const { colors } = useAppTheme();
+  const { sidebarShell, width: winWidth } = useResponsive();
   const styles = useMemo(() => createStyles(colors), [colors]);
+
+  /** 手机端抽屉式预览：当前预览项 id（非空 → 渲染前景覆盖层）。iPad 走整页路由，不用它。 */
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  /** 目录树露出宽度（手机端预览半开时目录铺到此宽，内容不戳到 peek 出来的预览背后）。 */
+  const maxTranslateX = Math.min(300, winWidth - 56);
+  /** 卡片位移 shared value（传给 overlay 驱动动画/手势）。目录宽度跟它联动：
+   *  dismiss 卡片右移出屏时目录从露出宽平滑变到全宽，而不是关闭后瞬间变宽。 */
+  const previewTx = useSharedValue(winWidth);
+  /** 目录可见宽 = max(露出宽, 卡片左缘位置 tx)；完整态=maxTranslateX(被卡片盖)，
+   *  dismiss(tx 从 maxTranslateX→winWidth) 随卡片右移渐变到全宽；无预览时 tx=winWidth=全宽。 */
+  const dirAnimStyle = useAnimatedStyle(() => ({
+    width: Math.max(maxTranslateX, previewTx.value),
+  }));
+
+  /* 手机端：文档板块自己接管屏幕左缘（不让全局抽屉的覆盖手势条吃掉折叠点击）。
+   *  focus 期间让位全局 strip；目录区左缘右滑 → 打开全局抽屉（非跟手，达阈值即开）；
+   *  完整预览态左缘 → overlay 自己的「露目录」。点击穿透给折叠（pan 不吞 tap）。 */
+  const drawer = useDrawer();
+  useFocusEffect(
+    useCallback(() => {
+      if (sidebarShell) return;
+      drawer.setOpenGestureSuppressed?.(true);
+      return () => drawer.setOpenGestureSuppressed?.(false);
+    }, [sidebarShell, drawer])
+  );
+  const docEdgeArmed = useSharedValue(false);
+  const openGlobalDrawer = useCallback(() => drawer.open(), [drawer]);
+  const dirOpenGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetX(8)
+        .failOffsetY([-12, 12])
+        .onBegin((e) => {
+          'worklet';
+          docEdgeArmed.value = e.x <= 40; // 仅左缘起始
+        })
+        .onEnd((e) => {
+          'worklet';
+          if (!docEdgeArmed.value) return;
+          if (e.translationX > 60 || e.velocityX > 500) {
+            runOnJS(openGlobalDrawer)();
+          }
+        }),
+    [docEdgeArmed, openGlobalDrawer]
+  );
 
   const [tree, setTree] = useState<FlowDocTreeItem[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
   const [treeRefreshing, setTreeRefreshing] = useState(false);
   const [treeError, setTreeError] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const [treeSheetVisible, setTreeSheetVisible] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
-
-  const docBodyRef = useRef<DocBodyViewHandle | null>(null);
-
-  const byId = useMemo(() => {
-    const m = new Map<string, FlowDocTreeItem>();
-    for (const it of tree) m.set(it.id, it);
-    return m;
-  }, [tree]);
-
-  const selectedItem = selectedId ? byId.get(selectedId) || null : null;
-
-  const selectedChildren = useMemo(() => {
-    if (!selectedItem) return [];
-    const ids = selectedItem.children ?? [];
-    return ids
-      .map((id) => byId.get(id))
-      .filter((it): it is FlowDocTreeItem => it != null);
-  }, [selectedItem, byId]);
 
   const loadTree = useCallback(
     async (isRefresh: boolean) => {
@@ -85,11 +126,8 @@ export function DocsScreen() {
       try {
         const next = await getFlowDocTree(session);
         setTree(next);
-        setSelectedId((cur) => {
-          if (cur && next.some((it) => it.id === cur)) return cur;
-          const root = next.find((it) => (it.level ?? 0) === 0) || next[0];
-          return root ? root.id : null;
-        });
+        /* 写入进程级缓存：DocPreview 在任意深度按 id 解析项 + 子项靠它。 */
+        docsTreeStore.set(next);
       } catch (e) {
         setTreeError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -104,33 +142,24 @@ export function DocsScreen() {
     loadTree(false);
   }, [loadTree]);
 
-  const onPickItem = useCallback((item: FlowDocTreeItem) => {
-    setSelectedId(item.id);
-  }, []);
-
-  const headerTitle =
-    selectedItem?.name?.trim() ||
-    (selectedItem?.type === 'folder' ? '未命名文件夹' : null) ||
-    '文档';
-
-  const isSelectedFolder = selectedItem
-    ? FOLDER_LIKE_TYPES.has(selectedItem.type)
-    : false;
-
-  const onCopyMarkdown = useCallback(() => {
-    setOptionsOpen(false);
-    if (!docBodyRef.current) return;
-    docBodyRef.current.copyMarkdown();
-  }, []);
+  /** 点任意条目（文件夹或文档）：
+   *  - iPad（sidebarShell）：push 整页 DocPreview（右滑入）。两栈都注册了该路由，as never 兼容两栈静态类型。
+   *  - 手机（compact）：置 previewId → 抽屉式前景层从屏右滑入完整预览。 */
+  const onTreeSelect = useCallback(
+    (item: FlowDocTreeItem) => {
+      if (sidebarShell) {
+        navigation.push('DocPreview' as never, { id: item.id } as never);
+      } else {
+        setPreviewId(item.id);
+      }
+    },
+    [navigation, sidebarShell]
+  );
 
   const onReload = useCallback(() => {
     setOptionsOpen(false);
-    if (selectedItem && !FOLDER_LIKE_TYPES.has(selectedItem.type)) {
-      docBodyRef.current?.reload();
-    } else {
-      loadTree(true);
-    }
-  }, [selectedItem, loadTree]);
+    loadTree(true);
+  }, [loadTree]);
 
   /** "更多"按钮的彩蛋：长按 ≥ 3s 跳 SlateRNSpike 开发测试页 */
   const secretTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -163,121 +192,117 @@ export function DocsScreen() {
 
   if (!session) return null;
 
+  const sidebarEl = (
+    <DocsSidebar
+      items={tree}
+      /* 手机端高亮当前预览的文档行（变暗高亮，对齐全局抽屉）;iPad 走路由不持有此 state → null。 */
+      selectedId={sidebarShell ? null : previewId}
+      loading={treeLoading}
+      refreshing={treeRefreshing}
+      error={treeError}
+      onRefresh={() => loadTree(true)}
+      onSelect={onTreeSelect}
+      /* 手机端目录只由最底层 container（chatScreenBackground）供色 → 单层背景;iPad 保持 surface。 */
+      backgroundColor={sidebarShell ? undefined : 'transparent'}
+      /* 手机端：选中高亮随 dismiss（卡片 tx 从半开位 maxTranslateX → 屏外 winWidth）渐隐到透明。 */
+      selectionTx={sidebarShell ? undefined : previewTx}
+      dismissFrom={maxTranslateX}
+      dismissTo={winWidth}
+    />
+  );
+
   return (
     <View style={styles.container}>
-      {/* 主区 */}
-      <View style={[styles.mainArea, { paddingTop: headerHeight }]}>
-        {selectedItem == null ? (
-          <View style={styles.centered}>
-            <Text style={styles.placeholderText}>
-              {treeLoading ? '加载中…' : treeError ? treeError : '暂无文档'}
-            </Text>
-          </View>
-        ) : isSelectedFolder ? (
-          <FolderView
-            folder={selectedItem}
-            items={selectedChildren}
-            onSelect={(it) => setSelectedId(it.id)}
-          />
+      {/* 主区：顶级文档树（缩进 + 文件夹 chevron 行内展开/收起）。 */}
+      <View style={[styles.mainArea, sidebarShell ? { paddingTop: headerHeight } : null]}>
+        {sidebarShell ? (
+          /* iPad：浮动 header（下方）盖在上面，树铺满。 */
+          sidebarEl
         ) : (
-          <DocBodyView
-            ref={docBodyRef}
-            docId={selectedItem.id}
-            docType={selectedItem.type}
-          />
+          /* 手机端：目录 = 汉堡行 + 树，作为「同一表面」(完整/半开都是它);无单独标题 header。
+           *  预览存在时限宽到露出宽（maxTranslateX），内容不戳到 peek 出来的预览背后;刷新靠下拉。 */
+          <GestureDetector gesture={dirOpenGesture}>
+            <Animated.View style={[styles.compactDir, dirAnimStyle]}>
+              <View style={[styles.compactDirHeader, { paddingTop: insets.top + 8 }]}>
+                <HamburgerButton />
+              </View>
+              {sidebarEl}
+            </Animated.View>
+          </GestureDetector>
         )}
       </View>
 
-      {/* 顶部 header */}
-      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <BlurHeaderBackground
-          style={StyleSheet.absoluteFill}
-          topSolidHeight={insets.top + 8}
-          gradientBaseHex={colors.chatScreenBackground}
-        />
-        <View style={styles.headerLeft}>
-          <HamburgerButton />
-          <HeaderCircleButton
-            ionicon="list-outline"
-            sfSymbol="list.bullet"
-            iconSize={24}
-            onPress={() => setTreeSheetVisible(true)}
-            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-          />
-        </View>
-        <View style={styles.headerTitleWrap}>
-          <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
-            {headerTitle}
-          </Text>
-        </View>
-        {/* ⋯ 没用 HeaderCircleButton 是因为这里有个 3s 长按 secret（onPressIn/Out 计时
-            跳 SlateRNSpike dev 页），HeaderCircleButton/AnimatedCircleButton 的 native
-            iOS 路径不暴露 press-in/out 信号，特殊化保留 TouchableOpacity。 */}
-        <TouchableOpacity
-          style={styles.circleBtn}
-          onPress={onOptionsPress}
-          onPressIn={onOptionsPressIn}
-          onPressOut={onOptionsPressOut}
-          activeOpacity={0.7}
-          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-          delayLongPress={4000}
-        >
-          <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
-        </TouchableOpacity>
-      </View>
-
-      {/* 更多菜单 */}
-      {optionsOpen ? (
+      {/* iPad 浮动 header：汉堡（开/合侧栏）+「文档」标题 +「更多」。手机端无此 header。 */}
+      {sidebarShell ? (
         <>
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={() => setOptionsOpen(false)}
-          />
-          <View
-            style={[
-              styles.optionsMenu,
-              { top: insets.top + 8 + HEADER_CIRCLE_BTN_SIZE + 4, right: 16 },
-            ]}
-          >
-            {selectedItem && !FOLDER_LIKE_TYPES.has(selectedItem.type) ? (
-              <TouchableOpacity style={styles.optionsItem} onPress={onCopyMarkdown}>
-                <Ionicons
-                  name="copy-outline"
-                  size={16}
-                  color={colors.textPrimary}
-                  style={styles.optionsIcon}
-                />
-                <Text style={styles.optionsItemText}>复制为 Markdown</Text>
-              </TouchableOpacity>
-            ) : null}
-            <TouchableOpacity style={styles.optionsItem} onPress={onReload}>
-              <Ionicons
-                name="refresh"
-                size={16}
-                color={colors.textPrimary}
-                style={styles.optionsIcon}
-              />
-              <Text style={styles.optionsItemText}>
-                {selectedItem && !FOLDER_LIKE_TYPES.has(selectedItem.type)
-                  ? '刷新文档'
-                  : '刷新文档树'}
+          <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+            <BlurHeaderBackground
+              style={StyleSheet.absoluteFill}
+              topSolidHeight={insets.top + 8}
+              gradientBaseHex={colors.chatScreenBackground}
+            />
+            <View style={styles.headerLeft}>
+              <HamburgerButton />
+            </View>
+            <View style={styles.headerTitleWrap}>
+              <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
+                文档
               </Text>
+            </View>
+            {/* ⋯ 没用 HeaderCircleButton 是因为这里有个 3s 长按 secret（onPressIn/Out 计时
+                跳 SlateRNSpike dev 页），HeaderCircleButton/AnimatedCircleButton 的 native
+                iOS 路径不暴露 press-in/out 信号，特殊化保留 TouchableOpacity。 */}
+            <TouchableOpacity
+              style={styles.circleBtn}
+              onPress={onOptionsPress}
+              onPressIn={onOptionsPressIn}
+              onPressOut={onOptionsPressOut}
+              activeOpacity={0.7}
+              hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+              delayLongPress={4000}
+            >
+              <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
             </TouchableOpacity>
           </View>
+
+          {/* 更多菜单（iPad） */}
+          {optionsOpen ? (
+            <>
+              <Pressable
+                style={StyleSheet.absoluteFill}
+                onPress={() => setOptionsOpen(false)}
+              />
+              <View
+                style={[
+                  styles.optionsMenu,
+                  { top: insets.top + 8 + HEADER_CIRCLE_BTN_SIZE + 4, right: 16 },
+                ]}
+              >
+                <TouchableOpacity style={styles.optionsItem} onPress={onReload}>
+                  <Ionicons
+                    name="refresh"
+                    size={16}
+                    color={colors.textPrimary}
+                    style={styles.optionsIcon}
+                  />
+                  <Text style={styles.optionsItemText}>刷新文档树</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : null}
         </>
       ) : null}
 
-      <DocsTreeSheet
-        visible={treeSheetVisible}
-        onClose={() => setTreeSheetVisible(false)}
-        items={tree}
-        selectedId={selectedId}
-        loading={treeLoading}
-        refreshing={treeRefreshing}
-        error={treeError}
-        onRefresh={() => loadTree(true)}
-        onSelect={onPickItem}
-      />
+      {/* 手机端抽屉式预览前景层：盖住整页（含目录汉堡行），自带目录按钮 header。
+       *  半开/dismiss/滑入全由它内部驱动；点条目 onReplaceChild 原地替换、右滑到底 onDismiss 卸载。 */}
+      {!sidebarShell && previewId != null ? (
+        <CompactDocsPreviewOverlay
+          previewId={previewId}
+          onReplaceChild={(child) => setPreviewId(child.id)}
+          onDismiss={() => setPreviewId(null)}
+          tx={previewTx}
+        />
+      ) : null}
     </View>
   );
 }
@@ -286,6 +311,15 @@ function createStyles(c: AppColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: c.chatScreenBackground },
     mainArea: { flex: 1 },
+    /** 手机端目录「同一表面」：汉堡行 + 树。不自带背景，透出最底层 container 的单层背景色
+     *  （完整/半开露出都是它，避免多层叠色 + 不遮挡汉堡阴影）。 */
+    compactDir: { flex: 1 },
+    compactDirHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      paddingBottom: 12,
+    },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     placeholderText: { color: c.placeholder, fontSize: 14 },
     topBar: {
@@ -337,4 +371,3 @@ function createStyles(c: AppColors) {
     optionsItemText: { fontSize: 14, color: c.textPrimary },
   });
 }
-

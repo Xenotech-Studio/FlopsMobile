@@ -8,7 +8,7 @@
  *
  * 抽出来给 DocsHomeScreen / 任何"看一个 doc"的场景复用。
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   ScrollView,
@@ -70,6 +70,17 @@ export const DocBodyView = React.forwardRef<DocBodyViewHandle, DocBodyViewProps>
     const [doc, setDoc] = useState<FlowDocDocument | null>(null);
     const [loading, setLoading] = useState(isSupported);
     const [error, setError] = useState<string | null>(null);
+
+    /* 切换文档（docId 变）时在渲染期同步清空旧 doc + 回到 loading：否则会用「新 docId + 旧 doc」
+     *  先挂一次 FlowDocBlocks，之后 doc 更新但内部 FlowDocInput 的 key 不变被复用、
+     *  initialContent 只在挂载应用一次 → 残留上一篇第一块文本。清空后先 spinner，load 完再挂新 doc。 */
+    const lastDocIdRef = useRef(docId);
+    if (lastDocIdRef.current !== docId) {
+      lastDocIdRef.current = docId;
+      setDoc(null);
+      setLoading(isSupported);
+      setError(null);
+    }
 
     const load = useCallback(async () => {
       if (!isSupported) return;
@@ -162,7 +173,9 @@ export const DocBodyView = React.forwardRef<DocBodyViewHandle, DocBodyViewProps>
           expanded && styles.scrollContentWide,
         ]}
       >
-        <FlowDocBlocks document={doc ?? EMPTY_DOC} editable={false} />
+        {/* key={docId}：切换文档时强制重挂原生 blocks，避免「内容文档→空文档」时原生渲染
+         *  diff 残留上一篇第一块文本的 bug。 */}
+        <FlowDocBlocks key={docId} document={doc ?? EMPTY_DOC} editable={false} />
       </ScrollView>
     );
   },

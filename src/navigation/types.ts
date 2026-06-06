@@ -43,6 +43,9 @@ export type RootStackParamList = {
       };
   /** 跨项目日历（从今日页 task 段头按钮跳入） */
   TasksCalendar: undefined;
+  /** 文档下钻预览页（整页右滑入）：只携带 id，正文/子项由 docsTreeStore 解析。
+   *  compact 下走 RootStack 这条；iPad 下走 MainPaneNavigator 同名路由。 */
+  DocPreview: { id: string };
   /** 账户操作 / 改密码 / 绑邮箱 / 用量 / 灵魂设置 / 外观 / 通知 / Slate spike */
   AccountActions: undefined;
   ChangePassword: undefined;

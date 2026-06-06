@@ -9,6 +9,7 @@ import { Platform } from 'react-native';
 import {
   createStackNavigator,
   type StackCardInterpolationProps,
+  type StackScreenProps,
 } from '@react-navigation/stack';
 import { DrawerShell } from '../screens/shell/DrawerShell';
 import { ChatScreen } from '../screens/ChatScreen';
@@ -22,6 +23,7 @@ import { SoulSettingsScreen } from '../screens/SoulSettingsScreen';
 import { AppearanceSettingsScreen } from '../screens/AppearanceSettingsScreen';
 import { NotificationSettingsScreen } from '../screens/NotificationSettingsScreen';
 import { SlateRNSpikeScreen } from '../screens/SlateRNSpikeScreen';
+import { DocPreviewScreen } from '../screens/docs/DocPreviewScreen';
 import type { RootStackParamList } from './types';
 import { useAppTheme } from '../context/ThemeContext';
 
@@ -41,6 +43,11 @@ function rightCardStyleInterpolator({ current, layouts }: StackCardInterpolation
       ],
     },
   };
+}
+
+/** 薄 wrapper：把 RootStack 的 route.params.id 桥接给 DocPreviewScreen（屏内部用 useNavigation）。 */
+function DocPreviewRoute({ route }: StackScreenProps<RootStackParamList, 'DocPreview'>) {
+  return <DocPreviewScreen id={route.params.id} />;
 }
 
 export function RootNavigator() {
@@ -131,6 +138,16 @@ export function RootNavigator() {
       <Stack.Screen
         name="SlateRNSpike"
         component={SlateRNSpikeScreen}
+        options={{
+          headerShown: false,
+          gestureEnabled: true,
+          cardStyleInterpolator: rightCardStyleInterpolator,
+        }}
+      />
+      {/* 文档下钻预览：compact（iPhone）走这条，整页右滑入 + 左缘滑回。 */}
+      <Stack.Screen
+        name="DocPreview"
+        component={DocPreviewRoute}
         options={{
           headerShown: false,
           gestureEnabled: true,

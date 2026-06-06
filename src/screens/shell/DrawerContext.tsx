@@ -18,6 +18,10 @@ export type DrawerHandle = {
   active: DrawerActive;
   setActive: (a: DrawerActive) => void;
   presentProfileSheet: () => void;
+  /** 临时让位左缘开抽屉手势(compact / iOS 左缘 strip)。文档抽屉式预览挂载时调 true:
+   *  让屏幕左缘归「拖预览露目录」而不是开全局菜单(回全局菜单 = 先关预览回到目录,再用目录页汉堡/左缘)。
+   *  iPad / Android 无 iOS 左缘 strip,此 setter 为可选 no-op。 */
+  setOpenGestureSuppressed?: (suppressed: boolean) => void;
 };
 
 const DrawerContext = createContext<DrawerHandle | null>(null);

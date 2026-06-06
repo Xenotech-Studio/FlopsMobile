@@ -1866,6 +1866,8 @@ export type FlowDocTreeItem = {
   parentId?: string | null;
   children?: string[];
   level?: number;
+  /** 文档是否为空（无正文）。后端 tree 返回；!== false 视为空（与 web 一致），用于切换文档图标。 */
+  isEmpty?: boolean;
   accessRole?: 'owner' | 'collaborator';
   ownerNickname?: string | null;
   ownerUserId?: string | null;
