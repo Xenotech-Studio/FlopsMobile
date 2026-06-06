@@ -250,6 +250,10 @@ export function DrawerShell() {
    *  只在 sidebarShell 生效；手势挂在手柄外层 GestureDetector（见 render）。 */
   /** 手势起始时的侧栏宽度（手柄随侧栏移动，需记起点再叠加 translationX）。 */
   const dragStartWidth = useSharedValue(0);
+  /** 一次拖动只允许一个 onEnd 落位：手柄/拦截带/侧栏三个 Pan 都由 buildHandlePan 造、在分界线处重叠，
+   *  快速 flick 时可能两个同时识别 → 两次 onEnd（一个按位置吸开、一个按速度吸合）→ 松手先弹开再塌成无侧栏。
+   *  用这个 shared flag 去重：onBegin 复位、onEnd 抢到才落位，后到的直接跳过。 */
+  const dragSettledOnce = useSharedValue(false);
   /** 把最终态同步回 JS state（spring 落位后），供主区宽度 / DocBodyView / 旋转读。 */
   const settleSidebarState = useCallback(
     (open: boolean) => {
@@ -276,6 +280,7 @@ export function DrawerShell() {
         .onBegin(() => {
           'worklet';
           dragStartWidth.value = sidebarAnimWidth.value;
+          dragSettledOnce.value = false;
           /* 手指一落手柄就禁用返回手势 → 横向拖只开侧栏、不会触发返回。 */
           runOnJS(setMainPaneSwipeBack)(false);
         })
@@ -287,6 +292,10 @@ export function DrawerShell() {
         })
         .onEnd((e) => {
           'worklet';
+          /* 去重：手柄/拦截带/侧栏三个 Pan 在分界线处重叠，可能多个同时识别 → 多次 onEnd。
+             只让第一个落位，后到的跳过。 */
+          if (dragSettledOnce.value) return;
+          dragSettledOnce.value = true;
           /* 吸附：速度过 flick 阈值按方向定；否则按是否过半。 */
           const flickOpen = e.velocityX > SWIPE_VELOCITY_THRESHOLD;
           const flickClose = e.velocityX < -SWIPE_VELOCITY_THRESHOLD;
@@ -295,9 +304,13 @@ export function DrawerShell() {
             : flickClose
               ? false
               : sidebarAnimWidth.value > sidebarWidth / 2;
+          /* 极端 flick 速度（实测见过 -6251）灌进 spring 会数值过冲、冲过目标再回弹 → 视觉"先弹开再塌"。
+             ① 注入速度 clamp 到合理区间；② overshootClamping 锁死不许冲过目标（0 / sidebarWidth）。 */
+          const clampedV = Math.max(-2500, Math.min(2500, e.velocityX));
           sidebarAnimWidth.value = withSpring(open ? sidebarWidth : 0, {
             ...SPRING_CONFIG,
-            velocity: e.velocityX,
+            overshootClamping: true,
+            velocity: clampedV,
           });
           runOnJS(settleSidebarState)(open);
         })
@@ -306,15 +319,15 @@ export function DrawerShell() {
           /* 手势结束（含 cancel）恢复返回手势。 */
           runOnJS(setMainPaneSwipeBack)(true);
         }),
-    [dragStartWidth, sidebarAnimWidth, sidebarWidth, settleSidebarState, setMainPaneSwipeBack],
+    [dragStartWidth, dragSettledOnce, sidebarAnimWidth, sidebarWidth, settleSidebarState, setMainPaneSwipeBack],
   );
   /** 手柄本体的拖动手势实例（保留 tap 共存阈值）。 */
   const handlePanGesture = useMemo(() => buildHandlePan(false), [buildHandlePan]);
   /** 拦截带的拖动手势实例（独立 handlerTag，近乎落手即激活，抢在返回手势挪卡片前夺权）。 */
-  const edgeInterceptGesture = useMemo(() => buildHandlePan(true), [buildHandlePan]);
+  const edgeInterceptGesture = useMemo(() => buildHandlePan(true, 'edge'), [buildHandlePan]);
   /** 整个侧栏的拖动手势实例：在侧栏区域横向滑也能开合（跟手柄一致）。
    *  activeOffsetX±6 + failOffsetY 保证：tap 列表项、纵向 scroll DrawerContent 都不被抢，只有明确横向拖才接管。 */
-  const sidebarPanGesture = useMemo(() => buildHandlePan(false), [buildHandlePan]);
+  const sidebarPanGesture = useMemo(() => buildHandlePan(false, 'sidebar'), [buildHandlePan]);
   /** 「commit armed」状态：translation 当前是否过了 commit 阈值。
    *  - true → release 就会 commit；onUpdate 在过线一刻 fire haptic
    *  - false → release 不 commit；onUpdate 在退线一刻 fire haptic（反悔反馈）
