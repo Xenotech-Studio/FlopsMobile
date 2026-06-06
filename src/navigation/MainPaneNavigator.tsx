@@ -16,7 +16,6 @@
 import React, { useEffect } from 'react';
 import {
   createStackNavigator,
-  type StackCardInterpolationProps,
   type StackScreenProps,
 } from '@react-navigation/stack';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
@@ -42,22 +41,6 @@ export type MainPaneParamList = {
 const MainPaneStack = createStackNavigator<MainPaneParamList>();
 
 export type MainPaneNavigation = NavigationProp<MainPaneParamList>;
-
-/** 右侧滑入（与 root stack 设置页同款体感） */
-function rightCardStyleInterpolator({ current, layouts }: StackCardInterpolationProps) {
-  return {
-    cardStyle: {
-      transform: [
-        {
-          translateX: current.progress.interpolate({
-            inputRange: [0, 1],
-            outputRange: [layouts.screen.width, 0],
-          }),
-        },
-      ],
-    },
-  };
-}
 
 /** 无动画（瞬切）：legacy Stack 没有 animationEnabled，用空 cardStyle interpolator 实现即时切换。
  *  一级页（Today/Project/Docs）由侧栏 reset 切换时用它 → 不滑入。 */
@@ -102,15 +85,16 @@ function DocsRoute() {
 }
 
 function ChatRoute({ route }: StackScreenProps<MainPaneParamList, 'Chat'>) {
-  useBindNav(true);
+  /* iPad：对话现在是顶级页（openChat reset 成单条 [Chat] 栈），跟 Today/Docs 一样 isSecondary=false
+   *  → 左上角汉堡（开/合侧栏）、无返回箭头、不显示分界线切换钮。 */
+  useBindNav(false);
   const p = route.params ?? undefined;
   return (
     <ChatScreen
       conversationIdOverride={p?.conversationId}
       conversationTitleOverride={p?.conversationTitle}
       createEncrypted={Boolean(p?.createEncrypted)}
-      /* mainPane=true：主区嵌套栈模式。底层 Today 显示汉堡（开/合侧栏）；push 出来的 Chat 显示返回箭头。
-       *  跟 inDrawer（compact 覆盖式抽屉顶层页）区分：那个永远汉堡、不可返回。 */
+      /* mainPane=true：主区嵌套栈模式；Chat 作为栈根（不可返回）→ 显示汉堡。 */
       mainPane
     />
   );
@@ -132,19 +116,9 @@ export function MainPaneNavigator() {
       <MainPaneStack.Screen name="Today" component={TodayRoute} />
       <MainPaneStack.Screen name="Project" component={ProjectRoute} />
       <MainPaneStack.Screen name="Docs" component={DocsRoute} />
-      {/* 仅二级页 Chat 用右滑入动画 + 可左滑返回——这是「进对话」要的正常 iOS 导航感。 */}
-      <MainPaneStack.Screen
-        name="Chat"
-        component={ChatRoute}
-        options={{
-          cardStyleInterpolator: rightCardStyleInterpolator,
-          gestureEnabled: true,
-          transitionSpec: {
-            open: { animation: 'spring', config: { stiffness: 1000, damping: 500, mass: 3, overshootClamping: true, restDisplacementThreshold: 0.01, restSpeedThreshold: 0.01 } },
-            close: { animation: 'spring', config: { stiffness: 1000, damping: 500, mass: 3, overshootClamping: true, restDisplacementThreshold: 0.01, restSpeedThreshold: 0.01 } },
-          },
-        }}
-      />
+      {/* Chat 也是顶级页：沿用默认瞬切（noAnimationInterpolator + instantTransitionSpec），
+          跟 Today/Project/Docs 一样直接切入、不滑入。 */}
+      <MainPaneStack.Screen name="Chat" component={ChatRoute} />
     </MainPaneStack.Navigator>
   );
 }

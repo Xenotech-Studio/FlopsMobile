@@ -95,16 +95,10 @@ export function MainPaneProvider({ children }: { children: React.ReactNode }) {
         );
       },
       openChat: (params) => {
-        /* 重置到「今日页 + 对话」两层：返回箭头回到今日页，栈结构统一。
-         *  （新对话用 nonce 体现在 key 上由屏内部处理；这里 reset 保证每次进对话栈干净。） */
+        /* iPad：对话也是顶级页——reset 成单条 [Chat] 栈（跟 goToday/goDocs 一样），
+         *  直接切入、不滑入，左上角是汉堡（侧栏常驻，靠侧栏切换而非返回箭头）。 */
         navRef.current?.dispatch(
-          CommonActions.reset({
-            index: 1,
-            routes: [
-              { name: 'Today' },
-              { name: 'Chat', params },
-            ],
-          }),
+          CommonActions.reset({ index: 0, routes: [{ name: 'Chat', params }] }),
         );
       },
       setSwipeBackEnabled: (enabled) => {
