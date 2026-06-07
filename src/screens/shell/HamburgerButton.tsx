@@ -6,16 +6,18 @@
  */
 import React from 'react';
 import { HeaderCircleButton } from '../../components/HeaderCircleButton';
+import { useResponsive } from '../../hooks/useResponsive';
 import { useDrawer } from './DrawerContext';
 
 export function HamburgerButton() {
   const { toggle } = useDrawer();
-  /** 始终显示：compact 用它开覆盖式抽屉；iPad sidebarShell 用它收起/展开 push 侧栏。 */
+  const { sidebarShell } = useResponsive();
+  /** compact 用它开覆盖式抽屉(三横线)；iPad sidebarShell 用它收起/展开 push 侧栏(侧栏图标)。 */
   return (
     <HeaderCircleButton
       ionicon="menu-outline"
-      sfSymbol="line.3.horizontal"
-      iconSize={26}
+      sfSymbol={sidebarShell ? 'sidebar.left' : 'line.3.horizontal'}
+      iconSize={sidebarShell ? 24 : 26}
       onPress={toggle}
       hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
     />
