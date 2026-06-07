@@ -25,14 +25,28 @@ import { docsTreeStore } from './docs/docsTreeStore';
 import { CompactDocsPreviewOverlay } from './docs/CompactDocsPreviewOverlay';
 import { DocPreviewScreen } from './docs/DocPreviewScreen';
 import { DocsDirectoryPane } from './docs/DocsDirectoryPane';
+import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import Animated, {
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
+  withSpring,
   withTiming,
 } from 'react-native-reanimated';
 import { useResponsive } from '../hooks/useResponsive';
 import { useDrawer } from './shell/DrawerContext';
+import {
+  useGlobalSidebarOpen,
+  useGlobalSidebarDrive,
+  useReportDocsTreeOpen,
+} from './shell/MainPaneContext';
+import {
+  DividerHandle,
+  dividerHandleStyles,
+  DIVIDER_TOGGLE_W,
+  DIVIDER_TOGGLE_MARGIN,
+  EDGE_INTERCEPT_LEFT,
+} from './shell/DividerHandle';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 import { HEADER_CIRCLE_BTN_SIZE } from '../theme/layout';
@@ -42,6 +56,20 @@ import { HamburgerButton } from './shell/HamburgerButton';
 
 /** iPad 文档目录树侧栏宽度（收起时动画到 0）。 */
 const IPAD_TREE_WIDTH = 300;
+/** 目录手柄拖动吸附阈值（与全局手柄一致的体感）。 */
+const TREE_SWIPE_VELOCITY = 400;
+/** 目录手柄落位 spring（接近临界阻尼，干净无回弹；同 DrawerShell 全局手柄）。 */
+const TREE_SPRING = {
+  damping: 28,
+  stiffness: 360,
+  mass: 0.5,
+  overshootClamping: true,
+} as const;
+
+/** 手柄 commit 那刻的轻 haptic 预反馈（runOnJS 需稳定 function ref）。 */
+function triggerTreeHandleHaptic() {
+  ReactNativeHapticFeedback.trigger('impactLight', { enableVibrateFallback: true });
+}
 /** 上次打开的文档 id 本地缓存 key（退出再回来恢复；手机右滑关闭则清除）。 */
 const LAST_OPENED_KEY = 'docsLastOpenedV1';
 
@@ -79,6 +107,171 @@ export function DocsScreen() {
       return next;
     });
   }, [treeW]);
+
+  /** 全局菜单侧栏当前是否打开（DrawerShell 下发）。决定文档页两个分界手柄的显隐。 */
+  const globalSidebarOpen = useGlobalSidebarOpen();
+  /** 全局侧栏跟手驱动通道（DrawerShell 下发）：在目录树侧栏上向左滑直接关全局侧栏要用。 */
+  const globalDrive = useGlobalSidebarDrive();
+  /** G 的 UI 线程镜像（worklet 里 onBegin 决定这次拖动是关全局还是关目录树）。 */
+  const gOpenSV = useSharedValue(globalSidebarOpen);
+  useEffect(() => {
+    gOpenSV.value = globalSidebarOpen;
+  }, [globalSidebarOpen, gOpenSV]);
+  /* 把目录树开关态上报给 DrawerShell：用它判断「全局↔目录」线上的全局手柄显隐（仅 G&&T 显示）。
+   *  非 iPad（手机）上报 null → DrawerShell 维持原 mainPaneSecondary 行为、不受文档页影响。 */
+  useReportDocsTreeOpen(sidebarShell ? treeOpen : null);
+
+  /** ── iPad 目录手柄（骑「目录↔预览」线，绑 treeW）：tap=toggle、拖=跟手改 treeW + 吸附。
+   *  位置同全局手柄公式：left = max(MARGIN, treeW − W/2)（T 开骑线 / T 关贴正文左缘）。
+   *  可见 iff !(G && T)：G&&T 时由全局手柄接管（在 全局↔目录 线上），这里隐藏。 */
+  const treeHandleStyle = useAnimatedStyle(() => ({
+    left: Math.max(DIVIDER_TOGGLE_MARGIN, treeW.value - DIVIDER_TOGGLE_W / 2),
+  }));
+  /** 拦截带位置：跟分界线同步移动，左伸 EDGE_INTERCEPT_LEFT、右伸 EDGE_INTERCEPT_RIGHT，
+   *  让分界线附近一整条都能拖（不必精准摸到窄胶囊）。clamp 0：折叠态贴正文左缘。 */
+  const treeInterceptStyle = useAnimatedStyle(() => ({
+    left: Math.max(0, treeW.value - EDGE_INTERCEPT_LEFT),
+  }));
+  const treeDragStart = useSharedValue(0);
+  const treeDragSettled = useSharedValue(false);
+  const settleTreeState = useCallback((open: boolean) => {
+    setTreeOpen(open);
+  }, []);
+  /** 拖动开合 treeW 的 Pan 构造器：调一次返回独立实例（GestureDetector 不能把同一 Gesture 挂两处）。
+   *  胶囊本体 + 拦截带各一个实例；共享的 treeDragStart/treeDragSettled 同时刻只有一条拖动在跑。
+   *  immediate（拦截带）= activeOffsetX±2 近乎落手即激活；胶囊本体 = ±6 保 tap/纵向滑不被抢。 */
+  const buildTreePan = useCallback(
+    (immediate: boolean) =>
+      Gesture.Pan()
+        .activeOffsetX(immediate ? [-2, 2] : [-6, 6])
+        .failOffsetY([-12, 12])
+        .onBegin(() => {
+          'worklet';
+          treeDragStart.value = treeW.value;
+          treeDragSettled.value = false;
+        })
+        .onUpdate((e) => {
+          'worklet';
+          const w = treeDragStart.value + e.translationX;
+          treeW.value = Math.max(0, Math.min(IPAD_TREE_WIDTH, w));
+        })
+        .onEnd((e) => {
+          'worklet';
+          /* 去重：胶囊/拦截带两个 Pan 在分界线处重叠，可能同时识别 → 多次 onEnd，只让第一个落位。 */
+          if (treeDragSettled.value) return;
+          treeDragSettled.value = true;
+          const open =
+            e.velocityX > TREE_SWIPE_VELOCITY
+              ? true
+              : e.velocityX < -TREE_SWIPE_VELOCITY
+                ? false
+                : treeW.value > IPAD_TREE_WIDTH / 2;
+          const clampedV = Math.max(-2500, Math.min(2500, e.velocityX));
+          treeW.value = withSpring(open ? IPAD_TREE_WIDTH : 0, {
+            ...TREE_SPRING,
+            velocity: clampedV,
+          });
+          runOnJS(triggerTreeHandleHaptic)();
+          runOnJS(settleTreeState)(open);
+        }),
+    [treeW, treeDragStart, treeDragSettled, settleTreeState]
+  );
+  const treeHandlePan = useMemo(() => buildTreePan(false), [buildTreePan]);
+  const treeInterceptPan = useMemo(() => buildTreePan(true), [buildTreePan]);
+  /** 整条目录树侧栏横向拖动开合：不必精准摸到窄胶囊，侧栏任意位置横向拖即可。目标按「G + 方向」分流，
+   *  在首帧 onUpdate（这时才知道方向）锁定、整段拖动只驱动同一个：
+   *  - 全局侧栏开着(G)：驱动「全局侧栏」（向左滑关全局；向右已满，clamp 无效）。
+   *  - 全局侧栏关着 + 向右滑：驱动「全局侧栏」从 0 跟手拉开（在目录区右滑打开全局）。
+   *  - 全局侧栏关着 + 向左滑：驱动「目录树」(treeW) 关闭，跟之前一致。
+   *  activeOffsetX±6 + failOffsetY 保 tap/纵向滚动/折叠不被抢。 */
+  const sidebarDragTarget = useSharedValue(-1); // -1=未定, 0=目录树, 1=全局侧栏
+  const sidebarDragStart = useSharedValue(0);
+  const canDriveGlobal = !!globalDrive;
+  const globalAnimWidth = globalDrive?.animWidth;
+  const globalWidth = globalDrive?.width ?? 0;
+  const settleGlobalOpen = globalDrive?.settleOpen;
+  const treeSidebarPan = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetX([-6, 6])
+        .failOffsetY([-12, 12])
+        .onBegin(() => {
+          'worklet';
+          treeDragSettled.value = false;
+          sidebarDragTarget.value = -1;
+        })
+        .onUpdate((e) => {
+          'worklet';
+          /* 首帧按方向锁定目标。G 开 → 全局（左滑关）；G 关 + 右滑 → 全局（拉开）；其余 → 目录树。 */
+          if (sidebarDragTarget.value === -1) {
+            const goRight = e.translationX > 0;
+            if (canDriveGlobal && globalAnimWidth && (gOpenSV.value || goRight)) {
+              sidebarDragTarget.value = 1;
+              sidebarDragStart.value = globalAnimWidth.value;
+            } else {
+              sidebarDragTarget.value = 0;
+              sidebarDragStart.value = treeW.value;
+            }
+          }
+          const next = sidebarDragStart.value + e.translationX;
+          if (sidebarDragTarget.value === 1 && globalAnimWidth) {
+            globalAnimWidth.value = Math.max(0, Math.min(globalWidth, next));
+          } else {
+            treeW.value = Math.max(0, Math.min(IPAD_TREE_WIDTH, next));
+          }
+        })
+        .onEnd((e) => {
+          'worklet';
+          if (treeDragSettled.value || sidebarDragTarget.value === -1) return;
+          treeDragSettled.value = true;
+          const clampedV = Math.max(-2500, Math.min(2500, e.velocityX));
+          if (sidebarDragTarget.value === 1 && globalAnimWidth) {
+            const open =
+              e.velocityX > TREE_SWIPE_VELOCITY
+                ? true
+                : e.velocityX < -TREE_SWIPE_VELOCITY
+                  ? false
+                  : globalAnimWidth.value > globalWidth / 2;
+            globalAnimWidth.value = withSpring(open ? globalWidth : 0, {
+              ...TREE_SPRING,
+              velocity: clampedV,
+            });
+            runOnJS(triggerTreeHandleHaptic)();
+            if (settleGlobalOpen) runOnJS(settleGlobalOpen)(open);
+          } else {
+            const open =
+              e.velocityX > TREE_SWIPE_VELOCITY
+                ? true
+                : e.velocityX < -TREE_SWIPE_VELOCITY
+                  ? false
+                  : treeW.value > IPAD_TREE_WIDTH / 2;
+            treeW.value = withSpring(open ? IPAD_TREE_WIDTH : 0, {
+              ...TREE_SPRING,
+              velocity: clampedV,
+            });
+            runOnJS(triggerTreeHandleHaptic)();
+            runOnJS(settleTreeState)(open);
+          }
+        }),
+    [
+      treeW,
+      treeDragSettled,
+      settleTreeState,
+      gOpenSV,
+      sidebarDragTarget,
+      sidebarDragStart,
+      canDriveGlobal,
+      globalAnimWidth,
+      globalWidth,
+      settleGlobalOpen,
+    ]
+  );
+  /** 目录手柄显隐：!(G && T)。tap 也带 haptic（toggleTree 仅状态切换，这里补反馈）。 */
+  const showTreeHandle = !(globalSidebarOpen && treeOpen);
+  const onTreeHandlePress = useCallback(() => {
+    triggerTreeHandleHaptic();
+    toggleTree();
+  }, [toggleTree]);
   /** 目录树露出宽度（手机端预览半开时目录铺到此宽，内容不戳到 peek 出来的预览背后）。 */
   const maxTranslateX = Math.min(300, winWidth - 56);
   /** 卡片位移 shared value（传给 overlay 驱动动画/手势）。目录宽度跟它联动：
@@ -213,7 +406,9 @@ export function DocsScreen() {
   if (sidebarShell) {
     return (
       <View style={styles.ipadRow}>
-        {/* 文档目录树侧栏（第二条侧栏；左上角按钮收起 → 宽度动画到 0，内层固定宽防压缩） */}
+        {/* 文档目录树侧栏（第二条侧栏；左上角按钮收起 → 宽度动画到 0，内层固定宽防压缩）。
+         *  整条侧栏接横向拖动开合（treeSidebarPan）：不必精准摸到窄胶囊，侧栏任意位置横向拖即可关闭。 */}
+        <GestureDetector gesture={treeSidebarPan}>
         <Animated.View style={[styles.ipadTreeSidebar, treeAnimStyle]}>
           <View style={styles.ipadTreeInner}>
             {/* iPad 目录树面板：复用 DocsDirectoryPane；header 只放汉堡 + 文档标题（无 ⋯）。 */}
@@ -248,6 +443,7 @@ export function DocsScreen() {
             />
           </View>
         </Animated.View>
+        </GestureDetector>
 
         {/* 正文主区：master-detail，直接复用 DocPreviewScreen（标题行/顶底渐变/目录按钮/⋯菜单全来自同一份）。
          *  左上角「目录」按钮(onGoDirectory)接成收起/展开目录树侧栏；点文件夹子项 → 切 selectedId。 */}
@@ -264,6 +460,32 @@ export function DocsScreen() {
             />
           )}
         </View>
+
+        {/* 目录↔预览 分界手柄：绑 treeW，骑在目录树右缘（T 开）/ 贴正文左缘（T 关）。
+         *  仅 !(G && T) 显示——G&&T 时由 DrawerShell 的全局手柄（全局↔目录 线）接管。
+         *  绝对定位于 ipadRow（local x=0 在全局侧栏右缘）：left 公式同全局手柄。 */}
+        {showTreeHandle ? (
+          <>
+            {/* 拦截带：分界线附近一整条(~88×104pt，竖直居中)透明可拖区，跟手柄同一套 pan
+             *  → 不必精准摸到窄胶囊就能开合（对齐 全局↔主区 手柄的体验）。 */}
+            <GestureDetector gesture={treeInterceptPan}>
+              <Animated.View
+                style={[dividerHandleStyles.edgeIntercept, treeInterceptStyle]}
+              />
+            </GestureDetector>
+
+            <Animated.View
+              style={[dividerHandleStyles.dividerToggle, treeHandleStyle]}
+            >
+              <GestureDetector gesture={treeHandlePan}>
+                <DividerHandle
+                  onPress={onTreeHandlePress}
+                  iconColor={colors.textSecondary}
+                />
+              </GestureDetector>
+            </Animated.View>
+          </>
+        ) : null}
       </View>
     );
   }

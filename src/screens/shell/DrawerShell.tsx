@@ -60,17 +60,23 @@ import { TodayScreen } from '../TodayScreen';
 import { ProjectScreen } from '../ProjectScreen';
 import { DocsScreen } from '../DocsScreen';
 import { ChatScreen } from '../ChatScreen';
-import Ionicons from 'react-native-vector-icons/Ionicons';
-import { AnimatedCircleButton } from '../../components/AnimatedCircleButton';
 import { subscribeClientOutdated } from '../../utils/clientCompatBus';
 import { getScreenCornerRadius, inferScreenCornerRadius, isSquareScreen } from '../../utils/screenInfo';
 import { SHADOW_COLOR } from '../../theme/shadows';
 import { useResponsive } from '../../hooks/useResponsive';
 import { MainPaneNavigator } from '../../navigation/MainPaneNavigator';
 import {
+  DividerHandle,
+  dividerHandleStyles,
+  DIVIDER_TOGGLE_W,
+  DIVIDER_TOGGLE_MARGIN,
+  EDGE_INTERCEPT_LEFT,
+} from './DividerHandle';
+import {
   MainPaneProvider,
   useMainPaneController,
   useMainPaneIsSecondary,
+  useMainPaneDocsTreeOpen,
   type MainPaneController,
 } from './MainPaneContext';
 
@@ -126,27 +132,19 @@ function triggerDrawerHaptic() {
  *  主区 flex 自适应。直接写 shared value、不经 React → 零延迟。 */
 const SIDEBAR_ANIM_DURATION = 280;
 
-/** 分界线切换钮：纵向胶囊（窄而高）。展开时骑在分界线上；折叠时离屏左缘 DIVIDER_TOGGLE_MARGIN 完整显示。 */
-const DIVIDER_TOGGLE_W = 26;
-const DIVIDER_TOGGLE_H = 56;
-const DIVIDER_TOGGLE_MARGIN = 12;
-/** 拖动拦截带：在手柄那段高度（比胶囊稍高，留点冗余）覆盖返回手势触发区，吃掉这段 Y 的横向拖，
- *  让返回手势在此收不到 → 拖手柄开/关侧栏不被返回手势抢（区域划分，无时序竞争）。
- *  返回手势触发区是「主区左缘往右 ~50pt」（展开态主区左缘=分界线）。带要从分界线左边一点一直盖到
- *  分界线右边 > 50pt，所以左伸 LEFT 一点、右伸够远；总宽 = LEFT + RIGHT。 */
-const EDGE_INTERCEPT_H = DIVIDER_TOGGLE_H + 48;
-const EDGE_INTERCEPT_LEFT = 24; // 分界线左侧覆盖（含手柄左半）
-const EDGE_INTERCEPT_RIGHT = 64; // 分界线右侧覆盖（盖满返回手势触发区 ~50pt + 冗余）
-const EDGE_INTERCEPT_W = EDGE_INTERCEPT_LEFT + EDGE_INTERCEPT_RIGHT;
+/* 分界线切换钮的尺寸/位置常量 + 胶囊视觉 + 拦截带 style 抽到 ./DividerHandle 共享
+ * （DrawerShell 的 全局↔主区 手柄、DocsScreen 的 目录↔预览 手柄都用同一份）。 */
 
 /** 在 MainPaneProvider 内部抓取 controller（填进 ref 供 setActive 驱动）+ 把"是否二级页"上报给
  *  DrawerShell（决定分界线切换钮是否显示）。侧栏在 Provider 外面，靠这个 grabber 桥接。不渲染 UI。 */
 function MainPaneControllerGrabber({
   targetRef,
   onSecondaryChange,
+  onDocsTreeOpenChange,
 }: {
   targetRef: React.MutableRefObject<MainPaneController | null>;
   onSecondaryChange: (v: boolean) => void;
+  onDocsTreeOpenChange: (v: boolean | null) => void;
 }) {
   const ctrl = useMainPaneController();
   targetRef.current = ctrl;
@@ -154,6 +152,11 @@ function MainPaneControllerGrabber({
   useEffect(() => {
     onSecondaryChange(isSecondary);
   }, [isSecondary, onSecondaryChange]);
+  /* 文档页上报的目录树开关态（null=不在文档页）→ 提给 DrawerShell 判断全局手柄显隐。 */
+  const docsTreeOpen = useMainPaneDocsTreeOpen();
+  useEffect(() => {
+    onDocsTreeOpenChange(docsTreeOpen);
+  }, [docsTreeOpen, onDocsTreeOpenChange]);
   return null;
 }
 
@@ -360,6 +363,9 @@ export function DrawerShell() {
   /** sidebarShell：主区当前是否停在二级页（对话等）。分界线切换钮只在二级页显示——
    *  一级页左上角汉堡已能开合侧栏，二级页左上角是返回键才需要这个钮兜底。grabber 上报。 */
   const [mainPaneSecondary, setMainPaneSecondary] = useState(false);
+  /** sidebarShell：文档页上报的目录树开关态（null=不在文档页）。全局手柄显隐要用：
+   *  G&&T 才在 全局↔目录 线上显示全局手柄；其余页面恒为 null → 维持原 mainPaneSecondary 行为。 */
+  const [docsTreeOpen, setDocsTreeOpen] = useState<boolean | null>(null);
 
   /** 主页面 translateX 最大值 = 抽屉宽度（设计主值 DRAWER_WIDTH），即抽屉露出区宽度。
    *  窄屏夹断：抽屉宽不超过「屏宽 − 最小 peek」，保证右页始终留一条可点/可滑回的空白。 */
@@ -746,11 +752,18 @@ export function DrawerShell() {
   if (sidebarShell) {
     return (
       <DrawerProvider value={handle}>
-        <MainPaneProvider>
-          {/* grabber：把主区嵌套栈 controller 填进 ref，供 setActiveAndClose 驱动 push/reset */}
+        <MainPaneProvider
+          globalSidebarOpen={sidebarOpen}
+          globalSidebarAnimWidth={sidebarAnimWidth}
+          globalSidebarWidth={sidebarWidth}
+          settleGlobalSidebarOpen={settleSidebarState}
+        >
+          {/* grabber：把主区嵌套栈 controller 填进 ref，供 setActiveAndClose 驱动 push/reset；
+           *  同时把文档页上报的目录树开关态(docsTreeOpen)抽出来给本层（全局手柄显隐用）。 */}
           <MainPaneControllerGrabber
             targetRef={mainPaneControllerRef}
             onSecondaryChange={setMainPaneSecondary}
+            onDocsTreeOpenChange={setDocsTreeOpen}
           />
           <View style={[styles.root, styles.sidebarShellRoot, { backgroundColor: colors.drawerBackground }]}>
             {/* 整个侧栏也接横向拖动开合（跟手柄一致）：activeOffsetX 保证 tap 列表项 / 纵向 scroll 不被抢。 */}
@@ -774,41 +787,29 @@ export function DrawerShell() {
            *  用 AnimatedCircleButton → iOS 26+ 走 Liquid Glass material（跟顶角圆钮同款质感，
            *  系统自带投影 + 按压缩放）；iOS<26/Android 走 bouncy fallback，由 children Ionicons 渲染。
            *  形状（胶囊尺寸/圆角）由 dividerToggleBtn style 决定。 */}
-          {mainPaneSecondary ? (
+          {/* 全局手柄（骑 全局↔目录 线）显隐：
+           *  - 其余页面：docsTreeOpen===null → 维持原 mainPaneSecondary 行为（对话等二级页才显示）。
+           *  - 文档页：仅 G(sidebarOpen) && T(docsTreeOpen) 才显示；G 关或 T 关都隐藏（目录手柄接管）。 */}
+          {mainPaneSecondary || (docsTreeOpen === true && sidebarOpen) ? (
           <>
             {/* 左缘拦截带：在手柄那段高度，左缘放一条横向拖动手势区（跟手柄同一套 handlePanGesture）。
              *  它把这段 Y 的左缘 touch 接住 → 主区返回手势在此收不到 → 拖动只开侧栏、不返回（区域划分，
              *  无时序竞争，比 onBegin 临时禁用更可靠）。仅折叠态需要（展开态手柄已离开左缘），但常驻无害：
              *  展开态它在左缘、拖它一样是开合侧栏的有效区。pointerEvents 由 GestureDetector 接管。 */}
             <GestureDetector gesture={edgeInterceptGesture}>
-              <Animated.View style={[styles.edgeIntercept, edgeInterceptStyle]} />
+              <Animated.View style={[dividerHandleStyles.edgeIntercept, edgeInterceptStyle]} />
             </GestureDetector>
 
             <Animated.View
               style={[
-                styles.dividerToggle,
+                dividerHandleStyles.dividerToggle,
                 dividerToggleStyle,
               ]}
             >
-              {/* 外层 GestureDetector 接拖动手势（完全跟手开合）；内层 AnimatedCircleButton 接 tap（toggle）。
-               *  Pan 用 activeOffsetX 只在横向拖动时激活 → 纯 tap 不被抢、仍触发 toggle；原生 glass 按钮的
-               *  touch 由按钮处理，横向拖被外层 Pan 接管。 */}
+              {/* 外层 GestureDetector 接拖动手势（完全跟手开合）；内层胶囊接 tap（toggle）。
+               *  Pan 用 activeOffsetX 只在横向拖动时激活 → 纯 tap 不被抢、仍触发 toggle。 */}
               <GestureDetector gesture={handlePanGesture}>
-                <AnimatedCircleButton
-                  style={styles.dividerToggleBtn}
-                  onPress={toggle}
-                  /* 触摸响应区比视觉胶囊大不少（不改显示尺寸）：四周各扩 28pt，窄胶囊也好点中、好拖。 */
-                  hitSlop={{ top: 28, bottom: 28, left: 28, right: 28 }}
-                  iosSfSymbol={{
-                    /* 三横线（菜单）图标，小一号。 */
-                    name: 'line.3.horizontal',
-                    size: 11,
-                    color: colors.textSecondary,
-                  }}
-                >
-                  {/* iOS<26 / Android fallback：reorder-three 比 menu 三横线更窄。 */}
-                  <Ionicons name="reorder-three" size={15} color={colors.textSecondary} />
-                </AnimatedCircleButton>
+                <DividerHandle onPress={toggle} iconColor={colors.textSecondary} />
               </GestureDetector>
             </Animated.View>
           </>
@@ -934,34 +935,7 @@ const styles = StyleSheet.create({
     flex: 1,
     overflow: 'hidden',
   },
-  /** 分界线切换钮容器：绝对定位，left 由 dividerToggleStyle 动画（跟侧栏宽度走），zIndex 盖在两栏之上。
-   *  纵向居中：top 50% + marginTop −半钮高，让钮中心落在屏幕竖直中点。 */
-  dividerToggle: {
-    position: 'absolute',
-    top: '50%',
-    marginTop: -DIVIDER_TOGGLE_H / 2,
-    zIndex: 100,
-  },
-  /** 纵向胶囊本体：窄而高，borderRadius = 半宽 → 上下半圆胶囊形。 */
-  dividerToggleBtn: {
-    width: DIVIDER_TOGGLE_W,
-    height: DIVIDER_TOGGLE_H,
-    borderRadius: DIVIDER_TOGGLE_W / 2,
-    borderCurve: 'continuous',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  /** 拖动拦截带：手柄那段高度（竖直居中）、以分界线/手柄为中心的一条横向带，透明。left 由 edgeInterceptStyle
-   *  动画跟随侧栏宽度——折叠态在左缘（接走返回手势触发区）、展开态在分界线（中间这块可拖关）。
-   *  承载 edgeInterceptGesture。zIndex 低于手柄、但高于主区内容。 */
-  edgeIntercept: {
-    position: 'absolute',
-    top: '50%',
-    marginTop: -EDGE_INTERCEPT_H / 2,
-    width: EDGE_INTERCEPT_W,
-    height: EDGE_INTERCEPT_H,
-    zIndex: 99,
-  },
+  /* 分界线切换钮容器 / 胶囊本体 / 拦截带 style 移到 ./DividerHandle（dividerHandleStyles）。 */
   drawerBack: {
     ...StyleSheet.absoluteFillObject,
   },

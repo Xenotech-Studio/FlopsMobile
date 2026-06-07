@@ -131,9 +131,11 @@ function DocsRoute() {
 }
 
 function ChatRoute({ route }: StackScreenProps<MainPaneParamList, 'Chat'>) {
-  /* iPad：对话现在是顶级页（openChat reset 成单条 [Chat] 栈），跟 Today/Docs 一样 isSecondary=false
-   *  → 左上角汉堡（开/合侧栏）、无返回箭头、不显示分界线切换钮。 */
-  useBindNav(false);
+  /* iPad：对话是顶级页（openChat reset 成单条 [Chat] 栈）→ 左上角汉堡（开/合侧栏）、无返回箭头。
+   *  但仍报告 isSecondary=true：这个通道只驱动 DrawerShell 的分界线胶囊手柄（跟 hamburger 那个
+   *  mainPane 通道相互独立），对话页保留这个骑在 全局↔主区 线上的手柄（可拖动跟手开合 + tap toggle，
+   *  比纯汉堡多一种交互）。汉堡 + 手柄并存，跟文档页一致。 */
+  useBindNav(true);
   const p = route.params ?? undefined;
   return (
     <ChatScreen

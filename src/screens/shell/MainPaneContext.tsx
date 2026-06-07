@@ -10,11 +10,13 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
 import { CommonActions, useFocusEffect } from '@react-navigation/native';
+import type { SharedValue } from 'react-native-reanimated';
 
 /** 主区嵌套 navigation 的最小接口（避免到处引 MainPaneNavigation 造成循环依赖） */
 export type MainPaneNavRef = {
@@ -65,14 +67,77 @@ export function useReportMainPaneSecondary(isSecondary: boolean) {
   );
 }
 
+/** 全局侧栏是否打开（DrawerShell 下发 → 文档页判断分界手柄显隐）。 */
+const GlobalSidebarOpenContext = createContext<boolean>(false);
+export function useGlobalSidebarOpen(): boolean {
+  return useContext(GlobalSidebarOpenContext);
+}
+
+/** 全局侧栏「跟手驱动」通道（DrawerShell 下发 → 文档页可在目录树侧栏上横向拖动直接开合全局侧栏）。
+ *  animWidth = 全局侧栏当前宽度 SharedValue（UI 线程逐帧写即跟手）；width = 满开宽；
+ *  settleOpen = 落位后把 React 逻辑态同步回 DrawerShell。compact / 非 sidebarShell 下为 null。 */
+export type GlobalSidebarDrive = {
+  animWidth: SharedValue<number>;
+  width: number;
+  settleOpen: (open: boolean) => void;
+};
+const GlobalSidebarDriveContext = createContext<GlobalSidebarDrive | null>(null);
+export function useGlobalSidebarDrive(): GlobalSidebarDrive | null {
+  return useContext(GlobalSidebarDriveContext);
+}
+
+/** 文档目录树侧栏开关态（DocsScreen 上报 → DrawerShell 判断全局手柄显隐）。null = 不在文档页。 */
+const DocsTreeOpenContext = createContext<boolean | null>(null);
+const DocsTreeSetterContext = createContext<((v: boolean | null) => void) | null>(
+  null,
+);
+export function useMainPaneDocsTreeOpen(): boolean | null {
+  return useContext(DocsTreeOpenContext);
+}
+/** 文档页用：上报目录树开关态;卸载/离开文档页时回 null。 */
+export function useReportDocsTreeOpen(open: boolean | null) {
+  const setter = useContext(DocsTreeSetterContext);
+  useEffect(() => {
+    setter?.(open);
+    return () => setter?.(null);
+  }, [setter, open]);
+}
+
 /** Provider：DrawerShell 在 sidebarShell 分支包住主区 + 侧栏，统一提供 bind + controller。 */
-export function MainPaneProvider({ children }: { children: React.ReactNode }) {
+export function MainPaneProvider({
+  children,
+  globalSidebarOpen,
+  globalSidebarAnimWidth,
+  globalSidebarWidth,
+  settleGlobalSidebarOpen,
+}: {
+  children: React.ReactNode;
+  /** 全局侧栏当前是否打开（DrawerShell 传入 → 下发给文档页）。 */
+  globalSidebarOpen: boolean;
+  /** 全局侧栏当前宽度 SharedValue（DrawerShell 的 sidebarAnimWidth）→ 文档页跟手驱动用。 */
+  globalSidebarAnimWidth: SharedValue<number>;
+  /** 全局侧栏满开宽（DrawerShell 的 sidebarWidth）。 */
+  globalSidebarWidth: number;
+  /** 跟手落位后把全局侧栏逻辑态同步回 DrawerShell（= setSidebarOpen）。 */
+  settleGlobalSidebarOpen: (open: boolean) => void;
+}) {
   const navRef = useRef<MainPaneNavRef | null>(null);
   const [isSecondary, setIsSecondary] = useState(false);
+  const [docsTreeOpen, setDocsTreeOpen] = useState<boolean | null>(null);
 
   const bind = useCallback<BindFn>((nav) => {
     navRef.current = nav;
   }, []);
+
+  /** 全局侧栏跟手驱动通道（对象 memo 稳定，避免无谓重渲染）。 */
+  const globalSidebarDrive = useMemo<GlobalSidebarDrive>(
+    () => ({
+      animWidth: globalSidebarAnimWidth,
+      width: globalSidebarWidth,
+      settleOpen: settleGlobalSidebarOpen,
+    }),
+    [globalSidebarAnimWidth, globalSidebarWidth, settleGlobalSidebarOpen],
+  );
 
   const controller = useMemo<MainPaneController>(
     () => ({
@@ -111,11 +176,19 @@ export function MainPaneProvider({ children }: { children: React.ReactNode }) {
   return (
     <BindContext.Provider value={bind}>
       <ControllerContext.Provider value={controller}>
-        <SecondarySetterContext.Provider value={setIsSecondary}>
-          <SecondaryContext.Provider value={isSecondary}>
-            {children}
-          </SecondaryContext.Provider>
-        </SecondarySetterContext.Provider>
+        <GlobalSidebarOpenContext.Provider value={globalSidebarOpen}>
+          <GlobalSidebarDriveContext.Provider value={globalSidebarDrive}>
+            <DocsTreeSetterContext.Provider value={setDocsTreeOpen}>
+              <DocsTreeOpenContext.Provider value={docsTreeOpen}>
+                <SecondarySetterContext.Provider value={setIsSecondary}>
+                  <SecondaryContext.Provider value={isSecondary}>
+                    {children}
+                  </SecondaryContext.Provider>
+                </SecondarySetterContext.Provider>
+              </DocsTreeOpenContext.Provider>
+            </DocsTreeSetterContext.Provider>
+          </GlobalSidebarDriveContext.Provider>
+        </GlobalSidebarOpenContext.Provider>
       </ControllerContext.Provider>
     </BindContext.Provider>
   );
