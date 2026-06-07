@@ -51,14 +51,30 @@ export type FolderViewProps = {
   /** 该 folder 的直接子项（由 caller 从 tree 里筛出来传进来） */
   items: FlowDocTreeItem[];
   onSelect: (item: FlowDocTreeItem) => void;
+  /** 正文上下额外内边距：让内容贯穿顶/底渐变遮罩。 */
+  contentTopInset?: number;
+  contentBottomInset?: number;
 };
 
-export function FolderView({ folder, items, onSelect }: FolderViewProps) {
+export function FolderView({
+  folder,
+  items,
+  onSelect,
+  contentTopInset,
+  contentBottomInset,
+}: FolderViewProps) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={[
+        styles.scrollContent,
+        contentTopInset != null ? { paddingTop: contentTopInset } : null,
+        contentBottomInset != null ? { paddingBottom: contentBottomInset } : null,
+      ]}
+    >
       <View style={styles.titleRow}>
         <Ionicons
           name="folder-outline"

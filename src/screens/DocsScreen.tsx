@@ -34,6 +34,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
 import { getFlowDocTree, type FlowDocTreeItem } from '../api';
+import LinearGradient from 'react-native-linear-gradient';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { DocsSidebar } from './docs/DocsSidebar';
 import { docsTreeStore } from './docs/docsTreeStore';
@@ -56,6 +57,13 @@ import { HamburgerButton } from './shell/HamburgerButton';
 /** DocsScreen 在 compact 下跑在 RootStack、iPad 下跑在 MainPane 嵌套栈；这里按 RootStack 类型标注，
  *  push('DocPreview') 用 as never 兼容两栈（两栈都注册了 DocPreview，运行时按平台解析）。 */
 type Nav = NativeStackNavigationProp<RootStackParamList>;
+
+/** hex(#rrggbb) → rgba 字符串（目录底部自定义长渐变遮罩用）。 */
+function hexToRgba(hex: string, a: number): string {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex.trim());
+  if (!m) return `rgba(0,0,0,${a})`;
+  return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${a})`;
+}
 
 export function DocsScreen() {
   const insets = useSafeAreaInsets();
@@ -189,6 +197,8 @@ export function DocsScreen() {
   }, []);
 
   const headerHeight = insets.top + 8 + 12 + HEADER_CIRCLE_BTN_SIZE;
+  /** 手机端目录底部渐变遮罩带高度：较长，但用从头就开始掉透明度的缓渐变（无纯色平台、不显得遮挡多）。 */
+  const dirFooterHeight = insets.bottom + 72;
 
   if (!session) return null;
 
@@ -208,6 +218,9 @@ export function DocsScreen() {
       selectionTx={sidebarShell ? undefined : previewTx}
       dismissFrom={maxTranslateX}
       dismissTo={winWidth}
+      /* 手机端：内容上下留出顶/底遮罩带高度，让树滚动时贯穿渐变遮罩下。 */
+      contentTopInset={sidebarShell ? undefined : headerHeight}
+      contentBottomInset={sidebarShell ? undefined : dirFooterHeight}
     />
   );
 
@@ -223,10 +236,40 @@ export function DocsScreen() {
            *  预览存在时限宽到露出宽（maxTranslateX），内容不戳到 peek 出来的预览背后;刷新靠下拉。 */
           <GestureDetector gesture={dirOpenGesture}>
             <Animated.View style={[styles.compactDir, dirAnimStyle]}>
-              <View style={[styles.compactDirHeader, { paddingTop: insets.top + 8 }]}>
+              {/* 树铺满整个目录高度，内容上下留出遮罩带高度 → 滚动时贯穿顶/底渐变遮罩下。 */}
+              {sidebarEl}
+              {/* 底部渐变遮罩带（内容滚到下面被柔化遮挡）。 */}
+              <View
+                style={[styles.compactBottomFade, { height: dirFooterHeight }]}
+                pointerEvents="none"
+              >
+                {/* 长缓渐变：从顶端就开始掉透明度（无纯色平台），到底端才接近不透明 → 不显得遮挡多。 */}
+                <LinearGradient
+                  style={StyleSheet.absoluteFill}
+                  colors={[
+                    hexToRgba(colors.chatScreenBackground, 0),
+                    hexToRgba(colors.chatScreenBackground, 0.08),
+                    hexToRgba(colors.chatScreenBackground, 0.22),
+                    hexToRgba(colors.chatScreenBackground, 0.45),
+                    hexToRgba(colors.chatScreenBackground, 0.98),
+                  ]}
+                  locations={[0, 0.25, 0.5, 0.75, 1]}
+                  start={{ x: 0.5, y: 0 }}
+                  end={{ x: 0.5, y: 1 }}
+                />
+              </View>
+              {/* 顶部渐变遮罩带 + 浮动汉堡；box-none 让空白处的滚动穿透给下方树。 */}
+              <View
+                style={[styles.compactTopBar, { paddingTop: insets.top + 8 }]}
+                pointerEvents="box-none"
+              >
+                <BlurHeaderBackground
+                  style={StyleSheet.absoluteFill}
+                  topSolidHeight={insets.top + 8}
+                  gradientBaseHex={colors.chatScreenBackground}
+                />
                 <HamburgerButton />
               </View>
-              {sidebarEl}
             </Animated.View>
           </GestureDetector>
         )}
@@ -314,11 +357,23 @@ function createStyles(c: AppColors) {
     /** 手机端目录「同一表面」：汉堡行 + 树。不自带背景，透出最底层 container 的单层背景色
      *  （完整/半开露出都是它，避免多层叠色 + 不遮挡汉堡阴影）。 */
     compactDir: { flex: 1 },
-    compactDirHeader: {
+    /** 顶部渐变遮罩带 + 浮动汉堡：绝对定位贴顶，覆盖在树之上；box-none 让空白处滚动穿透。 */
+    compactTopBar: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
       flexDirection: 'row',
       alignItems: 'center',
       paddingHorizontal: 16,
       paddingBottom: 12,
+    },
+    /** 底部渐变遮罩带：绝对定位贴底，覆盖在树之上（pointerEvents none）。 */
+    compactBottomFade: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
     },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     placeholderText: { color: c.placeholder, fontSize: 14 },

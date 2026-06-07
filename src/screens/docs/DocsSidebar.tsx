@@ -238,6 +238,9 @@ export type DocsSidebarProps = {
   selectionTx?: SharedValue<number>;
   dismissFrom?: number;
   dismissTo?: number;
+  /** 列表内容上下额外内边距：手机端让内容延伸贯穿顶/底渐变遮罩，首尾项滚到遮罩下。 */
+  contentTopInset?: number;
+  contentBottomInset?: number;
 };
 
 export function DocsSidebar({
@@ -252,6 +255,8 @@ export function DocsSidebar({
   selectionTx,
   dismissFrom = 0,
   dismissTo = 1,
+  contentTopInset,
+  contentBottomInset,
 }: DocsSidebarProps) {
   const { colors, isDark } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -384,7 +389,11 @@ export function DocsSidebar({
           data={visibleItems}
           keyExtractor={(it) => it.id}
           renderItem={renderItem}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[
+            styles.listContent,
+            contentTopInset != null ? { paddingTop: contentTopInset } : null,
+            contentBottomInset != null ? { paddingBottom: contentBottomInset } : null,
+          ]}
           onContentSizeChange={(_w, h) => setContentH(h)}
           onLayout={(e) => setLayoutH(e.nativeEvent.layout.height)}
           /* 内容不到可视区 200% 时不显示滚动条。 */

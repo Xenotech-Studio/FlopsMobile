@@ -35,6 +35,33 @@ const EMPTY_DOC: FlowDocDocument = [
   { type: 'paragraph', children: [{ text: '' }] },
 ];
 
+/** 叶子文本块类型：这些块全是空白文本才可能算「空文档」；其它块（divider/image/list/quote 等）= 有内容。 */
+const LEAF_TEXT_TYPES = new Set([
+  'paragraph',
+  'heading-1',
+  'heading-2',
+  'heading-3',
+  'heading-4',
+  'heading-5',
+  'heading-6',
+  'code',
+]);
+
+/** 文档是否为空（无正文）：null/空数组，或所有块都是「空白文本的叶子文本块」。 */
+function documentIsEmpty(doc: FlowDocDocument | null): boolean {
+  if (!doc || doc.length === 0) return true;
+  return doc.every((b) => {
+    const type = (b as { type?: string }).type;
+    if (!type || !LEAF_TEXT_TYPES.has(type)) return false; // 非叶子文本块 → 有内容
+    const children = (b as { children?: unknown }).children;
+    if (!Array.isArray(children) || children.length === 0) return false;
+    return children.every((c) => {
+      const t = (c as { text?: unknown }).text;
+      return typeof t === 'string' && t.trim() === ''; // 非文本 inline(pill 等) → 有内容
+    });
+  });
+}
+
 const SUPPORTED_TYPES = new Set(['document']);
 
 const UNSUPPORTED_TYPE_LABEL: Record<string, string> = {
@@ -55,10 +82,18 @@ export type DocBodyViewHandle = {
 export type DocBodyViewProps = {
   docId: string;
   docType: string;
+  /** 文档标题：在正文顶部用一行大标题显示（对齐 web 版）。 */
+  title?: string;
+  /** 正文上下额外内边距：让内容贯穿顶/底渐变遮罩。 */
+  contentTopInset?: number;
+  contentBottomInset?: number;
 };
 
 export const DocBodyView = React.forwardRef<DocBodyViewHandle, DocBodyViewProps>(
-  function DocBodyView({ docId, docType }, ref) {
+  function DocBodyView(
+    { docId, docType, title, contentTopInset, contentBottomInset },
+    ref,
+  ) {
     const { session } = useSession();
     const { colors } = useAppTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
@@ -165,14 +200,33 @@ export const DocBodyView = React.forwardRef<DocBodyViewHandle, DocBodyViewProps>
       );
     }
 
+    if (documentIsEmpty(doc)) {
+      return (
+        <View style={styles.centered}>
+          <Ionicons
+            name="document-text-outline"
+            size={48}
+            color={colors.placeholder}
+            style={styles.emptyIcon}
+          />
+          <Text style={styles.emptyTitle}>空文档</Text>
+          <Text style={styles.emptyHint}>这篇文档还没有内容</Text>
+        </View>
+      );
+    }
+
     return (
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
           expanded && styles.scrollContentWide,
+          contentTopInset != null ? { paddingTop: contentTopInset } : null,
+          contentBottomInset != null ? { paddingBottom: contentBottomInset } : null,
         ]}
       >
+        {/* 文档标题用一行大标题显示（对齐 web 版）。 */}
+        {title?.trim() ? <Text style={styles.docTitle}>{title.trim()}</Text> : null}
         {/* key={docId}：切换文档时强制重挂原生 blocks，避免「内容文档→空文档」时原生渲染
          *  diff 残留上一篇第一块文本的 bug。 */}
         <FlowDocBlocks key={docId} document={doc ?? EMPTY_DOC} editable={false} />
@@ -188,6 +242,15 @@ function createStyles(c: AppColors) {
       paddingHorizontal: 16,
       paddingVertical: 12,
       paddingBottom: 64,
+    },
+    /** 文档标题行（正文顶部一行大标题，对齐 web 版）。marginTop 让标题与顶部 header 拉开距离。 */
+    docTitle: {
+      fontSize: 26,
+      fontWeight: '700',
+      color: c.textHeader,
+      lineHeight: 32,
+      marginTop: 40,
+      marginBottom: 24,
     },
     /** 宽屏沉浸阅读：限宽居中 + 更宽松的横向 / 纵向留白 */
     scrollContentWide: {
@@ -218,6 +281,14 @@ function createStyles(c: AppColors) {
       backgroundColor: c.surfaceMuted,
     },
     retryText: { fontSize: 13, color: c.textPrimary },
+    emptyIcon: { marginBottom: 12, opacity: 0.5 },
+    emptyTitle: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: c.textMuted,
+      marginBottom: 4,
+    },
+    emptyHint: { fontSize: 13, color: c.placeholder },
     unsupportedIcon: { marginBottom: 16, opacity: 0.6 },
     unsupportedTitle: {
       fontSize: 16,

@@ -31,6 +31,7 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { type FlowDocTreeItem } from '../../api';
+import LinearGradient from 'react-native-linear-gradient';
 import { BlurHeaderBackground } from '../../components/BlurHeaderBackground';
 import { docsTreeStore } from './docsTreeStore';
 import { useAppTheme } from '../../context/ThemeContext';
@@ -59,6 +60,13 @@ export type DocPreviewScreenProps = {
    *  native 按钮浮在白遮罩之上挡不住，靠自身变淡露出底下白遮罩来等效。 */
   headerLeftStyle?: StyleProp<ViewStyle>;
 };
+
+/** hex(#rrggbb) → rgba（底部长缓渐变遮罩用）。 */
+function hexToRgba(hex: string, a: number): string {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex.trim());
+  if (!m) return `rgba(0,0,0,${a})`;
+  return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${a})`;
+}
 
 export function DocPreviewScreen({
   id,
@@ -122,23 +130,55 @@ export function DocPreviewScreen({
   }, []);
 
   const headerHeight = insets.top + 8 + 12 + HEADER_CIRCLE_BTN_SIZE;
+  /** 底部渐变遮罩带高度（长缓渐变，从顶端就掉透明度、无纯色平台）。 */
+  const footerHeight = insets.bottom + 72;
 
   return (
     <View style={styles.container}>
-      {/* 主区：文件夹 → FolderView；文档 → DocBodyView；找不到 → 占位。 */}
-      <View style={[styles.mainArea, { paddingTop: headerHeight }]}>
+      {/* 主区：内容铺满整页，上下留出遮罩带高度 → 滚动贯穿顶/底渐变遮罩下。 */}
+      <View style={styles.mainArea}>
         {item == null ? (
-          <View style={styles.centered}>
+          <View style={[styles.centered, { paddingTop: headerHeight }]}>
             <Text style={styles.placeholderText}>文档不存在，请返回</Text>
           </View>
         ) : isFolder ? (
-          <FolderView folder={item} items={children} onSelect={onChildSelect} />
+          <FolderView
+            folder={item}
+            items={children}
+            onSelect={onChildSelect}
+            contentTopInset={headerHeight}
+            contentBottomInset={footerHeight}
+          />
         ) : (
-          <DocBodyView ref={docBodyRef} docId={item.id} docType={item.type} />
+          <DocBodyView
+            ref={docBodyRef}
+            docId={item.id}
+            docType={item.type}
+            title={headerTitle}
+            contentTopInset={headerHeight}
+            contentBottomInset={footerHeight}
+          />
         )}
       </View>
 
-      {/* 顶部 header：返回键 + 标题 + ⋯ */}
+      {/* 底部渐变遮罩带：长缓渐变，从顶端就掉透明度、无纯色平台（内容滚到下面被柔化遮挡）。 */}
+      <View style={[styles.bottomFade, { height: footerHeight }]} pointerEvents="none">
+        <LinearGradient
+          style={StyleSheet.absoluteFill}
+          colors={[
+            hexToRgba(colors.chatScreenBackground, 0),
+            hexToRgba(colors.chatScreenBackground, 0.08),
+            hexToRgba(colors.chatScreenBackground, 0.22),
+            hexToRgba(colors.chatScreenBackground, 0.45),
+            hexToRgba(colors.chatScreenBackground, 0.98),
+          ]}
+          locations={[0, 0.25, 0.5, 0.75, 1]}
+          start={{ x: 0.5, y: 0 }}
+          end={{ x: 0.5, y: 1 }}
+        />
+      </View>
+
+      {/* 顶部 header：目录按钮 + 标题 + ⋯ */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <BlurHeaderBackground
           style={StyleSheet.absoluteFill}
@@ -256,12 +296,13 @@ function createStyles(c: AppColors) {
       backgroundColor: c.surface,
       ...shadowCircleButtonThemed(c),
     },
-    headerTitleWrap: { flex: 1, alignItems: 'center', paddingHorizontal: 8 },
+    headerTitleWrap: { flex: 1, alignItems: 'flex-start', paddingHorizontal: 8 },
     headerTitle: {
       fontSize: TASK_FONT_SIZE_TITLE,
-      fontWeight: '700',
-      color: c.textHeader,
+      fontWeight: '400',
+      color: c.textPrimary,
     },
+    bottomFade: { position: 'absolute', left: 0, right: 0, bottom: 0 },
     optionsMenu: {
       position: 'absolute',
       zIndex: 50,
