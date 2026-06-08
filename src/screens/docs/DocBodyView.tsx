@@ -11,7 +11,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -215,8 +214,14 @@ export const DocBodyView = React.forwardRef<DocBodyViewHandle, DocBodyViewProps>
       );
     }
 
+    /* 虚拟化：FlowDocBlocks 自带 FlatList 滚动（只挂可视区+缓冲），长文档省内存/首屏快/拖侧栏不全量重排。
+       标题作为 ListHeaderComponent；key={docId} 切文档时重挂，避免原生残留上一篇首块文本的 bug。 */
     return (
-      <ScrollView
+      <FlowDocBlocks
+        key={docId}
+        document={doc ?? EMPTY_DOC}
+        editable={false}
+        virtualized
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
@@ -224,13 +229,10 @@ export const DocBodyView = React.forwardRef<DocBodyViewHandle, DocBodyViewProps>
           contentTopInset != null ? { paddingTop: contentTopInset } : null,
           contentBottomInset != null ? { paddingBottom: contentBottomInset } : null,
         ]}
-      >
-        {/* 文档标题用一行大标题显示（对齐 web 版）。 */}
-        {title?.trim() ? <Text style={styles.docTitle}>{title.trim()}</Text> : null}
-        {/* key={docId}：切换文档时强制重挂原生 blocks，避免「内容文档→空文档」时原生渲染
-         *  diff 残留上一篇第一块文本的 bug。 */}
-        <FlowDocBlocks key={docId} document={doc ?? EMPTY_DOC} editable={false} />
-      </ScrollView>
+        ListHeaderComponent={
+          title?.trim() ? <Text style={styles.docTitle}>{title.trim()}</Text> : null
+        }
+      />
     );
   },
 );

@@ -16,23 +16,29 @@
 import React, {
   forwardRef,
   useCallback,
+  useContext,
   useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
 } from 'react';
 import {
+  FlatList,
   Image,
   Linking,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
-  useWindowDimensions,
+  type ImageStyle,
+  type LayoutChangeEvent,
+  type StyleProp,
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
+import Svg, { Circle, Path } from 'react-native-svg';
 import { Element as SlateElement, type Descendant } from 'slate';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
@@ -54,6 +60,7 @@ type SlateMarkedText = {
   italic?: boolean;
   code?: boolean;
   color?: string;
+  link?: string;
 };
 
 type RefPillNode = {
@@ -68,15 +75,20 @@ type RefPillNode = {
 type SlateBlockBase<T extends string> = {
   type: T;
   children: Descendant[];
+  /** web 端自主缩进级数（indent）；>0 时整块左移 indent × INDENT_STEP */
+  indent?: number;
 };
 
 type ParagraphBlock = SlateBlockBase<'paragraph'>;
+/** 嵌套文本块容器（对齐 web textblock）：children 头部是 inline 主文本，之后是嵌套子块。
+ *  仅当 web textblock 真的带嵌套子块时才会出现；无嵌套的 textblock 解码成 paragraph。 */
+type TextBlockContainer = SlateBlockBase<'textblock'>;
 type HeadingBlock = SlateBlockBase<
   'heading-one' | 'heading-two' | 'heading-three' | 'heading-four' | 'heading-five' | 'heading-six'
 >;
 type CodeBlock = SlateBlockBase<'code'>;
 type QuoteBlock = SlateBlockBase<'quote'>;
-type DividerBlock = { type: 'divider'; children: [{ text: '' }] };
+type DividerBlock = { type: 'divider'; children: [{ text: '' }]; indent?: number };
 /* FlowDoc 的 listblock 结构：children 头部是 inline 内容（item 主文本），后面是嵌套 block。
    - order_in_list：web 端持久化的序号；前端不做累加，直接读
    - numberingStyle：'decimal' / 'lower-alpha' / 'upper-alpha' / 'lower-roman'；缺省时按 depth 循环
@@ -92,9 +104,38 @@ type ImageBlock = {
   type: 'image';
   url?: string;
   alt?: string;
+  /** 图注：web 端是纯字符串属性，移动端用自研原生引擎(FlowDocInput)渲染成只读文本 */
+  caption?: string;
   width?: number;
   height?: number;
+  /** 非破坏裁剪：0–1 归一化矩形（对齐 web element.crop）。需配合 width/height(自然尺寸)才能渲染 */
+  crop?: { x: number; y: number; width: number; height: number };
   children: [{ text: '' }];
+  indent?: number;
+};
+
+/* 表格：table > tableRow > tableCell > block[]（cell 是 mini-doc）。对齐 web flowdoc-editor-core schema。
+   - align：每列对齐 'left'|'center'|'right'|null（null=默认左）
+   - colWidths：每列宽度 px（null=该列用默认宽）；整字段可为 null
+   - tableCell.isHeader：首行为 true */
+type TableAlign = 'left' | 'center' | 'right' | null;
+type TableCellBlock = {
+  type: 'tableCell';
+  isHeader?: boolean;
+  /** 单元格背景色（web cell.bgColor，色板设的 CSS 颜色字符串） */
+  bgColor?: string;
+  children: Descendant[];
+};
+type TableRowBlock = {
+  type: 'tableRow';
+  children: TableCellBlock[];
+};
+type TableBlock = {
+  type: 'table';
+  align?: TableAlign[];
+  colWidths?: (number | null)[] | null;
+  children: Descendant[];
+  indent?: number;
 };
 
 /** 文件附件 void block：url 可点击打开 */
@@ -104,18 +145,23 @@ type FileAttachmentBlock = {
   filename?: string;
   mime_type?: string;
   size?: number;
+  /** web display 字段：'card'=300 卡片；'inline'=小图标+文件名链接（单行链接模式） */
+  display?: 'card' | 'inline';
   children: [{ text: '' }];
+  indent?: number;
 };
 
 export type FlowDocBlock =
   | ParagraphBlock
+  | TextBlockContainer
   | HeadingBlock
   | CodeBlock
   | QuoteBlock
   | DividerBlock
   | ListBlock
   | ImageBlock
-  | FileAttachmentBlock;
+  | FileAttachmentBlock
+  | TableBlock;
 
 export type FlowDocDocument = FlowDocBlock[];
 
@@ -132,6 +178,13 @@ export type FlowDocBlocksProps = {
   /** 点 pill 触发；不传则 pill 不可点 */
   onPillPress?: (refKey: string) => void;
   style?: ViewStyle;
+  /** 虚拟化：顶层 block 用 FlatList 渲染（自带滚动，只挂可视区+缓冲）。仅 viewer(只读) 用，
+   *  长文档省内存/首屏快/不全量重排。开启后本组件即滚动容器，外层别再套 ScrollView。 */
+  virtualized?: boolean;
+  /** 虚拟化时的列表头（如文档大标题） */
+  ListHeaderComponent?: React.ReactElement | null;
+  /** 虚拟化时的内容内边距样式（对应原 ScrollView contentContainerStyle） */
+  contentContainerStyle?: StyleProp<ViewStyle>;
 };
 
 /** 文档可切换的 block 类型；FlowDoc 端 paragraph / heading-2..6 / code / quote 都接收同样的 inline children */
@@ -170,7 +223,16 @@ type DocPath = number[];
 
 export const FlowDocBlocks = forwardRef<FlowDocBlocksHandle, FlowDocBlocksProps>(
   function FlowDocBlocks(
-    { document, editable = false, onChange, onPillPress, style },
+    {
+      document,
+      editable = false,
+      onChange,
+      onPillPress,
+      style,
+      virtualized,
+      ListHeaderComponent,
+      contentContainerStyle,
+    },
     ref,
   ) {
   const { colors } = useAppTheme();
@@ -352,6 +414,42 @@ export const FlowDocBlocks = forwardRef<FlowDocBlocksHandle, FlowDocBlocksProps>
     }),
     [document, onChange],
   );
+
+  // 虚拟化（仅 viewer）：顶层 block 用 FlatList 渲染，只挂可视区 + 缓冲，长文档省内存/首屏快。
+  if (virtualized) {
+    return (
+      <FlatList
+        data={document}
+        keyExtractor={(_item, i) => `${structuralGen}-${i}`}
+        renderItem={({ item, index }) => (
+          <BlockRenderer
+            block={item}
+            editable={editable}
+            styles={styles}
+            colors={colors}
+            onPillPress={onPillPress}
+            depth={0}
+            path={[index]}
+            updateBlockAtPath={updateBlockAtPath}
+            insertSiblingAfter={insertSiblingAfter}
+            splitBlock={splitBlock}
+            mergeBackward={mergeBackward}
+            registerInputRef={registerInputRef}
+            reportFocus={reportFocus}
+            reportBlur={reportBlur}
+            structuralGen={structuralGen}
+          />
+        )}
+        ListHeaderComponent={ListHeaderComponent ?? undefined}
+        contentContainerStyle={contentContainerStyle}
+        style={style}
+        initialNumToRender={12}
+        maxToRenderPerBatch={8}
+        windowSize={9}
+        keyboardShouldPersistTaps="handled"
+      />
+    );
+  }
 
   return (
     <View style={style}>
@@ -625,6 +723,8 @@ type RendererCtx = {
 
 function BlockRenderer(ctx: RendererCtx) {
   const { block } = ctx;
+  // 基准字号（表格单元格内 = 14，其余 16）。段落用它、标题按 base/16 比例缩放
+  const baseFontSize = useContext(BaseFontSizeContext);
   // 文本类 block 的统一 onContentChange：替换 block.children 为 native 内联回来的 content
   const onWholeChildrenChange = ctx.editable
     ? (newContent: FlowDocContent) => {
@@ -652,7 +752,10 @@ function BlockRenderer(ctx: RendererCtx) {
       }
     : undefined;
 
+  const rendered = ((): React.ReactNode => {
   switch (block.type) {
+    case 'textblock':
+      return <TextBlockContainerRenderer ctx={ctx} block={block as TextBlockContainer} />;
     case 'bulletlistblock':
     case 'numberedlistblock':
       return <ListBlockRenderer ctx={ctx} block={block as ListBlock} />;
@@ -662,7 +765,8 @@ function BlockRenderer(ctx: RendererCtx) {
           <TextBlockInput
             ctx={ctx}
             content={inlineToContent(block.children)}
-            fontSize={16}
+            fontSize={baseFontSize}
+            lineHeight={Math.round(baseFontSize * BODY_LH_RATIO)}
             onContentChange={onWholeChildrenChange}
             onSplitRequest={onSplitSameType}
             onMergeBackwardRequest={onMergeBackward}
@@ -676,14 +780,14 @@ function BlockRenderer(ctx: RendererCtx) {
     case 'heading-five':
     case 'heading-six': {
       const level = headingLevel(block.type);
-      const size = HEADING_FONT_SIZES[level];
-      const tight = level <= 2;
+      const size = Math.round(HEADING_FONT_SIZES[level] * (baseFontSize / 16));
       return (
-        <View style={tight ? ctx.styles.headingWrapTight : ctx.styles.headingWrap}>
+        <View style={{ marginTop: HEADING_MARGIN_TOP[level], marginBottom: BLOCK_SPACING / 2 }}>
           <TextBlockInput
             ctx={ctx}
             content={inlineToContent(block.children, { headingForceBold: true })}
             fontSize={size}
+            lineHeight={Math.round(size * HEADING_LH_RATIO[level])}
             onContentChange={onWholeChildrenChange}
             onSplitRequest={onSplitSameType}
             onMergeBackwardRequest={onMergeBackward}
@@ -697,8 +801,10 @@ function BlockRenderer(ctx: RendererCtx) {
           <TextBlockInput
             ctx={ctx}
             content={inlineToContent(block.children)}
-            fontSize={13}
+            fontSize={14}
+            lineHeight={Math.round(14 * 1.5)}
             fontFamily={Platform.OS === 'ios' ? 'Menlo' : 'monospace'}
+            textColor={CODE_TEXT_COLOR}
             enterCreatesBlock={false}
             onContentChange={onWholeChildrenChange}
             onMergeBackwardRequest={onMergeBackward}
@@ -717,51 +823,290 @@ function BlockRenderer(ctx: RendererCtx) {
       return <ImageBlockRenderer ctx={ctx} block={block as ImageBlock} />;
     case 'file_attachment':
       return <FileAttachmentRenderer ctx={ctx} block={block as FileAttachmentBlock} />;
+    case 'table':
+      return <TableRenderer ctx={ctx} block={block as unknown as TableBlock} />;
     default:
       return null;
   }
+  })();
+  // 自主缩进（web indent 字段）：整块左移 indent × INDENT_STEP。与结构性嵌套缩进相互独立。
+  const indent = (block as { indent?: number }).indent;
+  if (indent && indent > 0) {
+    return <View style={{ marginLeft: indent * INDENT_STEP }}>{rendered}</View>;
+  }
+  return rendered;
 }
 
-/** image void block：按内置宽高 / 默认 16:9 比例显示；点击可在外部浏览器打开原图 */
+/** image void block：宽度按 onLayout 实测的父容器宽度（不是猜屏宽，兼容缩进/单元格/iPad 分栏）；
+ *  高度按图片宽高比；支持非破坏裁剪 crop；点击在外部浏览器打开原图。 */
 function ImageBlockRenderer({ ctx, block }: { ctx: RendererCtx; block: ImageBlock }) {
   const url = (block.url ?? '').trim();
-  const { width: winW } = useWindowDimensions();
-  // 容器宽度兜底（spike 屏内大约 winW - 36 左右；用 winW 减保守 margin）
-  const containerW = Math.max(120, winW - 48);
-  const aspect = block.width && block.height && block.width > 0 && block.height > 0
-    ? block.width / block.height
-    : 16 / 9;
-  const h = containerW / aspect;
+  // 实测父容器可用宽度——缩进 / 表格单元格 / iPad 分栏各不相同，绝不能用屏宽猜
+  const [availW, setAvailW] = React.useState(0);
+  const onLayout = React.useCallback((e: LayoutChangeEvent) => {
+    const w = e.nativeEvent.layout.width;
+    if (w > 0) setAvailW((prev) => (Math.abs(prev - w) > 0.5 ? w : prev));
+  }, []);
+  // 真实自然尺寸：block.width/height 不一定是自然像素（裁剪图尤其会偏），crop 的宽高比必须用真值。
+  // 对齐 web 的 onLoad naturalWidth/Height —— 这里用 Image.getSize 取。
+  const [natural, setNatural] = React.useState<{ w: number; h: number } | null>(null);
+  React.useEffect(() => {
+    if (!url) {
+      setNatural(null);
+      return;
+    }
+    let cancelled = false;
+    Image.getSize(
+      url,
+      (w, h) => {
+        if (!cancelled && w > 0 && h > 0) setNatural({ w, h });
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  const caption = (block.caption ?? '').trim();
+  // 图注：纯字符串属性，用自研原生引擎(FlowDocInput)渲染成只读 italic 文本，对齐 web .image-caption
+  const captionNode = caption ? (
+    <View style={ctx.styles.imageCaptionWrap}>
+      <FlowDocInput
+        initialContent={[{ type: 'text', text: caption, marks: { italic: true } }]}
+        editable={false}
+        fontSize={14}
+        textColor={ctx.colors.textMuted}
+      />
+    </View>
+  ) : null;
+
   if (!url) {
     return (
-      <View style={[ctx.styles.imagePlaceholder, { height: 80 }]}>
-        <Text style={ctx.styles.imagePlaceholderText}>（图片缺 url）</Text>
+      <View onLayout={onLayout}>
+        <View style={[ctx.styles.imagePlaceholder, { height: 80 }]}>
+          <Text style={ctx.styles.imagePlaceholderText}>（图片缺 url）</Text>
+        </View>
+        {captionNode}
       </View>
     );
   }
+
+  // 显示宽 = 实测可用宽；若 block.width 更小（用户缩过的显示宽）则不放大，对齐 web maxWidth:100%
+  const displayW =
+    block.width && block.width > 0 ? Math.min(availW, block.width) : availW;
+  // 宽高比优先用真实自然尺寸；未取到时退回 block 比值，再退 16:9
+  const naturalAspect = natural ? natural.w / natural.h : null;
+  const aspect =
+    naturalAspect ??
+    (block.width && block.height && block.width > 0 && block.height > 0
+      ? block.width / block.height
+      : 16 / 9);
+  const crop = block.crop;
+  const canCrop = !!crop && crop.width > 0 && crop.height > 0;
+
+  let imageNode: React.ReactNode = null;
+  if (availW > 0) {
+    // crop 必须有真实自然宽高比才正确——未取到 natural 前不渲染（避免闪一下错比例 / 未裁剪全图）
+    if (canCrop && crop && naturalAspect) {
+      const A = naturalAspect;
+      // 裁剪区显示尺寸：高 = displayW * (cropH/cropW) / A；内图放大 1/cropW 并按 -cropX/-cropY 偏移
+      const dispH = (displayW * (crop.height / crop.width)) / A;
+      const innerW = displayW / crop.width;
+      const innerH = innerW / A;
+      imageNode = (
+        <View style={[ctx.styles.imageCropBox, { width: displayW, height: dispH }]}>
+          <Image
+            source={{ uri: url }}
+            style={[
+              ctx.styles.imageCropInner,
+              {
+                width: innerW,
+                height: innerH,
+                left: -(crop.x / crop.width) * displayW,
+                top: -(crop.y / crop.height) * dispH,
+              },
+            ]}
+            resizeMode="stretch"
+            accessible
+            accessibilityLabel={block.alt}
+          />
+        </View>
+      );
+    } else if (!canCrop) {
+      imageNode = (
+        <Image
+          source={{ uri: url }}
+          style={[ctx.styles.image, { width: displayW, height: displayW / aspect }]}
+          resizeMode="cover"
+          accessible
+          accessibilityLabel={block.alt}
+        />
+      );
+    }
+    // canCrop 但 natural 还没取到：imageNode 保持 null，等 getSize 回来再渲染
+  }
+
   return (
-    <TouchableOpacity
-      activeOpacity={0.85}
-      onPress={() => Linking.openURL(url).catch(() => {})}
-    >
-      <Image
-        source={{ uri: url }}
-        style={{
-          width: containerW,
-          height: h,
-          borderRadius: 6,
-          marginVertical: 8,
-          backgroundColor: ctx.colors.surfaceMuted,
-        }}
-        resizeMode="cover"
-        accessible
-        accessibilityLabel={block.alt}
-      />
-    </TouchableOpacity>
+    <View onLayout={onLayout}>
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={() => Linking.openURL(url).catch(() => {})}
+      >
+        {imageNode}
+      </TouchableOpacity>
+      {captionNode}
+    </View>
   );
 }
 
 /** file_attachment：一个 chip 行，📎 + filename（+ size）；点击打开 url（如有） */
+/* 文件类型图标：按扩展名/mime 分类 → lucide 图标 + 颜色，对齐 web attachmentIcon.jsx。
+   path 直接抠自 lucide-react（含 file-video=file-play / file-audio=file-headphone 别名）。 */
+const _FILE_BASE =
+  'M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z';
+const _FILE_CORNER = 'M14 2v5a1 1 0 0 0 1 1h5';
+type _IconShape = { paths: string[]; circles?: { cx: number; cy: number; r: number }[] };
+const ATTACHMENT_ICONS: Record<string, _IconShape> = {
+  image: {
+    paths: [_FILE_BASE, _FILE_CORNER, 'm20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22'],
+    circles: [{ cx: 10, cy: 12, r: 2 }],
+  },
+  video: {
+    paths: [
+      _FILE_BASE,
+      _FILE_CORNER,
+      'M15.033 13.44a.647.647 0 0 1 0 1.12l-4.065 2.352a.645.645 0 0 1-.968-.56v-4.704a.645.645 0 0 1 .967-.56z',
+    ],
+  },
+  audio: {
+    paths: [
+      'M4 6.835V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-.343',
+      _FILE_CORNER,
+      'M2 19a2 2 0 0 1 4 0v1a2 2 0 0 1-4 0v-4a6 6 0 0 1 12 0v4a2 2 0 0 1-4 0v-1a2 2 0 0 1 4 0',
+    ],
+  },
+  pdf: {
+    paths: [
+      _FILE_BASE,
+      _FILE_CORNER,
+      'M11 18h2',
+      'M12 12v6',
+      'M9 13v-.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 .5.5v.5',
+    ],
+  },
+  archive: {
+    paths: [
+      'M13.659 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v11.5',
+      _FILE_CORNER,
+      'M8 12v-1',
+      'M8 18v-2',
+      'M8 7V6',
+    ],
+    circles: [{ cx: 8, cy: 20, r: 2 }],
+  },
+  sheet: {
+    paths: [_FILE_BASE, _FILE_CORNER, 'M8 13h2', 'M14 13h2', 'M8 17h2', 'M14 17h2'],
+  },
+  code: {
+    paths: [_FILE_BASE, _FILE_CORNER, 'M10 12.5 8 15l2 2.5', 'm14 12.5 2 2.5-2 2.5'],
+  },
+  text: {
+    paths: [_FILE_BASE, _FILE_CORNER, 'M10 9H8', 'M16 13H8', 'M16 17H8'],
+  },
+  '3d': {
+    paths: [
+      'M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z',
+      'm3.3 7 8.7 5 8.7-5',
+      'M12 22V12',
+    ],
+  },
+  default: { paths: [_FILE_BASE, _FILE_CORNER] },
+};
+const ATTACHMENT_COLORS: Record<string, string> = {
+  image: '#0ea5e9',
+  video: '#a855f7',
+  audio: '#22c55e',
+  pdf: '#ef4444',
+  archive: '#a16207',
+  sheet: '#16a34a',
+  code: '#6366f1',
+  text: '#64748b',
+  '3d': '#0891b2',
+  default: '#6b7280',
+};
+const ATTACHMENT_EXT_MAP: Record<string, string> = {
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image',
+  bmp: 'image', svg: 'image', heic: 'image', avif: 'image', ico: 'image',
+  mp4: 'video', mov: 'video', webm: 'video', mkv: 'video', avi: 'video', m4v: 'video',
+  mp3: 'audio', wav: 'audio', flac: 'audio', ogg: 'audio', m4a: 'audio', aac: 'audio',
+  pdf: 'pdf',
+  zip: 'archive', tar: 'archive', gz: 'archive', tgz: 'archive', '7z': 'archive',
+  rar: 'archive', bz2: 'archive', xz: 'archive',
+  xlsx: 'sheet', xls: 'sheet', csv: 'sheet', tsv: 'sheet', ods: 'sheet',
+  js: 'code', jsx: 'code', ts: 'code', tsx: 'code', py: 'code', rb: 'code',
+  go: 'code', rs: 'code', c: 'code', h: 'code', cpp: 'code', hpp: 'code',
+  cc: 'code', java: 'code', kt: 'code', swift: 'code', php: 'code', sh: 'code',
+  bash: 'code', zsh: 'code', lua: 'code', sql: 'code', json: 'code', yaml: 'code',
+  yml: 'code', toml: 'code', xml: 'code', html: 'code', htm: 'code', css: 'code',
+  scss: 'code', less: 'code', vue: 'code', svelte: 'code',
+  ply: '3d', splat: '3d', splatv: '3d', glb: '3d', gltf: '3d', obj: '3d',
+  fbx: '3d', stl: '3d', usdz: '3d',
+  txt: 'text', md: 'text', rst: 'text', log: 'text',
+  doc: 'text', docx: 'text', odt: 'text', rtf: 'text', pages: 'text',
+  ppt: 'text', pptx: 'text', key: 'text',
+};
+
+function attachmentCategory(filename?: string, mimeType?: string): string {
+  const s = String(filename || '').toLowerCase();
+  const dot = s.lastIndexOf('.');
+  const ext = dot >= 0 && dot < s.length - 1 ? s.slice(dot + 1) : '';
+  if (ext && ATTACHMENT_EXT_MAP[ext]) return ATTACHMENT_EXT_MAP[ext];
+  const mt = String(mimeType || '').toLowerCase();
+  if (mt.startsWith('image/')) return 'image';
+  if (mt.startsWith('video/')) return 'video';
+  if (mt.startsWith('audio/')) return 'audio';
+  if (mt === 'application/pdf') return 'pdf';
+  if (mt === 'application/zip' || mt.includes('compressed') || mt.includes('archive')) return 'archive';
+  if (mt.includes('spreadsheet') || mt === 'text/csv') return 'sheet';
+  if (mt.startsWith('text/') || mt.includes('word') || mt.includes('document')) return 'text';
+  return 'default';
+}
+
+/** 按文件类型渲染对应 lucide 图标 + 颜色（对齐 web AttachmentIcon） */
+function AttachmentIcon({
+  filename,
+  mimeType,
+  size = 28,
+}: {
+  filename?: string;
+  mimeType?: string;
+  size?: number;
+}) {
+  const cat = attachmentCategory(filename, mimeType);
+  const shape = ATTACHMENT_ICONS[cat] ?? ATTACHMENT_ICONS.default;
+  const color = ATTACHMENT_COLORS[cat] ?? ATTACHMENT_COLORS.default;
+  return (
+    <Svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={color}
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {shape.paths.map((d, i) => (
+        <Path key={i} d={d} />
+      ))}
+      {shape.circles?.map((cc, i) => (
+        <Circle key={`c${i}`} cx={cc.cx} cy={cc.cy} r={cc.r} />
+      ))}
+    </Svg>
+  );
+}
+
 function FileAttachmentRenderer({
   ctx,
   block,
@@ -772,26 +1117,155 @@ function FileAttachmentRenderer({
   const name = (block.filename ?? '').trim() || '附件';
   const url = (block.url ?? '').trim();
   const sizeLabel = formatFileSize(block.size);
-  const onPress = url ? () => Linking.openURL(url).catch(() => {}) : undefined;
-  const Wrapper = onPress ? TouchableOpacity : View;
-  return (
-    <Wrapper
-      style={ctx.styles.fileAttachmentChip}
-      onPress={onPress}
-      activeOpacity={0.7}
-      accessible
-      accessibilityLabel={`附件 ${name}`}
-    >
-      <Text style={ctx.styles.fileAttachmentIcon}>📎</Text>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={ctx.styles.fileAttachmentName} numberOfLines={1} ellipsizeMode="middle">
+  const open = url ? () => Linking.openURL(url).catch(() => {}) : undefined;
+  const iconColor = ctx.colors.textMuted;
+  // 卡片宽实测（hook 必须无条件调用，放在任何 early-return 之前）
+  const [availW, setAvailW] = React.useState(0);
+  const onLayout = React.useCallback((e: LayoutChangeEvent) => {
+    const w = e.nativeEvent.layout.width;
+    if (w > 0) setAvailW((prev) => (Math.abs(prev - w) > 0.5 ? w : prev));
+  }, []);
+
+  // display='inline'：紧凑单行链接（小图标 + 文件名链接），对齐 web .flowdoc-file-attachment-inline
+  if (block.display === 'inline') {
+    return (
+      <TouchableOpacity
+        style={ctx.styles.fileInline}
+        onPress={open}
+        activeOpacity={0.7}
+        accessible
+        accessibilityLabel={`附件 ${name}`}
+      >
+        <AttachmentIcon filename={block.filename} mimeType={block.mime_type} size={14} />
+        <Text style={ctx.styles.fileInlineText} numberOfLines={1} ellipsizeMode="middle">
           {name}
         </Text>
-        {sizeLabel ? (
-          <Text style={ctx.styles.fileAttachmentSize}>{sizeLabel}</Text>
-        ) : null}
+      </TouchableOpacity>
+    );
+  }
+  // 卡片宽 = min(300, 实测可用宽)。不用 width:300 + maxWidth:'100%'——父容器宽度不确定时
+  // 百分比 maxWidth 解析不出来、300 不收缩会在窄容器溢出（独占一行/分栏/嵌套时）。
+  const cardW = availW > 0 ? Math.min(300, availW) : 300;
+  // 对齐 web .assistant-attachment-card：圆角带边框卡片，左 body(图标+名/大小)、右独立下载段
+  return (
+    <View onLayout={onLayout}>
+      <View style={[ctx.styles.fileCard, { width: cardW }]}>
+      <TouchableOpacity
+        style={ctx.styles.fileCardBody}
+        onPress={open}
+        activeOpacity={0.7}
+        accessible
+        accessibilityLabel={`附件 ${name}`}
+      >
+        {/* 按文件类型上色的图标 */}
+        <AttachmentIcon filename={block.filename} mimeType={block.mime_type} size={28} />
+        <View style={ctx.styles.fileCardText}>
+          <Text style={ctx.styles.fileAttachmentName} numberOfLines={1} ellipsizeMode="middle">
+            {name}
+          </Text>
+          {sizeLabel ? (
+            <Text style={ctx.styles.fileAttachmentSize}>{sizeLabel}</Text>
+          ) : null}
+        </View>
+      </TouchableOpacity>
+      {url ? (
+        <TouchableOpacity
+          style={ctx.styles.fileCardDownload}
+          onPress={open}
+          activeOpacity={0.7}
+          accessibilityLabel="下载"
+        >
+          {/* 下载图标（lucide download） */}
+          <Svg
+            width={18}
+            height={18}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke={iconColor}
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <Path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <Path d="M7 10l5 5 5-5" />
+            <Path d="M12 15V3" />
+          </Svg>
+        </TouchableOpacity>
+      ) : null}
       </View>
-    </Wrapper>
+    </View>
+  );
+}
+
+/** 表格渲染：table > tableRow > tableCell。网格/边框/表头底色/列宽用 RN 组合(chrome)，
+ *  每个单元格的 mini-doc 内容走 BlockSequence → 自研原生引擎渲染文本。
+ *  列宽可超视口 → 外层 horizontal ScrollView 横滚（对齐 web "列宽可超出视口横滚"）。
+ *  注：列对齐(align)/表头加粗当前未生效——需给原生引擎加 textAlign/forceBold，列为后续步骤。 */
+function TableRenderer({ ctx, block }: { ctx: RendererCtx; block: TableBlock }) {
+  const rows = (block.children as unknown as TableRowBlock[]).filter(
+    (r) => r && r.type === 'tableRow',
+  );
+  if (rows.length === 0) return null;
+  const colCount = rows.reduce(
+    (m, r) => Math.max(m, Array.isArray(r.children) ? r.children.length : 0),
+    0,
+  );
+  const colWidths = Array.isArray(block.colWidths) ? block.colWidths : [];
+  const widthFor = (ci: number): number => {
+    const w = colWidths[ci];
+    return typeof w === 'number' && w > 0 ? w : DEFAULT_TABLE_COL_WIDTH;
+  };
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator
+      style={ctx.styles.tableScroll}
+      contentContainerStyle={ctx.styles.tableWrap}
+    >
+      <View>
+        {rows.map((row, ri) => (
+          <View key={ri} style={ctx.styles.tableRow}>
+            {Array.from({ length: colCount }).map((_, ci) => {
+              const cell = Array.isArray(row.children) ? row.children[ci] : undefined;
+              const isHeader = !!cell?.isHeader || ri === 0;
+              return (
+                <View
+                  key={ci}
+                  style={[
+                    ctx.styles.tableCell,
+                    { width: widthFor(ci) },
+                    isHeader && ctx.styles.tableHeaderCell,
+                    cell?.bgColor ? { backgroundColor: cell.bgColor } : null,
+                  ]}
+                >
+                  {cell && Array.isArray(cell.children) ? (
+                    <BaseFontSizeContext.Provider value={TABLE_FONT_SIZE}>
+                    <BlockSequence
+                      blocks={cell.children}
+                      editable={ctx.editable}
+                      styles={ctx.styles}
+                      colors={ctx.colors}
+                      onPillPress={ctx.onPillPress}
+                      depth={ctx.depth + 1}
+                      path={[...ctx.path, ri, ci]}
+                      updateBlockAtPath={ctx.updateBlockAtPath}
+                      insertSiblingAfter={ctx.insertSiblingAfter}
+                      splitBlock={ctx.splitBlock}
+                      mergeBackward={ctx.mergeBackward}
+                      registerInputRef={ctx.registerInputRef}
+                      reportFocus={ctx.reportFocus}
+                      reportBlur={ctx.reportBlur}
+                      structuralGen={ctx.structuralGen}
+                    />
+                    </BaseFontSizeContext.Provider>
+                  ) : null}
+                </View>
+              );
+            })}
+          </View>
+        ))}
+      </View>
+    </ScrollView>
   );
 }
 
@@ -859,6 +1333,7 @@ function NestedBlocks({ ctx, children }: { ctx: RendererCtx; children: Descendan
  *  - 之后的 block 节点 = 嵌套缩进的子块
  *  - marker 由 formatListMarker 计算：order_in_list / numberingStyle 全部从数据读 */
 function ListBlockRenderer({ ctx, block }: { ctx: RendererCtx; block: ListBlock }) {
+  const baseFontSize = useContext(BaseFontSizeContext);
   const { inline, nested } = splitListChildren(block.children);
   const marker = formatListMarker(
     block.type,
@@ -899,17 +1374,36 @@ function ListBlockRenderer({ ctx, block }: { ctx: RendererCtx; block: ListBlock 
         );
       }
     : undefined;
+  // bullet 用 View 画干净的小圆点（实心/空心/方块按层级），不用字符（字形大小基线都不可控）
+  const isBullet = block.type === 'bulletlistblock';
+  const bulletKind = ctx.depth % 3;
   return (
     <View style={ctx.styles.listItemWrap}>
       <View style={ctx.styles.listItemRow}>
-        <Text style={ctx.styles.listItemMarker} selectable={false}>
-          {marker}
-        </Text>
+        {isBullet ? (
+          <View style={ctx.styles.listBulletBox}>
+            <View
+              style={[
+                ctx.styles.bulletBase,
+                bulletKind === 0
+                  ? ctx.styles.bulletDisc
+                  : bulletKind === 1
+                    ? ctx.styles.bulletCircle
+                    : ctx.styles.bulletSquare,
+              ]}
+            />
+          </View>
+        ) : (
+          <Text style={ctx.styles.listItemMarker} selectable={false}>
+            {marker}
+          </Text>
+        )}
         <View style={ctx.styles.listItemContent}>
           <TextBlockInput
             ctx={ctx}
             content={inlineToContent(inline)}
-            fontSize={16}
+            fontSize={baseFontSize}
+            lineHeight={Math.round(baseFontSize * BODY_LH_RATIO)}
             onContentChange={onInlineChange}
             onSplitRequest={onSplitList}
             onMergeBackwardRequest={
@@ -922,6 +1416,72 @@ function ListBlockRenderer({ ctx, block }: { ctx: RendererCtx; block: ListBlock 
       </View>
       {nested.length > 0 ? (
         <View style={ctx.styles.listNested}>
+          <BlockSequence
+            blocks={nested}
+            editable={ctx.editable}
+            styles={ctx.styles}
+            colors={ctx.colors}
+            onPillPress={ctx.onPillPress}
+            depth={ctx.depth + 1}
+            path={ctx.path}
+            /* 跳过头部 inline 段：nested[0] 在父 children 数组的真实索引 = inline.length */
+            indexOffset={inline.length}
+            updateBlockAtPath={ctx.updateBlockAtPath}
+            insertSiblingAfter={ctx.insertSiblingAfter}
+            splitBlock={ctx.splitBlock}
+            mergeBackward={ctx.mergeBackward}
+            registerInputRef={ctx.registerInputRef}
+            reportFocus={ctx.reportFocus}
+            reportBlur={ctx.reportBlur}
+            structuralGen={ctx.structuralGen}
+          />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/** textblock 容器：children 头部 inline = 主文本（段落样式），之后是 marginLeft 缩进的嵌套子块。
+ *  对齐 web textblock 渲染（textblock-main-text + textblock-nested-blocks）。主文本走自研原生引擎。 */
+function TextBlockContainerRenderer({
+  ctx,
+  block,
+}: {
+  ctx: RendererCtx;
+  block: TextBlockContainer;
+}) {
+  const baseFontSize = useContext(BaseFontSizeContext);
+  const { inline, nested } = splitListChildren(block.children);
+  // 主文本变化 → 替换 children 头部 inline 段，保留尾部 nested 子块（同 list）
+  const onInlineChange = ctx.editable
+    ? (newContent: FlowDocContent) => {
+        ctx.updateBlockAtPath(ctx.path, (b) => {
+          const oldNested = splitListChildren(b.children).nested;
+          return {
+            ...b,
+            children: [...contentToInline(newContent), ...oldNested],
+          } as FlowDocBlock;
+        });
+      }
+    : undefined;
+  return (
+    <View style={ctx.styles.textblockWrap}>
+      <View style={ctx.styles.paragraphWrap}>
+        <TextBlockInput
+          ctx={ctx}
+          content={inlineToContent(inline)}
+          fontSize={baseFontSize}
+          lineHeight={Math.round(baseFontSize * BODY_LH_RATIO)}
+          onContentChange={onInlineChange}
+          onMergeBackwardRequest={
+            ctx.editable
+              ? (currentContent) => ctx.mergeBackward(ctx.path, currentContent)
+              : undefined
+          }
+        />
+      </View>
+      {nested.length > 0 ? (
+        <View style={ctx.styles.textblockNested}>
           <BlockSequence
             blocks={nested}
             editable={ctx.editable}
@@ -971,7 +1531,8 @@ function formatListMarker(
         return `${toRoman(orderInList)}.`;
     }
   } else {
-    return ['●', '○', '●', '○'][depth % 4];
+    // 对齐 web 浏览器默认 ul 标记：disc(•) / circle(◦) / square(▪) 按层级循环（比 ●/○ 更贴近）
+    return ['•', '◦', '▪'][depth % 3];
   }
 }
 
@@ -1015,6 +1576,8 @@ function TextBlockInput({
   content,
   fontSize,
   fontFamily,
+  lineHeight,
+  textColor,
   onContentChange,
   onSplitRequest,
   onMergeBackwardRequest,
@@ -1024,6 +1587,10 @@ function TextBlockInput({
   content: FlowDocContent;
   fontSize: number;
   fontFamily?: string;
+  /** 行高（pt 绝对值）；缺省走原生默认 */
+  lineHeight?: number;
+  /** 文本颜色覆盖；缺省用主题正文色。代码块用 #eb5757 对齐 web */
+  textColor?: string;
   /** native 内容变化时回调；caller 负责把 newContent 写回 doc 的正确位置 */
   onContentChange?: (newContent: FlowDocContent) => void;
   /** Enter 触发拆 block；caller 负责把当前块拆两半 + 插新块 */
@@ -1055,7 +1622,8 @@ function TextBlockInput({
       enterCreatesBlock={enterCreatesBlock}
       fontSize={fontSize}
       fontFamily={fontFamily}
-      textColor={ctx.colors.textPrimary}
+      lineHeight={lineHeight}
+      textColor={textColor ?? ctx.colors.textPrimary}
       pillBackgroundColor={ctx.colors.surfaceMuted}
       pillTextColor={ctx.colors.textMuted}
       onPillPress={ctx.onPillPress}
@@ -1076,14 +1644,54 @@ function TextBlockInput({
  * 工具
  * ============================================================ */
 
+/** 正文基准字号 context：默认 16（文档正文）；表格单元格内 = 14（对齐 web .md-table 14px），
+ *  这样同样列宽下文本不会比 web 早换行。段落/标题/列表的字号都以它为基准。 */
+const BaseFontSizeContext = React.createContext(16);
+/** 表格单元格内基准字号（web .md-table { font-size: 14px }） */
+const TABLE_FONT_SIZE = 14;
+
+/** 每级自主缩进(indent 字段)的左移像素。web 用 32；移动端窄屏取小一档。 */
+const INDENT_STEP = 20;
+
+/** 表格列在 colWidths 缺省时的默认宽度（px）。 */
+const DEFAULT_TABLE_COL_WIDTH = 130;
+
+/** 代码文字色 / 底色，对齐 web .slate-editor code（半透明暖灰底对深浅色都安全） */
+const CODE_TEXT_COLOR = '#eb5757';
+const CODE_BG_COLOR = 'rgba(135,131,120,0.15)';
+
+/* 字号/行高/边距严格对齐 web flowdoc（editorChrome.css，base 16px）：
+   h1 2em / h2 1.5em / h3 1.25em / h4 1.1em / h5 1em / h6 0.9em */
 const HEADING_FONT_SIZES: Record<1 | 2 | 3 | 4 | 5 | 6, number> = {
-  1: 26,
-  2: 22,
+  1: 32,
+  2: 24,
   3: 20,
   4: 18,
   5: 16,
   6: 14,
 };
+/** 各级标题 line-height 比例（web h1 1.2 / h2 1.3 / h3-4 1.4 / h5-6 1.5） */
+const HEADING_LH_RATIO: Record<1 | 2 | 3 | 4 | 5 | 6, number> = {
+  1: 1.2,
+  2: 1.3,
+  3: 1.4,
+  4: 1.4,
+  5: 1.5,
+  6: 1.5,
+};
+/** 各级标题 margin-top（web：h1 2em=32 / h2 1.4em≈22 / h3 1em=16 / h4-6 = block-spacing 8） */
+const HEADING_MARGIN_TOP: Record<1 | 2 | 3 | 4 | 5 | 6, number> = {
+  1: 32,
+  2: 22,
+  3: 16,
+  4: 8,
+  5: 8,
+  6: 8,
+};
+/** 正文行高比例（web data-slate-editor / p line-height: 1.6） */
+const BODY_LH_RATIO = 1.6;
+/** web --block-spacing = body 16 × 0.5 = 8px（RN 无 margin 折叠，块间隔用半值见各处） */
+const BLOCK_SPACING = 8;
 
 function headingLevel(t: HeadingBlock['type']): 1 | 2 | 3 | 4 | 5 | 6 {
   switch (t) {
@@ -1099,6 +1707,7 @@ function headingLevel(t: HeadingBlock['type']): 1 | 2 | 3 | 4 | 5 | 6 {
 function isBlockType(t: string | undefined): boolean {
   return (
     t === 'paragraph' ||
+    t === 'textblock' ||
     t === 'heading-one' ||
     t === 'heading-two' ||
     t === 'heading-three' ||
@@ -1111,7 +1720,8 @@ function isBlockType(t: string | undefined): boolean {
     t === 'bulletlistblock' ||
     t === 'numberedlistblock' ||
     t === 'image' ||
-    t === 'file_attachment'
+    t === 'file_attachment' ||
+    t === 'table'
   );
 }
 
@@ -1173,6 +1783,7 @@ function contentToInline(content: FlowDocContent): Descendant[] {
     if (p.marks?.italic) leaf.italic = true;
     if (p.marks?.code) leaf.code = true;
     if (p.marks?.color) leaf.color = p.marks.color;
+    if (p.marks?.link) leaf.link = p.marks.link;
     return leaf as unknown as Descendant;
   });
 }
@@ -1202,6 +1813,7 @@ function inlineToContent(
     if (leaf.italic) marks.italic = true;
     if (leaf.code) marks.code = true;
     if (typeof leaf.color === 'string' && leaf.color) marks.color = leaf.color;
+    if (typeof leaf.link === 'string' && leaf.link) marks.link = leaf.link;
     const hasMarks = Object.keys(marks).length > 0;
     out.push(
       hasMarks
@@ -1220,43 +1832,93 @@ type BlocksStyles = ReturnType<typeof createStyles>;
 
 function createStyles(c: AppColors) {
   return StyleSheet.create({
+    // RN 无 margin 折叠：web p margin 8 上下折叠成 8，这里用 4（4+4=8）等效
     paragraphWrap: { marginVertical: 4 } as ViewStyle,
-    headingWrap: { marginTop: 14, marginBottom: 6 } as ViewStyle,
-    headingWrapTight: { marginTop: 18, marginBottom: 8 } as ViewStyle,
+    // 代码块对齐 web pre：padding 1em=16 / radius 3 / margin block-spacing(8)
     codeBlockWrap: {
-      backgroundColor: c.surfaceMuted,
-      padding: 10,
-      borderRadius: 6,
+      backgroundColor: CODE_BG_COLOR,
+      padding: 16,
+      borderRadius: 3,
       marginVertical: 8,
     } as ViewStyle,
+    // 引用对齐 web .quote-block：border-left 4 / padding 12·20·12·16 / 右侧圆角 3 / margin 8
+    // 背景用有区分度的灰（web 视觉上是明显灰底，不是几乎看不见的极淡 tint）
     quoteWrap: {
-      borderLeftWidth: 3,
+      borderLeftWidth: 4,
       borderLeftColor: c.borderMuted,
-      paddingLeft: 12,
+      backgroundColor: c.surfaceMuted,
+      paddingTop: 12,
+      paddingBottom: 12,
+      paddingLeft: 16,
+      paddingRight: 20,
+      borderTopRightRadius: 3,
+      borderBottomRightRadius: 3,
       marginVertical: 8,
     } as ViewStyle,
+    // 分割线对齐 web：1px / margin block-spacing(8)
     divider: {
       height: StyleSheet.hairlineWidth,
       backgroundColor: c.borderMuted,
-      marginVertical: 12,
+      marginVertical: 8,
     } as ViewStyle,
-    listItemWrap: { marginVertical: 2 } as ViewStyle,
+    // web li margin 0.5em=8 上下折叠成 8 → RN 用 4
+    listItemWrap: { marginVertical: 4 } as ViewStyle,
     listItemRow: { flexDirection: 'row', alignItems: 'flex-start' } as ViewStyle,
+    // 序号：字号与正文一致(16) + 自然行高 → 与右侧正文(lineSpacing 后首行自然顶位)baseline 对齐
     listItemMarker: {
-      width: 22,
-      paddingTop: 2,
-      fontSize: 14,
-      lineHeight: 22,
+      width: 24,
+      fontSize: 16,
       color: c.textMuted,
       textAlign: 'center',
     } as TextStyle,
+    // bullet 圆点：用 View 画，尺寸 7、marginTop 让它对齐到首行文字垂直中部
+    listBulletBox: { width: 24, alignItems: 'center' } as ViewStyle,
+    bulletBase: { width: 7, height: 7, marginTop: 7 } as ViewStyle,
+    bulletDisc: { borderRadius: 3.5, backgroundColor: c.textPrimary } as ViewStyle,
+    bulletCircle: {
+      borderRadius: 3.5,
+      borderWidth: 1.2,
+      borderColor: c.textPrimary,
+    } as ViewStyle,
+    bulletSquare: { backgroundColor: c.textPrimary } as ViewStyle,
     listItemContent: { flex: 1, minWidth: 0 } as ViewStyle,
     listNested: { marginLeft: 22 } as ViewStyle,
+    textblockWrap: {} as ViewStyle,
+    /* 结构性嵌套缩进（对齐 web textblock-nested-blocks 的 marginLeft），独立于 indent 字段 */
+    textblockNested: { marginLeft: 20 } as ViewStyle,
+    imageCaptionWrap: { marginTop: -2, marginBottom: 8 } as ViewStyle,
+    tableScroll: { marginVertical: 8 } as ViewStyle,
+    /* 网格边框：外层补 top+left，每个 cell 补 right+bottom，避免相邻边框叠加变粗 */
+    tableWrap: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderLeftWidth: StyleSheet.hairlineWidth,
+      borderColor: c.borderMuted,
+      borderRadius: 4,
+      overflow: 'hidden',
+    } as ViewStyle,
+    tableRow: { flexDirection: 'row', alignItems: 'stretch' } as ViewStyle,
+    tableCell: {
+      borderRightWidth: StyleSheet.hairlineWidth,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderColor: c.borderMuted,
+      // web 是 10；这里收到 8 给文字多挤几 px，抵消 TextKit 比 WebKit 排得略松导致的提前换行
+      paddingHorizontal: 8,
+      paddingVertical: 6,
+    } as ViewStyle,
+    // web 表头不加底色、不强制加粗（.md-table-cell-header { font-weight: inherit }）→ 留空
+    tableHeaderCell: {} as ViewStyle,
     image: {
       borderRadius: 6,
       marginVertical: 8,
       backgroundColor: c.surfaceMuted,
+    } as ImageStyle,
+    imageCropBox: {
+      borderRadius: 6,
+      marginVertical: 8,
+      backgroundColor: c.surfaceMuted,
+      overflow: 'hidden',
     } as ViewStyle,
+    imageCropInner: { position: 'absolute' } as ImageStyle,
     imagePlaceholder: {
       borderRadius: 6,
       marginVertical: 8,
@@ -1268,28 +1930,60 @@ function createStyles(c: AppColors) {
       color: c.textMuted,
       fontSize: 12,
     } as TextStyle,
-    fileAttachmentChip: {
+    // 文件卡片对齐 web .assistant-attachment-card：1px 边框、圆角 10、muted 底。宽度由 caller 实测注入。
+    fileCard: {
+      flexDirection: 'row',
+      alignItems: 'stretch',
+      borderWidth: 1,
+      borderColor: c.borderMuted,
+      borderRadius: 10,
+      backgroundColor: c.surfaceMuted,
+      overflow: 'hidden',
+      marginVertical: 4,
+    } as ViewStyle,
+    fileCardBody: {
+      flex: 1,
+      minWidth: 0,
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 10,
-      paddingVertical: 10,
-      paddingHorizontal: 12,
-      backgroundColor: c.surfaceMuted,
-      borderRadius: 8,
-      marginVertical: 6,
+      gap: 12,
+      padding: 12,
     } as ViewStyle,
-    fileAttachmentIcon: {
-      fontSize: 20,
+    fileCardText: { flex: 1, minWidth: 0, gap: 2 } as ViewStyle,
+    // 单行链接模式（display='inline'）：小图标 + 文件名链接，紧凑、内容宽、不撑满
+    fileInline: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      alignSelf: 'flex-start',
+      maxWidth: '100%',
+      gap: 4,
+      paddingHorizontal: 4,
+      paddingVertical: 2,
+      borderRadius: 4,
+      marginVertical: 2,
+    } as ViewStyle,
+    fileInlineText: {
+      // web --color-primary 在本主题是黑(#000)，不是蓝；用正文色 + 下划线
+      color: c.textPrimary,
+      textDecorationLine: 'underline',
+      fontSize: 16,
+      flexShrink: 1,
     } as TextStyle,
+    fileCardDownload: {
+      width: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderLeftWidth: 1,
+      borderLeftColor: c.borderMuted,
+    } as ViewStyle,
     fileAttachmentName: {
-      fontSize: 14,
+      fontSize: 13,
       color: c.textPrimary,
       fontWeight: '500',
     } as TextStyle,
     fileAttachmentSize: {
       fontSize: 11,
       color: c.textMuted,
-      marginTop: 2,
     } as TextStyle,
   });
 }

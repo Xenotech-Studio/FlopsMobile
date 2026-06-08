@@ -20,6 +20,72 @@
 }
 @end
 
+/* 自定义 NSLayoutManager：把 NSBackgroundColorAttributeName 的背景从系统默认的直角矩形
+   改画成圆角矩形（贴合文字高度），用来给行内 code 底色做出 web 那种圆角胶囊感。
+   只有 code 段用到背景色，所以这里画的就是 code 背景。 */
+@interface FlowDocCodeBGLayoutManager : NSLayoutManager
+@end
+
+@implementation FlowDocCodeBGLayoutManager
+- (void)fillBackgroundRectArray:(const CGRect *)rectArray
+                          count:(NSUInteger)rectCount
+              forCharacterRange:(NSRange)charRange
+                          color:(UIColor *)color {
+  CGContextRef cg = UIGraphicsGetCurrentContext();
+  if (!cg || rectCount == 0) {
+    [super fillBackgroundRectArray:rectArray count:rectCount forCharacterRange:charRange color:color];
+    return;
+  }
+  /* 关键：强制行高(min=max)会把多余行距加在文字上方、文字沉到行底，所以不能在 line fragment 里
+     居中画背景（那样会偏上）。改成围绕真实 baseline 画：
+       baselineY = 行 fragment 顶 + locationForGlyphAtIndex.y（该字形在 fragment 内的 baseline 偏移）
+       框 = [baselineY - ascent - padY, baselineY + descent + padY]，正好贴合字形。 */
+  UIFont *font = nil;
+  CGFloat baselineOffset = -1.0;
+  if (self.textStorage.length > 0) {
+    NSUInteger ci = MIN(charRange.location, self.textStorage.length - 1);
+    font = [self.textStorage attribute:NSFontAttributeName atIndex:ci effectiveRange:NULL];
+    NSUInteger gi = [self glyphIndexForCharacterAtIndex:ci];
+    if (gi < self.numberOfGlyphs) {
+      baselineOffset = [self locationForGlyphAtIndex:gi].y;
+    }
+  }
+  CGFloat ascent = font ? font.ascender : 0;       // 正值
+  CGFloat descent = font ? ABS(font.descender) : 0; // descender 为负，取绝对值
+  CGFloat radius = 4.0;
+  CGFloat padX = 3.0;  // 横向各加 3pt，做出 web code 的左右内边距感
+  CGFloat padY = 1.5;  // 纵向各加 1.5pt 呼吸
+  /* 末字符若带 kern（applyContentJson 给 code 后留空加的），把它从背景宽度里扣掉，
+     否则背景会盖住"后间距"、看起来还是紧贴后文。 */
+  CGFloat trailingKern = 0;
+  if (NSMaxRange(charRange) > 0 && NSMaxRange(charRange) <= self.textStorage.length) {
+    NSNumber *k = [self.textStorage attribute:NSKernAttributeName
+                                      atIndex:NSMaxRange(charRange) - 1
+                               effectiveRange:NULL];
+    if ([k isKindOfClass:[NSNumber class]]) trailingKern = k.doubleValue;
+  }
+  CGContextSaveGState(cg);
+  [color setFill];
+  for (NSUInteger i = 0; i < rectCount; i++) {
+    CGRect r = rectArray[i];
+    // 只有最后一段 rect 含末字符的 trailing kern，扣掉
+    CGFloat w = r.size.width - (i == rectCount - 1 ? trailingKern : 0);
+    CGRect rr;
+    if (font && baselineOffset >= 0) {
+      CGFloat baselineY = r.origin.y + baselineOffset;
+      CGFloat top = baselineY - ascent - padY;
+      CGFloat h = ascent + descent + 2 * padY;
+      rr = CGRectMake(r.origin.x - padX, top, w + padX * 2, h);
+    } else {
+      rr = CGRectMake(r.origin.x - padX, r.origin.y, w + padX * 2, r.size.height);
+    }
+    UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:rr cornerRadius:radius];
+    [path fill];
+  }
+  CGContextRestoreGState(cg);
+}
+@end
+
 @interface FlowDocInputView () <UITextViewDelegate, UIGestureRecognizerDelegate>
 @property (nonatomic, strong) UITextView *textView;
 @property (nonatomic, strong) UILabel *placeholderLabel;
@@ -44,7 +110,18 @@
     _pillBackgroundColor = [UIColor colorWithWhite:0.92 alpha:1.0];
     _pillTextColor = [UIColor colorWithWhite:0.35 alpha:1.0];
 
-    _textView = [[FlowDocInputTextView alloc] initWithFrame:self.bounds];
+    /* 手搭 TextKit 1 栈，注入自定义 layoutManager（圆角 code 背景）。
+       用 initWithFrame:textContainer: 让 UITextView 直接走 TextKit 1，无需再靠访问
+       .layoutManager 触发 fallback。 */
+    NSTextStorage *codeTextStorage = [[NSTextStorage alloc] init];
+    FlowDocCodeBGLayoutManager *codeLayoutManager = [[FlowDocCodeBGLayoutManager alloc] init];
+    [codeTextStorage addLayoutManager:codeLayoutManager];
+    NSTextContainer *codeTextContainer =
+        [[NSTextContainer alloc] initWithSize:CGSizeMake(self.bounds.size.width, CGFLOAT_MAX)];
+    codeTextContainer.widthTracksTextView = YES;
+    [codeLayoutManager addTextContainer:codeTextContainer];
+    _textView = [[FlowDocInputTextView alloc] initWithFrame:self.bounds
+                                              textContainer:codeTextContainer];
     __weak __typeof(self) weakSelf = self;
     ((FlowDocInputTextView *)_textView).onDeleteBackwardAtStart = ^BOOL{
       __strong __typeof(weakSelf) strong = weakSelf;
@@ -63,6 +140,12 @@
     (void)_textView.layoutManager;
     _textView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _textView.delegate = self;
+    /* 行内链接视觉：UITextView 对 NSLinkAttributeName 段会用 linkTextAttributes 覆盖前景/下划线，
+       这里显式设成链接色 + 单下划线，避免被系统默认蓝色覆盖。 */
+    _textView.linkTextAttributes = @{
+      NSForegroundColorAttributeName: [FlowDocInputView flowDocLinkColor],
+      NSUnderlineStyleAttributeName: @(NSUnderlineStyleSingle),
+    };
     _textView.backgroundColor = [UIColor clearColor];
     _textView.scrollEnabled = NO;
     _textView.textContainerInset = UIEdgeInsetsZero;
@@ -213,6 +296,23 @@
   [self refreshAllPillStyles];
 }
 
+- (void)setCustomLineHeight:(CGFloat)lh {
+  _customLineHeight = lh;
+  /* prop 可能在 initialContent 之后才到 —— 直接把段落样式刷到已有 textStorage 全段，
+     这样后到的 lineHeight 也能即时生效（不依赖 prop 顺序）。 */
+  NSTextStorage *ts = self.textView.textStorage;
+  if (ts.length == 0) return;
+  NSRange full = NSMakeRange(0, ts.length);
+  CGFloat spacing = (lh > 0) ? (lh - [self baseFontOfSize:self.fontSize].lineHeight) : 0;
+  if (spacing > 0.5) {
+    NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
+    ps.lineSpacing = spacing;
+    [ts addAttribute:NSParagraphStyleAttributeName value:ps range:full];
+  } else {
+    [ts removeAttribute:NSParagraphStyleAttributeName range:full];
+  }
+}
+
 - (void)setFontFamily:(NSString *)fontFamily {
   _fontFamily = [fontFamily copy];
   UIFont *font = [self baseFontOfSize:self.fontSize];
@@ -343,6 +443,25 @@
       [attr appendAttributedString:pillAtomic];
     }
   }
+
+  /* 行内 code 前后加一点字距，模拟 web code 的 padding:_ 6px 的呼吸感（NSAttributedString 没有
+     run padding 概念）。给 code 段前一个字符 + code 段最后一个字符各加 kern：前者把 code 推右、
+     后者把后文推右。圆角背景绘制时会把末字符 kern 从宽度里扣掉，避免背景盖住"后间距"。 */
+  const CGFloat kCodeGap = 6.0;
+  [attr enumerateAttribute:NSBackgroundColorAttributeName
+                   inRange:NSMakeRange(0, attr.length)
+                   options:0
+                usingBlock:^(id value, NSRange range, BOOL *stop) {
+    if (!value || range.length == 0) return;
+    if (range.location > 0) {
+      [attr addAttribute:NSKernAttributeName
+                   value:@(kCodeGap)
+                   range:NSMakeRange(range.location - 1, 1)];
+    }
+    [attr addAttribute:NSKernAttributeName
+                 value:@(kCodeGap)
+                 range:NSMakeRange(range.location + range.length - 1, 1)];
+  }];
 
   self.textView.attributedText = attr;
   if (toEnd) {
@@ -589,10 +708,12 @@
   BOOL italic = [marks[@"italic"] boolValue];
   BOOL code = [marks[@"code"] boolValue];
   NSString *colorStr = [marks[@"color"] isKindOfClass:[NSString class]] ? marks[@"color"] : nil;
+  NSString *linkStr = [marks[@"link"] isKindOfClass:[NSString class]] ? marks[@"link"] : nil;
 
   UIFont *font = baseFont;
   if (code) {
-    font = [UIFont fontWithName:@"Menlo" size:self.fontSize] ?: baseFont;
+    // web 行内 code 是 0.9em；用 Menlo
+    font = [UIFont fontWithName:@"Menlo" size:self.fontSize * 0.9] ?: baseFont;
   } else if (bold || italic) {
     UIFontDescriptorSymbolicTraits traits = 0;
     if (bold) traits |= UIFontDescriptorTraitBold;
@@ -606,7 +727,17 @@
   UIColor *parsedColor = colorStr ? [self colorFromHexString:colorStr] : nil;
   attrs[NSForegroundColorAttributeName] = parsedColor ?: fg;
   if (code) {
-    attrs[NSBackgroundColorAttributeName] = [UIColor colorWithWhite:0.93 alpha:1.0];
+    // 对齐 web .slate-editor code：暖灰底 rgba(135,131,120,0.15) + 红字 #eb5757（无显式 color mark 时）
+    attrs[NSBackgroundColorAttributeName] = [UIColor colorWithRed:135 / 255.0
+                                                            green:131 / 255.0
+                                                             blue:120 / 255.0
+                                                            alpha:0.15];
+    if (!parsedColor) {
+      attrs[NSForegroundColorAttributeName] = [UIColor colorWithRed:0xeb / 255.0
+                                                              green:0x57 / 255.0
+                                                               blue:0x57 / 255.0
+                                                              alpha:1.0];
+    }
   }
   /* iOS 系统中文字体不带 italic 字形；font trait 改不到 CJK。NSObliquenessAttributeName
      用仿射变换斜切文字（约 1/4 弧度 ≈ 14°），不依赖字族，对所有字符都生效。
@@ -614,7 +745,33 @@
   if (italic) {
     attrs[NSObliquenessAttributeName] = @(0.2);
   }
+  /* 行内链接：NSLinkAttributeName 让 selectable + 非编辑态 textView 可点（系统打开 URL）；
+     前景换链接色 #1d75d4 + 单下划线，对齐 web .flowdoc-inline-link 视觉。
+     注意覆盖在 color 之后——link 段的颜色以链接色为准。 */
+  if (linkStr.length > 0) {
+    NSURL *url = [NSURL URLWithString:linkStr];
+    attrs[NSLinkAttributeName] = url ?: linkStr;
+    attrs[NSForegroundColorAttributeName] = [FlowDocInputView flowDocLinkColor];
+    attrs[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
+  }
+  /* 行高：用 lineSpacing(行间距 = 目标行高 - 字体自然行高)，不用 min/max line height。
+     min/max 会把多余行距全加到文字上方、文字沉到行底，导致和行号 / 相邻文本 baseline 错位；
+     lineSpacing 让每行文字保持自然顶位，只在行间补空 —— 既有 web line-height 的行距观感、
+     又不破坏 baseline 对齐。按 block 字号(self.fontSize)算统一值，避免行内不同字号(code 0.9em)各算各导致不齐。 */
+  if (self.customLineHeight > 0) {
+    CGFloat spacing = self.customLineHeight - [self baseFontOfSize:self.fontSize].lineHeight;
+    if (spacing > 0.5) {
+      NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
+      ps.lineSpacing = spacing;
+      attrs[NSParagraphStyleAttributeName] = ps;
+    }
+  }
   return attrs;
+}
+
+/** 行内链接显示色（对齐 web #1d75d4）。 */
++ (UIColor *)flowDocLinkColor {
+  return [UIColor colorWithRed:0x1d / 255.0 green:0x75 / 255.0 blue:0xd4 / 255.0 alpha:1.0];
 }
 
 /** 反向：根据一段 text 上的 attributes，推断出 marks 字典；纯文本返回 nil */
@@ -636,18 +793,30 @@
   // italic 也可能仅通过 NSObliquenessAttributeName 表达（CJK 走变换斜切的场景）
   NSNumber *obliqueness = attrs[NSObliquenessAttributeName];
   if (!italic && obliqueness && [obliqueness doubleValue] > 0) italic = YES;
+  // 行内链接：从 NSLinkAttributeName 取回 url（NSURL 或 NSString 两种存法）
+  id linkAttr = attrs[NSLinkAttributeName];
+  NSString *linkStr = nil;
+  if ([linkAttr isKindOfClass:[NSURL class]]) {
+    linkStr = [(NSURL *)linkAttr absoluteString];
+  } else if ([linkAttr isKindOfClass:[NSString class]]) {
+    linkStr = (NSString *)linkAttr;
+  }
+  // 链接段前景=链接色、code 段前景=红字 #eb5757，都是我们加的样式而非用户 color mark →
+  // 有 link / code 时不回收 color，避免误增 color mark
   NSString *colorHex = nil;
-  if (fg && ![self color:fg isApproximatelyEqualTo:self.textColor ?: [UIColor labelColor]]) {
+  if (!linkStr && !code && fg &&
+      ![self color:fg isApproximatelyEqualTo:self.textColor ?: [UIColor labelColor]]) {
     colorHex = [self hexStringFromColor:fg];
   }
 
-  if (!bold && !italic && !code && !colorHex && !bg) return nil;
+  if (!bold && !italic && !code && !colorHex && !bg && linkStr.length == 0) return nil;
 
   NSMutableDictionary *out = [NSMutableDictionary dictionary];
   if (bold) out[@"bold"] = @YES;
   if (italic) out[@"italic"] = @YES;
   if (code) out[@"code"] = @YES;
   if (colorHex) out[@"color"] = colorHex;
+  if (linkStr.length > 0) out[@"link"] = linkStr;
   return out;
 }
 
@@ -769,6 +938,18 @@
      主动 invalidate + 重测，让 didChangeContentSize 及时上报 */
   [self setNeedsLayout];
   [self layoutIfNeeded];
+}
+
+/* 点击行内链接 → 打开 URL。selectable + 非编辑态 textView 上 NSLinkAttributeName 段会触发本方法。
+   显式用 UIApplication 打开并返回 NO，避免依赖系统默认行为（也绕开本类自定义手势过滤的潜在干扰）。 */
+- (BOOL)textView:(UITextView *)textView
+    shouldInteractWithURL:(NSURL *)URL
+                  inRange:(NSRange)characterRange
+              interaction:(UITextItemInteraction)interaction {
+  if (URL) {
+    [[UIApplication sharedApplication] openURL:URL options:@{} completionHandler:nil];
+  }
+  return NO;
 }
 
 - (void)textViewDidChangeSelection:(UITextView *)textView {

@@ -26,6 +26,8 @@ export type FlowDocMarks = {
   code?: boolean;
   /** CSS-like 颜色字符串，如 "#ff0000"。仅 6 位 hex 当前保证 round-trip；其它格式可能丢失 */
   color?: string;
+  /** 行内链接 URL（对齐 web 行内 link）。非空时该段文本为链接：原生加下划线+链接色、可点打开 */
+  link?: string;
 };
 
 export type FlowDocContentPart =
@@ -40,7 +42,7 @@ export type FlowDocContentPart =
 
 export type FlowDocContent = FlowDocContentPart[];
 
-export type FlowDocMarkName = 'bold' | 'italic' | 'code' | 'color';
+export type FlowDocMarkName = 'bold' | 'italic' | 'code' | 'color' | 'link';
 
 export type FlowDocInputHandle = {
   insertPill: (
