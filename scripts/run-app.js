@@ -300,6 +300,51 @@ function getFirstRealIosDevice(kind = null, nameFilter = null) {
 }
 
 /**
+ * 按设备类型（iPad/iPhone）在「可用模拟器」里挑一台。`yarn dev ipad`（默认 / real 没真机回退）用。
+ * 选择优先级：已 Booted（省一次冷启动）> iOS runtime 版本更新 > 列出顺序。
+ * @param {'ipad'|'iphone'} kind 设备类型。
+ * @param {string|null} nameFilter 模拟器名子串（大小写无关），非空时只保留名字含它的。
+ * @returns {{ udid: string, name: string, booted: boolean } | null}
+ */
+function getFirstSimulatorOfKind(kind, nameFilter = null) {
+  try {
+    const json = execSync('xcrun simctl list devices available --json', {
+      encoding: 'utf8',
+    });
+    const data = JSON.parse(json);
+    const nf = nameFilter ? nameFilter.toLowerCase() : null;
+    const re = kind === 'ipad' ? /iPad/i : /iPhone/i;
+    const candidates = [];
+    for (const runtime of Object.keys(data.devices || {})) {
+      /* 只看 iOS runtime（排除 watchOS/tvOS/visionOS）；顺带解析版本号用于排序。 */
+      const m = runtime.match(/iOS-(\d+)-(\d+)/i);
+      if (!m) continue;
+      const rv = parseInt(m[1], 10) * 1000 + parseInt(m[2], 10);
+      for (const dev of data.devices[runtime] || []) {
+        if (!re.test(dev.name)) continue;
+        if (nf && !dev.name.toLowerCase().includes(nf)) continue;
+        candidates.push({
+          udid: dev.udid,
+          name: dev.name,
+          booted: dev.state === 'Booted',
+          rv,
+        });
+      }
+    }
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => {
+      if (a.booted !== b.booted) return a.booted ? -1 : 1;
+      if (a.rv !== b.rv) return b.rv - a.rv;
+      return 0;
+    });
+    const c = candidates[0];
+    return { udid: c.udid, name: c.name, booted: c.booted };
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
  * iOS 防御性清理：删 ios/ 目录下所有 .DS_Store。
  *
  * 缘起：RN 0.84 的 prebuilt RNDeps 用 [CP-User] script phase 在 Debug/Release
@@ -484,28 +529,71 @@ function run() {
     args.push('--port', String(METRO_PORT), '--no-packager');
     args.push('--extra-params', `FLOPS_METRO_PORT=${METRO_PORT}`);
     if (target === 'ios:real') {
-      /** 设备类型过滤（yarn dev ipad / iphone）。dev.js 通过环境变量传入。 */
+      /** 设备类型过滤（yarn dev ipad real → 'ipad'；纯 ios real → null=iPhone 优先）。dev.js 经环境变量传入。 */
       const deviceKind = (process.env.FLOPS_IOS_DEVICE_KIND || '').toLowerCase() || null;
       /** 真机名过滤：real 模式下命令行的引号参数当「设备名子串」用，区分同类型多台真机
-       *  （如两台 iPhone：yarn dev iphone "Steven" / yarn dev iphone "Haowen"）。 */
+       *  （如两台 iPhone：yarn dev ios real "Steven" / yarn dev ios real "Haowen"）。 */
       const nameFilter = SIMULATOR_OVERRIDE;
       const device = getFirstRealIosDevice(deviceKind, nameFilter);
-      if (!device) {
-        const kindLabel = deviceKind === 'ipad' ? ' iPad' : deviceKind === 'iphone' ? ' iPhone' : '';
-        const nameLabel = nameFilter ? `（名字含 "${nameFilter}"）` : '';
+      const kindLabel = deviceKind === 'ipad' ? ' iPad' : deviceKind === 'iphone' ? ' iPhone' : '';
+      const nameLabel = nameFilter ? `（名字含 "${nameFilter}"）` : '';
+      if (device) {
+        acquireDeviceLock(device.udid); // 占用本机，让后续 dev 自动避让到下一台
+        args.push('--udid', device.udid);
+        console.log(`[ios:real] 使用真机: ${device.name} (${device.udid})`);
+      } else if (deviceKind) {
+        /* yarn dev ipad real：没连真机 → 回退到 iPad 模拟器（纯 ios real 才严格只用真机）。 */
+        const sim = getFirstSimulatorOfKind(deviceKind, nameFilter);
+        if (!sim) {
+          console.error(
+            `\n[ios:real] 既没连${kindLabel}真机${nameLabel}，也没找到可用的${kindLabel}模拟器。请确认：\n` +
+              `  1) 接上${kindLabel}真机（USB + 设备上「信任此电脑」+ Xcode signing），或\n` +
+              `  2) 在 Xcode / \`xcrun simctl list devices available\` 里有一台${kindLabel}模拟器\n` +
+              (nameFilter ? `  3) 名字确实含 "${nameFilter}"（大小写无关）\n` : '')
+          );
+          process.exit(1);
+        }
+        args.push('--udid', sim.udid);
+        console.log(
+          `[ios:real] 未连接${kindLabel}真机${nameLabel}，回退模拟器: ${sim.name} (${sim.udid})${
+            sim.booted ? ' (已 Booted)' : ''
+          }`
+        );
+      } else {
+        /* 纯 `yarn dev ios real`（无类型别名）：保持严格——只用真机，不回退模拟器。 */
         console.error(
-          `\n[ios:real] 未检测到已连接的${kindLabel || ' iOS'}真机${nameLabel}。请确认：\n` +
-            `  1)${kindLabel || ' iPhone/iPad'} 通过 USB 连上 Mac，且已在设备上「信任此电脑」\n` +
+          `\n[ios:real] 未检测到已连接的 iOS 真机${nameLabel}。请确认：\n` +
+            '  1) iPhone/iPad 通过 USB 连上 Mac，且已在设备上「信任此电脑」\n' +
             '  2) Xcode 里已设过 development team / signing\n' +
             '  3) `xcrun xctrace list devices` 能列出该设备\n' +
             (nameFilter ? `  4) 名字确实含 "${nameFilter}"（区分大小写无关）\n` : '') +
-            '或者用 yarn dev ios 跑模拟器。'
+            '或者用 yarn dev ios 跑模拟器、yarn dev ipad 跑 iPad（默认模拟器、real 才用真机）。'
         );
         process.exit(1);
       }
-      acquireDeviceLock(device.udid); // 占用本机，让后续 dev 自动避让到下一台
-      args.push('--udid', device.udid);
-      console.log(`[ios:real] 使用真机: ${device.name} (${device.udid})`);
+    } else if ((process.env.FLOPS_IOS_DEVICE_KIND || '').toLowerCase()) {
+      /* yarn dev ipad（不带 real）：按设备类型挑一台模拟器，不优先真机。
+       *  引号位置参数当「模拟器名子串」过滤（如 yarn dev ipad "Pro"）。 */
+      const deviceKind = process.env.FLOPS_IOS_DEVICE_KIND.toLowerCase();
+      const kindLabel = deviceKind === 'ipad' ? 'iPad' : 'iPhone';
+      const nameFilter = SIMULATOR_OVERRIDE;
+      const nameLabel = nameFilter ? `（名字含 "${nameFilter}"）` : '';
+      const sim = getFirstSimulatorOfKind(deviceKind, nameFilter);
+      if (!sim) {
+        console.error(
+          `\n[ios] 没找到可用的 ${kindLabel} 模拟器${nameLabel}。请确认：\n` +
+            `  1) Xcode / \`xcrun simctl list devices available\` 里有一台 ${kindLabel} 模拟器\n` +
+            (nameFilter ? `  2) 名字确实含 "${nameFilter}"（大小写无关）\n` : '') +
+            `或用 \`yarn dev ${deviceKind} real\` 跑真机。`
+        );
+        process.exit(1);
+      }
+      args.push('--udid', sim.udid);
+      console.log(
+        `[ios] 使用 ${kindLabel} 模拟器: ${sim.name} (${sim.udid})${
+          sim.booted ? ' (已 Booted)' : ''
+        }`
+      );
     } else {
       const simulator = SIMULATOR_OVERRIDE || getIosSimulator();
       if (simulator) {

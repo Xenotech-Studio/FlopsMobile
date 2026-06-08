@@ -3,13 +3,16 @@
  * yarn dev [ios|android] [real] ["<Simulator Name>"] [--quick]: start Metro + run app.
  * --quick: 跳过清理 cache（不传 --reset-cache）。
  * 端口被占用时自动递增到下一可用端口，不再交互确认。
+ * 说明：ios 即代表 iPhone（iOS），ipad 代表 iPadOS。没有单独的 iphone 指令——用 ios 即可。
  * real (空格分隔，跟在 platform 后)：
  *   - android real：优先选第一台 USB/wifi 真机（adb，排除 emulator-*），未找到报错
  *   - ios real：找连接的 iOS 真机（xcrun xctrace），优先 iPhone、没 iPhone 才用 iPad，未找到报错
- * ipad / iphone（替代 platform token）：等价于 ios:real，但按设备类型过滤真机。
- *   - yarn dev ipad   → 找第一台连接的 iPad（隐含 real，无需再写 real）
- *   - yarn dev iphone → 找第一台连接的 iPhone（隐含 real）
- *   （模拟器不区分类型：要指定模拟器直接用 yarn dev ios "<Simulator Name>"。）
+ * ipad（替代 platform token）：选 iPad，默认走「iPad 模拟器」，不优先真机。
+ *   - yarn dev ipad        → 挑一台可用 iPad 模拟器启动（不用真机）
+ *   - yarn dev ipad real   → 优先连接的真 iPad；没真机才回退 iPad 模拟器
+ *     （模拟器优先级：已 Booted > iOS 版本更新 > 列出顺序；可加名字子串过滤，如 yarn dev ipad "Pro"）
+ *   - 跟 `ios real` 的区别：`ios real` 严格只用真机、找不到报错；ipad 默认模拟器、real 才用真机。
+ *   （iPhone/通用 iOS 模拟器用 yarn dev ios；也可显式指定：yarn dev ios "<Simulator Name>"。）
  * 模拟器名（任意非 platform/real/--quick 的位置参数，含空格请加引号）：
  *   - 仅 iOS 模拟器生效，覆盖 rn-dev.config.json 的 ios.simulator。
  *     例：yarn dev ios "iPhone 16 Pro"
@@ -140,9 +143,10 @@ const quick = argv.includes('--quick');
  *   yarn dev android:real    (兼容)
  * 内部统一规范化成 'ios' / 'android' / 'ios:real' / 'android:real' 传给 run-app.js。 */
 const VALID_PLATFORMS = ['ios', 'android'];
-/* ipad / iphone 是 iOS 真机的「设备类型」别名：隐含 ios:real，并按类型过滤连接的真机。
- * 透传给 run-app.js 的是环境变量 FLOPS_IOS_DEVICE_KIND（'ipad' / 'iphone'）。 */
-const deviceKindArg = argv.find((a) => a === 'ipad' || a === 'iphone') || null;
+/* ipad 是「设备类型」别名：默认 iPad 模拟器，加 real 才用真 iPad（real 优先、回退模拟器）。
+ * 透传给 run-app.js 的是环境变量 FLOPS_IOS_DEVICE_KIND（'ipad'）。
+ * 没有 iphone 别名——ios 即代表 iPhone（通用 iOS），用 yarn dev ios。 */
+const deviceKindArg = argv.find((a) => a === 'ipad') || null;
 const platformArg = argv.find((a) =>
   VALID_PLATFORMS.includes(a) || a === 'ios:real' || a === 'android:real'
 );
@@ -150,8 +154,8 @@ const wantReal = argv.includes('real');
 /* 引号位置参数：第一个「既不是 platform token、也不是 real / --quick / 冒号形式」的参数。
  * 含空格的名字（如 "iPhone 16 Pro"）shell 会作为单个 argv 传进来。两用，透传给 run-app.js：
  *   - 模拟器模式（yarn dev ios "iPhone 16 Pro"）：当模拟器名。
- *   - 真机模式（yarn dev iphone "Steven" / yarn dev ios real "Haowen"）：当真机名子串过滤，
- *     区分同类型多台真机（两台 iPhone 各跑一个 dev）。 */
+ *   - 真机模式（yarn dev ios real "Haowen" / yarn dev ipad real "Steven"）：当真机名子串过滤，
+ *     区分同类型多台真机（如两台 iPhone 各跑一个 dev）。 */
 const simulatorName =
   argv.find(
     (a) =>
@@ -171,8 +175,9 @@ const osDefault = isDarwin ? 'ios' : 'android';
 
 let target;
 if (deviceKindArg) {
-  // yarn dev ipad / iphone：隐含 iOS 真机，类型靠 FLOPS_IOS_DEVICE_KIND 过滤。
-  target = 'ios:real';
+  // yarn dev ipad：默认走「iPad 模拟器」（不优先真机）；加 real 才用真机（real 优先、回退模拟器）。
+  // 类型靠 FLOPS_IOS_DEVICE_KIND 过滤（sim 模式按类型挑模拟器；real 模式按类型挑真机）。
+  target = wantReal ? 'ios:real' : 'ios';
 } else if (platformArg === 'ios:real' || platformArg === 'android:real') {
   // 老形式冒号已经带 real 后缀
   target = platformArg;
