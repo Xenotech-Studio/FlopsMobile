@@ -1675,6 +1675,27 @@ export async function submitSafetyDecision(
   }
 }
 
+/** 提交 ask_user_question 的用户选择，解阻塞正在等待的本轮 run（answers=[{header,question,answer}]）。 */
+export async function answerAskUserQuestion(
+  session: Session,
+  conversationId: string,
+  answers: { header?: string; question?: string; answer: string }[]
+): Promise<void> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(
+    `${base}api/conversations/${conversationId}/ask/answer`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({ answers }),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `提交选择失败: ${res.status}`);
+  }
+}
+
 /** GET /api/user/layout-preferences — 返回扁平偏好对象（与 Web 一致） */
 export async function getLayoutPreferences(session: Session): Promise<Record<string, unknown>> {
   const base = session.server_base_url;

@@ -48,6 +48,7 @@ import {
   deleteSendQueueItem,
   injectSendQueueItem,
   submitSafetyDecision,
+  answerAskUserQuestion,
   getConversation,
   getMessagesBefore,
   CHAT_MESSAGES_INITIAL_LIMIT,
@@ -136,7 +137,9 @@ import { FileWriteCard } from './chat-cards/FileWriteCard';
 import { FileEditCard } from './chat-cards/FileEditCard';
 import { ExecCommandCard } from './chat-cards/ExecCommandCard';
 import { DefaultToolCard } from './chat-cards/DefaultToolCard';
-import { CursorAgentCard } from './chat-cards/CursorAgentCard';
+import { SubagentCard } from './chat-cards/SubagentCard';
+import { SubagentMetaCard } from './chat-cards/SubagentMetaCard';
+import { AskUserQuestionCard } from './chat-cards/AskUserQuestionCard';
 import { ReadPagesCard } from './chat-cards/ReadPagesCard';
 import { FlowDocItemMetaProvider } from '../context/FlowDocItemMetaContext';
 import { FlowDocSlateAdapter, type SlateDocument } from '../flowdoc-native-input';
@@ -1182,7 +1185,10 @@ export function ChatScreen({
             const name = String(event.name || '');
             const args = event.arguments ?? '{}';
             const i = findLastToolBlockByIndex(idx);
-            if (i >= 0 && localBlocks[i].type === 'tool') {
+            // 同 index 的上一块已完成（跨 step 复用 0 基 index）→ 新建块而非覆盖；
+            // 自动桥接的合成 tool_call 无前置 tool_call_start，仅发 ready，正需此分支（否则会盖掉上一步的卡）。
+            const existingCompleted = i >= 0 && localBlocks[i].type === 'tool' && localBlocks[i].status === 'completed';
+            if (i >= 0 && localBlocks[i].type === 'tool' && !existingCompleted) {
               localBlocks[i] = { ...localBlocks[i], tool_name: name, arguments: args, status: 'waiting' };
             } else {
               localBlocks.push({ type: 'tool', index: idx, tool_name: name, status: 'waiting', arguments: args, streaming_content: '' });
@@ -2528,14 +2534,64 @@ export function ChatScreen({
     [session, conversationId, patchToolBlocksByReviewId]
   );
 
-  function renderCursorAgentBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+  // 统一子 agent 卡：agent_type → 标签；复用同一张卡渲染 claude / cursor / subagent_start / subagent_continue
+  function subagentAgentLabel(block: Extract<StreamBlock, { type: 'tool' }>): string {
+    if (block.tool_name === 'local_claude_agent') return 'Claude Code';
+    if (block.tool_name === 'local_cursor_agent') return 'Cursor';
+    try {
+      const obj = JSON.parse(block.arguments || '{}') as { agent_type?: string };
+      const at = String(obj.agent_type || '').trim().toLowerCase();
+      if (at === 'claude') return 'Claude Code';
+      if (at === 'cursor') return 'Cursor';
+    } catch {
+      /* ignore */
+    }
+    return 'Subagent';
+  }
+
+  function renderSubagentBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
     return (
-      <CursorAgentCard
+      <SubagentCard
+        block={block as unknown as Record<string, unknown> as never}
+        cardKey={key}
+        agentLabel={subagentAgentLabel(block)}
+        styles={styles as unknown as Record<string, any>}
+        iconColor={colors.textSecondary}
+        getToolStatusLabel={getToolStatusLabel}
+        renderToolCardSafetyActions={renderToolCardSafetyActions}
+        isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
+      />
+    );
+  }
+
+  function renderSubagentMetaBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    return (
+      <SubagentMetaCard
+        block={block as unknown as Record<string, unknown> as never}
+        cardKey={key}
+        agentLabel={subagentAgentLabel(block)}
+        styles={styles as unknown as Record<string, any>}
+      />
+    );
+  }
+
+  // ask_user_question：用户点选 → POST /ask/answer 解阻塞正在等待的本轮 run（卡片自管 submitted 乐观态）
+  const handleAskUserAnswer = useCallback(
+    async (answers: { header?: string; question?: string; answer: string }[]) => {
+      if (!session || !conversationId) return;
+      await answerAskUserQuestion(session, conversationId, answers);
+    },
+    [session, conversationId]
+  );
+
+  function renderAskUserQuestionBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    return (
+      <AskUserQuestionCard
         block={block}
         cardKey={key}
         styles={styles as unknown as Record<string, object>}
-        renderToolCardSafetyActions={renderToolCardSafetyActions}
-        isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
+        placeholderColor={colors.textMuted}
+        onSubmit={handleAskUserAnswer}
       />
     );
   }
@@ -2878,8 +2934,19 @@ export function ChatScreen({
   ).current;
 
   function renderToolBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
-    if (block.tool_name === 'local_cursor_agent') {
-      return renderCursorAgentBlock(block, key);
+    if (
+      block.tool_name === 'local_cursor_agent' ||
+      block.tool_name === 'local_claude_agent' ||
+      block.tool_name === 'subagent_start' ||
+      block.tool_name === 'subagent_continue'
+    ) {
+      return renderSubagentBlock(block, key);
+    }
+    if (block.tool_name === 'subagent_find_sessions' || block.tool_name === 'subagent_get_session') {
+      return renderSubagentMetaBlock(block, key);
+    }
+    if (block.tool_name === 'ask_user_question') {
+      return renderAskUserQuestionBlock(block, key);
     }
     if (block.tool_name === 'open_tool_packages' || block.tool_name === 'close_tool_packages') {
       return (
