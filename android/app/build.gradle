@@ -123,9 +123,25 @@ android {
     }
 }
 
+// AndroidMath（iosMath 的 Kotlin 移植）走 JitPack 分发，仓库未在根 build.gradle 声明，模块内补一个。
+repositories {
+    maven { url("https://www.jitpack.io") }
+}
+
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+
+    // flowdoc 行内 LaTeX 公式渲染（对齐 iOS 的 iosMath）。EquationSpan 用 MTMathView → Bitmap。
+    // AndroidMath 把 junit / androidx.test / 一个 jitpack 占位包错放进了 implementation（应是 testImplementation），
+    // 会把 guava:18.0 带进 app 运行时，跟 androidx 的 listenablefuture:1.0 撞类（duplicate class ListenableFuture）。
+    // 数学渲染本身不用这些，排掉。
+    implementation("com.github.gregcockroft:AndroidMath:v1.1.0") {
+        exclude group: "androidx.test"
+        exclude group: "junit"
+        exclude group: "com.github.jitpack"
+        exclude group: "com.google.guava", module: "guava"
+    }
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

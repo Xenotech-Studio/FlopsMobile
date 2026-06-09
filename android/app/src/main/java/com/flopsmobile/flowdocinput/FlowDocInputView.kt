@@ -11,13 +11,18 @@
 package com.flopsmobile.flowdocinput
 
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.Editable
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.TextWatcher
 import android.text.InputType
+import android.text.method.ArrowKeyMovementMethod
+import android.text.method.LinkMovementMethod
 import android.text.style.BackgroundColorSpan
 import android.view.Gravity
 import android.view.KeyEvent
@@ -28,7 +33,6 @@ import android.view.inputmethod.InputMethodManager
 import android.text.style.CharacterStyle
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import android.text.style.TypefaceSpan
 import android.util.TypedValue
 import android.view.View
 import androidx.appcompat.widget.AppCompatEditText
@@ -41,6 +45,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 private const val OBJ_REPL_CHAR = '￼'
+
+/* 行内 code 视觉常量（对齐 web .slate-editor code / iOS）：红字 #eb5757 + 暖灰底 rgba(135,131,120,0.15)。
+   字体等宽 + 0.9em 由 FlowDocCodeSpan 承载。红字是真实 ForegroundColorSpan，round-trip 时用同色判别
+   跟"用户 color mark"区分（见 marksFromSpannableRange）。 */
+private val CODE_TEXT_COLOR = Color.parseColor("#eb5757")
+private val CODE_BG_COLOR = Color.argb((0.15f * 255).toInt(), 135, 131, 120)
+private const val CODE_TEXT_HEX = "#EB5757" // "#%06X".format 产出大写，用于反查时识别"code 红字"
 
 class FlowDocInputView(context: Context) : AppCompatEditText(context) {
 
@@ -171,6 +182,80 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
     post { maybeEmitContentSize() }
   }
 
+  /* 行内 code 圆角底（对齐 iOS 自定义 NSLayoutManager 画的圆角背景）。暖灰底 + 圆角 4dp +
+     横向外扩 3dp 模拟 web code padding 的呼吸感（不移动文字，区别于 iOS 用 kern 推开）。
+     在 super.onDraw 之前画，落在文字下方。 */
+  private val codeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = CODE_BG_COLOR }
+
+  override fun onDraw(canvas: Canvas) {
+    drawCodeBackgrounds(canvas)
+    super.onDraw(canvas)
+  }
+
+  private fun drawCodeBackgrounds(canvas: Canvas) {
+    val spanned = text as? Spanned ?: return
+    val spans = spanned.getSpans(0, spanned.length, FlowDocCodeSpan::class.java)
+    if (spans.isEmpty()) return
+    val lyt = layout ?: return
+    val density = resources.displayMetrics.density
+    val radius = 4f * density
+    val padH = 3f * density
+    val padV = 1f * density
+
+    /* 盒子高度按 code 字体自身（0.9em 等宽）的 ascent/descent 算，恒定 —— 不用 getLineAscent/Descent，
+       那是整行的上下沿（由行内最高内容决定），code 单独成行时矮、跟正文同行时被撑高 → 高矮不定。
+       baseline 各行共享，所以用 code 度量 + 每行 baseline 就能稳稳裹住 code 字形（对齐 iOS 按 code 字体画）。 */
+    val codeFm = Paint().apply {
+      textSize = this@FlowDocInputView.textSize * 0.9f
+      typeface = Typeface.MONOSPACE
+    }.fontMetrics
+    val codeAscent = codeFm.ascent // 负
+    val codeDescent = codeFm.descent
+
+    /* 复刻 TextView 画 Layout 时的画布平移：水平 compoundPaddingLeft、垂直 compoundPaddingTop +
+       垂直 gravity 偏移（本 view 用 CENTER_VERTICAL；autoHeight 时 view 高=内容高 → voffset≈0，
+       单行偏矮时才非 0）。再减 scrollX/scrollY（viewer 不滚，保险）。算法照搬 TextView.getVerticalOffset。 */
+    var voffset = 0
+    val gravityV = gravity and Gravity.VERTICAL_GRAVITY_MASK
+    if (gravityV != Gravity.TOP) {
+      val boxHt = height - compoundPaddingTop - compoundPaddingBottom
+      val textHt = lyt.height
+      if (textHt < boxHt) {
+        voffset = if (gravityV == Gravity.BOTTOM) boxHt - textHt else (boxHt - textHt) / 2
+      }
+    }
+
+    canvas.save()
+    canvas.translate(
+      (compoundPaddingLeft - scrollX).toFloat(),
+      (compoundPaddingTop + voffset - scrollY).toFloat(),
+    )
+    for (s in spans) {
+      val st = spanned.getSpanStart(s)
+      val en = spanned.getSpanEnd(s)
+      if (st < 0 || en <= st) continue
+      val lineStart = lyt.getLineForOffset(st)
+      val lineEnd = lyt.getLineForOffset(en)
+      for (line in lineStart..lineEnd) {
+        /* 每行的左右边界：
+           - code 起始行用 getPrimaryHorizontal(st)，否则续行从整行左沿 getLineLeft 起；
+           - code 结束行用 getPrimaryHorizontal(en)，否则本行 code 延伸到整行右沿 getLineRight。
+           不能对换行边界的 offset 用 getPrimaryHorizontal —— 那个 offset 会被算到下一行行首（≈左边），右界变错。 */
+        val xL = if (line == lineStart) lyt.getPrimaryHorizontal(st) else lyt.getLineLeft(line)
+        val xR = if (line == lineEnd) lyt.getPrimaryHorizontal(en) else lyt.getLineRight(line)
+        val l = minOf(xL, xR)
+        val r = maxOf(xL, xR)
+        if (r <= l) continue // 空行 / 该行无可见 code
+        // 上下沿 = 该行 baseline + code 字体 ascent/descent（恒定高度，不随同行其它内容变）
+        val baseline = lyt.getLineBaseline(line)
+        val top = baseline + codeAscent - padV
+        val bottom = baseline + codeDescent + padV
+        canvas.drawRoundRect(l - padH, top, r + padH, bottom, radius, radius, codeBgPaint)
+      }
+    }
+    canvas.restore()
+  }
+
   private fun maybeEmitContentSize() {
     /* 用 TextView 内部 layout.height（内容真实所需高度）而不是 measuredHeight
        （受 parent 的 EXACTLY measure spec 约束、始终等于 JS 给的旧 contentHeight）。
@@ -215,11 +300,18 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
 
   fun setCustomLineHeight(lineHeight: Float) {
     if (lineHeight > 0) {
-      /* JS 端 prop 单位是 dp（跟 iOS pt 对齐），TextView.setLineHeight() 要 px。3x 密度设备
-         直接传 22 就被当 22px = 远小于 16sp 字体的实际行高，多行渲染重叠堆栈，autoHeight
-         也跟着报小、卡片不变高。先 dp → px 再设。 */
-      val px = (lineHeight * resources.displayMetrics.density).toInt()
-      setLineHeight(px)
+      /* 用 setLineSpacing(extra,1) 而不是 setLineHeight()：对齐 iOS 改用 lineSpacing 的理由——
+         setLineHeight 把多余行距按 ascent/descent 比例摊到文字上下，首行文字被往下推，跟
+         RN 侧画的列表 bullet（贴行顶）baseline 错位；lineSpacing 只在行间补空、文字保持自然顶位，
+         既有 web line-height 行距观感又不破坏 baseline。
+         JS 端 prop 单位是 dp，先 dp→px；extra = 目标行高 - 字体自然行高。 */
+      val targetPx = lineHeight * resources.displayMetrics.density
+      val fm = paint.fontMetrics
+      val naturalPx = fm.descent - fm.ascent
+      val extra = (targetPx - naturalPx).coerceAtLeast(0f)
+      setLineSpacing(extra, 1.0f)
+    } else {
+      setLineSpacing(0f, 1.0f)
     }
   }
 
@@ -239,6 +331,9 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
     isFocusable = value
     isFocusableInTouchMode = value
     isEnabled = value
+    /* 链接可点（对齐 iOS：仅非编辑态）。LinkMovementMethod 会接管 tap → 触发 ClickableSpan，
+       但也会干扰编辑态的光标/选区，所以编辑态恢复 EditText 默认的 ArrowKeyMovementMethod。 */
+    movementMethod = if (value) ArrowKeyMovementMethod.getInstance() else LinkMovementMethod.getInstance()
   }
 
   // MARK: - Commands
@@ -303,10 +398,14 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
       "bold" -> applyStyleSpan(t, start, end, Typeface.BOLD)
       "italic" -> applyStyleSpan(t, start, end, Typeface.ITALIC)
       "code" -> {
-        // 移除原有可能的 bold/italic，code 走独立 typeface
+        // 移除原有可能的 bold/italic，code 走独立 typeface（等宽 0.9em）+ 红字；圆角底由 onDraw 画
         removeSpansInRange(t, start, end, StyleSpan::class.java)
-        t.setSpan(TypefaceSpan("monospace"), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        t.setSpan(BackgroundColorSpan(Color.parseColor("#EEEEEE")), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        t.setSpan(FlowDocCodeSpan(), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        // 无显式 color mark 时用红字；已有 ForegroundColorSpan 则保留用户色（对齐 iOS）
+        if (t.getSpans(start, end, ForegroundColorSpan::class.java).isEmpty()) {
+          t.setSpan(ForegroundColorSpan(CODE_TEXT_COLOR), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        invalidate() // 触发 onDraw 重画圆角底
       }
       "color" -> {
         try {
@@ -330,8 +429,12 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
       "bold" -> removeStyleSpanFlag(t, start, end, Typeface.BOLD)
       "italic" -> removeStyleSpanFlag(t, start, end, Typeface.ITALIC)
       "code" -> {
-        removeSpansInRange(t, start, end, TypefaceSpan::class.java)
+        removeSpansInRange(t, start, end, FlowDocCodeSpan::class.java)
         removeSpansInRange(t, start, end, BackgroundColorSpan::class.java)
+        // 去掉 code 自带的红字（仅当前景正是 code 红，避免误删用户 color mark）
+        for (s in t.getSpans(start, end, ForegroundColorSpan::class.java)) {
+          if ("#%06X".format(0xFFFFFF and s.foregroundColor) == CODE_TEXT_HEX) t.removeSpan(s)
+        }
       }
       "color" -> removeSpansInRange(t, start, end, ForegroundColorSpan::class.java)
     }
@@ -439,6 +542,17 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
           builder.append(OBJ_REPL_CHAR)
           builder.setSpan(span, startPos, startPos + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
+        "equation" -> {
+          // 行内 LaTeX 公式（对齐 iOS EquationAttachment）：用 U+FFFC 占位 + EquationSpan 渲染
+          val tex = item.optString("tex", "")
+          val span = EquationSpan(tex, context).also {
+            it.fontSize = textSize
+            it.textColor = currentTextColor
+          }
+          val startPos = builder.length
+          builder.append(OBJ_REPL_CHAR)
+          builder.setSpan(span, startPos, startPos + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
       }
     }
 
@@ -466,10 +580,12 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
     val italic = marks.optBoolean("italic", false)
     val code = marks.optBoolean("code", false)
     val colorStr = if (marks.has("color")) marks.optString("color", "") else ""
+    val linkStr = if (marks.has("link")) marks.optString("link", "") else ""
 
+    // 字形：code 走等宽 0.9em（独占，不叠 bold/italic，对齐 iOS code 用 Menlo 不加粗斜）；否则 bold/italic。
+    // 暖灰底+圆角由 onDraw 按 FlowDocCodeSpan 范围画（见 drawCodeBackgrounds），不再用方角 BackgroundColorSpan。
     if (code) {
-      builder.setSpan(TypefaceSpan("monospace"), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-      builder.setSpan(BackgroundColorSpan(Color.parseColor("#EEEEEE")), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+      builder.setSpan(FlowDocCodeSpan(), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
     } else if (bold && italic) {
       builder.setSpan(StyleSpan(Typeface.BOLD_ITALIC), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
     } else if (bold) {
@@ -477,12 +593,17 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
     } else if (italic) {
       builder.setSpan(StyleSpan(Typeface.ITALIC), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
     }
-    if (colorStr.isNotEmpty()) {
-      try {
-        builder.setSpan(ForegroundColorSpan(Color.parseColor(colorStr)), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-      } catch (_: Throwable) {
-        /* 颜色字符串非法，忽略 */
-      }
+
+    /* 前景色优先级（对齐 iOS attributesForMarks）：link 链接色 > 用户 color mark > code 红字 > 默认。
+       link 的链接色 + 下划线由 FlowDocLinkSpan.updateDrawState 承载，不再叠 ForegroundColorSpan。 */
+    val userColor: Int? =
+      if (colorStr.isNotEmpty()) runCatching { Color.parseColor(colorStr) }.getOrNull() else null
+    if (linkStr.isNotEmpty()) {
+      builder.setSpan(FlowDocLinkSpan(linkStr), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    } else if (userColor != null) {
+      builder.setSpan(ForegroundColorSpan(userColor), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    } else if (code) {
+      builder.setSpan(ForegroundColorSpan(CODE_TEXT_COLOR), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
     }
   }
 
@@ -493,6 +614,7 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
     var italic = false
     var code = false
     var colorHex: String? = null
+    var link: String? = null
     val spans = text.getSpans(start, end, CharacterStyle::class.java)
     for (s in spans) {
       val ss = text.getSpanStart(s)
@@ -504,17 +626,22 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
           Typeface.ITALIC -> italic = true
           Typeface.BOLD_ITALIC -> { bold = true; italic = true }
         }
-        is TypefaceSpan -> if (s.family?.contains("mono", ignoreCase = true) == true) code = true
+        is FlowDocCodeSpan -> code = true
+        is FlowDocLinkSpan -> link = s.url
         is ForegroundColorSpan -> colorHex = "#%06X".format(0xFFFFFF and s.foregroundColor)
-        is BackgroundColorSpan -> { /* 当前仅 code 在用，跟 TypefaceSpan 配套 */ }
+        is BackgroundColorSpan -> { /* code 暖灰底，跟 FlowDocCodeSpan 配套，不当 mark */ }
       }
     }
-    if (!bold && !italic && !code && colorHex == null) return null
+    /* code 红字 / link 链接色是我们加的样式而非用户 color mark（对齐 iOS）→ 不当 color 上报 */
+    if (link != null) colorHex = null
+    else if (code && colorHex == CODE_TEXT_HEX) colorHex = null
+    if (!bold && !italic && !code && colorHex == null && link == null) return null
     return JSONObject().apply {
       if (bold) put("bold", true)
       if (italic) put("italic", true)
       if (code) put("code", true)
       if (colorHex != null) put("color", colorHex)
+      if (link != null) put("link", link)
     }
   }
 
@@ -535,23 +662,34 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
   fun currentContentJson(): String {
     val t = text ?: return "[]"
     val arr = JSONArray()
-    val pills = t.getSpans(0, t.length, RefPillSpan::class.java)
-      .map { Triple(t.getSpanStart(it), t.getSpanEnd(it), it) }
-      .sortedBy { it.first }
+
+    /* 收集原子对象（pill + equation），按位置排序后与中间文字交错。
+       两类都以 1 个 U+FFFC 占位，跟 iOS 的 attachment 序列化同思路。 */
+    val atoms = ArrayList<Triple<Int, Int, JSONObject>>()
+    for (p in t.getSpans(0, t.length, RefPillSpan::class.java)) {
+      atoms.add(Triple(t.getSpanStart(p), t.getSpanEnd(p), JSONObject().apply {
+        put("type", "pill")
+        put("refKey", p.refKey)
+        put("mention", p.mention)
+        put("title", p.title)
+        put("isPointer", p.isPointer)
+      }))
+    }
+    for (e in t.getSpans(0, t.length, EquationSpan::class.java)) {
+      atoms.add(Triple(t.getSpanStart(e), t.getSpanEnd(e), JSONObject().apply {
+        put("type", "equation")
+        put("tex", e.tex)
+      }))
+    }
+    atoms.sortBy { it.first }
 
     var cursor = 0
-    for ((start, end, pill) in pills) {
+    for ((start, end, json) in atoms) {
       if (start > cursor) {
         // 把 [cursor, start) 这段文字按 mark 边界拆成多个 text part
         appendTextPartsByMarks(arr, t, cursor, start)
       }
-      arr.put(JSONObject().apply {
-        put("type", "pill")
-        put("refKey", pill.refKey)
-        put("mention", pill.mention)
-        put("title", pill.title)
-        put("isPointer", pill.isPointer)
-      })
+      arr.put(json)
       cursor = end
     }
     if (cursor < t.length) {
