@@ -501,7 +501,7 @@ function inlineLogicalLength(block: FlowDocBlock): number {
   let total = 0;
   for (const c of block.children) {
     const cn = c as { type?: string; text?: string };
-    if (cn.type === 'ref-pill') {
+    if (cn.type === 'ref-pill' || cn.type === 'equation') {
       total += 1;
       continue;
     }
@@ -1737,7 +1737,8 @@ function splitContentAt(
   const after: FlowDocContent = [];
   let cursor = 0;
   for (const part of content) {
-    if (part.type === 'pill') {
+    if (part.type === 'pill' || part.type === 'equation') {
+      // 原子对象（pill / 公式）算 1 个逻辑字符
       if (cursor < offset) before.push(part);
       else after.push(part);
       cursor += 1;
@@ -1778,6 +1779,13 @@ function contentToInline(content: FlowDocContent): Descendant[] {
         children: [{ text: '' }],
       } as unknown as Descendant;
     }
+    if (p.type === 'equation') {
+      return {
+        type: 'equation',
+        tex: p.tex,
+        children: [{ text: '' }],
+      } as unknown as Descendant;
+    }
     const leaf: Record<string, unknown> = { text: p.text };
     if (p.marks?.bold) leaf.bold = true;
     if (p.marks?.italic) leaf.italic = true;
@@ -1804,6 +1812,11 @@ function inlineToContent(
         title: String(e.title || ''),
         isPointer: !!e.isPointer,
       });
+      continue;
+    }
+    if (SlateElement.isElement(node) && (node as { type?: string }).type === 'equation') {
+      const tex = (node as { tex?: string }).tex;
+      out.push({ type: 'equation', tex: typeof tex === 'string' ? tex : '' });
       continue;
     }
     const leaf = node as SlateMarkedText;

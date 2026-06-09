@@ -1,5 +1,6 @@
 #import "FlowDocInputView.h"
 #import "RefPillAttachment.h"
+#import "EquationAttachment.h"
 
 /* UITextView 子类，专门用来 override -deleteBackward。
    iOS 系统在 textView 偏移 0 处按退格时 *不会* 触发 shouldChangeTextInRange:replacementText:
@@ -441,6 +442,24 @@
                          value:(self.textColor ?: [UIColor labelColor])
                          range:NSMakeRange(0, pillAtomic.length)];
       [attr appendAttributedString:pillAtomic];
+    } else if ([type isEqualToString:@"equation"]) {
+      // 行内 LaTeX 公式：iosMath 渲染成图，作为 atomic attachment 嵌入（同 pill）
+      NSString *tex = [item[@"tex"] isKindOfClass:[NSString class]] ? item[@"tex"] : @"";
+      EquationAttachment *eq = [[EquationAttachment alloc] initWithTex:tex];
+      eq.textColor = self.textColor ?: [UIColor labelColor];
+      eq.fontSize = self.fontSize;
+      [eq refreshImage];
+      NSMutableAttributedString *eqAtomic =
+          [[NSMutableAttributedString alloc] initWithAttributedString:
+               [NSAttributedString attributedStringWithAttachment:eq]];
+      UIFont *bodyFont = [self baseFontOfSize:self.fontSize];
+      [eqAtomic addAttribute:NSFontAttributeName
+                       value:bodyFont
+                       range:NSMakeRange(0, eqAtomic.length)];
+      [eqAtomic addAttribute:NSForegroundColorAttributeName
+                       value:(self.textColor ?: [UIColor labelColor])
+                       range:NSMakeRange(0, eqAtomic.length)];
+      [attr appendAttributedString:eqAtomic];
     }
   }
 
@@ -884,6 +903,9 @@
         @"title": att.title ?: @"",
         @"isPointer": @(att.isPointer),
       }];
+    } else if ([attachment isKindOfClass:[EquationAttachment class]]) {
+      EquationAttachment *eq = (EquationAttachment *)attachment;
+      [items addObject:@{ @"type": @"equation", @"tex": eq.tex ?: @"" }];
     } else {
       NSString *chunk = [storage.string substringWithRange:effective];
       if (chunk.length > 0) {

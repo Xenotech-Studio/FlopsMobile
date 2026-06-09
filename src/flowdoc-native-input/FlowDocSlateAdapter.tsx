@@ -137,6 +137,14 @@ function contentToSlateDocument(content: FlowDocContent): SlateDocument {
       current.push(pillPartToSlate(part));
       continue;
     }
+    if (part.type === 'equation') {
+      current.push({
+        type: 'equation',
+        tex: part.tex,
+        children: [{ text: '' }],
+      } as unknown as Descendant);
+      continue;
+    }
     // text part：拆 \n
     const segments = part.text.split('\n');
     for (let i = 0; i < segments.length; i++) {

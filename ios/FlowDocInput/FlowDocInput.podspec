@@ -16,6 +16,9 @@ Pod::Spec.new do |s|
   s.source_files     = '*.{h,mm,m}'
   s.requires_arc     = true
 
+  # iosMath：行内 LaTeX 公式渲染（EquationAttachment 用）
+  s.dependency 'iosMath'
+
   # Fabric + new arch dependencies (会由 install_modules_dependencies 自动接入)
   install_modules_dependencies(s)
 end

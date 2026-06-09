@@ -26,6 +26,9 @@ target 'FlopsMobile' do
   # In-app native module for FlowDocInput（Fabric atomic-pill rich text input）
   pod 'FlowDocInput', :path => './FlowDocInput'
 
+  # iosMath：行内 LaTeX 公式渲染（FlowDocInput 的 EquationAttachment 依赖）
+  pod 'iosMath'
+
   # In-app native Fabric view: iOS-only bouncy press-feedback button (UI-thread driven)
   pod 'BouncyButton', :path => './BouncyButton'
 

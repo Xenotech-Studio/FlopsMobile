@@ -38,7 +38,9 @@ export type FlowDocContentPart =
       mention: string;
       title: string;
       isPointer: boolean;
-    };
+    }
+  /** 行内 LaTeX 公式：tex 源码。原生侧用 iosMath/AndroidMath 渲染成行内 image span/attachment */
+  | { type: 'equation'; tex: string };
 
 export type FlowDocContent = FlowDocContentPart[];
 
