@@ -447,6 +447,10 @@ export const FlowDocBlocks = forwardRef<FlowDocBlocksHandle, FlowDocBlocksProps>
         maxToRenderPerBatch={8}
         windowSize={9}
         keyboardShouldPersistTaps="handled"
+        /* 锚定可视内容：block 高度是动态的（文字 autoHeight、图片下载后才知尺寸、公式 bitmap 首帧渲染才长高），
+           没有 getItemLayout 给不出确定高度。安卓 FlatList 在项高度异步变化时会跳动可视内容（iOS 原生会锚住、
+           只是滚动条 thumb 随总高估计跳，无害）。mVCP 让原生帧级锚定首个可视项，上/下方项变高都补偿偏移。 */
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       />
     );
   }
