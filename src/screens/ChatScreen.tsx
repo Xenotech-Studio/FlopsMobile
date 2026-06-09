@@ -2556,6 +2556,7 @@ export function ChatScreen({
         cardKey={key}
         agentLabel={subagentAgentLabel(block)}
         styles={styles as unknown as Record<string, any>}
+        colors={colors as unknown as Record<string, any>}
         iconColor={colors.textSecondary}
         getToolStatusLabel={getToolStatusLabel}
         renderToolCardSafetyActions={renderToolCardSafetyActions}

@@ -1,22 +1,14 @@
 import React, { useState } from 'react';
-import { Text, TouchableOpacity, View } from 'react-native';
+import { Dimensions, LayoutAnimation, Text, TouchableOpacity, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
+import LinearGradient from 'react-native-linear-gradient';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import { ToolCardFrame } from './ToolCardFrame';
 
 /** 子 agent 标识图标（与 Web 一致：lucide Boxes 叠箱图标）。 */
 function SubagentIcon({ size, color }: { size: number; color: string }) {
   return (
-    <Svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
       <Path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z" />
       <Path d="m7 16.5-4.74-2.85" />
       <Path d="m7 16.5 5-3" />
@@ -31,6 +23,27 @@ function SubagentIcon({ size, color }: { size: number; color: string }) {
       <Path d="M12 13.5V8" />
     </Svg>
   );
+}
+
+/** 工作量行图标：lucide Hammer 锤子。 */
+function HammerIcon({ size, color }: { size: number; color: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <Path d="m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9" />
+      <Path d="m18 15 4-4" />
+      <Path d="m21.5 11.5-1.914-1.914A2 2 0 0 1 19 8.172V7l-2.26-2.26a6 6 0 0 0-4.202-1.756L9 2.96l.92.82A6.18 6.18 0 0 1 12 8.4V10l2 2h1.172a2 2 0 0 1 1.414.586L18.5 14.5" />
+    </Svg>
+  );
+}
+
+function withAlpha(hex: string, a: number): string {
+  const h = String(hex || '').replace('#', '');
+  const n = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  const r = parseInt(n.slice(0, 2), 16);
+  const g = parseInt(n.slice(2, 4), 16);
+  const b = parseInt(n.slice(4, 6), 16);
+  if ([r, g, b].some((x) => Number.isNaN(x))) return `rgba(255,255,255,${a})`;
+  return `rgba(${r},${g},${b},${a})`;
 }
 
 type AnyBlock = {
@@ -52,6 +65,7 @@ type Props = {
   cardKey: string;
   agentLabel: string;
   styles: Record<string, any>;
+  colors: Record<string, any>;
   iconColor: string;
   getToolStatusLabel: (status: string) => string;
   renderToolCardSafetyActions: (reviewId: string, isSubmitting: boolean) => React.ReactNode;
@@ -93,7 +107,6 @@ function InnerToolStep({
   let title = name;
   let tail = '';
   let body: React.ReactNode = null;
-
   const filePath = String((args.file_path ?? args.path ?? '') as string).trim();
 
   if (name === 'Bash' || name === 'shell' || name === 'local_exec_command') {
@@ -208,17 +221,25 @@ function AgentToolBlocks({
   );
 }
 
+function fmtDur(s: number): string {
+  return s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}m${String(Math.round(s % 60)).padStart(2, '0')}s`;
+}
+
 export function SubagentCard({
   block,
   cardKey,
   agentLabel,
   styles,
+  colors,
   iconColor,
   getToolStatusLabel,
   renderToolCardSafetyActions,
   isSubmitting,
 }: Props) {
-  const [collapseOverride, setCollapseOverride] = useState<boolean | null>(null);
+  const [viewOverride, setViewOverride] = useState<'collapsed' | 'preview' | 'full' | null>(null);
+  const [promptH, setPromptH] = useState(0);
+  const [previewH, setPreviewH] = useState(0);
+
   const args = parseArgs(block.arguments);
   const prompt = String((args.prompt ?? '') as string).trim();
   const cwd = String((args.cwd ?? '') as string).trim();
@@ -236,12 +257,7 @@ export function SubagentCard({
         {cwd ? <Text style={styles.toolCardSafetyMeta}>cwd: {cwd}</Text> : null}
         {review?.reason ? <Text style={styles.toolCardSafetyReason}>{review.reason}</Text> : null}
         {review?.advice ? (
-          <Text
-            style={[
-              styles.toolCardSafetyAdvice,
-              review.decision === 'need_confirm_after_warning' && styles.toolCardSafetyAdviceDanger,
-            ]}
-          >
+          <Text style={[styles.toolCardSafetyAdvice, review.decision === 'need_confirm_after_warning' && styles.toolCardSafetyAdviceDanger]}>
             {review.advice}
           </Text>
         ) : null}
@@ -259,34 +275,53 @@ export function SubagentCard({
     res && Array.isArray((res as any).agent_blocks) && (res as any).agent_blocks.length
       ? ((res as any).agent_blocks as AnyBlock[])
       : null;
-  const replyText =
-    block.streaming_content ?? (res && typeof res.stdout === 'string' ? res.stdout : '') ?? '';
+  const replyText = block.streaming_content ?? (res && typeof res.stdout === 'string' ? res.stdout : '') ?? '';
   const errorMsg = res && typeof res.error === 'string' ? res.error : null;
   const hasError = Boolean(errorMsg || (res && res.success === false));
   const isRunning = block.status === 'running';
 
+  // 半展开预览：最后一条纯文本（无工具）消息
+  let lastText = '';
+  if (agentBlocks) {
+    for (const b of agentBlocks) {
+      if (b && b.type === 'text' && typeof b.content === 'string' && b.content.trim()) lastText = b.content;
+    }
+  }
+  if (!lastText && replyText) lastText = replyText;
+  const previewText = String((hasError && errorMsg ? errorMsg : lastText) || '').trim();
+
+  const stepCount = agentBlocks ? agentBlocks.filter((b) => b && b.type === 'tool').length : 0;
+  const durationSec = res && typeof (res as any).duration_seconds === 'number' ? ((res as any).duration_seconds as number) : null;
+  const showSteps = block.status === 'completed' && (stepCount > 0 || durationSec != null);
+
   const statusLabel =
     block.status === 'completed'
-      ? hasError
-        ? '失败'
-        : '成功'
-      : block.status === 'running'
-        ? '执行中'
-        : block.status === 'waiting'
-          ? '等待执行'
-          : block.status === 'pending'
-            ? '参数生成中'
+      ? hasError ? '失败' : '成功'
+      : block.status === 'running' ? '执行中'
+        : block.status === 'waiting' ? '等待执行'
+          : block.status === 'pending' ? '参数生成中'
             : String(block.status || '');
 
-  // 工作时展开、结束后自动折叠；点 header 可手动覆盖（覆盖后固定，不再随状态自动变）
+  // 三态：工作时 full、结束后自动 preview；点 header 折成单行（collapsed）
   const isWorking = ['running', 'pending', 'waiting'].includes(String(block.status || ''));
-  const expanded = collapseOverride !== null ? collapseOverride : isWorking;
+  const view = viewOverride !== null ? viewOverride : isWorking ? 'full' : 'preview';
+  const setView = (v: 'collapsed' | 'preview' | 'full') => {
+    LayoutAnimation.configureNext(LayoutAnimation.create(200, LayoutAnimation.Types.easeInEaseOut, LayoutAnimation.Properties.opacity));
+    setViewOverride(v);
+  };
+
+  const winH = Dimensions.get('window').height;
+  const promptMax = Math.round(winH * 0.1);
+  const previewMax = Math.round(winH * 0.2);
+  const promptClamped = view !== 'full';
+  const promptClipped = promptClamped && promptH > promptMax + 2;
+  const previewClipped = previewH > previewMax + 2;
 
   return (
     <View key={cardKey} style={styles.subCard}>
       <TouchableOpacity
         style={styles.subHeader}
-        onPress={() => setCollapseOverride(!expanded)}
+        onPress={() => setView(view === 'collapsed' ? 'preview' : 'collapsed')}
         activeOpacity={0.6}
       >
         <View style={styles.subIcon}>
@@ -307,35 +342,89 @@ export function SubagentCard({
         <Text style={[styles.subStatus, hasError && styles.subStatusErr]}>{statusLabel}</Text>
       </TouchableOpacity>
 
-      {expanded ? (
+      {view !== 'collapsed' ? (
         <>
-          <View style={styles.subPrompt}>
-            <Text style={styles.subPromptLabel}>提问</Text>
-            <Text style={styles.subPromptText}>{prompt || '(无 prompt)'}</Text>
-            {cwd ? <Text style={styles.subPromptMeta}>cwd: {cwd}</Text> : null}
+          {/* 提问：非完全展开时限高 + 底部渐变 */}
+          <View style={styles.subPromptZone}>
+            <View style={[styles.subPrompt, promptClamped ? { maxHeight: promptMax, overflow: 'hidden' } : null]}>
+              <View onLayout={(e) => setPromptH(e.nativeEvent.layout.height)}>
+                <Text style={styles.subPromptLabel}>提问</Text>
+                <Text style={styles.subPromptText}>{prompt || '(无 prompt)'}</Text>
+                {cwd ? <Text style={styles.subPromptMeta}>cwd: {cwd}</Text> : null}
+              </View>
+              {promptClipped ? (
+                <LinearGradient
+                  colors={[withAlpha(colors.surface, 0), colors.surface]}
+                  style={styles.subFade}
+                  pointerEvents="none"
+                />
+              ) : null}
+            </View>
           </View>
 
-          <View style={styles.subReply}>
-            <Text style={styles.subReplyLabel}>回答</Text>
-            {hasError && errorMsg ? (
-              <Text style={styles.cursorAgentReplyError}>{errorMsg}</Text>
-            ) : agentBlocks ? (
-              <AgentToolBlocks
-                blocks={agentBlocks}
-                cardKey={cardKey}
-                styles={styles}
-                getToolStatusLabel={getToolStatusLabel}
-              />
-            ) : replyText ? (
-              <View style={styles.cursorAgentReplyBody}>
-                <MarkdownContent text={replyText} showCopyButton />
+          {/* 步骤数·耗时行（锤子图标 + 右侧展开完整） */}
+          {showSteps ? (
+            <TouchableOpacity
+              style={styles.subSteps}
+              onPress={() => setView(view === 'full' ? 'preview' : 'full')}
+              activeOpacity={0.7}
+            >
+              <View style={styles.subStepsIcon}>
+                <HammerIcon size={13} color={colors.textMuted} />
               </View>
-            ) : isRunning ? (
-              <Text style={styles.cursorAgentReplyLoading}>{agentLabel} 正在分析并输出…</Text>
-            ) : (
-              <Text style={styles.cursorAgentReplyEmpty}>暂无输出</Text>
-            )}
-          </View>
+              <Text style={styles.subStepsName}>{agentLabel} 工作</Text>
+              <Text style={styles.subStepsTail} numberOfLines={1}>
+                {stepCount > 0 ? `${stepCount} 步` : ''}
+                {stepCount > 0 && durationSec != null ? ' · ' : ''}
+                {durationSec != null ? `耗时 ${fmtDur(durationSec)}` : ''}
+              </Text>
+              <Text style={styles.subStepsAction}>{view === 'full' ? '收起 ›' : '展开完整 ›'}</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {/* 回答：完全展开=完整；半展开=最后回复 markdown 限高+渐变 */}
+          {view === 'full' ? (
+            <View style={styles.subReply}>
+              <Text style={styles.subReplyLabel}>回答</Text>
+              {hasError && errorMsg ? (
+                <Text style={styles.cursorAgentReplyError}>{errorMsg}</Text>
+              ) : agentBlocks ? (
+                <AgentToolBlocks blocks={agentBlocks} cardKey={cardKey} styles={styles} getToolStatusLabel={getToolStatusLabel} />
+              ) : replyText ? (
+                <View style={styles.cursorAgentReplyBody}>
+                  <MarkdownContent text={replyText} showCopyButton />
+                </View>
+              ) : isRunning ? (
+                <Text style={styles.cursorAgentReplyLoading}>{agentLabel} 正在分析并输出…</Text>
+              ) : (
+                <Text style={styles.cursorAgentReplyEmpty}>暂无输出</Text>
+              )}
+            </View>
+          ) : previewText ? (
+            <View style={styles.subPreviewZone}>
+              <View style={[styles.subPreview, { maxHeight: previewMax }]}>
+                <View onLayout={(e) => setPreviewH(e.nativeEvent.layout.height)}>
+                  <MarkdownContent text={previewText} showCopyButton={false} />
+                </View>
+                {previewClipped ? (
+                  <LinearGradient
+                    colors={[withAlpha(colors.chatScreenBackground, 0), colors.chatScreenBackground]}
+                    style={styles.subFade}
+                    pointerEvents="none"
+                  />
+                ) : null}
+              </View>
+            </View>
+          ) : null}
+
+          {/* 底部展开/收起 bar */}
+          <TouchableOpacity
+            style={styles.subBar}
+            onPress={() => setView(view === 'full' ? 'preview' : 'full')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.subBarChevron}>{view === 'full' ? '▴' : '▾'}</Text>
+          </TouchableOpacity>
         </>
       ) : null}
     </View>
