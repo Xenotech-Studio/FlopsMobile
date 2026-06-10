@@ -1654,6 +1654,23 @@ export async function cancelConversation(
 /**
  * 提交安全确认：POST /api/conversations/:id/safety/decision
  */
+/** 挂起/恢复：加密对话在提交确认/回应时重发 k_conv_wire，供服务端续起 run 解密对话续跑
+ *  （零知识，服务端不持久持钥）。非加密对话 getCachedKConv 返回 null，自然跳过。 */
+async function buildResumeKeyWire(
+  session: Session,
+  conversationId: string
+): Promise<{ k_conv_wire?: string }> {
+  const kConv = getCachedKConv(conversationId);
+  if (!kConv) return {};
+  try {
+    const pub = await getTransportPubkeyMobile(session.server_base_url);
+    return { k_conv_wire: wrapKConvForWire(kConv, pub) };
+  } catch (e) {
+    console.warn('[resume-key-wire] wrap K_conv failed:', (e as Error)?.message || e);
+    return {};
+  }
+}
+
 export async function submitSafetyDecision(
   session: Session,
   conversationId: string,
@@ -1661,12 +1678,13 @@ export async function submitSafetyDecision(
   decision: 'approve' | 'reject'
 ): Promise<void> {
   const base = session.server_base_url;
+  const _wire = await buildResumeKeyWire(session, conversationId);
   const res = await fetchWithDebugLog(
     `${base}api/conversations/${conversationId}/safety/decision`,
     {
       method: 'POST',
       headers: authHeaders(session.access_token),
-      body: JSON.stringify({ review_id: reviewId, decision }),
+      body: JSON.stringify({ review_id: reviewId, decision, ..._wire }),
     }
   );
   if (!res.ok) {
@@ -1682,12 +1700,13 @@ export async function answerAskUserQuestion(
   answers: { header?: string; question?: string; answer: string }[]
 ): Promise<void> {
   const base = session.server_base_url;
+  const _wire = await buildResumeKeyWire(session, conversationId);
   const res = await fetchWithDebugLog(
     `${base}api/conversations/${conversationId}/ask/answer`,
     {
       method: 'POST',
       headers: authHeaders(session.access_token),
-      body: JSON.stringify({ answers }),
+      body: JSON.stringify({ answers, ..._wire }),
     }
   );
   if (!res.ok) {
