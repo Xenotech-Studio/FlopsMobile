@@ -85,6 +85,50 @@ function asObj(v: unknown): Record<string, unknown> | null {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
 
+/** 未注册专卡的工具（claude 原生 Read/Grep/Glob/LS…）折叠行的一句话摘要：按工具名取关键字段。 */
+function summarizeToolArgs(toolName: string, argsRaw?: string): string {
+  let o: Record<string, unknown> = {};
+  try {
+    o = argsRaw ? JSON.parse(argsRaw) : {};
+  } catch {
+    o = {};
+  }
+  if (!o || typeof o !== 'object') return '';
+  const s = (v: unknown) => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
+  switch (toolName) {
+    case 'Read':
+      return s(o.file_path) || s(o.path);
+    case 'Grep': {
+      const pat = s(o.pattern);
+      const where = s(o.path) || s(o.glob) || s(o.include);
+      return where ? `${pat ? `"${pat}" ` : ''}于 ${where}` : pat ? `"${pat}"` : '';
+    }
+    case 'Glob':
+      return s(o.pattern) + (s(o.path) ? ` 于 ${s(o.path)}` : '');
+    case 'LS':
+      return s(o.path);
+    case 'WebFetch':
+      return s(o.url);
+    case 'WebSearch':
+      return s(o.query);
+    case 'Task':
+      return s(o.description) || s(o.subagent_type);
+    case 'NotebookEdit':
+      return s(o.notebook_path);
+    case 'TodoWrite':
+      return Array.isArray(o.todos) ? `${o.todos.length} 项` : '';
+    default: {
+      const guess = s(o.file_path) || s(o.path) || s(o.pattern) || s(o.query) || s(o.url) || s(o.command) || s(o.description);
+      if (guess) return guess;
+      for (const k of Object.keys(o)) {
+        const v = s(o[k]);
+        if (v) return v;
+      }
+      return '';
+    }
+  }
+}
+
 /** 子 agent 内部一步工具的折叠卡（默认折叠成单行，点开看命令/输出/diff）。 */
 function InnerToolStep({
   blk,
@@ -160,7 +204,9 @@ function InnerToolStep({
       </View>
     );
   } else {
-    tail = (blk.arguments || '').slice(0, 80);
+    // 未注册专卡：动作名用原工具名首字母大写，细节(读哪个文件 / grep 什么…)进 tail
+    title = name ? name.charAt(0).toUpperCase() + name.slice(1) : name;
+    tail = summarizeToolArgs(name, blk.arguments);
     const resultText = blk.result != null ? (typeof blk.result === 'string' ? blk.result : JSON.stringify(blk.result, null, 2)) : '';
     body = resultText ? <Text style={styles.subInnerMono}>{resultText.slice(0, 3000)}</Text> : null;
   }
