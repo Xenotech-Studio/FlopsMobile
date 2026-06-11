@@ -110,13 +110,40 @@ export function ExecCommandCard({
   const isFull = viewMode === 'full';
   const isPreview = viewMode === 'preview';
   const isAwaiting = block.status === 'awaiting_confirmation' && Boolean(block.review_id);
-  const errorMsg = resultObj && typeof resultObj.error === 'string' ? resultObj.error : null;
+  // 安全审核退回重想（withdraw_and_rethink）：展示具体建议(reason + next_actions)而非 error 套话。
+  // 数据在 result，老/新记录结构一致，同覆盖历史记录。
+  const isWithdrawRethink = Boolean(
+    resultObj && (resultObj as Record<string, unknown>).withdraw_and_rethink === true,
+  );
+  const withdrawRethinkMsg = (() => {
+    if (!isWithdrawRethink || !resultObj) return null;
+    const sr = (resultObj as Record<string, unknown>).safety_review;
+    const srObj = sr && typeof sr === 'object' && !Array.isArray(sr) ? (sr as Record<string, unknown>) : null;
+    const reason = srObj ? String(srObj.reason ?? '').trim() : '';
+    const suggestion =
+      String((resultObj as Record<string, unknown>).next_actions ?? '').trim() ||
+      (srObj ? String(srObj.rethink_suggestion ?? '').trim() : '');
+    const txt = [reason, suggestion].filter(Boolean).join(' ');
+    return txt
+      ? `安全审核退回本次操作，建议改用更稳妥的做法：${txt}`
+      : '安全审核退回了本次操作，建议调整后再继续。';
+  })();
+  const errorMsg = isWithdrawRethink
+    ? null
+    : resultObj && typeof resultObj.error === 'string'
+      ? resultObj.error
+      : null;
 
   const maxOutLen = isFull ? 12000 : 3500;
   const hasAnyStreamOut = Boolean(stdoutNorm || stderrNorm || errorMsg);
 
   const streamOutputInner = (opts: { showGeneratingInPreview: boolean; showNoOutputWhenDone: boolean }) => (
     <>
+      {withdrawRethinkMsg ? (
+        <Text style={styles.toolCardSafetyMeta as object} numberOfLines={isFull ? 14 : 10}>
+          {withdrawRethinkMsg}
+        </Text>
+      ) : null}
       {errorMsg ? (
         <Text style={styles.readPagesErrorText as object} numberOfLines={isFull ? 12 : 8}>
           {errorMsg}
