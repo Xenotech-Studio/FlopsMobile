@@ -342,7 +342,12 @@ function convertWebNode(n: SlateNode): FlowDocBlock[] {
           url: typeof n.url === 'string' ? n.url : undefined,
           filename: typeof n.filename === 'string' ? n.filename : undefined,
           mime_type: typeof n.mime_type === 'string' ? n.mime_type : undefined,
-          display: n.display === 'inline' ? 'inline' : 'card',
+          display:
+            n.display === 'inline'
+              ? 'inline'
+              : n.display === 'preview'
+                ? 'preview'
+                : 'card',
           // web 字段是 size_bytes；兼容旧 size
           size:
             typeof n.size_bytes === 'number'

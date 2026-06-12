@@ -1109,7 +1109,7 @@
   resolved "https://registry.npmjs.org/@eslint/js/-/js-8.57.1.tgz"
   integrity sha512-d9zaMRSTIKDLhctzH12MtXvJKSSUhaHcjV+2Z+GK+EEY7XKpP5yR4x+N3TAcHTcu963nIr+TMcCb4DBCYX1z6Q==
 
-"@gorhom/bottom-sheet@^5.0.2":
+"@gorhom/bottom-sheet@5.2.8":
   version "5.2.8"
   resolved "https://registry.yarnpkg.com/@gorhom/bottom-sheet/-/bottom-sheet-5.2.8.tgz#25e49122c30ffe83d3813b3bcf3dec39f3359aeb"
   integrity sha512-+N27SMpbBxXZQ/IA2nlEV6RGxL/qSFHKfdFKcygvW+HqPG5jVNb1OqehLQsGfBP+Up42i0gW5ppI+DhpB7UCzA==
@@ -1945,6 +1945,11 @@
   version "0.84.0"
   resolved "https://registry.npmjs.org/@react-native/new-app-screen/-/new-app-screen-0.84.0.tgz"
   integrity sha512-feHjWBw4ehetsAmCwGnXEzecVGpai3Qv/ZTJyd+8KhRdQvg1a+RtyR4LNvR1vXdB0OC+gKleWN4okG2bdpt3kA==
+
+"@react-native/normalize-color@*":
+  version "2.1.0"
+  resolved "https://registry.yarnpkg.com/@react-native/normalize-color/-/normalize-color-2.1.0.tgz#939b87a9849e81687d3640c5efa2a486ac266f91"
+  integrity sha512-Z1jQI2NpdFJCVgpY+8Dq/Bt3d+YUi1928Q+/CZm/oh66fzM0RUl54vvuXlPJKybH4pdCZey1eDTPaLHkMPNgWA==
 
 "@react-native/normalize-colors@0.84.0":
   version "0.84.0"
@@ -3088,6 +3093,11 @@ cross-spawn@^7.0.2, cross-spawn@^7.0.3, cross-spawn@^7.0.6:
     shebang-command "^2.0.0"
     which "^2.0.1"
 
+crypto-js@4.2.0:
+  version "4.2.0"
+  resolved "https://registry.yarnpkg.com/crypto-js/-/crypto-js-4.2.0.tgz#4d931639ecdfd12ff80e8186dba6af2c2e856631"
+  integrity sha512-KALDyEYgpY+Rlob/iriUtjV6d5Eq+Y191A5g4UqLAi8CyGP9N1+FdVbkc1SxKc2r4YAYqG8JzO2KGL+AizD70Q==
+
 css-color-keywords@^1.0.0:
   version "1.0.0"
   resolved "https://registry.npmjs.org/css-color-keywords/-/css-color-keywords-1.0.0.tgz"
@@ -3236,6 +3246,15 @@ depd@2.0.0, depd@~2.0.0:
   version "2.0.0"
   resolved "https://registry.npmjs.org/depd/-/depd-2.0.0.tgz"
   integrity sha512-g7nH6P6dyDioJogAAGprGpCtVImJhpPk/roCzdb3fIh61/s/nPsfR6onyMwkCAR/OlC3yBC0lESvUoQEAssIrw==
+
+deprecated-react-native-prop-types@^2.3.0:
+  version "2.3.0"
+  resolved "https://registry.yarnpkg.com/deprecated-react-native-prop-types/-/deprecated-react-native-prop-types-2.3.0.tgz#c10c6ee75ff2b6de94bb127f142b814e6e08d9ab"
+  integrity sha512-pWD0voFtNYxrVqvBMYf5gq3NA2GCpfodS1yNynTPc93AYA/KEMGeWDqqeUB6R2Z9ZofVhks2aeJXiuQqKNpesA==
+  dependencies:
+    "@react-native/normalize-color" "*"
+    invariant "*"
+    prop-types "*"
 
 destroy@1.2.0, destroy@~1.2.0:
   version "1.2.0"
@@ -4288,7 +4307,7 @@ internal-slot@^1.1.0:
     hasown "^2.0.2"
     side-channel "^1.1.0"
 
-invariant@^2.2.4:
+invariant@*, invariant@^2.2.4:
   version "2.2.4"
   resolved "https://registry.npmjs.org/invariant/-/invariant-2.2.4.tgz"
   integrity sha512-phJfQVBuaJM5raOpJjSfkiD6BpbCE4Ns//LaXl6wGYtUBY83nWS6Rf9tXm2e8VaK60JEjYldbPif/A2B1C2gNA==
@@ -5985,7 +6004,7 @@ prompts@^2.0.1, prompts@^2.4.2:
     kleur "^3.0.3"
     sisteransi "^1.0.5"
 
-prop-types@^15.5.10, prop-types@^15.7.2, prop-types@^15.8.1:
+prop-types@*, prop-types@^15.5.10, prop-types@^15.7.2, prop-types@^15.8.1:
   version "15.8.1"
   resolved "https://registry.npmjs.org/prop-types/-/prop-types-15.8.1.tgz"
   integrity sha512-oj87CgZICdulUohogVAR7AjlC0327U4el4L6eAvOqCeudMDVU0NThNaV+b9Df4dXgSP1gXMTnPdhfe/2qDH5cg==
@@ -6081,10 +6100,10 @@ react-native-argon2@^4.0.0:
   resolved "https://registry.yarnpkg.com/react-native-argon2/-/react-native-argon2-4.0.0.tgz#9e5f8a9fc2d89fdb1b8a34183f6d36e8b46509a8"
   integrity sha512-K6qIg9nBCHtu9/t5BdaGtmqKvmYjUy4aDrG2CeI4WNEMeQPlj91uDb9KP6AnFiFX3W7Unqo4f3uEgKcDUpZxcg==
 
-react-native-blob-util@^0.24.7:
-  version "0.24.7"
-  resolved "https://registry.yarnpkg.com/react-native-blob-util/-/react-native-blob-util-0.24.7.tgz#889e3626e3b20f9b10bb265ea91d9ae44ce65ecf"
-  integrity sha512-3vgn3hblfJh0+LIoqEhYRqCtwKh1xID2LtXHdTrUml3rYh4xj69eN+lvWU235AL0FRbX5uKrS1c4lIYexSgtWQ==
+react-native-blob-util@^0.24.9:
+  version "0.24.9"
+  resolved "https://registry.yarnpkg.com/react-native-blob-util/-/react-native-blob-util-0.24.9.tgz#fb5609251d3e3b3b59913bc19ad116e6bfd4e6f8"
+  integrity sha512-tG3+m0WhVdBGifvxSFxZDVqtr85D0fGBJU6E4UxmK3tU+RabJZTumXEn8k7jn5/NFe8OhQhPjtBEZ11ZJ6L7Vw==
   dependencies:
     base-64 "0.1.0"
     glob "13.0.1"
@@ -6173,6 +6192,14 @@ react-native-markdown-display@^7.0.2:
     prop-types "^15.7.2"
     react-native-fit-image "^1.5.5"
 
+react-native-pdf@^7.0.4:
+  version "7.0.4"
+  resolved "https://registry.yarnpkg.com/react-native-pdf/-/react-native-pdf-7.0.4.tgz#f48d485d32cef24f41511ba2072bc99ba94b13c9"
+  integrity sha512-Uhxn5SSguMKvbwD50iIZfYPmYeKcX+9I3tc4J3HCbRExAN0uqXTAKx2pvbR2Y62umAj0JS274FcbSldQfoQfyg==
+  dependencies:
+    crypto-js "4.2.0"
+    deprecated-react-native-prop-types "^2.3.0"
+
 react-native-polyfill-globals@^3.1.0:
   version "3.1.0"
   resolved "https://registry.npmjs.org/react-native-polyfill-globals/-/react-native-polyfill-globals-3.1.0.tgz"
@@ -6222,6 +6249,11 @@ react-native-vector-icons@^10.2.0:
   dependencies:
     prop-types "^15.7.2"
     yargs "^16.1.1"
+
+react-native-video@^6.19.2:
+  version "6.19.2"
+  resolved "https://registry.yarnpkg.com/react-native-video/-/react-native-video-6.19.2.tgz#91065e087f90bc653b312ff2347903345c4f2411"
+  integrity sha512-gh5dBMGSHywKr8+p4azRXrFQgT+QTmS1tI4sz6kVRjSENORfsrGGLQzmyo/7S9m+ZOTLWQJ3h8ONaXxR4F2Fcw==
 
 react-native-worklets@^0.7.4:
   version "0.7.4"

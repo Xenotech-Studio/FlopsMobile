@@ -39,6 +39,8 @@ import {
   type ViewStyle,
 } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
+import Video, { type VideoRef } from 'react-native-video';
+import Pdf from 'react-native-pdf';
 import { Element as SlateElement, type Descendant } from 'slate';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
@@ -145,8 +147,9 @@ type FileAttachmentBlock = {
   filename?: string;
   mime_type?: string;
   size?: number;
-  /** web display 字段：'card'=300 卡片；'inline'=小图标+文件名链接（单行链接模式） */
-  display?: 'card' | 'inline';
+  /** web display 字段：'card'=300 卡片；'inline'=小图标+文件名链接（单行链接模式）；
+   *  'preview'=块级原比例媒体预览（image 直接渲染，video/pdf 等移动端无播放器→回落大卡片） */
+  display?: 'card' | 'inline' | 'preview';
   children: [{ text: '' }];
   indent?: number;
 };
@@ -825,8 +828,15 @@ function BlockRenderer(ctx: RendererCtx) {
       return <View style={ctx.styles.divider} />;
     case 'image':
       return <ImageBlockRenderer ctx={ctx} block={block as ImageBlock} />;
-    case 'file_attachment':
-      return <FileAttachmentRenderer ctx={ctx} block={block as FileAttachmentBlock} />;
+    case 'file_attachment': {
+      const fb = block as FileAttachmentBlock;
+      // display='preview' → 块级原比例媒体预览；card/inline 走原渲染器（拆开是为各自 hooks 稳定）
+      return fb.display === 'preview' ? (
+        <AttachmentPreviewRenderer ctx={ctx} block={fb} />
+      ) : (
+        <FileAttachmentRenderer ctx={ctx} block={fb} />
+      );
+    }
     case 'table':
       return <TableRenderer ctx={ctx} block={block as unknown as TableBlock} />;
     default:
@@ -1198,6 +1208,294 @@ function FileAttachmentRenderer({
       ) : null}
       </View>
     </View>
+  );
+}
+
+/** 附件 preview 媒体类型（对齐 web attachmentPreviewKind）：image/video/pdf 原生渲染，其余回落大卡片。 */
+const PREVIEW_IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|avif|heic|ico)$/i;
+const PREVIEW_VIDEO_EXT = /\.(mp4|webm|mov|m4v|ogv|mkv|avi)$/i;
+function previewKind(filename?: string, mimeType?: string): 'image' | 'video' | 'pdf' | 'other' {
+  const mt = (mimeType ?? '').toLowerCase();
+  const fn = (filename ?? '').trim();
+  if (mt.startsWith('image/') || PREVIEW_IMAGE_EXT.test(fn)) return 'image';
+  if (mt.startsWith('video/') || PREVIEW_VIDEO_EXT.test(fn)) return 'video';
+  if (mt === 'application/pdf' || /\.pdf$/i.test(fn)) return 'pdf';
+  return 'other';
+}
+
+function formatClock(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${r < 10 ? '0' : ''}${r}`;
+}
+
+/** preview 视频的极简自绘播放器（系统 controls 太重，全关自绘）：
+ *  - 未播放：画面上仅一个居中播放按钮
+ *  - 播放中：隐藏全部 UI；点击画面切换显示
+ *  - 显示的 UI 仅底部一小条：最底沿细进度条 + 播放/暂停、时间/总时长、全屏
+ *  - 全屏走原生全屏播放器（iOS AVPlayer / Android ExoPlayer），播放中显示 UI 数秒无操作自动隐藏 */
+function VideoPreviewPlayer({
+  url,
+  width,
+  height,
+  onAspect,
+  styles,
+}: {
+  url: string;
+  width: number;
+  height: number;
+  onAspect: (aspect: number) => void;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const videoRef = React.useRef<VideoRef>(null);
+  const [paused, setPaused] = React.useState(true);
+  const [started, setStarted] = React.useState(false);
+  const [showUI, setShowUI] = React.useState(false);
+  const [currentTime, setCurrentTime] = React.useState(0);
+  const [duration, setDuration] = React.useState(0);
+  const endedRef = React.useRef(false);
+  // 播放中且 UI 可见 → 数秒无操作自动隐藏；依赖含 currentTime 取整段（点击/暂停会重置计时不准确——
+  // 用专门的 tick 替代：每次 showUI/paused 变化重启 3.5s 定时即可，进度更新不打断倒计时
+  React.useEffect(() => {
+    if (!showUI || paused) return;
+    const t = setTimeout(() => setShowUI(false), 3500);
+    return () => clearTimeout(t);
+  }, [showUI, paused]);
+
+  const play = React.useCallback(() => {
+    if (endedRef.current) {
+      videoRef.current?.seek(0);
+      endedRef.current = false;
+    }
+    setStarted(true);
+    setPaused(false);
+  }, []);
+
+  const togglePlay = React.useCallback(() => {
+    if (paused) play();
+    else setPaused(true);
+  }, [paused, play]);
+
+  // 点击画面：未播放=开始播放；已开始=切换 UI 显隐
+  const onSurfacePress = React.useCallback(() => {
+    if (!started) {
+      play();
+      return;
+    }
+    setShowUI((v) => !v);
+  }, [started, play]);
+
+  const enterFullscreen = React.useCallback(() => {
+    videoRef.current?.setFullScreen(true);
+  }, []);
+
+  const progress = duration > 0 ? Math.min(currentTime / duration, 1) : 0;
+  const iconColor = '#fff';
+
+  return (
+    <View style={[styles.previewVideo, { width, height }]}>
+      <Video
+        ref={videoRef}
+        source={{ uri: url }}
+        style={StyleSheet.absoluteFill}
+        paused={paused}
+        resizeMode="contain"
+        progressUpdateInterval={250}
+        onLoad={(d) => {
+          if (d?.duration > 0) setDuration(d.duration);
+          const ns = d?.naturalSize;
+          if (ns && ns.width > 0 && ns.height > 0) onAspect(ns.width / ns.height);
+        }}
+        onProgress={(p) => setCurrentTime(p.currentTime)}
+        onEnd={() => {
+          endedRef.current = true;
+          setPaused(true);
+          setShowUI(true);
+          setCurrentTime(duration);
+        }}
+      />
+      {/* 点击层（铺满画面） */}
+      <TouchableOpacity
+        style={StyleSheet.absoluteFill}
+        activeOpacity={1}
+        onPress={onSurfacePress}
+      />
+      {/* 未播放：仅居中播放按钮 */}
+      {!started ? (
+        <View pointerEvents="box-none" style={styles.videoCenterWrap}>
+          <TouchableOpacity style={styles.videoCenterPlay} onPress={play} activeOpacity={0.8}>
+            <Svg width={26} height={26} viewBox="0 0 24 24" fill={iconColor}>
+              {/* 视觉居中：三角形微右移 */}
+              <Path d="M9 5.5v13l11-6.5z" />
+            </Svg>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+      {/* 底部小条（开始播放后，点击切换显隐；暂停时常显） */}
+      {started && (showUI || paused) ? (
+        <View style={styles.videoBottomBar}>
+          <TouchableOpacity onPress={togglePlay} hitSlop={8} activeOpacity={0.8}>
+            {paused ? (
+              <Svg width={18} height={18} viewBox="0 0 24 24" fill={iconColor}>
+                <Path d="M8 5v14l11-7z" />
+              </Svg>
+            ) : (
+              <Svg width={18} height={18} viewBox="0 0 24 24" fill={iconColor}>
+                <Path d="M6 4h4v16H6z" />
+                <Path d="M14 4h4v16h-4z" />
+              </Svg>
+            )}
+          </TouchableOpacity>
+          <Text style={styles.videoClock}>
+            {formatClock(currentTime)} / {formatClock(duration)}
+          </Text>
+          <View style={{ flex: 1 }} />
+          <TouchableOpacity onPress={enterFullscreen} hitSlop={8} activeOpacity={0.8}>
+            {/* maximize（lucide）：全屏 */}
+            <Svg
+              width={16}
+              height={16}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke={iconColor}
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <Path d="M8 3H5a2 2 0 0 0-2 2v3" />
+              <Path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+              <Path d="M3 16v3a2 2 0 0 0 2 2h3" />
+              <Path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+            </Svg>
+          </TouchableOpacity>
+          {/* 最底沿细进度条 */}
+          <View style={styles.videoProgressTrack}>
+            <View style={[styles.videoProgressFill, { width: `${progress * 100}%` }]} />
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/** 附件 preview 形态（display='preview'）：块级原比例媒体，对齐 web AttachmentPreviewBlock。
+ *  - image：真实自然比例渲染（Image.getSize），点开看原图
+ *  - video：react-native-video 原生播放器（iOS AVPlayer / Android ExoPlayer），带控件，onLoad 取真实宽高比
+ *  - pdf：react-native-pdf 原生翻页（iOS PDFKit / Android Pdfium），限高内联可翻
+ *  - 其它：回落居中大卡片（大图标+名+大小），对齐 web renderUnsupported */
+function AttachmentPreviewRenderer({
+  ctx,
+  block,
+}: {
+  ctx: RendererCtx;
+  block: FileAttachmentBlock;
+}) {
+  const name = (block.filename ?? '').trim() || '附件';
+  const url = (block.url ?? '').trim();
+  const sizeLabel = formatFileSize(block.size);
+  const open = url ? () => Linking.openURL(url).catch(() => {}) : undefined;
+  const kind = url !== '' ? previewKind(block.filename, block.mime_type) : 'other';
+
+  // hooks 必须无条件调用，放在任何 early-return 之前
+  const [availW, setAvailW] = React.useState(0);
+  const onLayout = React.useCallback((e: LayoutChangeEvent) => {
+    const w = e.nativeEvent.layout.width;
+    if (w > 0) setAvailW((prev) => (Math.abs(prev - w) > 0.5 ? w : prev));
+  }, []);
+  // 真实自然尺寸（image 用 Image.getSize；video 用 onLoad naturalSize 回填）。默认 16:9。
+  const [aspect, setAspect] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    if (kind !== 'image' || !url) return;
+    let cancelled = false;
+    Image.getSize(
+      url,
+      (w, h) => {
+        if (!cancelled && w > 0 && h > 0) setAspect(w / h);
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [kind, url]);
+
+  if (kind === 'image') {
+    return (
+      <View onLayout={onLayout}>
+        {availW > 0 && aspect ? (
+          <TouchableOpacity activeOpacity={0.9} onPress={open}>
+            <Image
+              source={{ uri: url }}
+              style={[ctx.styles.previewImage, { width: availW, height: availW / aspect }]}
+              resizeMode="cover"
+              accessible
+              accessibilityLabel={name}
+            />
+          </TouchableOpacity>
+        ) : (
+          // 自然尺寸未取到前占位（避免闪一下错比例）
+          <View style={[ctx.styles.imagePlaceholder, { height: 120 }]} />
+        )}
+      </View>
+    );
+  }
+
+  if (kind === 'video') {
+    const vAspect = aspect && aspect > 0 ? aspect : 16 / 9;
+    return (
+      <View onLayout={onLayout}>
+        {availW > 0 ? (
+          <VideoPreviewPlayer
+            url={url}
+            width={availW}
+            height={availW / vAspect}
+            onAspect={setAspect}
+            styles={ctx.styles}
+          />
+        ) : (
+          <View style={[ctx.styles.imagePlaceholder, { height: 200 }]} />
+        )}
+      </View>
+    );
+  }
+
+  if (kind === 'pdf') {
+    // PDF 是分页文档，给一个限定高度的内联可翻视图（A4 纵向 √2 比例，封顶 560）
+    return (
+      <View onLayout={onLayout}>
+        {availW > 0 ? (
+          <Pdf
+            source={{ uri: url, cache: true }}
+            style={[
+              ctx.styles.previewPdf,
+              { width: availW, height: Math.min(Math.round(availW * 1.414), 560) },
+            ]}
+            trustAllCerts={false}
+            onError={() => {}}
+          />
+        ) : (
+          <View style={[ctx.styles.imagePlaceholder, { height: 200 }]} />
+        )}
+      </View>
+    );
+  }
+
+  // 其它类型 → 居中大卡片，对齐 web renderUnsupported
+  return (
+    <TouchableOpacity
+      style={ctx.styles.previewFallbackCard}
+      onPress={open}
+      activeOpacity={0.7}
+      accessible
+      accessibilityLabel={`附件 ${name}`}
+    >
+      <AttachmentIcon filename={block.filename} mimeType={block.mime_type} size={56} />
+      <Text style={ctx.styles.previewFallbackName} numberOfLines={2} ellipsizeMode="middle">
+        {name}
+      </Text>
+      {sizeLabel ? <Text style={ctx.styles.previewFallbackMeta}>{sizeLabel}</Text> : null}
+    </TouchableOpacity>
   );
 }
 
@@ -2000,6 +2298,90 @@ function createStyles(c: AppColors) {
     } as TextStyle,
     fileAttachmentSize: {
       fontSize: 11,
+      color: c.textMuted,
+    } as TextStyle,
+    // 附件 preview 形态（display='preview'）
+    previewImage: {
+      borderRadius: 8,
+      marginVertical: 8,
+      backgroundColor: c.surfaceMuted,
+    } as ImageStyle,
+    previewVideo: {
+      borderRadius: 8,
+      marginVertical: 8,
+      backgroundColor: '#000',
+      overflow: 'hidden',
+    } as ViewStyle,
+    // 自绘视频播放器 UI
+    videoCenterWrap: {
+      ...StyleSheet.absoluteFillObject,
+      alignItems: 'center',
+      justifyContent: 'center',
+    } as ViewStyle,
+    videoCenterPlay: {
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    } as ViewStyle,
+    videoBottomBar: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingHorizontal: 12,
+      paddingTop: 8,
+      paddingBottom: 11, // 给最底沿 3px 进度条留出空间
+      backgroundColor: 'rgba(0,0,0,0.45)',
+    } as ViewStyle,
+    videoClock: {
+      color: '#fff',
+      fontSize: 12,
+      fontVariant: ['tabular-nums'],
+    } as TextStyle,
+    videoProgressTrack: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      height: 3,
+      backgroundColor: 'rgba(255,255,255,0.25)',
+    } as ViewStyle,
+    videoProgressFill: {
+      height: 3,
+      backgroundColor: '#fff',
+    } as ViewStyle,
+    previewPdf: {
+      borderRadius: 8,
+      marginVertical: 8,
+      backgroundColor: c.surfaceMuted,
+    } as ViewStyle,
+    // 不可预览类型（video/pdf/其它）的居中大卡片，对齐 web .flowdoc-attachment-preview-card
+    previewFallbackCard: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      paddingVertical: 28,
+      paddingHorizontal: 16,
+      borderWidth: 1,
+      borderColor: c.borderMuted,
+      borderRadius: 10,
+      backgroundColor: c.surfaceMuted,
+      marginVertical: 8,
+    } as ViewStyle,
+    previewFallbackName: {
+      fontSize: 14,
+      color: c.textPrimary,
+      fontWeight: '500',
+      textAlign: 'center',
+    } as TextStyle,
+    previewFallbackMeta: {
+      fontSize: 12,
       color: c.textMuted,
     } as TextStyle,
   });
