@@ -379,6 +379,16 @@ export function SubagentCard({
         <Text style={styles.subSessionBadge} numberOfLines={1}>
           {sidShort ? `${verb}:${sidShort}` : verb}
         </Text>
+        {(() => {
+          const m = String(((res as any)?.model as string) || '').trim();
+          if (!m) return null;
+          const short = m.replace(/^claude-/, '').replace(/-\d{8}$/, '');
+          return (
+            <Text style={styles.subModelBadge} numberOfLines={1}>
+              {short}
+            </Text>
+          );
+        })()}
         <View style={{ flex: 1 }} />
         {deviceName ? (
           <Text style={styles.subExecutor} numberOfLines={1}>
