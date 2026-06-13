@@ -23,9 +23,11 @@ import React, {
   useRef,
 } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
   Image,
   Linking,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -38,9 +40,13 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 import Video, { type VideoRef } from 'react-native-video';
 import Pdf from 'react-native-pdf';
+import { WebView } from 'react-native-webview';
+import Orientation from 'react-native-orientation-locker';
+import { downloadAttachment } from './attachmentDownload';
 import { Element as SlateElement, type Descendant } from 'slate';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
@@ -224,6 +230,34 @@ export type FlowDocBlocksHandle = {
  *  list 的「inline 内联部分」不算独立 path，更新时直接操作 listBlock.children 头部 inline。 */
 type DocPath = number[];
 
+/** 应用内附件预览的打开回调（对齐 web AttachmentPreviewModal：点击附件不跳浏览器，弹全屏预览）。
+ *  用 Context 下发，免得在 BlockRenderer/BlockSequence/NestedBlocks 的转传链上逐层加 prop。 */
+const AttachmentPreviewContext = React.createContext<
+  ((block: FileAttachmentBlock) => void) | null
+>(null);
+
+/** 预览弹窗用的附件信息（与渲染块解耦的最小字段） */
+type AttachmentInfo = {
+  url: string;
+  filename?: string;
+  mimeType?: string;
+  size?: number;
+};
+
+/** 按文档顺序递归收集所有带 url 的 file_attachment（含 textblock/listblock/table 嵌套），
+ *  对齐 web collectDocAttachments —— 预览弹窗内可在文档全部附件间切换。 */
+function collectDocAttachments(blocks: readonly unknown[], out: FileAttachmentBlock[] = []): FileAttachmentBlock[] {
+  for (const b of blocks) {
+    if (!b || typeof b !== 'object') continue;
+    const node = b as FlowDocBlock & { children?: unknown };
+    if (node.type === 'file_attachment' && typeof node.url === 'string' && node.url.trim()) {
+      out.push(node as FileAttachmentBlock);
+    }
+    if (Array.isArray(node.children)) collectDocAttachments(node.children, out);
+  }
+  return out;
+}
+
 export const FlowDocBlocks = forwardRef<FlowDocBlocksHandle, FlowDocBlocksProps>(
   function FlowDocBlocks(
     {
@@ -247,6 +281,27 @@ export const FlowDocBlocks = forwardRef<FlowDocBlocksHandle, FlowDocBlocksProps>
      拿新 initialContent 重建 native 状态。代价是丢焦点，spike 阶段先接受。
      普通字符输入只走 updateBlockAtPath 不 bump，所以打字时不会闪。 */
   const [structuralGen, setStructuralGen] = React.useState(0);
+
+  /* 应用内附件预览：点击任意附件 → 收集全文附件列表 + 定位被点的那个 → 全屏预览弹窗 */
+  const [attachmentPreview, setAttachmentPreview] = React.useState<{
+    list: AttachmentInfo[];
+    index: number;
+  } | null>(null);
+  const openAttachmentPreview = React.useCallback(
+    (block: FileAttachmentBlock) => {
+      const all = collectDocAttachments(document);
+      const idx = all.findIndex((b) => b === block);
+      const list: AttachmentInfo[] = all.map((b) => ({
+        url: (b.url ?? '').trim(),
+        filename: b.filename,
+        mimeType: b.mime_type,
+        size: b.size,
+      }));
+      setAttachmentPreview({ list, index: Math.max(idx, 0) });
+    },
+    [document],
+  );
+  const closeAttachmentPreview = React.useCallback(() => setAttachmentPreview(null), []);
 
   /** 各 block 的 FlowDocInput handle 注册表，key = path.join('.') */
   const inputRefs = useRef<Map<string, FlowDocInputHandle>>(new Map());
@@ -418,9 +473,18 @@ export const FlowDocBlocks = forwardRef<FlowDocBlocksHandle, FlowDocBlocksProps>
     [document, onChange],
   );
 
+  const previewModal = attachmentPreview ? (
+    <AttachmentPreviewModal
+      attachments={attachmentPreview.list}
+      initialIndex={attachmentPreview.index}
+      onClose={closeAttachmentPreview}
+    />
+  ) : null;
+
   // 虚拟化（仅 viewer）：顶层 block 用 FlatList 渲染，只挂可视区 + 缓冲，长文档省内存/首屏快。
   if (virtualized) {
     return (
+      <AttachmentPreviewContext.Provider value={openAttachmentPreview}>
       <FlatList
         data={document}
         keyExtractor={(_item, i) => `${structuralGen}-${i}`}
@@ -455,10 +519,13 @@ export const FlowDocBlocks = forwardRef<FlowDocBlocksHandle, FlowDocBlocksProps>
            只是滚动条 thumb 随总高估计跳，无害）。mVCP 让原生帧级锚定首个可视项，上/下方项变高都补偿偏移。 */
         maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       />
+      {previewModal}
+      </AttachmentPreviewContext.Provider>
     );
   }
 
   return (
+    <AttachmentPreviewContext.Provider value={openAttachmentPreview}>
     <View style={style}>
       <BlockSequence
         blocks={document as unknown as Descendant[]}
@@ -477,7 +544,9 @@ export const FlowDocBlocks = forwardRef<FlowDocBlocksHandle, FlowDocBlocksProps>
         reportBlur={reportBlur}
         structuralGen={structuralGen}
       />
+      {previewModal}
     </View>
+    </AttachmentPreviewContext.Provider>
   );
 });
 FlowDocBlocks.displayName = 'FlowDocBlocks';
@@ -1132,6 +1201,20 @@ function FileAttachmentRenderer({
   const url = (block.url ?? '').trim();
   const sizeLabel = formatFileSize(block.size);
   const open = url ? () => Linking.openURL(url).catch(() => {}) : undefined;
+  // 点击附件本体 → 应用内预览弹窗（对齐 web）；拿不到 context 时退回外跳
+  const openPreview = React.useContext(AttachmentPreviewContext);
+  const onPressBody = url && openPreview ? () => openPreview(block) : open;
+  // 下载键 → 应用内下载（Android 进系统下载目录；iOS 下完弹保存/分享菜单），不再跳浏览器
+  const [downloading, setDownloading] = React.useState(false);
+  const handleDownload = url
+    ? () => {
+        if (downloading) return;
+        setDownloading(true);
+        downloadAttachment(url, block.filename)
+          .catch(() => {})
+          .finally(() => setDownloading(false));
+      }
+    : undefined;
   const iconColor = ctx.colors.textMuted;
   // 卡片宽实测（hook 必须无条件调用，放在任何 early-return 之前）
   const [availW, setAvailW] = React.useState(0);
@@ -1145,7 +1228,7 @@ function FileAttachmentRenderer({
     return (
       <TouchableOpacity
         style={ctx.styles.fileInline}
-        onPress={open}
+        onPress={onPressBody}
         activeOpacity={0.7}
         accessible
         accessibilityLabel={`附件 ${name}`}
@@ -1166,7 +1249,7 @@ function FileAttachmentRenderer({
       <View style={[ctx.styles.fileCard, { width: cardW }]}>
       <TouchableOpacity
         style={ctx.styles.fileCardBody}
-        onPress={open}
+        onPress={onPressBody}
         activeOpacity={0.7}
         accessible
         accessibilityLabel={`附件 ${name}`}
@@ -1185,25 +1268,29 @@ function FileAttachmentRenderer({
       {url ? (
         <TouchableOpacity
           style={ctx.styles.fileCardDownload}
-          onPress={open}
+          onPress={handleDownload}
           activeOpacity={0.7}
           accessibilityLabel="下载"
         >
-          {/* 下载图标（lucide download） */}
-          <Svg
-            width={18}
-            height={18}
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke={iconColor}
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <Path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <Path d="M7 10l5 5 5-5" />
-            <Path d="M12 15V3" />
-          </Svg>
+          {downloading ? (
+            <ActivityIndicator size="small" color={iconColor} />
+          ) : (
+            // 下载图标（lucide download）
+            <Svg
+              width={18}
+              height={18}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke={iconColor}
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <Path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <Path d="M7 10l5 5 5-5" />
+              <Path d="M12 15V3" />
+            </Svg>
+          )}
         </TouchableOpacity>
       ) : null}
       </View>
@@ -1211,16 +1298,26 @@ function FileAttachmentRenderer({
   );
 }
 
-/** 附件 preview 媒体类型（对齐 web attachmentPreviewKind）：image/video/pdf 原生渲染，其余回落大卡片。 */
+/** 附件 preview 媒体类型（对齐 web attachmentPreviewKind）：image/video/pdf 原生渲染，
+ *  splatv 走 WebView 嵌 4D viewer（web 也是 iframe），其余回落大卡片。 */
 const PREVIEW_IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|avif|heic|ico)$/i;
 const PREVIEW_VIDEO_EXT = /\.(mp4|webm|mov|m4v|ogv|mkv|avi)$/i;
-function previewKind(filename?: string, mimeType?: string): 'image' | 'video' | 'pdf' | 'other' {
+function previewKind(
+  filename?: string,
+  mimeType?: string,
+): 'image' | 'video' | 'pdf' | 'splatv' | 'other' {
   const mt = (mimeType ?? '').toLowerCase();
   const fn = (filename ?? '').trim();
   if (mt.startsWith('image/') || PREVIEW_IMAGE_EXT.test(fn)) return 'image';
   if (mt.startsWith('video/') || PREVIEW_VIDEO_EXT.test(fn)) return 'video';
   if (mt === 'application/pdf' || /\.pdf$/i.test(fn)) return 'pdf';
+  if (/\.splatv$/i.test(fn)) return 'splatv';
   return 'other';
+}
+
+/** splatv（4D Gaussian Splatting）在线 viewer 地址，对齐 web AttachmentPreviewContent 的 iframe */
+function splatvViewerUrl(url: string): string {
+  return `https://4d.kiriengine.com/viewer?model=${encodeURIComponent(url)}`;
 }
 
 function formatClock(sec: number): string {
@@ -1229,6 +1326,57 @@ function formatClock(sec: number): string {
   const r = s % 60;
   return `${m}:${r < 10 ? '0' : ''}${r}`;
 }
+
+/** 自绘视频播放器 UI（固定黑白配色，不依赖主题；文档内联与全屏预览弹窗共用） */
+const videoUI = StyleSheet.create({
+  container: {
+    backgroundColor: '#000',
+    overflow: 'hidden',
+  } as ViewStyle,
+  centerWrap: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  } as ViewStyle,
+  centerPlay: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  } as ViewStyle,
+  bottomBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    paddingBottom: 11, // 给最底沿 3px 进度条留出空间
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  } as ViewStyle,
+  clock: {
+    color: '#fff',
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+  } as TextStyle,
+  progressTrack: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 3,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+  } as ViewStyle,
+  progressFill: {
+    height: 3,
+    backgroundColor: '#fff',
+  } as ViewStyle,
+});
 
 /** preview 视频的极简自绘播放器（系统 controls 太重，全关自绘）：
  *  - 未播放：画面上仅一个居中播放按钮
@@ -1240,13 +1388,13 @@ function VideoPreviewPlayer({
   width,
   height,
   onAspect,
-  styles,
+  style,
 }: {
   url: string;
   width: number;
   height: number;
-  onAspect: (aspect: number) => void;
-  styles: ReturnType<typeof createStyles>;
+  onAspect?: (aspect: number) => void;
+  style?: StyleProp<ViewStyle>;
 }) {
   const videoRef = React.useRef<VideoRef>(null);
   const [paused, setPaused] = React.useState(true);
@@ -1294,7 +1442,7 @@ function VideoPreviewPlayer({
   const iconColor = '#fff';
 
   return (
-    <View style={[styles.previewVideo, { width, height }]}>
+    <View style={[videoUI.container, style, { width, height }]}>
       <Video
         ref={videoRef}
         source={{ uri: url }}
@@ -1305,7 +1453,7 @@ function VideoPreviewPlayer({
         onLoad={(d) => {
           if (d?.duration > 0) setDuration(d.duration);
           const ns = d?.naturalSize;
-          if (ns && ns.width > 0 && ns.height > 0) onAspect(ns.width / ns.height);
+          if (ns && ns.width > 0 && ns.height > 0) onAspect?.(ns.width / ns.height);
         }}
         onProgress={(p) => setCurrentTime(p.currentTime)}
         onEnd={() => {
@@ -1323,8 +1471,8 @@ function VideoPreviewPlayer({
       />
       {/* 未播放：仅居中播放按钮 */}
       {!started ? (
-        <View pointerEvents="box-none" style={styles.videoCenterWrap}>
-          <TouchableOpacity style={styles.videoCenterPlay} onPress={play} activeOpacity={0.8}>
+        <View pointerEvents="box-none" style={videoUI.centerWrap}>
+          <TouchableOpacity style={videoUI.centerPlay} onPress={play} activeOpacity={0.8}>
             <Svg width={26} height={26} viewBox="0 0 24 24" fill={iconColor}>
               {/* 视觉居中：三角形微右移 */}
               <Path d="M9 5.5v13l11-6.5z" />
@@ -1334,7 +1482,7 @@ function VideoPreviewPlayer({
       ) : null}
       {/* 底部小条（开始播放后，点击切换显隐；暂停时常显） */}
       {started && (showUI || paused) ? (
-        <View style={styles.videoBottomBar}>
+        <View style={videoUI.bottomBar}>
           <TouchableOpacity onPress={togglePlay} hitSlop={8} activeOpacity={0.8}>
             {paused ? (
               <Svg width={18} height={18} viewBox="0 0 24 24" fill={iconColor}>
@@ -1347,7 +1495,7 @@ function VideoPreviewPlayer({
               </Svg>
             )}
           </TouchableOpacity>
-          <Text style={styles.videoClock}>
+          <Text style={videoUI.clock}>
             {formatClock(currentTime)} / {formatClock(duration)}
           </Text>
           <View style={{ flex: 1 }} />
@@ -1370,12 +1518,299 @@ function VideoPreviewPlayer({
             </Svg>
           </TouchableOpacity>
           {/* 最底沿细进度条 */}
-          <View style={styles.videoProgressTrack}>
-            <View style={[styles.videoProgressFill, { width: `${progress * 100}%` }]} />
+          <View style={videoUI.progressTrack}>
+            <View style={[videoUI.progressFill, { width: `${progress * 100}%` }]} />
           </View>
         </View>
       ) : null}
     </View>
+  );
+}
+
+/** 全屏预览弹窗的暗色 UI（固定配色，不依赖主题） */
+const modalUI = StyleSheet.create({
+  root: { flex: 1, backgroundColor: '#000' } as ViewStyle,
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+  } as ViewStyle,
+  topBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  } as ViewStyle,
+  titleWrap: { flex: 1, minWidth: 0, alignItems: 'center', gap: 1 } as ViewStyle,
+  titleText: { color: '#fff', fontSize: 14, fontWeight: '500', maxWidth: '100%' } as TextStyle,
+  counterText: { color: 'rgba(255,255,255,0.55)', fontSize: 11 } as TextStyle,
+  content: { flex: 1 } as ViewStyle,
+  contentInner: { flex: 1 } as ViewStyle,
+  contentImage: { flex: 1 } as ImageStyle,
+  navBtn: {
+    position: 'absolute',
+    top: '50%',
+    marginTop: -22,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.14)',
+  } as ViewStyle,
+  unsupportedWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    padding: 24,
+  } as ViewStyle,
+  unsupportedName: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '500',
+    textAlign: 'center',
+  } as TextStyle,
+  unsupportedMeta: { color: 'rgba(255,255,255,0.55)', fontSize: 12 } as TextStyle,
+  unsupportedBtn: {
+    marginTop: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  } as ViewStyle,
+  unsupportedBtnText: { color: '#fff', fontSize: 14 } as TextStyle,
+});
+
+/** 应用内附件全屏预览弹窗（对齐 web AttachmentPreviewModal）：
+ *  不透明全屏 Modal + 内层 SafeAreaProvider（关键：让安全区随 Modal 实际旋转重新测量，
+ *  否则横屏会沿用竖屏 inset）。转屏解锁/复锁也在这层（不依赖 inset）。 */
+function AttachmentPreviewModal({
+  attachments,
+  initialIndex,
+  onClose,
+}: {
+  attachments: AttachmentInfo[];
+  initialIndex: number;
+  onClose: () => void;
+}) {
+  /* 预览期间允许转屏：iPhone 平时锁竖屏（AppDelegate 钩子 + orientation-locker），弹窗存活时
+     解锁、关闭复锁。iPad（本就全向）/ Android（系统未锁）不动。 */
+  React.useEffect(() => {
+    if (Platform.OS !== 'ios' || Platform.isPad) return;
+    Orientation.unlockAllOrientations();
+    return () => {
+      Orientation.lockToPortrait();
+    };
+  }, []);
+
+  return (
+    <Modal
+      visible
+      /* 不透明全屏（不用 transparent）：透明 Modal 与底下 RN 根视图分属不同层、转屏时各自
+         旋转不同步，缝隙会露出背后的文档预览页。fullScreen 不透明呈现会把背后视图移出、
+         整块作为一体旋转，背后不露。 */
+      animationType="fade"
+      presentationStyle="fullScreen"
+      supportedOrientations={['portrait', 'landscape-left', 'landscape-right']}
+      onRequestClose={onClose}
+    >
+      {/* 内层 SafeAreaProvider：测量 Modal 自己（会随屏旋转）的安全区。不放它的话
+          useSafeAreaInsets 读的是锁竖屏的根视图 inset，横屏时刘海/灵动岛跑到侧边却仍用顶部值。 */}
+      <SafeAreaProvider>
+        <AttachmentPreviewBody
+          attachments={attachments}
+          initialIndex={initialIndex}
+          onClose={onClose}
+        />
+      </SafeAreaProvider>
+    </Modal>
+  );
+}
+
+function AttachmentPreviewBody({
+  attachments,
+  initialIndex,
+  onClose,
+}: {
+  attachments: AttachmentInfo[];
+  initialIndex: number;
+  onClose: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const [index, setIndex] = React.useState(
+    Math.min(Math.max(initialIndex, 0), Math.max(attachments.length - 1, 0)),
+  );
+  // 内容区实测尺寸（video 播放器需要明确宽高）
+  const [contentSize, setContentSize] = React.useState<{ w: number; h: number } | null>(null);
+  const onContentLayout = React.useCallback((e: LayoutChangeEvent) => {
+    const { width: w, height: h } = e.nativeEvent.layout;
+    if (w > 0 && h > 0) setContentSize({ w, h });
+  }, []);
+
+  const current = attachments[index];
+  const url = current?.url ?? '';
+  const name = (current?.filename ?? '').trim() || '附件';
+  const kind = url ? previewKind(current?.filename, current?.mimeType) : 'other';
+  const sizeLabel = formatFileSize(current?.size);
+  const openExternal = url ? () => Linking.openURL(url).catch(() => {}) : undefined;
+  // 下载 → 应用内（Android 系统下载目录 / iOS 保存菜单），不跳浏览器
+  const [downloading, setDownloading] = React.useState(false);
+  const handleDownload = url
+    ? () => {
+        if (downloading) return;
+        setDownloading(true);
+        downloadAttachment(url, current?.filename)
+          .catch(() => {})
+          .finally(() => setDownloading(false));
+      }
+    : undefined;
+  const iconColor = '#fff';
+
+  let body: React.ReactNode = null;
+  if (kind === 'image') {
+    body = (
+      <Image
+        source={{ uri: url }}
+        style={modalUI.contentImage}
+        resizeMode="contain"
+        accessible
+        accessibilityLabel={name}
+      />
+    );
+  } else if (kind === 'video') {
+    body = contentSize ? (
+      <VideoPreviewPlayer key={url} url={url} width={contentSize.w} height={contentSize.h} />
+    ) : null;
+  } else if (kind === 'pdf') {
+    body = contentSize ? (
+      <Pdf
+        key={url}
+        source={{ uri: url, cache: true }}
+        style={{ width: contentSize.w, height: contentSize.h, backgroundColor: 'transparent' }}
+        trustAllCerts={false}
+        onError={() => {}}
+      />
+    ) : null;
+  } else if (kind === 'splatv') {
+    body = (
+      <WebView
+        key={url}
+        source={{ uri: splatvViewerUrl(url) }}
+        style={{ flex: 1, backgroundColor: '#000' }}
+        allowsFullscreenVideo
+        javaScriptEnabled
+        domStorageEnabled
+      />
+    );
+  } else {
+    body = (
+      <View style={modalUI.unsupportedWrap}>
+        <AttachmentIcon filename={current?.filename} mimeType={current?.mimeType} size={72} />
+        <Text style={modalUI.unsupportedName} numberOfLines={2} ellipsizeMode="middle">
+          {name}
+        </Text>
+        {sizeLabel ? <Text style={modalUI.unsupportedMeta}>{sizeLabel}</Text> : null}
+        <Text style={modalUI.unsupportedMeta}>暂不支持该类型的应用内预览</Text>
+        {openExternal ? (
+          <TouchableOpacity style={modalUI.unsupportedBtn} onPress={openExternal} activeOpacity={0.8}>
+            <Text style={modalUI.unsupportedBtnText}>用浏览器打开</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+    );
+  }
+
+  return (
+      <View style={modalUI.root}>
+        {/* 控件全部避开安全区（灵动岛/刘海/圆角/Home 指示条）：顶栏加 top+左右 inset，
+            内容区加左右+底 inset（媒体不顶进异形区），左右切换箭头跟随左右 inset。 */}
+        <View
+          style={[
+            modalUI.topBar,
+            {
+              paddingTop: insets.top + 6,
+              paddingLeft: insets.left + 12,
+              paddingRight: insets.right + 12,
+            },
+          ]}
+        >
+          <TouchableOpacity style={modalUI.topBtn} onPress={onClose} activeOpacity={0.8}>
+            {/* X 关闭 */}
+            <Svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke={iconColor} strokeWidth={2} strokeLinecap="round">
+              <Path d="M18 6L6 18" />
+              <Path d="M6 6l12 12" />
+            </Svg>
+          </TouchableOpacity>
+          <View style={modalUI.titleWrap}>
+            <Text style={modalUI.titleText} numberOfLines={1} ellipsizeMode="middle">
+              {name}
+            </Text>
+            {attachments.length > 1 ? (
+              <Text style={modalUI.counterText}>
+                {index + 1} / {attachments.length}
+              </Text>
+            ) : null}
+          </View>
+          <TouchableOpacity
+            style={modalUI.topBtn}
+            onPress={handleDownload}
+            activeOpacity={0.8}
+            disabled={!handleDownload}
+          >
+            {downloading ? (
+              <ActivityIndicator size="small" color={iconColor} />
+            ) : (
+              // 下载（应用内保存）
+              <Svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke={iconColor} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <Path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <Path d="M7 10l5 5 5-5" />
+                <Path d="M12 15V3" />
+              </Svg>
+            )}
+          </TouchableOpacity>
+        </View>
+        <View
+          style={[
+            modalUI.content,
+            {
+              paddingLeft: insets.left,
+              paddingRight: insets.right,
+              paddingBottom: insets.bottom,
+            },
+          ]}
+        >
+          <View style={modalUI.contentInner} onLayout={onContentLayout}>
+            {body}
+          </View>
+        </View>
+        {index > 0 ? (
+          <TouchableOpacity
+            style={[modalUI.navBtn, { left: insets.left + 10 }]}
+            onPress={() => setIndex((i) => Math.max(i - 1, 0))}
+            activeOpacity={0.8}
+          >
+            <Svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={iconColor} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <Path d="M15 18l-6-6 6-6" />
+            </Svg>
+          </TouchableOpacity>
+        ) : null}
+        {index < attachments.length - 1 ? (
+          <TouchableOpacity
+            style={[modalUI.navBtn, { right: insets.right + 10 }]}
+            onPress={() => setIndex((i) => Math.min(i + 1, attachments.length - 1))}
+            activeOpacity={0.8}
+          >
+            <Svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={iconColor} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <Path d="M9 18l6-6-6-6" />
+            </Svg>
+          </TouchableOpacity>
+        ) : null}
+      </View>
   );
 }
 
@@ -1395,6 +1830,9 @@ function AttachmentPreviewRenderer({
   const url = (block.url ?? '').trim();
   const sizeLabel = formatFileSize(block.size);
   const open = url ? () => Linking.openURL(url).catch(() => {}) : undefined;
+  // 点击 → 应用内全屏预览（image 放大看、fallback 类型在弹窗里给"用浏览器打开"）
+  const openPreview = React.useContext(AttachmentPreviewContext);
+  const onPressBody = url && openPreview ? () => openPreview(block) : open;
   const kind = url !== '' ? previewKind(block.filename, block.mime_type) : 'other';
 
   // hooks 必须无条件调用，放在任何 early-return 之前
@@ -1424,7 +1862,7 @@ function AttachmentPreviewRenderer({
     return (
       <View onLayout={onLayout}>
         {availW > 0 && aspect ? (
-          <TouchableOpacity activeOpacity={0.9} onPress={open}>
+          <TouchableOpacity activeOpacity={0.9} onPress={onPressBody}>
             <Image
               source={{ uri: url }}
               style={[ctx.styles.previewImage, { width: availW, height: availW / aspect }]}
@@ -1451,7 +1889,7 @@ function AttachmentPreviewRenderer({
             width={availW}
             height={availW / vAspect}
             onAspect={setAspect}
-            styles={ctx.styles}
+            style={ctx.styles.previewVideo}
           />
         ) : (
           <View style={[ctx.styles.imagePlaceholder, { height: 200 }]} />
@@ -1481,11 +1919,32 @@ function AttachmentPreviewRenderer({
     );
   }
 
+  if (kind === 'splatv') {
+    // 4D Gaussian Splatting：WebView 嵌在线 viewer（对齐 web iframe），内联给 4:3 视口
+    return (
+      <View onLayout={onLayout}>
+        {availW > 0 ? (
+          <View style={[ctx.styles.previewPdf, { width: availW, height: Math.min(Math.round(availW * 0.75), 480) }]}>
+            <WebView
+              source={{ uri: splatvViewerUrl(url) }}
+              style={{ flex: 1, backgroundColor: '#000' }}
+              allowsFullscreenVideo
+              javaScriptEnabled
+              domStorageEnabled
+            />
+          </View>
+        ) : (
+          <View style={[ctx.styles.imagePlaceholder, { height: 240 }]} />
+        )}
+      </View>
+    );
+  }
+
   // 其它类型 → 居中大卡片，对齐 web renderUnsupported
   return (
     <TouchableOpacity
       style={ctx.styles.previewFallbackCard}
-      onPress={open}
+      onPress={onPressBody}
       activeOpacity={0.7}
       accessible
       accessibilityLabel={`附件 ${name}`}
@@ -2311,50 +2770,6 @@ function createStyles(c: AppColors) {
       marginVertical: 8,
       backgroundColor: '#000',
       overflow: 'hidden',
-    } as ViewStyle,
-    // 自绘视频播放器 UI
-    videoCenterWrap: {
-      ...StyleSheet.absoluteFillObject,
-      alignItems: 'center',
-      justifyContent: 'center',
-    } as ViewStyle,
-    videoCenterPlay: {
-      width: 56,
-      height: 56,
-      borderRadius: 28,
-      backgroundColor: 'rgba(0,0,0,0.45)',
-      alignItems: 'center',
-      justifyContent: 'center',
-    } as ViewStyle,
-    videoBottomBar: {
-      position: 'absolute',
-      left: 0,
-      right: 0,
-      bottom: 0,
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 10,
-      paddingHorizontal: 12,
-      paddingTop: 8,
-      paddingBottom: 11, // 给最底沿 3px 进度条留出空间
-      backgroundColor: 'rgba(0,0,0,0.45)',
-    } as ViewStyle,
-    videoClock: {
-      color: '#fff',
-      fontSize: 12,
-      fontVariant: ['tabular-nums'],
-    } as TextStyle,
-    videoProgressTrack: {
-      position: 'absolute',
-      left: 0,
-      right: 0,
-      bottom: 0,
-      height: 3,
-      backgroundColor: 'rgba(255,255,255,0.25)',
-    } as ViewStyle,
-    videoProgressFill: {
-      height: 3,
-      backgroundColor: '#fff',
     } as ViewStyle,
     previewPdf: {
       borderRadius: 8,

@@ -20,6 +20,9 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     let window = UIWindow(windowScene: windowScene)
+    // 旋转动画期间视图边界外短暂露出的是 window 底色；默认偏白，在附件全屏预览（暗色）里
+    // 转屏会闪白角。设黑：正常使用时 window 永远被内容盖住看不到，只有转屏瞬间可见。
+    window.backgroundColor = .black
     self.window = window
 
     reactNativeFactory.startReactNative(

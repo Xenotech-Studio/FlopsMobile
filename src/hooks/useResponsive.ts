@@ -28,6 +28,16 @@ import { useWindowDimensions } from 'react-native';
  */
 export const SIDEBAR_BREAKPOINT = 700;
 
+/**
+ * sidebarShell 的第二判据：窗口「最短边」下限（dp）。
+ * 手机横屏宽度（iPhone Pro Max 横 ≈ 932）会越过 SIDEBAR_BREAKPOINT，但它不是平板——
+ * 若进 sidebar 外壳会整棵树 remount（compact ↔ sidebar 是两套树），且转回竖屏时再切回来，
+ * 前景层（文档预览等）重放入场动画。最短边把手机排除：手机最短边 ≈ 390–440 < 500，
+ * iPad 全屏最短边 ≥ 768；iPad 分屏窄条宽度本就 < 700 已被第一判据排除。
+ * （手机原本锁竖屏碰不到这条；附件预览解锁转屏后必须有它。）
+ */
+export const SIDEBAR_MIN_SHORT_SIDE = 500;
+
 /** sidebarShell 展开态侧栏宽度（dp）。承载 DrawerContent。收起态宽度动画到 0。 */
 export const SIDEBAR_WIDTH = 300;
 
@@ -63,8 +73,10 @@ export interface ResponsiveInfo {
 export function useResponsive(): ResponsiveInfo {
   const { width, height } = useWindowDimensions();
   const isLandscape = width > height;
-  /** iPad 级宽度即用 push 侧栏外壳（横竖通用）；窄于断点退回手机覆盖式抽屉。 */
-  const sidebarShell = width >= SIDEBAR_BREAKPOINT;
+  /** iPad 级宽度即用 push 侧栏外壳（横竖通用）；窄于断点退回手机覆盖式抽屉。
+   *  最短边条件排除「手机横屏」误入 sidebar 外壳（见 SIDEBAR_MIN_SHORT_SIDE）。 */
+  const sidebarShell =
+    width >= SIDEBAR_BREAKPOINT && Math.min(width, height) >= SIDEBAR_MIN_SHORT_SIDE;
   return {
     width,
     height,

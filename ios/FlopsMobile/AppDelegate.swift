@@ -26,7 +26,26 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     // 不在启动时申请权限/注册远端通知；由 RN 侧 FlopsPushModule.requestPermission()
     // 在用户点「登记推送令牌（APNs）」时触发，避免首次启动打扰用户。
 
+    // iPhone 默认锁竖屏（Info.plist 已声明横屏，运行时由 orientation-locker 动态放开——
+    // 目前仅附件全屏预览解锁）。JS 起来前先压成竖屏，避免启动瞬间横置。iPad 不动（全向）。
+    if UIDevice.current.userInterfaceIdiom != .pad {
+      Orientation.setOrientation(UIInterfaceOrientationMask.portrait)
+    }
+
     return true
+  }
+
+  // MARK: - 屏幕方向（orientation-locker 动态控制）
+
+  func application(
+    _ application: UIApplication,
+    supportedInterfaceOrientationsFor window: UIWindow?
+  ) -> UIInterfaceOrientationMask {
+    // iPad 保持全向（Split View / 多任务依赖）；iPhone 由 orientation-locker 的动态 mask 决定
+    if UIDevice.current.userInterfaceIdiom == .pad {
+      return .all
+    }
+    return Orientation.getOrientation()
   }
 
   func application(
