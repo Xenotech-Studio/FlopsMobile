@@ -1630,6 +1630,29 @@ PODS:
     - Yoga
   - react-native-orientation-locker (1.7.0):
     - React-Core
+  - react-native-pager-view (8.0.2):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-Core-prebuilt
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - SwiftUIIntrospect (~> 1.0)
+    - Yoga
   - react-native-pdf (7.0.4):
     - hermes-engine
     - RCTRequired
@@ -2568,6 +2591,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
+  - SwiftUIIntrospect (1.3.0)
   - Yoga (0.0.0)
 
 DEPENDENCIES:
@@ -2623,6 +2647,7 @@ DEPENDENCIES:
   - react-native-keyboard-controller (from `../node_modules/react-native-keyboard-controller`)
   - "react-native-menu (from `../node_modules/@react-native-menu/menu`)"
   - react-native-orientation-locker (from `../node_modules/react-native-orientation-locker`)
+  - react-native-pager-view (from `../node_modules/react-native-pager-view`)
   - react-native-pdf (from `../node_modules/react-native-pdf`)
   - react-native-safe-area-context (from `../node_modules/react-native-safe-area-context`)
   - react-native-video (from `../node_modules/react-native-video`)
@@ -2678,6 +2703,7 @@ SPEC REPOS:
   trunk:
     - Argon2Swift
     - iosMath
+    - SwiftUIIntrospect
 
 EXTERNAL SOURCES:
   BouncyButton:
@@ -2781,6 +2807,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/@react-native-menu/menu"
   react-native-orientation-locker:
     :path: "../node_modules/react-native-orientation-locker"
+  react-native-pager-view:
+    :path: "../node_modules/react-native-pager-view"
   react-native-pdf:
     :path: "../node_modules/react-native-pdf"
   react-native-safe-area-context:
@@ -2935,6 +2963,7 @@ SPEC CHECKSUMS:
   react-native-keyboard-controller: 49dc83754aaf686d4b250c03e151a37b1a76d90e
   react-native-menu: 2de122c54dc10056932c0c0f73b82adfa4231faf
   react-native-orientation-locker: cc6f357b289a2e0dd2210fea0c52cb8e0727fdaa
+  react-native-pager-view: 915bebe4c77d5303a259c9589b5fd9ce015b2858
   react-native-pdf: dac049a15aec41db452e372f85184d3f15741b12
   react-native-safe-area-context: 37e680fc4cace3c0030ee46e8987d24f5d3bdab2
   react-native-video: 293a1dfb84d6b79b5bf9dd33925931008e225d5a
@@ -2984,6 +3013,7 @@ SPEC CHECKSUMS:
   RNSVG: 507bf2685de6b3d49449efd4aae7e7471bb9c433
   RNVectorIcons: 4351544f100d4f12cac156a7c13399e60bab3e26
   RNWorklets: 30f9a363d681c776a5f9d74f6d21a6d1bb7bfe80
+  SwiftUIIntrospect: fee9aa07293ee280373a591e1824e8ddc869ba5d
   Yoga: 772166513f9cd2d61a6251d0dacbbfaa5b537479
 
 PODFILE CHECKSUM: b9212edf2e40e312599da7c20cdc65a36e3292f8

@@ -1931,6 +1931,70 @@ export async function getFlowDocTree(session: Session): Promise<FlowDocTreeItem[
   return Array.isArray(data?.tree) ? data.tree : [];
 }
 
+/** paper 文档的 arXiv HTML（经 Flops 代理 flowdoc-server /api/paper/fetch-arxiv-html）。
+ *  - variant='processed'：后处理正文（含合并 CSS、参考文献），适合阅读；'raw'：处理前快照
+ *  - cacheOnly=true：只读服务端缓存，无缓存返回 {ok:true, cache_miss:true, html:''}，不触发爬取
+ *  - forceRefresh=true：重新爬取（慢）
+ *  返回的 html 直接喂 WebView（移动端 viewer，不做 web 的 Shadow DOM 注入）。 */
+export type PaperArxivHtmlResult = {
+  ok: boolean;
+  html: string;
+  cacheMiss: boolean;
+  error?: string;
+};
+export async function fetchPaperArxivHtml(
+  session: Session,
+  opts: {
+    itemId: string;
+    variant?: 'processed' | 'raw';
+    cacheOnly?: boolean;
+    forceRefresh?: boolean;
+  },
+): Promise<PaperArxivHtmlResult> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/paper/fetch-arxiv-html`, {
+    method: 'POST',
+    headers: authHeaders(session.access_token),
+    body: JSON.stringify({
+      item_id: opts.itemId,
+      full_html: true,
+      variant: opts.variant ?? 'processed',
+      cache_only: opts.cacheOnly ?? false,
+      force_refresh: opts.forceRefresh ?? false,
+    }),
+  });
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok || data.ok === false) {
+    const err =
+      (typeof data.error === 'string' && data.error) ||
+      (typeof data.detail === 'string' && data.detail) ||
+      `HTTP ${res.status}`;
+    return { ok: false, html: '', cacheMiss: false, error: err };
+  }
+  const html =
+    (typeof data.html === 'string' && data.html) ||
+    (typeof data.html_preview === 'string' && data.html_preview) ||
+    '';
+  return { ok: true, html, cacheMiss: Boolean(data.cache_miss) };
+}
+
+/** 取单个 item 的标题（代理 flowdoc-server GET /api/tree/item/{id}，只回 name）。
+ *  用于 paper 锚点 subdoc 的 tab 标签——subdoc 引用只有 {id,type}，名字要另取。 */
+export async function getFlowDocItemName(
+  session: Session,
+  docId: string,
+): Promise<string | null> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(
+    `${base}api/flowdoc/tree/item/${encodeURIComponent(docId)}`,
+    { method: 'GET', headers: authHeaders(session.access_token) },
+  );
+  if (!res.ok) return null;
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (data.success === false) return null;
+  return typeof data.name === 'string' && data.name.trim() ? data.name.trim() : null;
+}
+
 /** 返回 Y.Doc 二进制快照。404 时返回 null（文档存在于树但尚无 snapshot：新建未输入文字的状态）。 */
 export async function getFlowDocSnapshot(
   session: Session,

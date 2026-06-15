@@ -1,0 +1,144 @@
+diff --git a/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfManager.java b/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfManager.java
+index 03e6de2..5bee8c9 100644
+--- a/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfManager.java
++++ b/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfManager.java
+@@ -119,6 +119,11 @@ public class PdfManager extends SimpleViewManager<PdfView> implements RNPDFPdfVi
+         pdfView.setSpacing(spacing);
+     }
+ 
++    @ReactProp(name = "contentInsetTop")
++    public void setContentInsetTop(PdfView pdfView, int contentInsetTop) {
++        pdfView.setContentInsetTop(contentInsetTop);
++    }
++
+     @ReactProp(name = "password")
+     public void setPassword(PdfView pdfView, String password) {
+         pdfView.setPassword(password);
+diff --git a/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfView.java b/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfView.java
+index e9a1d16..73493f6 100644
+--- a/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfView.java
++++ b/node_modules/react-native-pdf/android/src/main/java/org/wonday/pdf/PdfView.java
+@@ -416,6 +416,11 @@ public class PdfView extends PDFView implements OnPageChangeListener,OnLoadCompl
+         this.spacing = spacing;
+     }
+ 
++    // [PATCH] contentInsetTop：Android 端 barteksc PDFView 暂不支持顶部 inset，先 no-op（满足 codegen 接口）。
++    public void setContentInsetTop(int contentInsetTop) {
++        // TODO: Android inset (iOS only for now)
++    }
++
+     public void setPassword(String password) {
+         this.password = password;
+     }
+diff --git a/node_modules/react-native-pdf/fabric/RNPDFPdfNativeComponent.js b/node_modules/react-native-pdf/fabric/RNPDFPdfNativeComponent.js
+index 43fea3b..5f78aef 100644
+--- a/node_modules/react-native-pdf/fabric/RNPDFPdfNativeComponent.js
++++ b/node_modules/react-native-pdf/fabric/RNPDFPdfNativeComponent.js
+@@ -29,6 +29,7 @@
+    enableDoubleTapZoom: ?boolean,
+    fitPolicy: ?Int32,
+    spacing: ?Int32,
++   contentInsetTop: ?Int32,
+    password: ?string,
+    onChange: ?BubblingEventHandler<ChangeEvent>,
+    singlePage: ?boolean,
+diff --git a/node_modules/react-native-pdf/index.d.ts b/node_modules/react-native-pdf/index.d.ts
+index cfcea72..565a300 100644
+--- a/node_modules/react-native-pdf/index.d.ts
++++ b/node_modules/react-native-pdf/index.d.ts
+@@ -40,6 +40,7 @@ export interface PdfProps {
+     showsVerticalScrollIndicator?: boolean,
+     scrollEnabled?: boolean,
+     spacing?: number,
++    contentInsetTop?: number,
+     password?: string,
+     renderActivityIndicator?: (progress: number) => React.ReactElement,
+     enableAntialiasing?: boolean,
+diff --git a/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.h b/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.h
+index 723ca7b..1979af7 100644
+--- a/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.h
++++ b/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.h
+@@ -49,6 +49,7 @@ UIView
+ @property(nonatomic) BOOL enableDoubleTapZoom;
+ @property(nonatomic) int fitPolicy;
+ @property(nonatomic) int spacing;
++@property(nonatomic) int contentInsetTop;
+ @property(nonatomic, strong) NSString *password;
+ @property(nonatomic) BOOL singlePage;
+ 
+diff --git a/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.mm b/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.mm
+index de46c98..6c31b2d 100644
+--- a/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.mm
++++ b/node_modules/react-native-pdf/ios/RNPDFPdf/RNPDFPdfView.mm
+@@ -154,6 +154,10 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+         _spacing = newProps.spacing;
+         [updatedPropNames addObject:@"spacing"];
+     }
++    if (_contentInsetTop != newProps.contentInsetTop) {
++        _contentInsetTop = newProps.contentInsetTop;
++        [updatedPropNames addObject:@"contentInsetTop"];
++    }
+     if (_password != RCTNSStringFromStringNilIfEmpty(newProps.password)) {
+         _password = RCTNSStringFromStringNilIfEmpty(newProps.password);
+         [updatedPropNames addObject:@"password"];
+@@ -535,16 +539,59 @@ - (void)didSetProps:(NSArray<NSString *> *)changedProps
+             }
+         }
+ 
++        // [PATCH] 顶部 contentInset：PDF 滚动时贯穿到顶，静止(offset 0)时顶部留出 _contentInsetTop（给 header/安全区）。
++        if (_pdfDocument && ([changedProps containsObject:@"path"] || [changedProps containsObject:@"contentInsetTop"])) {
++            CGFloat topInset = (CGFloat)_contentInsetTop;
++            for (UIView *subview in _pdfView.subviews) {
++                if ([subview isKindOfClass:[UIScrollView class]]) {
++                    UIScrollView *sv = (UIScrollView *)subview;
++                    if (@available(iOS 11.0, *)) {
++                        sv.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
++                    }
++                    UIEdgeInsets ci = sv.contentInset;
++                    ci.top = topInset;
++                    sv.contentInset = ci;
++                    UIEdgeInsets si = sv.verticalScrollIndicatorInsets;
++                    si.top = topInset;
++                    sv.verticalScrollIndicatorInsets = si;
++                    // 静止时停在 inset 顶（content 在留白下方）
++                    if (sv.contentOffset.y <= 0) {
++                        [sv setContentOffset:CGPointMake(sv.contentOffset.x, -topInset) animated:NO];
++                    }
++                    break;
++                }
++            }
++        }
++
+         if (_pdfDocument && ([changedProps containsObject:@"path"] || [changedProps containsObject:@"enablePaging"] || [changedProps containsObject:@"horizontal"] || [changedProps containsObject:@"page"])) {
+ 
+             PDFPage *pdfPage = [_pdfDocument pageAtIndex:_page-1];
+             if (pdfPage && _page == 1) {
+                 dispatch_async(dispatch_get_main_queue(), ^{
+                     [self->_pdfView goToFirstPage:nil];
++                    CGFloat topInset = (CGFloat)self->_contentInsetTop;
+                     for (UIView *subview in self->_pdfView.subviews) {
+                         if ([subview isKindOfClass:[UIScrollView class]]) {
+                             UIScrollView *scrollView = (UIScrollView *)subview;
+-                            [scrollView setContentOffset:CGPointMake(0, 0) animated:NO];
++                            // [PATCH] goToFirstPage 之后 PDFKit 会清掉 contentInset，这里重新套回去，
++                            // 再把初始 offset 停在 inset 顶（内容在留白下方），而不是贴顶被 header 盖。
++                            if (topInset > 0) {
++                                if (@available(iOS 11.0, *)) {
++                                    scrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
++                                }
++                                UIEdgeInsets ci = scrollView.contentInset;
++                                ci.top = topInset;
++                                scrollView.contentInset = ci;
++                                UIEdgeInsets si = scrollView.verticalScrollIndicatorInsets;
++                                si.top = topInset;
++                                scrollView.verticalScrollIndicatorInsets = si;
++                            }
++                            [scrollView setContentOffset:CGPointMake(0, -topInset) animated:NO];
++                            // PDFKit 的 goToFirstPage 会在后续 runloop 再排版一次并把 offset 冲回，
++                            // 这里在下一帧布局沉淀后再把 offset 落到 inset 顶，避免首页顶部被切。
++                            dispatch_async(dispatch_get_main_queue(), ^{
++                                [scrollView setContentOffset:CGPointMake(0, -topInset) animated:NO];
++                            });
+                             break;
+                         }
+                     }

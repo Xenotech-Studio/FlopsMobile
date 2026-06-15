@@ -22,15 +22,18 @@ import {
   type StyleProp,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
   type ViewStyle,
 } from 'react-native';
 import Animated from 'react-native-reanimated';
+import PagerView from 'react-native-pager-view';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import { type FlowDocTreeItem } from '../../api';
+import { type FlowDocTreeItem, getFlowDocItemName } from '../../api';
+import { useSession } from '../../context/SessionContext';
 import LinearGradient from 'react-native-linear-gradient';
 import { BlurHeaderBackground } from '../../components/BlurHeaderBackground';
 import { docsTreeStore } from './docsTreeStore';
@@ -42,6 +45,7 @@ import { shadowCircleButtonThemed, shadowMenu } from '../../theme/shadows';
 import { TASK_FONT_SIZE_TITLE } from '../../theme/typography';
 import { FolderView } from './FolderView';
 import { DocBodyView, type DocBodyViewHandle } from './DocBodyView';
+import { paperHasHtml, normalizeSubdocRefs, type ViewMode } from './PaperView';
 import { HeaderCircleButton } from '../../components/HeaderCircleButton';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -75,12 +79,26 @@ export function DocPreviewScreen({
   headerLeftStyle,
 }: DocPreviewScreenProps) {
   const insets = useSafeAreaInsets();
+  const { width: winWidth } = useWindowDimensions();
   const navigation = useNavigation<Nav>();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
+  const { session } = useSession();
   const [optionsOpen, setOptionsOpen] = useState(false);
   const docBodyRef = useRef<DocBodyViewHandle | null>(null);
+  /** 横滑分页器（走马灯切 tab）+ 当前页索引（与 header 切换器双向同步，ref 比对避免回环）。 */
+  const pagerRef = useRef<PagerView | null>(null);
+  const pagerPageRef = useRef(0);
+  /** paper header tab：'pdf' / 'html' / 某个 subdoc id。切文档时重置为 pdf。 */
+  const [activeTab, setActiveTab] = useState<string>('pdf');
+  useEffect(() => {
+    setActiveTab('pdf');
+  }, [id]);
+  /** subdoc id → 标题（异步拉，用作 tab 标签）。 */
+  const [subdocNames, setSubdocNames] = useState<Record<string, string>>({});
+  /** header（=文档区）实测宽度。iPad/宽屏有侧栏时只占右侧，不能用整窗宽算切换器/标题布局。 */
+  const [headerWidth, setHeaderWidth] = useState(0);
 
   /** 从缓存解析项 + 直接子项；缓存内容稳定（DocsScreen 加载后写入），用 id 做 memo key。 */
   const item = useMemo(() => docsTreeStore.get(id), [id]);
@@ -90,6 +108,99 @@ export function DocPreviewScreen({
   const headerTitle = item
     ? item.name?.trim() || (isFolder ? '未命名文件夹' : '未命名文档')
     : '文档';
+  const isPaper = item?.type === 'paper';
+  const paperHtml = isPaper && paperHasHtml(item?.meta);
+  /** paper 锚点内嵌子文档（meta.subdocs）。 */
+  const subdocRefs = useMemo(
+    () => (isPaper ? normalizeSubdocRefs(item?.meta) : []),
+    [isPaper, item?.meta],
+  );
+  /** paper 且有 HTML 或有 subdoc 时，header 居中显示可滚动 tab（PDF/HTML/各 subdoc）。 */
+  const showPaperTabs = isPaper && (paperHtml || subdocRefs.length > 0);
+  /** 全部 tab（PDF / HTML? / 各 subdoc），strip 与下拉共用。 */
+  const paperTabs = useMemo(() => {
+    if (!showPaperTabs) return [] as { key: string; label: string }[];
+    const tabs: { key: string; label: string }[] = [{ key: 'pdf', label: 'PDF' }];
+    if (paperHtml) tabs.push({ key: 'html', label: 'HTML' });
+    for (const s of subdocRefs) tabs.push({ key: s.id, label: subdocNames[s.id] || '笔记' });
+    return tabs;
+  }, [showPaperTabs, paperHtml, subdocRefs, subdocNames]);
+
+  /** 估算展开 strip 宽：PDF/HTML 固定 68，subdoc 按名字长度估（CJK 偏宽）。 */
+  const paperStripW = useMemo(() => {
+    let w = 6; // pill 内边距
+    for (const t of paperTabs) {
+      w +=
+        t.key === 'pdf' || t.key === 'html'
+          ? 68
+          : Math.min(120, Math.max(60, 24 + t.label.length * 13));
+    }
+    return w;
+  }, [paperTabs]);
+  /** 布局基准宽 = 实测 header 宽（文档区），未测到先用整窗宽兜底。 */
+  const layoutW = headerWidth > 0 ? headerWidth : winWidth;
+  /** 标题+切换器可用宽（扣掉左右按钮区）；切换器预算 = 可用宽 - 标题保底 100；
+   *  展开 strip 超预算就收成 ☰（标题始终至少留 100）。 */
+  const headerInner = layoutW - (16 + HEADER_CIRCLE_BTN_SIZE + 8) - (8 + HEADER_CIRCLE_BTN_SIZE + 16);
+  /** 标题保底宽：越大 → 切换器越早收成 ☰ 窄版（给左侧标题留更多空间）。 */
+  const PAPER_TITLE_RESERVE = 160;
+  const paperSelectorBudget = headerInner - PAPER_TITLE_RESERVE;
+  /** 完整标签的 strip 放不下 → 未选中 tab 收成 ☰ 窄段（仍是正常 tab，只是不显字）。 */
+  const paperTabsCollapsed = showPaperTabs && paperStripW > paperSelectorBudget;
+  /** header 切换器点选 → 翻页器跳到对应页；横滑反向经 onPageSelected 回写 activeTab（ref 比对避免回环）。 */
+  const activeTabIndex = paperTabs.findIndex((t) => t.key === activeTab);
+  useEffect(() => {
+    if (!showPaperTabs || activeTabIndex < 0) return;
+    if (activeTabIndex !== pagerPageRef.current) {
+      pagerPageRef.current = activeTabIndex;
+      pagerRef.current?.setPage(activeTabIndex);
+    }
+  }, [activeTabIndex, showPaperTabs]);
+  /** 当前切换器实际宽（收起态=选中段+其余 ☰32；展开态=完整 strip），用于：标题让位到居中切换器左缘前。 */
+  const paperActiveLabel = paperTabs.find((t) => t.key === activeTab)?.label ?? 'PDF';
+  const paperActiveSegW =
+    activeTab === 'pdf' || activeTab === 'html'
+      ? 68
+      : Math.min(120, Math.max(60, 24 + paperActiveLabel.length * 13));
+  const paperPillW = paperTabsCollapsed
+    ? 6 + paperActiveSegW + 32 * Math.max(0, paperTabs.length - 1)
+    : paperStripW;
+  const paperTitleAvailW = Math.floor(
+    layoutW / 2 - paperPillW / 2 - (16 + HEADER_CIRCLE_BTN_SIZE + 8) - 8,
+  );
+  /** 标题可用宽低于此阈值（更窄）→ 干脆不显示标题，只留居中切换器。 */
+  const PAPER_TITLE_MIN_W = 56;
+  const showPaperTitle = !showPaperTabs || paperTitleAvailW >= PAPER_TITLE_MIN_W;
+  const paperTitleMaxW = Math.max(40, paperTitleAvailW);
+
+  /** 拉 subdoc 标题（subdoc 引用只有 {id,type}，名字另取；不在树缓存里）。 */
+  useEffect(() => {
+    if (!session || subdocRefs.length === 0) return;
+    let cancelled = false;
+    subdocRefs.forEach((s) => {
+      if (subdocNames[s.id] !== undefined) return;
+      getFlowDocItemName(session, s.id)
+        .then((name) => {
+          if (!cancelled && name) {
+            setSubdocNames((prev) => (prev[s.id] === name ? prev : { ...prev, [s.id]: name }));
+          }
+        })
+        .catch(() => {});
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session, subdocRefs, subdocNames]);
+
+  /** 当前 tab 指向的 subdoc（'pdf'/'html' 时为 undefined = 看 paper 本体）。 */
+  const activeSubdoc = subdocRefs.find((s) => s.id === activeTab);
+  const bodyDocId = activeSubdoc ? activeSubdoc.id : item?.id ?? '';
+  const bodyDocType = activeSubdoc ? activeSubdoc.type : item?.type ?? '';
+  const bodyMeta = activeSubdoc ? undefined : item?.meta;
+  const bodyPaperMode: ViewMode = activeTab === 'html' ? 'html' : 'pdf';
+  const bodyTitle = activeSubdoc
+    ? subdocNames[activeSubdoc.id] || '笔记'
+    : headerTitle;
 
   /** 回到文档树（目录）。prop 优先(手机抽屉式 = 半开露目录)；否则整页路由 popToTop 回到树。 */
   const onGoTree = useCallback(() => {
@@ -133,6 +244,43 @@ export function DocPreviewScreen({
   /** 底部渐变遮罩带高度（长缓渐变，从顶端就掉透明度、无纯色平台）。 */
   const footerHeight = insets.bottom + 72;
 
+  /** paper 切换器胶囊（展开内联靠右 / 收起绝对居中两处共用同一节点）。 */
+  const paperPillNode = showPaperTabs ? (
+    <View style={styles.paperPill}>
+      {paperTabs.map((t) => {
+        const active = activeTab === t.key;
+        const asIcon = paperTabsCollapsed && !active; // 空间不足时，未选中 tab 显示 ☰
+        return (
+          <TouchableOpacity
+            key={t.key}
+            style={[
+              styles.paperSeg,
+              asIcon
+                ? styles.paperSegIcon
+                : t.key !== 'pdf' && t.key !== 'html' && styles.paperSegSubdoc,
+              active && styles.paperSegActive,
+            ]}
+            onPress={() => setActiveTab(t.key)}
+            activeOpacity={0.8}
+            accessibilityLabel={asIcon ? t.label : undefined}
+          >
+            {asIcon ? (
+              <Ionicons name="menu" size={16} color={colors.textMuted} />
+            ) : (
+              <Text
+                style={[styles.paperSegText, active && styles.paperSegTextActive]}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {t.label}
+              </Text>
+            )}
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  ) : null;
+
   return (
     <View style={styles.container}>
       {/* 主区：内容铺满整页，上下留出遮罩带高度 → 滚动贯穿顶/底渐变遮罩下。 */}
@@ -149,12 +297,50 @@ export function DocPreviewScreen({
             contentTopInset={headerHeight}
             contentBottomInset={footerHeight}
           />
+        ) : showPaperTabs ? (
+          /* paper 多 tab：横滑分页器（走马灯切 tab），与 header 切换器双向同步。
+             每页一个 DocBodyView：pdf/html = 同一 paper 不同 viewMode；subdoc = 各自文档。
+             ref 只挂当前页（⋯ 的复制/刷新作用于当前页）。 */
+          <PagerView
+            key={id}
+            ref={pagerRef}
+            style={styles.pager}
+            initialPage={Math.max(0, activeTabIndex)}
+            offscreenPageLimit={1}
+            onPageSelected={(e) => {
+              const i = e.nativeEvent.position;
+              pagerPageRef.current = i;
+              const k = paperTabs[i]?.key;
+              if (k) setActiveTab(k);
+            }}
+          >
+            {paperTabs.map((t) => {
+              const isPdfHtml = t.key === 'pdf' || t.key === 'html';
+              return (
+                <View key={t.key} style={styles.pagerPage} collapsable={false}>
+                  <DocBodyView
+                    ref={activeTab === t.key ? docBodyRef : undefined}
+                    docId={isPdfHtml ? item.id : t.key}
+                    docType={isPdfHtml ? 'paper' : subdocRefs.find((s) => s.id === t.key)?.type ?? 'document'}
+                    title={isPdfHtml ? headerTitle : subdocNames[t.key] || '笔记'}
+                    meta={isPdfHtml ? item.meta : undefined}
+                    paperViewMode={t.key === 'html' ? 'html' : 'pdf'}
+                    contentTopInset={headerHeight}
+                    contentBottomInset={footerHeight}
+                  />
+                </View>
+              );
+            })}
+          </PagerView>
         ) : (
           <DocBodyView
+            key={bodyDocId}
             ref={docBodyRef}
-            docId={item.id}
-            docType={item.type}
-            title={headerTitle}
+            docId={bodyDocId}
+            docType={bodyDocType}
+            title={bodyTitle}
+            meta={bodyMeta}
+            paperViewMode={bodyPaperMode}
             contentTopInset={headerHeight}
             contentBottomInset={footerHeight}
           />
@@ -179,7 +365,13 @@ export function DocPreviewScreen({
       </View>
 
       {/* 顶部 header：目录按钮 + 标题 + ⋯ */}
-      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+      <View
+        style={[styles.topBar, { paddingTop: insets.top + 8 }]}
+        onLayout={(e) => {
+          const w = e.nativeEvent.layout.width;
+          if (w > 0) setHeaderWidth((prev) => (Math.abs(prev - w) > 0.5 ? w : prev));
+        }}
+      >
         <BlurHeaderBackground
           style={StyleSheet.absoluteFill}
           topSolidHeight={insets.top + 8}
@@ -196,10 +388,20 @@ export function DocPreviewScreen({
             hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
           />
         </Animated.View>
+        {/* 标题靠左占弹性区。paper 切换器始终绝对居中 → 标题限宽不顶到切换器；更窄时干脆不显示。 */}
         <View style={styles.headerTitleWrap}>
-          <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
-            {headerTitle}
-          </Text>
+          {showPaperTitle ? (
+            <Text
+              style={[
+                styles.headerTitle,
+                showPaperTabs ? { maxWidth: paperTitleMaxW } : null,
+              ]}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+            >
+              {headerTitle}
+            </Text>
+          ) : null}
         </View>
         <TouchableOpacity
           style={styles.circleBtn}
@@ -209,6 +411,13 @@ export function DocPreviewScreen({
         >
           <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
         </TouchableOpacity>
+
+        {/* 切换器始终绝对居中（左右对称留出按钮区，与左侧标题无关）。box-none 让两侧穿透到按钮。 */}
+        {showPaperTabs ? (
+          <View style={[styles.paperTabsCenter, { top: insets.top + 8 }]} pointerEvents="box-none">
+            {paperPillNode}
+          </View>
+        ) : null}
       </View>
 
       {/* 更多菜单 */}
@@ -272,6 +481,8 @@ function createStyles(c: AppColors) {
      *  手机抽屉式下层是 overlay inner（背景随开抽屉进度渐变到纯白，文字在上层始终可见）。 */
     container: { flex: 1, backgroundColor: 'transparent' },
     mainArea: { flex: 1 },
+    pager: { flex: 1 },
+    pagerPage: { flex: 1 },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     placeholderText: { color: c.placeholder, fontSize: 14 },
     topBar: {
@@ -297,6 +508,37 @@ function createStyles(c: AppColors) {
       ...shadowCircleButtonThemed(c),
     },
     headerTitleWrap: { flex: 1, alignItems: 'flex-start', paddingHorizontal: 8 },
+    /** 切换器绝对居中层（左右对称留出按钮区 → 居中） */
+    paperTabsCenter: {
+      position: 'absolute',
+      left: 16 + HEADER_CIRCLE_BTN_SIZE + 8,
+      right: 16 + HEADER_CIRCLE_BTN_SIZE + 8,
+      height: HEADER_CIRCLE_BTN_SIZE,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    paperPill: {
+      flexDirection: 'row',
+      alignItems: 'stretch',
+      height: HEADER_CIRCLE_BTN_SIZE, // 与左右圆按钮等高
+      backgroundColor: c.surface, // 白底，跟左右圆按钮一致
+      borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
+      padding: 3,
+      ...shadowCircleButtonThemed(c),
+    },
+    paperSeg: {
+      width: 68, // PDF/HTML 固定等宽，与内容无关（对齐 web）
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
+    },
+    /** subdoc tab：名字长度不定，给上下限 + 省略号（不再固定 68） */
+    paperSegSubdoc: { width: undefined, minWidth: 60, maxWidth: 120, paddingHorizontal: 14 },
+    /** ☰ 段（未选中且空间不足）：更窄 */
+    paperSegIcon: { width: 32 },
+    paperSegActive: { backgroundColor: c.surfaceMuted }, // 白底胶囊上，选中段用 muted 反白对比
+    paperSegText: { fontSize: 13, color: c.textMuted, fontWeight: '500' },
+    paperSegTextActive: { color: c.textPrimary },
     headerTitle: {
       fontSize: TASK_FONT_SIZE_TITLE,
       fontWeight: '400',

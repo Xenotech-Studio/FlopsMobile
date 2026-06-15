@@ -6197,6 +6197,11 @@ react-native-orientation-locker@^1.7.0:
   resolved "https://registry.yarnpkg.com/react-native-orientation-locker/-/react-native-orientation-locker-1.7.0.tgz#47ef2b9c24618e40f0a521f184b51270e576b028"
   integrity sha512-2PhG4UyRJktb3KCTISStuu8/q+Q3q3oPesGg9DhdY0b6Cu/ZzxkCvkbJte2TPWRYkS0JpClimvqVaonulGvDrA==
 
+react-native-pager-view@^8.0.2:
+  version "8.0.2"
+  resolved "https://registry.yarnpkg.com/react-native-pager-view/-/react-native-pager-view-8.0.2.tgz#333f05ecf887c7cfa970fdee8128f115478ce5db"
+  integrity sha512-Y8All2BbjidI4ZIF9kBOIIoldkqrY/2FXapHZMdjwD+ByXhiOWTFenPs5rq9KRN5uAH/gOXtQCqHLxQDNBQRiQ==
+
 react-native-pdf@^7.0.4:
   version "7.0.4"
   resolved "https://registry.yarnpkg.com/react-native-pdf/-/react-native-pdf-7.0.4.tgz#f48d485d32cef24f41511ba2072bc99ba94b13c9"

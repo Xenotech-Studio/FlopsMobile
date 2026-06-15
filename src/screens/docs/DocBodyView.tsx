@@ -29,6 +29,7 @@ import { useSession } from '../../context/SessionContext';
 import { useAppTheme } from '../../context/ThemeContext';
 import type { AppColors } from '../../theme/appColors';
 import { useResponsive, READING_MAX_WIDTH } from '../../hooks/useResponsive';
+import { PaperView, type ViewMode } from './PaperView';
 
 const EMPTY_DOC: FlowDocDocument = [
   { type: 'paragraph', children: [{ text: '' }] },
@@ -83,6 +84,10 @@ export type DocBodyViewProps = {
   docType: string;
   /** 文档标题：在正文顶部用一行大标题显示（对齐 web 版）。 */
   title?: string;
+  /** item.meta（paper 用 pdf_url / arxiv_html_url；其它类型忽略）。 */
+  meta?: Record<string, unknown> | null;
+  /** paper 视图模式（切换器在 header 居中，由 DocPreviewScreen 受控下发）。 */
+  paperViewMode?: ViewMode;
   /** 正文上下额外内边距：让内容贯穿顶/底渐变遮罩。 */
   contentTopInset?: number;
   contentBottomInset?: number;
@@ -90,7 +95,7 @@ export type DocBodyViewProps = {
 
 export const DocBodyView = React.forwardRef<DocBodyViewHandle, DocBodyViewProps>(
   function DocBodyView(
-    { docId, docType, title, contentTopInset, contentBottomInset },
+    { docId, docType, title, meta, paperViewMode, contentTopInset, contentBottomInset },
     ref,
   ) {
     const { session } = useSession();
@@ -159,6 +164,19 @@ export const DocBodyView = React.forwardRef<DocBodyViewHandle, DocBodyViewProps>
       }),
       [doc, load],
     );
+
+    // paper：PDF/HTML 查看器（独立组件，自带数据加载；不走上面的 flowdoc 快照逻辑）
+    if (docType === 'paper') {
+      return (
+        <PaperView
+          docId={docId}
+          meta={meta}
+          viewMode={paperViewMode ?? 'pdf'}
+          contentTopInset={contentTopInset}
+          contentBottomInset={contentBottomInset}
+        />
+      );
+    }
 
     if (!isSupported) {
       return (
