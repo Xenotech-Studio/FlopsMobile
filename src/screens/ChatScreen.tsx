@@ -142,7 +142,11 @@ import { SubagentMetaCard } from './chat-cards/SubagentMetaCard';
 import { AskUserQuestionCard } from './chat-cards/AskUserQuestionCard';
 import { ReadPagesCard } from './chat-cards/ReadPagesCard';
 import { FlowDocItemMetaProvider } from '../context/FlowDocItemMetaContext';
-import { FlowDocSlateAdapter, type SlateDocument } from '../flowdoc-native-input';
+import {
+  FlowDocSlateAdapter,
+  slateDocumentToContent,
+  type SlateDocument,
+} from '../flowdoc-native-input';
 import type { FlowDocInputHandle } from '../flowdoc-native-input';
 import {
   hydrateUserMessageToSlateDocument,
@@ -492,6 +496,12 @@ export function ChatScreen({
   ]);
   const composerRefDataByKeyRef = useRef<Map<string, FlopsRef>>(new Map());
   const composerAdapterRef = useRef<FlowDocInputHandle | null>(null);
+  /* 切页回来重对齐 native 用：在稳定的 useFocusEffect 回调里读最新 composerDoc，
+     不把 composerDoc 进 effect deps（否则每次输入都触发 re-sync）。 */
+  const composerDocRef = useRef<SlateDocument>(composerDoc);
+  useEffect(() => {
+    composerDocRef.current = composerDoc;
+  }, [composerDoc]);
   /* composer 是原生 FlowDocInputView（UITextView / EditText），不在 RN TextInputState 注册
    * 表里——Keyboard.dismiss() 找不到 first responder，且会另起一条 keyboard-will-hide 通知
    * 流跟 native blur 的键盘动画打架，所以这里只调 native blur。 */
@@ -531,8 +541,6 @@ export function ChatScreen({
    *  在 onPickDoc 里置 true，在 onAfterDismiss 里读 + 触发 focus 后清回 false。 */
   const pendingComposerFocusRef = useRef(false);
   const pendingEditFocusRef = useRef(false);
-  /** 回到本页时强制重建输入框，避免多行/高度在其它页编辑后残留 */
-  const [composerRemountKey, setComposerRemountKey] = useState(0);
   const [loading, setLoading] = useState(false);
   /** 仅从路由拉取对话历史（GET conversation）期间，与流式 loading 分离 */
   /** 初值 = 有 conversationId 时直接 true：避免页面切换那一帧 useEffect 还没跑、
@@ -828,14 +836,23 @@ export function ChatScreen({
     }, [reloadLayoutPrefs, session, applyModelsConfig])
   );
 
-  const composerRemountSkipFirstFocusRef = useRef(true);
+  /* 切页回来（如看完文档返回对话）重对齐 composer。
+     以前这里 bump composerRemountKey 强制 keyed-remount——在原生 FlowDocInputView + Fabric
+     view 回收下不可靠：空 composer remount 出来的 native view 可能是池子里复用的、刚才文档首块
+     那张（textStorage 残留首行文本），而空 composer 的 initialContent="[]" 跟回收 view 的
+     default prop 相等，updateProps 会跳过 setInitialContent，于是文档首行泄漏进输入框。
+     改用 imperative setContent 把 native 重新对齐到 JS 真相（composerDoc）——同 view、可靠路径，
+     跟发送后清空用的是同一套（见 sendMessage 注释）。空 doc → setContent('[]') → 清空。 */
+  const composerResyncSkipFirstFocusRef = useRef(true);
   useFocusEffect(
     useCallback(() => {
-      if (composerRemountSkipFirstFocusRef.current) {
-        composerRemountSkipFirstFocusRef.current = false;
+      if (composerResyncSkipFirstFocusRef.current) {
+        composerResyncSkipFirstFocusRef.current = false;
         return;
       }
-      setComposerRemountKey((n) => n + 1);
+      composerAdapterRef.current?.setContent(
+        slateDocumentToContent(composerDocRef.current)
+      );
     }, [])
   );
 
@@ -1505,10 +1522,9 @@ export function ChatScreen({
     if (!text && flops_refs.length === 0) return;
     setComposerDoc([{ type: 'paragraph', children: [{ text: '' }] }]);
     composerRefDataByKeyRef.current = new Map();
-    /* 可靠清空：imperative 命令直接清 native 内容。不再 bump composerRemountKey 强制 remount——
-       Fabric view 回收 + initialContentApplied 守卫让 remount 重读空 initialContent 不可靠（旧文本
-       残留）；保持同一 native view + setContent('[]') 是可靠路径。composerRemountKey 仍保留给
-       "切页回来重建输入框"那个独立场景用。 */
+    /* 可靠清空：imperative 命令直接清 native 内容。不靠 keyed-remount 重读空 initialContent——
+       Fabric view 回收 + initialContentApplied 守卫让 remount 清空不可靠（旧文本残留）；
+       保持同一 native view + setContent('[]') 是可靠路径。切页回来重对齐也是同一套（见 useFocusEffect）。 */
     composerAdapterRef.current?.clear();
     const tempId = `tmp-${Date.now()}`;
     setSendQueue((q) => [...q, { id: tempId, text, pending: true }]);
@@ -1569,10 +1585,9 @@ export function ChatScreen({
     /* 清空 composer：把 SlateDocument 重置为单段空 paragraph，refDataByKey 清空，再 bump key 强制 remount native */
     setComposerDoc([{ type: 'paragraph', children: [{ text: '' }] }]);
     composerRefDataByKeyRef.current = new Map();
-    /* 可靠清空：imperative 命令直接清 native 内容。不再 bump composerRemountKey 强制 remount——
-       Fabric view 回收 + initialContentApplied 守卫让 remount 重读空 initialContent 不可靠（旧文本
-       残留）；保持同一 native view + setContent('[]') 是可靠路径。composerRemountKey 仍保留给
-       "切页回来重建输入框"那个独立场景用。 */
+    /* 可靠清空：imperative 命令直接清 native 内容。不靠 keyed-remount 重读空 initialContent——
+       Fabric view 回收 + initialContentApplied 守卫让 remount 清空不可靠（旧文本残留）；
+       保持同一 native view + setContent('[]') 是可靠路径。切页回来重对齐也是同一套（见 useFocusEffect）。 */
     composerAdapterRef.current?.clear();
     setError('');
     setLoading(true);
@@ -3960,7 +3975,6 @@ export function ChatScreen({
                  *  掉 UIControl 子树的 touch，不抢 + 按钮的 tap。 */
                 const adapter = (
                   <FlowDocSlateAdapter
-                    key={composerRemountKey}
                     ref={composerAdapterRef}
                     initialDocument={composerDoc}
                     onChange={setComposerDoc}

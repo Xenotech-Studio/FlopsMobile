@@ -344,6 +344,18 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
     applyContentJson(json, moveCursorToEnd = false, emit = false)
   }
 
+  /** Fabric 把 view 回收进池时调（见 FlowDocInputViewManager.prepareToRecycleView）。
+   *  复用前必须把 initialContentApplied 归零，否则下次 setInitialContent 被 guard 跳过、新内容
+   *  显示不出来。同时直接清空文本——否则复用到一个 initialContent 仍等于默认 "[]" 的节点（典型：
+   *  空 chat composer）时 prop diffing 不会重下发 initialContent，上一个节点（如文档首块）残留的
+   *  文本就泄漏进输入框。清空时压住 textWatcher，避免误触 onChangeContent。 */
+  fun resetForRecycle() {
+    initialContentApplied = false
+    suppressTextWatcher = true
+    setText("")
+    suppressTextWatcher = false
+  }
+
   fun setContentJson(json: String) {
     applyContentJson(json, moveCursorToEnd = true, emit = true)
   }

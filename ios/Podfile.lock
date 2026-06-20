@@ -1,6 +1,6 @@
 PODS:
   - Argon2Swift (1.0.4)
-  - BouncyButton (0.1.4):
+  - BouncyButton (0.1.5):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -22,7 +22,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - BouncyGlassCard (0.1.4):
+  - BouncyGlassCard (0.1.5):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -44,7 +44,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - BouncySegmentedControl (0.1.4):
+  - BouncySegmentedControl (0.1.5):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -66,7 +66,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - BouncyTabBar (0.1.4):
+  - BouncyTabBar (0.1.5):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -91,7 +91,7 @@ PODS:
   - BVLinearGradient (2.8.3):
     - React-Core
   - FBLazyVector (0.84.0)
-  - FlowDocInput (0.1.4):
+  - FlowDocInput (0.1.5):
     - hermes-engine
     - iosMath
     - RCTRequired
@@ -2912,13 +2912,13 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   Argon2Swift: 295b8bde7ba61434f227f5610b8813c42e866f74
-  BouncyButton: a262378aee18ef5579b8364ea25da3d7066bdfb0
-  BouncyGlassCard: b98896a6eb2dd1ddbbc71f7727a40e0f5ee7aac5
-  BouncySegmentedControl: 0b516467e0a9fac407d9237502f1fa143b4cd844
-  BouncyTabBar: 7e6d2f372f54f5414b818a6009838a116ee27916
+  BouncyButton: 20e997911081d65f2acbaec65b0a0a5d69465ea6
+  BouncyGlassCard: e4997798a9c08af4e1886871328ca3693f46dc6c
+  BouncySegmentedControl: 15c482afac5289f90917df303c7285aa1e4d997f
+  BouncyTabBar: aab1bd6dcd26b97cc7518ca39b42298861995bda
   BVLinearGradient: cb006ba232a1f3e4f341bb62c42d1098c284da70
   FBLazyVector: c12d2108050e27952983d565a232f6f7b1ad5e69
-  FlowDocInput: 27f3dc159ad92a89d9c36de2840da14f2f2e8c02
+  FlowDocInput: d676d5710365f9df04e7678e6204b44250e5bb2c
   hermes-engine: 1b7206e7baefe6118616994a3e025455841a608b
   iosMath: f7a6cbadf9d836d2149c2a84c435b1effc244cba
   RCTDeprecation: 3280799c14232a56e5a44f92981a8ee33bc69fd9

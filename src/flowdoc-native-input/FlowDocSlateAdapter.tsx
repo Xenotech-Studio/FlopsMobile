@@ -84,7 +84,7 @@ function paragraphChildrenToContent(children: Descendant[]): FlowDocContent {
 }
 
 /** Slate doc → 一段 FlowDocContent，paragraph 之间用 {type:'text',text:'\n'} 分隔 */
-function slateDocumentToContent(doc: SlateDocument): FlowDocContent {
+export function slateDocumentToContent(doc: SlateDocument): FlowDocContent {
   const out: FlowDocContent = [];
   doc.forEach((para, i) => {
     for (const part of paragraphChildrenToContent(para.children)) {

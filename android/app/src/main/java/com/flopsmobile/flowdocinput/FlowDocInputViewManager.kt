@@ -27,6 +27,14 @@ class FlowDocInputViewManager : SimpleViewManager<FlowDocInputView>(),
 
   override fun getDelegate(): ViewManagerDelegate<FlowDocInputView> = delegate
 
+  /* Fabric 把 view 回收进池、下次复用给新节点前调。清掉 initialContentApplied + 残留文本，
+     否则复用到空 composer（initialContent 仍是默认 "[]"）时残留的文档首块文本会泄漏进输入框。 */
+  override fun prepareToRecycleView(reactContext: ThemedReactContext, view: FlowDocInputView): FlowDocInputView? {
+    val recycled = super.prepareToRecycleView(reactContext, view)
+    recycled?.resetForRecycle()
+    return recycled
+  }
+
   // MARK: - Props
 
   // 注意：所有 setter 都用 override，因为 codegen 生成的 FlowDocInputViewManagerInterface

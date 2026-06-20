@@ -14,6 +14,9 @@ using namespace facebook::react;
 
 @implementation FlowDocInputViewComponentView {
   FlowDocInputView *_inputView;
+  /* 刚从回收池里被取出（prepareForRecycle 之后、下次 updateProps 之前）。
+     用来强制重新下发 initialContent —— 见 updateProps 里的说明。 */
+  BOOL _justRecycled;
 }
 
 + (ComponentDescriptorProvider)componentDescriptorProvider {
@@ -28,6 +31,7 @@ using namespace facebook::react;
   [_inputView resetForRecycle];
   static const auto defaultProps = std::make_shared<const FlowDocInputViewProps>();
   _props = defaultProps;
+  _justRecycled = YES;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -70,9 +74,16 @@ using namespace facebook::react;
   if (oldViewProps.fontFamily != newViewProps.fontFamily) {
     [_inputView setFontFamily:RCTNSStringFromString(newViewProps.fontFamily)];
   }
-  if (oldViewProps.initialContent != newViewProps.initialContent) {
+  /* `|| _justRecycled`：刚被回收复用的 view，textStorage 仍残留上一个 React 节点的内容
+     （resetForRecycle 故意不清，避免 doc 滚动复用时闪空一帧）。但若新节点的 initialContent
+     恰好等于 codegen 默认值（空 composer = "[]"），old==new 会跳过 setter，残留文本就泄漏出来
+     ——典型表现：看完文档返回，文档首块文本出现在空输入框里。回收后强制下发一次 initialContent：
+     applyContentJson 用新内容整体替换 attributedText，"[]" 即清空，从根上消除泄漏；对 doc 块
+     这种 initialContent 本就 != 默认值的场景行为不变（本来就会 apply），不引入额外闪烁。 */
+  if (oldViewProps.initialContent != newViewProps.initialContent || _justRecycled) {
     [_inputView setInitialContentJson:RCTNSStringFromString(newViewProps.initialContent)];
   }
+  _justRecycled = NO;
   if (oldViewProps.lineHeight != newViewProps.lineHeight) {
     [_inputView setCustomLineHeight:newViewProps.lineHeight];
   }
