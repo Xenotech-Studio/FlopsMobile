@@ -2,7 +2,7 @@
  * Flops Mobile - Chat + 历史对话列表（主页面带底部 Tab：Chat / Tasks / Calendar）
  */
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -27,6 +27,8 @@ import { PresenceReporter } from './src/notifications/PresenceReporter';
 import { DeepLinkRouter } from './src/notifications/DeepLinkRouter';
 import { UpgradeRequiredOverlay } from './src/components/UpgradeRequiredOverlay';
 import { EncryptionReloginOverlay } from './src/components/EncryptionReloginOverlay';
+import { setPreviewApiImpl } from './src/flowdoc-native-input/previewApi';
+import { getVideoPreviewByUrl, triggerVideoPreview } from './src/api';
 
 // 首帧 = DrawerShell（默认 active=today）。Chat 不再预 push 在栈上：
 // 由抽屉 + 按钮 / Recents / 今日页对话段 setActive 提升为顶层页，避免「两层导航」。
@@ -38,6 +40,20 @@ const initialNavState = {
 function AppContent() {
   const { session, isLoading } = useSession();
   const { isDark, colors } = useAppTheme();
+
+  /* 给 flowdoc 渲染引擎注入视频转码镜像 API（带当前 session 的鉴权）。session 变化（登录/登出）
+     时重注入；登出置 null → 引擎退化为直接播原始 URL。让 flowdoc 文档里的视频在原始编码
+     （如 VP9/AV1）移动端原生播放器解不了时，能查/触发后端 H.264 镜像后改播镜像。 */
+  useEffect(() => {
+    setPreviewApiImpl(
+      session
+        ? {
+            readByUrl: (url) => getVideoPreviewByUrl(session, url),
+            triggerForUrl: (url, fn, mt) => triggerVideoPreview(session, url, fn, mt),
+          }
+        : null
+    );
+  }, [session]);
 
   const navigationTheme = useMemo(
     () => ({

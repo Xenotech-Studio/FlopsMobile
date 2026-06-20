@@ -47,6 +47,12 @@ import Pdf from 'react-native-pdf';
 import { WebView } from 'react-native-webview';
 import Orientation from 'react-native-orientation-locker';
 import { downloadAttachment } from './attachmentDownload';
+import {
+  hasPreviewApiSupport,
+  readPreviewByUrl,
+  triggerPreviewForUrl,
+  type VideoPreview,
+} from './previewApi';
 import { Element as SlateElement, type Descendant } from 'slate';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
@@ -1357,6 +1363,24 @@ const videoUI = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   } as ViewStyle,
+  statusWrap: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+  } as ViewStyle,
+  statusText: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 13,
+    textAlign: 'center',
+  } as TextStyle,
+  statusRetry: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  } as TextStyle,
   centerPlay: {
     width: 56,
     height: 56,
@@ -1408,12 +1432,16 @@ function VideoPreviewPlayer({
   height,
   onAspect,
   style,
+  filename,
+  mimeType,
 }: {
   url: string;
   width: number;
   height: number;
   onAspect?: (aspect: number) => void;
   style?: StyleProp<ViewStyle>;
+  filename?: string;
+  mimeType?: string;
 }) {
   const videoRef = React.useRef<VideoRef>(null);
   const [paused, setPaused] = React.useState(true);
@@ -1422,6 +1450,89 @@ function VideoPreviewPlayer({
   const [currentTime, setCurrentTime] = React.useState(0);
   const [duration, setDuration] = React.useState(0);
   const endedRef = React.useRef(false);
+
+  /* 转码镜像状态机（对齐 web AttachmentPreviewContent）：原始视频用 VP9/AV1 等移动端原生
+     播放器解不了的编码时，AVPlayer 会 onError；此时查/触发后端 H.264 镜像，ready 后改播镜像。
+     - effectiveUrl：ready 有镜像就播镜像，否则播原始
+     - 挂载先查一次 by-url（后端可能已有镜像）；pending 时每 4s 轮询
+     - 原始播放失败且无镜像 → 自动触发一次转码（mobile 不弹按钮，直接生成）*/
+  const [preview, setPreview] = React.useState<VideoPreview | null>(null);
+  const [videoErrored, setVideoErrored] = React.useState(false);
+  const triggeredRef = React.useRef(false);
+  const effectiveUrl =
+    preview?.state === 'ready' && preview.url ? preview.url : url;
+
+  React.useEffect(() => {
+    // 切视频源：重置状态机
+    setPreview(null);
+    setVideoErrored(false);
+    triggeredRef.current = false;
+  }, [url]);
+
+  React.useEffect(() => {
+    setVideoErrored(false);
+  }, [effectiveUrl]);
+
+  // 挂载查一次 sidecar（后端新策略下 VP9/AV1 也会有镜像）
+  React.useEffect(() => {
+    if (!url || !hasPreviewApiSupport()) return;
+    let cancelled = false;
+    readPreviewByUrl(url).then((p) => {
+      if (!cancelled && p) setPreview(p);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  // pending 时轮询直到 ready / failed
+  React.useEffect(() => {
+    if (!url || preview?.state !== 'pending') return;
+    const t = setInterval(() => {
+      readPreviewByUrl(url).then((p) => {
+        if (p) setPreview(p);
+      });
+    }, 4000);
+    return () => clearInterval(t);
+  }, [url, preview?.state]);
+
+  const onVideoError = React.useCallback(() => {
+    setVideoErrored(true);
+    const s = preview?.state;
+    // 镜像/进行中/已失败：交给下面的 mode 计算展示，不再重复触发
+    if (s === 'ready' || s === 'pending' || s === 'failed') return;
+    // 原始播放失败且无镜像：自动触发一次后台转码
+    if (!hasPreviewApiSupport() || triggeredRef.current) return;
+    triggeredRef.current = true;
+    triggerPreviewForUrl(url, filename || '', mimeType || 'video/mp4').then((p) => {
+      // null = 触发失败（网络/服务端）→ 标 failed 给用户重试入口，避免卡在"生成中"
+      setPreview(p || { state: 'failed' });
+    });
+  }, [preview?.state, url, filename, mimeType]);
+
+  const onRetry = React.useCallback(() => {
+    if (!hasPreviewApiSupport()) return;
+    triggeredRef.current = true;
+    setVideoErrored(false);
+    setPreview({ state: 'pending' });
+    triggerPreviewForUrl(url, filename || '', mimeType || 'video/mp4').then((p) => {
+      setPreview(p || { state: 'failed' });
+    });
+  }, [url, filename, mimeType]);
+
+  /* 展示模式：
+     - play：渲染 Video 播 effectiveUrl（原始或镜像）
+     - pending：转码进行中占位
+     - failed：彻底无法播放（镜像也错 / 转码失败 / 无后端可兜底） */
+  const mode: 'play' | 'pending' | 'failed' = (() => {
+    const s = preview?.state;
+    if (s === 'ready' && preview?.url) return videoErrored ? 'failed' : 'play';
+    if (s === 'pending') return 'pending';
+    if (s === 'failed') return 'failed';
+    // 无镜像 / skipped：默认播原始；原始报错后，有后端则转 pending（已自动触发），否则 failed
+    if (videoErrored) return hasPreviewApiSupport() ? 'pending' : 'failed';
+    return 'play';
+  })();
   // 播放中且 UI 可见 → 数秒无操作自动隐藏；依赖含 currentTime 取整段（点击/暂停会重置计时不准确——
   // 用专门的 tick 替代：每次 showUI/paused 变化重启 3.5s 定时即可，进度更新不打断倒计时
   React.useEffect(() => {
@@ -1462,86 +1573,106 @@ function VideoPreviewPlayer({
 
   return (
     <View style={[videoUI.container, style, { width, height }]}>
-      <Video
-        ref={videoRef}
-        source={{ uri: url }}
-        style={StyleSheet.absoluteFill}
-        paused={paused}
-        resizeMode="contain"
-        progressUpdateInterval={250}
-        onLoad={(d) => {
-          if (d?.duration > 0) setDuration(d.duration);
-          const ns = d?.naturalSize;
-          if (ns && ns.width > 0 && ns.height > 0) onAspect?.(ns.width / ns.height);
-        }}
-        onProgress={(p) => setCurrentTime(p.currentTime)}
-        onEnd={() => {
-          endedRef.current = true;
-          setPaused(true);
-          setShowUI(true);
-          setCurrentTime(duration);
-        }}
-      />
-      {/* 点击层（铺满画面） */}
-      <TouchableOpacity
-        style={StyleSheet.absoluteFill}
-        activeOpacity={1}
-        onPress={onSurfacePress}
-      />
-      {/* 未播放：仅居中播放按钮 */}
-      {!started ? (
-        <View pointerEvents="box-none" style={videoUI.centerWrap}>
-          <TouchableOpacity style={videoUI.centerPlay} onPress={play} activeOpacity={0.8}>
-            <Svg width={26} height={26} viewBox="0 0 24 24" fill={iconColor}>
-              {/* 视觉居中：三角形微右移 */}
-              <Path d="M9 5.5v13l11-6.5z" />
-            </Svg>
-          </TouchableOpacity>
+      {mode === 'pending' ? (
+        <View style={videoUI.statusWrap}>
+          <ActivityIndicator color="#fff" />
+          <Text style={videoUI.statusText}>正在生成可播放的视频…</Text>
         </View>
-      ) : null}
-      {/* 底部小条（开始播放后，点击切换显隐；暂停时常显） */}
-      {started && (showUI || paused) ? (
-        <View style={videoUI.bottomBar}>
-          <TouchableOpacity onPress={togglePlay} hitSlop={8} activeOpacity={0.8}>
-            {paused ? (
-              <Svg width={18} height={18} viewBox="0 0 24 24" fill={iconColor}>
-                <Path d="M8 5v14l11-7z" />
-              </Svg>
-            ) : (
-              <Svg width={18} height={18} viewBox="0 0 24 24" fill={iconColor}>
-                <Path d="M6 4h4v16H6z" />
-                <Path d="M14 4h4v16h-4z" />
-              </Svg>
-            )}
-          </TouchableOpacity>
-          <Text style={videoUI.clock}>
-            {formatClock(currentTime)} / {formatClock(duration)}
-          </Text>
-          <View style={{ flex: 1 }} />
-          <TouchableOpacity onPress={enterFullscreen} hitSlop={8} activeOpacity={0.8}>
-            {/* maximize（lucide）：全屏 */}
-            <Svg
-              width={16}
-              height={16}
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke={iconColor}
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <Path d="M8 3H5a2 2 0 0 0-2 2v3" />
-              <Path d="M21 8V5a2 2 0 0 0-2-2h-3" />
-              <Path d="M3 16v3a2 2 0 0 0 2 2h3" />
-              <Path d="M16 21h3a2 2 0 0 0 2-2v-3" />
-            </Svg>
-          </TouchableOpacity>
-          {/* 最底沿细进度条 */}
-          <View style={videoUI.progressTrack}>
-            <View style={[videoUI.progressFill, { width: `${progress * 100}%` }]} />
-          </View>
+      ) : mode === 'failed' ? (
+        <View style={videoUI.statusWrap}>
+          <Text style={videoUI.statusText}>无法播放此视频</Text>
+          {hasPreviewApiSupport() ? (
+            <TouchableOpacity onPress={onRetry} hitSlop={8} activeOpacity={0.8}>
+              <Text style={videoUI.statusRetry}>重试转码</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
-      ) : null}
+      ) : (
+        <>
+          <Video
+            key={effectiveUrl}
+            ref={videoRef}
+            source={{ uri: effectiveUrl }}
+            style={StyleSheet.absoluteFill}
+            paused={paused}
+            resizeMode="contain"
+            progressUpdateInterval={250}
+            onError={onVideoError}
+            onLoad={(d) => {
+              if (d?.duration > 0) setDuration(d.duration);
+              const ns = d?.naturalSize;
+              if (ns && ns.width > 0 && ns.height > 0) onAspect?.(ns.width / ns.height);
+            }}
+            onProgress={(p) => setCurrentTime(p.currentTime)}
+            onEnd={() => {
+              endedRef.current = true;
+              setPaused(true);
+              setShowUI(true);
+              setCurrentTime(duration);
+            }}
+          />
+          {/* 点击层（铺满画面） */}
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={onSurfacePress}
+          />
+          {/* 未播放：仅居中播放按钮 */}
+          {!started ? (
+            <View pointerEvents="box-none" style={videoUI.centerWrap}>
+              <TouchableOpacity style={videoUI.centerPlay} onPress={play} activeOpacity={0.8}>
+                <Svg width={26} height={26} viewBox="0 0 24 24" fill={iconColor}>
+                  {/* 视觉居中：三角形微右移 */}
+                  <Path d="M9 5.5v13l11-6.5z" />
+                </Svg>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          {/* 底部小条（开始播放后，点击切换显隐；暂停时常显） */}
+          {started && (showUI || paused) ? (
+            <View style={videoUI.bottomBar}>
+              <TouchableOpacity onPress={togglePlay} hitSlop={8} activeOpacity={0.8}>
+                {paused ? (
+                  <Svg width={18} height={18} viewBox="0 0 24 24" fill={iconColor}>
+                    <Path d="M8 5v14l11-7z" />
+                  </Svg>
+                ) : (
+                  <Svg width={18} height={18} viewBox="0 0 24 24" fill={iconColor}>
+                    <Path d="M6 4h4v16H6z" />
+                    <Path d="M14 4h4v16h-4z" />
+                  </Svg>
+                )}
+              </TouchableOpacity>
+              <Text style={videoUI.clock}>
+                {formatClock(currentTime)} / {formatClock(duration)}
+              </Text>
+              <View style={{ flex: 1 }} />
+              <TouchableOpacity onPress={enterFullscreen} hitSlop={8} activeOpacity={0.8}>
+                {/* maximize（lucide）：全屏 */}
+                <Svg
+                  width={16}
+                  height={16}
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke={iconColor}
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <Path d="M8 3H5a2 2 0 0 0-2 2v3" />
+                  <Path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+                  <Path d="M3 16v3a2 2 0 0 0 2 2h3" />
+                  <Path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+                </Svg>
+              </TouchableOpacity>
+              {/* 最底沿细进度条 */}
+              <View style={videoUI.progressTrack}>
+                <View style={[videoUI.progressFill, { width: `${progress * 100}%` }]} />
+              </View>
+            </View>
+          ) : null}
+        </>
+      )}
     </View>
   );
 }
@@ -1703,7 +1834,14 @@ function AttachmentPreviewBody({
     );
   } else if (kind === 'video') {
     body = contentSize ? (
-      <VideoPreviewPlayer key={url} url={url} width={contentSize.w} height={contentSize.h} />
+      <VideoPreviewPlayer
+        key={url}
+        url={url}
+        width={contentSize.w}
+        height={contentSize.h}
+        filename={current?.filename}
+        mimeType={current?.mimeType}
+      />
     ) : null;
   } else if (kind === 'pdf') {
     body = contentSize ? (
@@ -1909,6 +2047,8 @@ function AttachmentPreviewRenderer({
             height={availW / vAspect}
             onAspect={setAspect}
             style={ctx.styles.previewVideo}
+            filename={block.filename}
+            mimeType={block.mime_type}
           />
         ) : (
           <View style={[ctx.styles.imagePlaceholder, { height: 200 }]} />

@@ -4,6 +4,7 @@
  */
 import { convProfileLog } from './debug/conversationLoadProfile';
 import { fetchWithDebugLog } from './utils/httpDebugLog';
+import type { VideoPreview } from './flowdoc-native-input/previewApi';
 import {
   SrpClientSession,
   deriveSrpPassword,
@@ -1109,6 +1110,58 @@ export async function createConversation(
     bound_agent_id: typeof data.bound_agent_id === 'string' ? data.bound_agent_id : undefined,
     agent_profile: data.agent_profile,
   };
+}
+
+/**
+ * GET /api/preview/by-url：读某个视频 URL 的转码镜像状态。
+ * 返回 {state, url?, source_codec?, ...}；找不到 / 失败 / 401 返回 null。
+ * 与 web flowdoc-editor-core/previewApi.js 同语义，供 flowdoc 渲染引擎经注入调用。
+ */
+export async function getVideoPreviewByUrl(
+  session: Session,
+  url: string
+): Promise<VideoPreview | null> {
+  if (!url) return null;
+  try {
+    const base = session.server_base_url;
+    const res = await fetchWithDebugLog(
+      `${base}api/preview/by-url?url=${encodeURIComponent(url)}`,
+      { method: 'GET', headers: authHeaders(session.access_token) }
+    );
+    if (!res.ok) return null;
+    const data = (await res.json().catch(() => null)) as { preview?: VideoPreview } | null;
+    const preview = data && typeof data === 'object' ? data.preview : null;
+    return preview && typeof preview === 'object' && preview.state ? preview : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * POST /api/preview/trigger：对一个原始视频 URL 触发后台 H.264 转码镜像任务。
+ * 返回最新 preview dict（通常 state='pending'）；失败 / 401 返回 null。
+ */
+export async function triggerVideoPreview(
+  session: Session,
+  url: string,
+  filename: string,
+  mimeType: string
+): Promise<VideoPreview | null> {
+  if (!url) return null;
+  try {
+    const base = session.server_base_url;
+    const res = await fetchWithDebugLog(`${base}api/preview/trigger`, {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({ url, filename: filename || '', mime_type: mimeType || 'video/mp4' }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json().catch(() => null)) as { preview?: VideoPreview } | null;
+    const preview = data && typeof data === 'object' ? data.preview : null;
+    return preview && typeof preview === 'object' && preview.state ? preview : null;
+  } catch {
+    return null;
+  }
 }
 
 /** GET /api/agentf/agent-ids — 与 FlopsWeb Chat.jsx 一致（顺序：用户设置页保存的序，或默认字母序） */
