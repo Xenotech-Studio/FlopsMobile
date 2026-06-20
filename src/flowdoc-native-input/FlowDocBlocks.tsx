@@ -1320,6 +1320,25 @@ function splatvViewerUrl(url: string): string {
   return `https://4d.kiriengine.com/viewer?model=${encodeURIComponent(url)}`;
 }
 
+/**
+ * 把内嵌 viewer 网页缩放到 50%（对齐 web 的"放大 2 倍再 scale(0.5)"）。
+ * 强制 viewport initial-scale=0.5：布局视口变 2 倍、内容渲染 0.5，canvas 仍铺满 WebView。
+ */
+const SPLATV_HALF_ZOOM_JS = `
+(function(){
+  try {
+    var set = function(){
+      var m = document.querySelector('meta[name=viewport]');
+      if (!m) { m = document.createElement('meta'); m.setAttribute('name','viewport'); (document.head||document.documentElement).appendChild(m); }
+      m.setAttribute('content','width=device-width, initial-scale=0.5, minimum-scale=0.5, maximum-scale=0.5, user-scalable=no');
+    };
+    set();
+    document.addEventListener('DOMContentLoaded', set);
+  } catch (e) {}
+  true;
+})();
+`;
+
 function formatClock(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
   const m = Math.floor(s / 60);
@@ -1931,6 +1950,8 @@ function AttachmentPreviewRenderer({
               allowsFullscreenVideo
               javaScriptEnabled
               domStorageEnabled
+              injectedJavaScriptBeforeContentLoaded={SPLATV_HALF_ZOOM_JS}
+              injectedJavaScript={SPLATV_HALF_ZOOM_JS}
             />
           </View>
         ) : (
