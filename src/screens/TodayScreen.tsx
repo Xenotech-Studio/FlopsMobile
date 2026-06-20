@@ -480,7 +480,9 @@ export function TodayScreen() {
   const onCreateChat = useCallback(async () => {
     if (!session) return;
     try {
-      const { id } = await createConversation(session);
+      // 新对话始终加密（与全局抽屉一致）。即时创建后按 id 进页，ChatScreen 的
+      // getConversation 会用本机 K_user 从 k_conv_blob 派生并缓存 K_conv。
+      const { id } = await createConversation(session, { encrypted: true });
       navigation.navigate('Chat', { conversationId: id, conversationTitle: '新对话' });
       loadConvs();
     } catch (e) {

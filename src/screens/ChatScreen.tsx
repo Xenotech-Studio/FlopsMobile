@@ -1609,11 +1609,20 @@ export function ChatScreen({
         const opts: { bound_agent_id?: string; encrypted?: boolean } = {};
         if (bid) opts.bound_agent_id = bid;
         if (createEncrypted) opts.encrypted = true;
-        const { id } = await createConversation(session, Object.keys(opts).length ? opts : undefined);
-        convId = id;
-        setConversationId(id);
-        conversationIdRef.current = id;
+        const created = await createConversation(session, Object.keys(opts).length ? opts : undefined);
+        convId = created.id;
+        setConversationId(created.id);
+        conversationIdRef.current = created.id;
         setConversationTitle(nextMessage.slice(0, 50) || '新对话');
+        /* 同步灌 meta（含 bound agent 的 agent_profile）：草稿对话首条消息走惰性创建，
+           随后立即 runV2WithHandlers 同步读 conversationMetaRef 拼 k_agent_wire。漏了它，
+           加密 bound agent 的 chat_v2 缺 k_agent_wire，server 返 400。对齐 getConversation 写法。 */
+        const nextMeta = {
+          bound_agent_id: created.bound_agent_id,
+          agent_profile: created.agent_profile,
+        };
+        conversationMetaRef.current = nextMeta;
+        setConversationMeta(nextMeta);
       } catch (e) {
         setError(e instanceof Error ? e.message : '创建会话失败');
         setMessages((prev) => [...prev, { role: 'error', content: String(e) }]);
@@ -2176,13 +2185,21 @@ export function ChatScreen({
     setConversationMeta(null);
     try {
       if (session) {
-        const { id } = await createConversation(
-          session,
-          bidForCreate ? { bound_agent_id: bidForCreate } : undefined
-        );
-        setConversationId(id);
-        conversationIdRef.current = id;
+        /* 新对话始终加密；并回填 meta（含 bound agent 的 agent_profile）让随后首条消息能拼
+           k_agent_wire（加密 bound agent 缺它 → server 400）。对齐草稿惰性创建与 web。 */
+        const created = await createConversation(session, {
+          encrypted: true,
+          ...(bidForCreate ? { bound_agent_id: bidForCreate } : {}),
+        });
+        setConversationId(created.id);
+        conversationIdRef.current = created.id;
         setConversationTitle('新对话');
+        const nextMeta = {
+          bound_agent_id: created.bound_agent_id,
+          agent_profile: created.agent_profile,
+        };
+        conversationMetaRef.current = nextMeta;
+        setConversationMeta(nextMeta);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : '创建会话失败');

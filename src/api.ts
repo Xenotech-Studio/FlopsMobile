@@ -1065,7 +1065,7 @@ export async function injectSendQueueItem(
 export async function createConversation(
   session: Session,
   opts?: { bound_agent_id?: string; encrypted?: boolean }
-): Promise<{ id: string }> {
+): Promise<{ id: string; bound_agent_id?: string; agent_profile?: AgentProfile }> {
   const base = session.server_base_url;
   const body: Record<string, unknown> = {};
   const bid = String(opts?.bound_agent_id || '').trim();
@@ -1093,7 +1093,7 @@ export async function createConversation(
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail || `创建会话失败: ${res.status}`);
   }
-  const data = (await res.json()) as { id?: string };
+  const data = (await res.json()) as { id?: string; bound_agent_id?: string; agent_profile?: AgentProfile };
   if (!data.id) throw new Error('服务端未返回会话 id');
   // 创建成功后注册 K_conv 到 cache
   if (opts?.encrypted) {
@@ -1102,7 +1102,13 @@ export async function createConversation(
       if (pending) setCachedKConv(data.id, pending);
     } catch { /* ignore */ }
   }
-  return { id: data.id };
+  // 返回 bound_agent_id + agent_profile（对齐 web）：惰性创建的草稿对话靠这个在首条消息前
+  // 灌进 conversationMetaRef，否则加密 bound agent 的 chat_v2 缺 k_agent_wire → server 400。
+  return {
+    id: data.id,
+    bound_agent_id: typeof data.bound_agent_id === 'string' ? data.bound_agent_id : undefined,
+    agent_profile: data.agent_profile,
+  };
 }
 
 /** GET /api/agentf/agent-ids — 与 FlopsWeb Chat.jsx 一致（顺序：用户设置页保存的序，或默认字母序） */
