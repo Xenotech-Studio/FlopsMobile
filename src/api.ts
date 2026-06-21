@@ -1909,16 +1909,43 @@ export async function getUsageSummary(session: Session, days: number = 90): Prom
   return (await res.json()) as UsageSummaryResponse;
 }
 
+export type ProviderKeyStatus = Record<string, { configured?: boolean; hint?: string }>;
+export type OfficialSubscriptionInfo = {
+  subscribed?: boolean;
+  tier?: string;
+  tier_label?: string;
+  package_market_ids?: string[];
+  owner?: string;
+};
+
 export type ModelsConfigResponse = {
   selected_model?: string;
   selected_model_label?: string;
-  /** label -> model id，与 Web/Desktop 一致 */
+  /** label -> model id（`<owner>:<market_id>` 形态），与 Web/Desktop 一致 */
   available_models?: Record<string, string>;
+  all_models?: Record<string, string>;
+  /** market_id -> 价格 / 思考强度 / 能力（已剥 owner，查表前先 marketIdOf） */
   model_price_reference?: Record<string, unknown>;
-  all_models?: Record<string, unknown>;
+  model_thinking_strengths?: Record<string, unknown>;
+  model_capabilities?: Record<string, unknown>;
   allowlist_ids?: string[];
+  allowlist_provider_keys?: string[];
+  allowlist_provider_catalog?: { key: string; label: string }[];
+  /** BYOK：每供应商是否已配 key + 末 4 位掩码 */
+  provider_key_status?: ProviderKeyStatus;
+  /** 官方精选套餐订阅状态 */
+  official_subscription?: OfficialSubscriptionInfo;
   default_model?: string;
 };
+
+/** 模型 id 为 `<owner>:<market_id>`；按「首个冒号且左侧无斜杠」切分（与后端一致）。 */
+export function marketIdOf(modelId: string): string {
+  const s = String(modelId || '').trim();
+  if (!s) return '';
+  const i = s.indexOf(':');
+  if (i > 0 && s.slice(0, i).indexOf('/') === -1) return s.slice(i + 1);
+  return s;
+}
 
 /** GET /api/models/config */
 export async function getModelsConfig(session: Session): Promise<ModelsConfigResponse> {
@@ -1948,6 +1975,54 @@ export async function selectModel(session: Session, model: string): Promise<Mode
     throw new Error((err as { detail?: string }).detail || `切换模型失败: ${res.status}`);
   }
   return (await res.json()) as ModelsConfigResponse;
+}
+
+/** POST /api/models/provider_key — 配置/清除自己某供应商的 API key（BYOK）。apiKey 为空串=清除。 */
+export async function setProviderKey(
+  session: Session,
+  provider: string,
+  apiKey: string,
+): Promise<ModelsConfigResponse> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/models/provider_key`, {
+    method: 'POST',
+    headers: { ...authHeaders(session.access_token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: String(provider || '').trim(), api_key: apiKey }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `保存 API Key 失败: ${res.status}`);
+  }
+  return (await res.json()) as ModelsConfigResponse;
+}
+
+/**
+ * POST /api/models/provider_key/test — 测试某供应商 key 的连通性（不落库）。
+ * apiKey 传空串时后端用已存的老 key 测，所以允许空。返回 { ok, message }。
+ */
+export async function testProviderKey(
+  session: Session,
+  provider: string,
+  apiKey: string,
+): Promise<{ ok: boolean; message: string }> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/models/provider_key/test`, {
+    method: 'POST',
+    headers: { ...authHeaders(session.access_token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: String(provider || '').trim(), api_key: apiKey }),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    message?: string;
+    detail?: string;
+  };
+  if (!res.ok) {
+    throw new Error(data.detail || data.message || `测试失败: ${res.status}`);
+  }
+  return {
+    ok: !!data.ok,
+    message: data.message || (data.ok ? '连接成功' : '连接失败'),
+  };
 }
 
 /* ============================================================

@@ -51,6 +51,7 @@ export type RootStackParamList = {
   ChangePassword: undefined;
   BindEmail: undefined;
   UsageSettings: undefined;
+  ModelProviderSettings: undefined;
   SoulSettings: undefined;
   AppearanceSettings: undefined;
   NotificationSettings: undefined;

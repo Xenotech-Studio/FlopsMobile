@@ -22,6 +22,7 @@ import { BindEmailScreen } from '../screens/BindEmailScreen';
 import { SoulSettingsScreen } from '../screens/SoulSettingsScreen';
 import { AppearanceSettingsScreen } from '../screens/AppearanceSettingsScreen';
 import { NotificationSettingsScreen } from '../screens/NotificationSettingsScreen';
+import { ModelProviderSettingsScreen } from '../screens/ModelProviderSettingsScreen';
 import { SlateRNSpikeScreen } from '../screens/SlateRNSpikeScreen';
 import { DocPreviewScreen } from '../screens/docs/DocPreviewScreen';
 import type { RootStackParamList } from './types';
@@ -129,6 +130,15 @@ export function RootNavigator() {
       <Stack.Screen
         name="NotificationSettings"
         component={NotificationSettingsScreen}
+        options={{
+          headerShown: false,
+          gestureEnabled: true,
+          cardStyleInterpolator: rightCardStyleInterpolator,
+        }}
+      />
+      <Stack.Screen
+        name="ModelProviderSettings"
+        component={ModelProviderSettingsScreen}
         options={{
           headerShown: false,
           gestureEnabled: true,

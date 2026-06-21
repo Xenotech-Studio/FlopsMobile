@@ -55,6 +55,7 @@ import {
   getLayoutPreferences,
   getModelsConfig,
   selectModel,
+  marketIdOf,
   getAgentIds,
   getAgentProfile,
   type ModelsConfigResponse,
@@ -255,7 +256,7 @@ function modelDropdownPriceLine(
   show: boolean
 ): string | null {
   if (!show) return null;
-  const priceRef = modelPriceReference[modelId];
+  const priceRef = modelPriceReference[marketIdOf(modelId)];
   if (priceRef === undefined) return null;
   if (priceRef === 0) return '免费';
   if (typeof priceRef === 'object' && priceRef != null) {

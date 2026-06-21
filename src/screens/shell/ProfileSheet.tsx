@@ -318,6 +318,13 @@ export function ProfileSheet({
               colors={colors}
             />
             <Row
+              icon="cube-outline"
+              label="模型与供应商"
+              border
+              onPress={() => dismissAndNavigate('ModelProviderSettings')}
+              colors={colors}
+            />
+            <Row
               icon="moon-outline"
               label="外观"
               border
