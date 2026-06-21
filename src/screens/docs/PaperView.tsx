@@ -249,7 +249,7 @@ function HtmlWebView({
         style={styles.webview}
         originWhitelist={['*']}
         showsHorizontalScrollIndicator={false}
-        decelerationRate="normal"
+        decelerationRate={0.998}
         directionalLockEnabled
         // 链接走系统浏览器，不在内嵌 WebView 里跳走整页
         onShouldStartLoadWithRequest={(req) => {
