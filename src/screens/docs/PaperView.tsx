@@ -147,19 +147,21 @@ export function PaperView({ docId, meta, viewMode, contentTopInset, contentBotto
     <View style={styles.root}>
       {mode === 'pdf' ? (
         pdfUrl ? (
-          /* 全宽贯穿（PDF 滚动时延伸到顶）；contentInsetTop（patch 加的原生 prop）让静止(offset 0)时
-             顶部留出 header+安全区高度。要调留白就改这个值。 */
+          /* 全宽贯穿（PDF 滚动时延伸到顶）；Android 用 paddingTop 包一层留顶部间距
+             （iOS 走原生 contentInsetTop，Android 原生 Canvas 不认 setPadding） */
+          <View style={{ flex: 1, paddingTop: Math.round(topPad), backgroundColor: '#fff' }}>
           <Pdf
             source={{ uri: pdfUrl, cache: true }}
             style={styles.pdf}
             // 全宽无边缘（对齐 web）：按宽适配、页间距 0
             fitPolicy={0}
             spacing={0}
-            // 顶部留白（静止时）：比完整 header 高略小一点，更紧凑。调系数即可。
+            // iOS 原生顶部留白（静止时）
             contentInsetTop={Math.round(topPad)}
             trustAllCerts={false}
             onError={() => {}}
           />
+          </View>
         ) : (
           <Centered styles={styles} colors={colors} icon="document-outline" title="无 PDF" hint="本论文还没有关联 PDF 文件" />
         )
