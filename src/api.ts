@@ -1947,6 +1947,37 @@ export function marketIdOf(modelId: string): string {
   return s;
 }
 
+const OFFICIAL_OWNER = 'flops_official';
+
+/** 取 owner 部分（剥 market_id）；与 marketIdOf 互补，按同一切分规则。 */
+export function ownerOf(modelId: string): string {
+  const s = String(modelId || '').trim();
+  if (!s) return '';
+  const i = s.indexOf(':');
+  if (i > 0 && s.slice(0, i).indexOf('/') === -1) return s.slice(0, i);
+  return '';
+}
+
+/**
+ * 与后端 `_get_allowlist_provider_key` / FlopsWeb `getAllowlistProviderKeyFromModelId` 一致：
+ * 资源节点 flops/→flops；官方 owner→official；其余按 market 路由首段；兜底 other。
+ */
+export function getAllowlistProviderKeyFromModelId(modelId: string): string {
+  if (!modelId || typeof modelId !== 'string') return 'other';
+  const owner = ownerOf(modelId);
+  const market = marketIdOf(modelId);
+  if (market.startsWith('flops/')) return 'flops';
+  if (owner === OFFICIAL_OWNER) return 'official';
+  if (market.startsWith('openrouter/')) return 'openrouter';
+  if (market.startsWith('minimax/')) return 'minimax';
+  if (market.startsWith('dashscope/')) return 'dashscope';
+  if (market.startsWith('deepseek/')) return 'deepseek';
+  if (market.startsWith('boundlessai/')) return 'boundlessai';
+  if (market.startsWith('aiprimetech/')) return 'aiprimetech';
+  if (market.startsWith('bailianplan/')) return 'bailianplan';
+  return 'other';
+}
+
 /** GET /api/models/config */
 export async function getModelsConfig(session: Session): Promise<ModelsConfigResponse> {
   const base = session.server_base_url;
@@ -1992,6 +2023,48 @@ export async function setProviderKey(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail || `保存 API Key 失败: ${res.status}`);
+  }
+  return (await res.json()) as ModelsConfigResponse;
+}
+
+/**
+ * POST /api/models/allowlist — 设置模型白名单（打勾列表）。body `{ model_ids }`，返回完整模型配置 payload。
+ * model_ids 为完整 `<owner>:<market_id>` 形态；后端会拒绝空列表，调用方需保证至少留一个。
+ */
+export async function setModelAllowlist(
+  session: Session,
+  modelIds: string[],
+): Promise<ModelsConfigResponse> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/models/allowlist`, {
+    method: 'POST',
+    headers: { ...authHeaders(session.access_token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model_ids: modelIds }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `保存模型白名单失败: ${res.status}`);
+  }
+  return (await res.json()) as ModelsConfigResponse;
+}
+
+/**
+ * POST /api/models/provider_allowlist — 设置供应商 allowlist（启用哪些供应商）。
+ * body `{ providers }`（model_id 前缀段，如 openrouter/flops/official）；后端拒绝空列表。
+ */
+export async function setProviderAllowlist(
+  session: Session,
+  providers: string[],
+): Promise<ModelsConfigResponse> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/models/provider_allowlist`, {
+    method: 'POST',
+    headers: { ...authHeaders(session.access_token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ providers }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `保存供应商白名单失败: ${res.status}`);
   }
   return (await res.json()) as ModelsConfigResponse;
 }
