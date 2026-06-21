@@ -1,5 +1,13 @@
 [
   {
+    "version": "0.1.7",
+    "date": "2026-06-21",
+    "changes": [
+      "模型供应商 BYOK 新增模型白名单编辑：手风琴卡片内联勾选",
+      "修复 Android paper PDF 标签页闪退"
+    ]
+  },
+  {
     "version": "0.1.6",
     "date": "2026-06-21",
     "changes": [
