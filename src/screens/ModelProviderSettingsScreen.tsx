@@ -328,29 +328,44 @@ export function ModelProviderSettingsScreen() {
             <Text style={[styles.modalLabel, { color: colors.textMuted }]}>
               {isManage ? '更换 Key（留空则不修改）' : 'API Key'}
             </Text>
-            <TextInput
-              style={[
-                styles.input,
-                { color: colors.textPrimary, borderColor: colors.border, backgroundColor: colors.surfaceMuted },
-              ]}
-              placeholder={isManage ? '输入新的 API Key 以替换' : `填入你的 ${modalLabel} API Key`}
-              placeholderTextColor={colors.textMuted}
-              value={token}
-              onChangeText={(t) => {
-                setToken(t);
-                setTestResult(null);
-              }}
-              autoCapitalize="none"
-              autoCorrect={false}
-              secureTextEntry
-            />
+            <View style={styles.inputRow}>
+              <TextInput
+                style={[
+                  styles.input,
+                  styles.inputFlex,
+                  { color: colors.textPrimary, borderColor: colors.border, backgroundColor: colors.surfaceMuted },
+                ]}
+                placeholder={isManage ? '输入新的 API Key 以替换' : `填入你的 ${modalLabel} API Key`}
+                placeholderTextColor={colors.textMuted}
+                value={token}
+                onChangeText={(t) => {
+                  setToken(t);
+                  setTestResult(null);
+                }}
+                autoCapitalize="none"
+                autoCorrect={false}
+                secureTextEntry
+              />
+              <TouchableOpacity
+                style={[
+                  styles.testBtn,
+                  { borderColor: colors.border, opacity: testing || (!isManage && !tokenTrim) ? 0.5 : 1 },
+                ]}
+                disabled={testing || (!isManage && !tokenTrim)}
+                onPress={() => void handleTest()}
+                activeOpacity={0.8}
+              >
+                {testing ? (
+                  <ActivityIndicator size="small" color={colors.textSecondary} />
+                ) : (
+                  <Text style={[styles.testBtnText, { color: colors.textSecondary }]}>
+                    {tokenTrim ? '测试' : '测试'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
 
-            {testing ? (
-              <View style={styles.statusRow}>
-                <ActivityIndicator size="small" color={colors.primary} />
-                <Text style={[styles.statusText, { color: colors.textMuted }]}>正在测试…</Text>
-              </View>
-            ) : testResult ? (
+            {testResult ? (
               <View style={styles.statusRow}>
                 <Text style={[styles.statusText, { color: testResult.ok ? '#16a34a' : '#dc2626' }]}>
                   {testResult.ok ? '✓ 测试成功，可以使用' : `✗ ${testResult.message}`}
@@ -377,20 +392,6 @@ export function ModelProviderSettingsScreen() {
                   <Text style={[styles.btnGhostText, { color: colors.textSecondary }]}>返回</Text>
                 </TouchableOpacity>
               )}
-              <TouchableOpacity
-                style={[
-                  styles.btn,
-                  styles.btnGhost,
-                  { borderColor: colors.border, opacity: testing || (!isManage && !tokenTrim) ? 0.5 : 1 },
-                ]}
-                disabled={testing || (!isManage && !tokenTrim)}
-                onPress={() => void handleTest()}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.btnGhostText, { color: colors.textSecondary }]}>
-                  {testing ? '测试中…' : tokenTrim ? '测试' : '测试当前 Key'}
-                </Text>
-              </TouchableOpacity>
               <View style={styles.flexSpacer} />
               <TouchableOpacity
                 style={[styles.btn, styles.btnGhost, { borderColor: colors.border }]}
@@ -442,8 +443,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   configBtnText: { fontSize: 13, fontWeight: '500' },
+  inputRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
   input: {
-    marginTop: 8,
     borderWidth: 1,
     borderRadius: 8,
     paddingHorizontal: 12,
@@ -451,6 +452,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: 'Menlo',
   },
+  inputFlex: { flex: 1 },
+  testBtn: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  testBtnText: { fontSize: 14, fontWeight: '500' },
   btn: { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   btnPrimaryText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   btnGhost: { backgroundColor: 'transparent', borderWidth: 1 },
