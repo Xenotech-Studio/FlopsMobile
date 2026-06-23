@@ -6100,6 +6100,13 @@ react-native-argon2@^4.0.0:
   resolved "https://registry.yarnpkg.com/react-native-argon2/-/react-native-argon2-4.0.0.tgz#9e5f8a9fc2d89fdb1b8a34183f6d36e8b46509a8"
   integrity sha512-K6qIg9nBCHtu9/t5BdaGtmqKvmYjUy4aDrG2CeI4WNEMeQPlj91uDb9KP6AnFiFX3W7Unqo4f3uEgKcDUpZxcg==
 
+react-native-audio-api@^0.12.2:
+  version "0.12.2"
+  resolved "https://registry.yarnpkg.com/react-native-audio-api/-/react-native-audio-api-0.12.2.tgz#e64389104254c753197dcc8ce8b1243ffe97313e"
+  integrity sha512-OizgzmolTzCwgMlNv8eyRTh888up6mmS158O1+h9M8dHE4dTSZjjT0622zDJ+Z58trEyYHRcOJP9evBMTzm4UQ==
+  dependencies:
+    semver "^7.7.3"
+
 react-native-blob-util@^0.24.9:
   version "0.24.9"
   resolved "https://registry.yarnpkg.com/react-native-blob-util/-/react-native-blob-util-0.24.9.tgz#fb5609251d3e3b3b59913bc19ad116e6bfd4e6f8"

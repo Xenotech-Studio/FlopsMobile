@@ -1,0 +1,12 @@
+diff --git a/node_modules/react-native-audio-api/lib/module/system/notification/RecordingNotificationManager.ios.js b/node_modules/react-native-audio-api/lib/module/system/notification/RecordingNotificationManager.ios.js
+index 6f8a2c3..a1b4d5e 100644
+--- a/node_modules/react-native-audio-api/lib/module/system/notification/RecordingNotificationManager.ios.js
++++ b/node_modules/react-native-audio-api/lib/module/system/notification/RecordingNotificationManager.ios.js
+@@ -4,7 +4,6 @@
+ class RecordingNotificationManager {
+   constructor() {
+     this.audioEventEmitter = new AudioEventEmitter(global.AudioEventEmitter);
+-    console.warn('RecordingNotificationManager is not implemented on iOS. Any calls to it will be no-ops.');
+   }
+ 
+   /**

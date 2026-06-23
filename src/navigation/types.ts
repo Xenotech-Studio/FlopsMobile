@@ -55,6 +55,8 @@ export type RootStackParamList = {
   SoulSettings: undefined;
   AppearanceSettings: undefined;
   NotificationSettings: undefined;
+  /** 开发测试页（Profile 入口） */
+  DevTest: undefined;
   SlateRNSpike: undefined;
 };
 

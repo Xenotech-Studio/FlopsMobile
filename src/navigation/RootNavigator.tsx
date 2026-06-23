@@ -24,6 +24,7 @@ import { AppearanceSettingsScreen } from '../screens/AppearanceSettingsScreen';
 import { NotificationSettingsScreen } from '../screens/NotificationSettingsScreen';
 import { ModelProviderSettingsScreen } from '../screens/ModelProviderSettingsScreen';
 import { SlateRNSpikeScreen } from '../screens/SlateRNSpikeScreen';
+import { DevTestScreen } from '../screens/DevTestScreen';
 import { DocPreviewScreen } from '../screens/docs/DocPreviewScreen';
 import type { RootStackParamList } from './types';
 import { useAppTheme } from '../context/ThemeContext';
@@ -148,6 +149,15 @@ export function RootNavigator() {
       <Stack.Screen
         name="SlateRNSpike"
         component={SlateRNSpikeScreen}
+        options={{
+          headerShown: false,
+          gestureEnabled: true,
+          cardStyleInterpolator: rightCardStyleInterpolator,
+        }}
+      />
+      <Stack.Screen
+        name="DevTest"
+        component={DevTestScreen}
         options={{
           headerShown: false,
           gestureEnabled: true,

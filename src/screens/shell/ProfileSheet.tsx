@@ -332,6 +332,13 @@ export function ProfileSheet({
               colors={colors}
             />
             <Row
+              icon="flask-outline"
+              label="开发测试"
+              border
+              onPress={() => dismissAndNavigate('DevTest')}
+              colors={colors}
+            />
+            <Row
               icon="information-circle-outline"
               label="关于 / 检查更新"
               border
