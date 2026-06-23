@@ -49,6 +49,37 @@ function floatTo16kInt16(float32: Float32Array, fromRate: number): Int16Array {
   return out;
 }
 
+/** 把 4 字节 ASCII 写进 buf[off..off+4]。 */
+function writeAscii(buf: Uint8Array, off: number, s: string): void {
+  for (let i = 0; i < 4; i++) buf[off + i] = s.charCodeAt(i);
+}
+
+/** WAV PCM 头：44 字节，固定布局——RIFF / fmt / data 三块。 */
+function writeWavHeader(
+  buf: Uint8Array,
+  dataSize: number,
+  sampleRate: number,
+  channels: number,
+  bitsPerSample: number,
+): void {
+  const view = new DataView(buf.buffer, buf.byteOffset, 44);
+  const byteRate = (sampleRate * channels * bitsPerSample) / 8;
+  const blockAlign = (channels * bitsPerSample) / 8;
+  writeAscii(buf, 0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeAscii(buf, 8, 'WAVE');
+  writeAscii(buf, 12, 'fmt ');
+  view.setUint32(16, 16, true); // PCM fmt 子块长度
+  view.setUint16(20, 1, true); // audioFormat = 1 (PCM)
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeAscii(buf, 36, 'data');
+  view.setUint32(40, dataSize, true);
+}
+
 /** https://host/ → wss://host/api/ws/asr?access_token=... */
 function buildAsrUrl(serverBaseUrl: string, token: string): string {
   const trimmed = (serverBaseUrl || '').replace(/\/+$/, '');
@@ -73,6 +104,9 @@ export class VoiceDictationSession {
   private _byteCarry = new Uint8Array(0); // 不足一个 chunk 的尾巴
   private _finishQueued = false;
   private _doneTimer: ReturnType<typeof setTimeout> | null = null;
+  /** start → stop 之间所有 16k/16bit/mono PCM 字节，按到达顺序攒着，供 getRecordedAudio 拼 WAV。 */
+  private _pcmChunks: Uint8Array[] = [];
+  private _pcmTotalBytes = 0;
 
   constructor(opts: VoiceDictationOptions) {
     this.serverBaseUrl = opts.serverBaseUrl;
@@ -85,6 +119,9 @@ export class VoiceDictationSession {
   async start(): Promise<void> {
     if (this.state !== 'idle') return;
     this.state = 'starting';
+    // 每次会话独立攒一份 PCM 用于回放/落库
+    this._pcmChunks = [];
+    this._pcmTotalBytes = 0;
 
     // 麦克风权限 + 音频会话
     try {
@@ -146,6 +183,22 @@ export class VoiceDictationSession {
     } catch {
       /* 拆除路径，忽略 */
     }
+  }
+
+  /**
+   * 把 start → stop 之间累计的 PCM 数据拼成完整 WAV(16k/16bit/mono),返回可直接当 audio/wav
+   * 上传或喂 <audio> 解码的 ArrayBuffer。没有数据时返回仅含头部的 44 字节空 WAV。
+   */
+  getRecordedAudio(): ArrayBuffer {
+    const dataSize = this._pcmTotalBytes;
+    const out = new Uint8Array(44 + dataSize);
+    writeWavHeader(out, dataSize, TARGET_SAMPLE_RATE, 1, 16);
+    let off = 44;
+    for (const chunk of this._pcmChunks) {
+      out.set(chunk, off);
+      off += chunk.length;
+    }
+    return out.buffer;
   }
 
   // -------------------- internal --------------------
@@ -219,6 +272,11 @@ export class VoiceDictationSession {
   /** 攒字节，凑满 CHUNK_BYTES 发一片 */
   private _pushPcm(int16: Int16Array): void {
     const bytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
+    // 单独留一份拷贝给 getRecordedAudio()——后续 send_audio 会切片,不能共用 buffer
+    const archived = new Uint8Array(bytes.length);
+    archived.set(bytes);
+    this._pcmChunks.push(archived);
+    this._pcmTotalBytes += archived.length;
     const merged = new Uint8Array(this._byteCarry.length + bytes.length);
     merged.set(this._byteCarry, 0);
     merged.set(bytes, this._byteCarry.length);

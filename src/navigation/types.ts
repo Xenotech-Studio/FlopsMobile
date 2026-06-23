@@ -57,6 +57,8 @@ export type RootStackParamList = {
   NotificationSettings: undefined;
   /** 开发测试页（Profile 入口） */
   DevTest: undefined;
+  /** 录音机本地库（DevTest 子页） */
+  RecordingLibrary: undefined;
   SlateRNSpike: undefined;
 };
 

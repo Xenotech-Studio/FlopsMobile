@@ -25,6 +25,7 @@ import { NotificationSettingsScreen } from '../screens/NotificationSettingsScree
 import { ModelProviderSettingsScreen } from '../screens/ModelProviderSettingsScreen';
 import { SlateRNSpikeScreen } from '../screens/SlateRNSpikeScreen';
 import { DevTestScreen } from '../screens/DevTestScreen';
+import { RecordingLibraryScreen } from '../screens/RecordingLibraryScreen';
 import { DocPreviewScreen } from '../screens/docs/DocPreviewScreen';
 import type { RootStackParamList } from './types';
 import { useAppTheme } from '../context/ThemeContext';
@@ -158,6 +159,15 @@ export function RootNavigator() {
       <Stack.Screen
         name="DevTest"
         component={DevTestScreen}
+        options={{
+          headerShown: false,
+          gestureEnabled: true,
+          cardStyleInterpolator: rightCardStyleInterpolator,
+        }}
+      />
+      <Stack.Screen
+        name="RecordingLibrary"
+        component={RecordingLibraryScreen}
         options={{
           headerShown: false,
           gestureEnabled: true,
