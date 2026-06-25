@@ -5,17 +5,37 @@
  * （录音结束后出现，点击保存到 /api/dev/recordings）。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import { useAppTheme } from '../context/ThemeContext';
 import { useSession } from '../context/SessionContext';
 import type { AppColors } from '../theme/appColors';
 import type { RootStackParamList } from '../navigation/types';
-import { VoiceDictationSession } from '../utils/voiceDictationMobile';
+import { VoiceDictationSession, createPlaybackSession } from '../utils/voiceDictationMobile';
 
 type RecStatus = 'idle' | 'starting' | 'recording' | 'finalizing';
+
+/** 从录音库「重访」带过来的回放数据 */
+export interface RevisitRecording {
+  id: string;
+  title: string;
+  durationMs: number;
+  text: string;
+  audioBase64: string;
+}
+
+/**
+ * 录音库「+」回退（navigation.pop）回 DevTest 时，用这个模块级变量传数据——
+ * 避免 navigate() 在栈里推一个全新的 DevTest（右滑入动画）。DevTestScreen 在 focus
+ * 时读取并清空。ES 模块导入是只读绑定，故对外暴露 setter 而非直接赋值。
+ */
+export let pendingRevisit: RevisitRecording | null = null;
+export function setPendingRevisit(r: RevisitRecording | null): void {
+  pendingRevisit = r;
+}
 
 interface LastRecording {
   audio: ArrayBuffer;
@@ -41,16 +61,35 @@ export function DevTestScreen() {
   const [error, setError] = useState('');
   const [pressed, setPressed] = useState(false);
   const [last, setLast] = useState<LastRecording | null>(null);
+  const [playback, setPlayback] = useState<RevisitRecording | null>(null);
 
   const sessionRef = useRef<VoiceDictationSession | null>(null);
+  const playbackRef = useRef<ReturnType<typeof createPlaybackSession> | null>(null);
   const startedAtRef = useRef<number>(0);
 
   useEffect(() => {
     return () => {
       sessionRef.current?.cancel();
       sessionRef.current = null;
+      playbackRef.current?.stop();
+      playbackRef.current = null;
     };
   }, []);
+
+  // 从录音库「+」回退（pop）回来：focus 时读取模块级 pendingRevisit → 进入回放模式
+  useEffect(() => {
+    const applyPending = () => {
+      if (pendingRevisit) {
+        setPlayback(pendingRevisit);
+        setText('');
+        setError('');
+        setLast(null);
+        setPendingRevisit(null);
+      }
+    };
+    applyPending(); // 覆盖「pop 后 focus 已先于本 effect 触发」的竞态
+    return navigation.addListener('focus', applyPending);
+  }, [navigation]);
 
   const baseUrl = session?.server_base_url || serverBaseUrl;
 
@@ -74,6 +113,30 @@ export function DevTestScreen() {
     setStatus('starting');
     startedAtRef.current = Date.now();
 
+    // 回放模式：用已保存的录音当输入源，不碰麦克风
+    if (playback) {
+      const p = createPlaybackSession({
+        serverBaseUrl: baseUrl,
+        token: session.access_token,
+        audioBase64: playback.audioBase64,
+        onResult: (t) => setText(t),
+        onDone: (t) => {
+          setText(t);
+          setStatus('idle');
+          playbackRef.current = null;
+        },
+        onError: (msg) => {
+          setError(msg);
+          setStatus('idle');
+          playbackRef.current = null;
+        },
+      });
+      playbackRef.current = p;
+      await p.start();
+      setStatus('recording');
+      return;
+    }
+
     const s = new VoiceDictationSession({
       serverBaseUrl: baseUrl,
       token: session.access_token,
@@ -93,14 +156,32 @@ export function DevTestScreen() {
     sessionRef.current = s;
     await s.start();
     setStatus('recording');
-  }, [status, session, baseUrl, captureLast]);
+  }, [status, session, baseUrl, captureLast, playback]);
 
   const doStop = useCallback(() => {
+    if (status !== 'recording' && status !== 'starting') return;
+    if (playback) {
+      const p = playbackRef.current;
+      if (!p) return;
+      setStatus('finalizing');
+      p.stop(); // 立刻停发，即使音频后面还有内容
+      return;
+    }
     const s = sessionRef.current;
-    if (!s || (status !== 'recording' && status !== 'starting')) return;
+    if (!s) return;
     setStatus('finalizing');
     s.stop();
-  }, [status]);
+  }, [status, playback]);
+
+  // 退出回放模式，回到普通麦克风录音
+  const exitPlayback = useCallback(() => {
+    playbackRef.current?.stop();
+    playbackRef.current = null;
+    setPlayback(null);
+    setStatus('idle');
+    setText('');
+    setError('');
+  }, []);
 
   const handlePressIn = useCallback(() => {
     setPressed(true);
@@ -186,8 +267,12 @@ export function DevTestScreen() {
               {status === 'finalizing'
                 ? '正在识别…'
                 : isActive
-                  ? '正在聆听…'
-                  : '按住下方按钮开始说话，松开后自动识别'}
+                  ? playback
+                    ? '正在回放…'
+                    : '正在聆听…'
+                  : playback
+                    ? '按住下方按钮，用这段录音回放识别'
+                    : '按住下方按钮开始说话，松开后自动识别'}
             </Text>
           )}
         </View>
@@ -198,11 +283,40 @@ export function DevTestScreen() {
         ) : null}
       </View>
 
+      {/* 回放模式：正在回放的录音片段信息条 */}
+      {playback && (
+        <View style={styles.revisitBar}>
+          <Ionicons name="albums-outline" size={18} color={colors.textSecondary} />
+          <View style={styles.revisitInfo}>
+            <Text style={[styles.revisitTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+              {playback.title || '未命名录音'} · {formatDuration(playback.durationMs)}
+            </Text>
+            <Text style={[styles.revisitText, { color: colors.textSecondary }]} numberOfLines={1}>
+              {playback.text || '(无文本)'}
+            </Text>
+          </View>
+          <Pressable
+            onPress={exitPlayback}
+            hitSlop={10}
+            style={({ pressed: p }) => [styles.revisitClose, p && { opacity: 0.5 }]}
+            accessibilityLabel="退出回放模式"
+          >
+            <Ionicons name="close" size={22} color={colors.textSecondary} />
+          </Pressable>
+        </View>
+      )}
+
       {/* 底部：左画廊 / 中录音 / 右音频卡片 */}
       <View style={styles.bottomArea}>
         {isActive && (
           <Text style={[styles.tip, { color: colors.danger }]}>
-            {status === 'starting' ? '正在初始化麦克风…' : '松开按钮结束录音'}
+            {status === 'starting'
+              ? playback
+                ? '正在连接…'
+                : '正在初始化麦克风…'
+              : playback
+                ? '松开按钮结束回放'
+                : '松开按钮结束录音'}
           </Text>
         )}
         <View style={styles.bottomRow}>
@@ -218,7 +332,7 @@ export function DevTestScreen() {
             ]}
             accessibilityLabel="打开录音库"
           >
-            <Text style={styles.sideIcon}>🗂</Text>
+            <Ionicons name="folder-open-outline" size={26} color={colors.textSecondary} />
           </Pressable>
 
           {/* 中：圆形录音按钮 */}
@@ -236,22 +350,39 @@ export function DevTestScreen() {
             accessibilityLabel={buttonLabel}
             accessibilityRole="button"
           >
-            <Text style={styles.micIcon}>{status === 'finalizing' ? '…' : '🎤'}</Text>
+            <Ionicons
+              name={status === 'finalizing' ? 'ellipsis-horizontal' : 'mic-outline'}
+              size={36}
+              color={isActive ? colors.danger : colors.textSecondary}
+            />
           </Pressable>
 
-          {/* 右：录音结束的音频小卡片 */}
-          <View style={styles.sideSlot}>
-            {last ? (
-              <AudioPreviewCard
-                last={last}
-                colors={colors}
-                onSave={saveLast}
-                onDismiss={() => setLast(null)}
-              />
-            ) : (
-              <View style={styles.sideButtonGhost} />
-            )}
-          </View>
+          {/* 右：保存按钮 — 录音结束后高亮可点 */}
+          {last && !last.saved ? (
+            <Pressable
+              onPress={saveLast}
+              disabled={last.saving}
+              style={({ pressed: p }) => [
+                styles.sideButton,
+                { borderColor: colors.success, backgroundColor: colors.surface },
+                p && { opacity: 0.7 },
+                last.saving && { opacity: 0.5 },
+              ]}
+              accessibilityLabel="保存录音"
+            >
+              {last.saving ? (
+                <ActivityIndicator size="small" color={colors.success} />
+              ) : (
+                <Ionicons name="save-outline" size={24} color={colors.success} />
+              )}
+            </Pressable>
+          ) : last?.saved ? (
+            <View style={[styles.sideButton, { borderColor: colors.success, backgroundColor: colors.success + '12' }]}>
+              <Ionicons name="checkmark" size={24} color={colors.success} />
+            </View>
+          ) : (
+            <View style={styles.sideButtonGhost} />
+          )}
         </View>
         <Text style={[styles.buttonLabel, { color: isActive ? colors.danger : colors.textSecondary }]}>
           {buttonLabel}
@@ -261,73 +392,12 @@ export function DevTestScreen() {
   );
 }
 
-interface AudioPreviewCardProps {
-  last: LastRecording;
-  colors: AppColors;
-  onSave: () => void;
-  onDismiss: () => void;
+function formatDuration(ms: number): string {
+  const s = Math.max(0, Math.round((ms || 0) / 1000));
+  const mm = Math.floor(s / 60);
+  const ss = s % 60;
+  return `${mm}:${ss.toString().padStart(2, '0')}`;
 }
-
-function AudioPreviewCard({ last, colors, onSave, onDismiss }: AudioPreviewCardProps) {
-  const seconds = Math.max(0, Math.round(last.durationMs / 1000));
-  const mm = Math.floor(seconds / 60);
-  const ss = seconds % 60;
-  const duration = `${mm}:${ss.toString().padStart(2, '0')}`;
-  const preview = (last.text || '').slice(0, 20);
-  const badge = last.saving ? '…' : last.saved ? '✓' : '💾';
-  const badgeColor = last.saved ? colors.success : colors.textSecondary;
-
-  return (
-    <Pressable
-      onPress={onSave}
-      onLongPress={onDismiss}
-      disabled={last.saving}
-      style={({ pressed }) => [
-        styles_card.card,
-        {
-          backgroundColor: colors.surface,
-          borderColor: last.saveError ? colors.danger : colors.border,
-        },
-        pressed && { opacity: 0.7 },
-      ]}
-      accessibilityLabel={last.saved ? '已保存到录音库' : '点击保存到录音库'}
-    >
-      <View style={styles_card.row}>
-        <Text style={[styles_card.duration, { color: colors.textPrimary }]}>{duration}</Text>
-        <Text style={[styles_card.badge, { color: badgeColor }]}>{badge}</Text>
-      </View>
-      <Text style={[styles_card.preview, { color: colors.textSecondary }]} numberOfLines={1}>
-        {preview || '无文本'}
-      </Text>
-      {last.saveError ? (
-        <Text style={[styles_card.err, { color: colors.danger }]} numberOfLines={1}>
-          {last.saveError}
-        </Text>
-      ) : null}
-    </Pressable>
-  );
-}
-
-const styles_card = StyleSheet.create({
-  card: {
-    width: 110,
-    minHeight: SIDE_SIZE,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    justifyContent: 'center',
-  },
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  duration: { fontSize: 15, fontWeight: '600' },
-  badge: { fontSize: 14, marginLeft: 4 },
-  preview: { fontSize: 12, marginTop: 2 },
-  err: { fontSize: 11, marginTop: 2 },
-});
 
 function arrayBufferToBase64(buf: ArrayBuffer): string {
   const bytes = new Uint8Array(buf);
@@ -411,6 +481,25 @@ function createStyles(c: AppColors, insets: { top: number; bottom: number }) {
     },
     errorText: { fontSize: 14, lineHeight: 20 },
 
+    /* ---- 回放信息条 ---- */
+    revisitBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginHorizontal: 20,
+      marginTop: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderRadius: 12,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
+      backgroundColor: c.surface,
+      gap: 10,
+    },
+    revisitInfo: { flex: 1 },
+    revisitTitle: { fontSize: 13, fontWeight: '600' },
+    revisitText: { fontSize: 12, marginTop: 2 },
+    revisitClose: { padding: 2 },
+
     /* ---- 底部 ---- */
     bottomArea: {
       alignItems: 'center',
@@ -429,12 +518,6 @@ function createStyles(c: AppColors, insets: { top: number; bottom: number }) {
       justifyContent: 'space-between',
       width: '100%',
     },
-    sideSlot: {
-      width: 110,
-      minHeight: SIDE_SIZE,
-      alignItems: 'flex-end',
-      justifyContent: 'center',
-    },
     sideButton: {
       width: SIDE_SIZE,
       height: SIDE_SIZE,
@@ -444,7 +527,6 @@ function createStyles(c: AppColors, insets: { top: number; bottom: number }) {
       justifyContent: 'center',
     },
     sideButtonGhost: { width: SIDE_SIZE, height: SIDE_SIZE },
-    sideIcon: { fontSize: 24 },
     micButton: {
       width: MIC_SIZE,
       height: MIC_SIZE,
@@ -460,7 +542,6 @@ function createStyles(c: AppColors, insets: { top: number; bottom: number }) {
     },
     micButtonPressed: { opacity: 0.85 },
     micButtonDisabled: { opacity: 0.4 },
-    micIcon: { fontSize: 36 },
     buttonLabel: {
       fontSize: 14,
       fontWeight: '600',

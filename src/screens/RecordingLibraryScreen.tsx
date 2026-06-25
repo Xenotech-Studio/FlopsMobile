@@ -17,10 +17,14 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import type { StackNavigationProp } from '@react-navigation/stack';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import { AudioContext, type AudioBuffer, type AudioBufferSourceNode } from 'react-native-audio-api';
 import { useAppTheme } from '../context/ThemeContext';
 import { useSession } from '../context/SessionContext';
 import type { AppColors } from '../theme/appColors';
+import type { RootStackParamList } from '../navigation/types';
+import { setPendingRevisit } from './DevTestScreen';
 
 interface RecordingListItem {
   id: string;
@@ -39,7 +43,7 @@ export function RecordingLibraryScreen() {
   const { colors } = useAppTheme();
   const { session, serverBaseUrl } = useSession();
   const insets = useSafeAreaInsets();
-  const navigation = useNavigation();
+  const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
   const styles = useMemo(() => createStyles(colors, insets), [colors, insets]);
 
   const baseUrl = session?.server_base_url || serverBaseUrl;
@@ -50,9 +54,13 @@ export function RecordingLibraryScreen() {
   const [err, setErr] = useState('');
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // 「重访」下载进度：id → 0..100；以及下载错误：id → 文案
+  const [downloading, setDownloading] = useState<Record<string, number>>({});
+  const [dlError, setDlError] = useState<Record<string, string>>({});
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const xhrRef = useRef<Record<string, XMLHttpRequest>>({});
 
   const stopPlayback = useCallback(() => {
     const src = currentSourceRef.current;
@@ -70,6 +78,15 @@ export function RecordingLibraryScreen() {
   useEffect(() => {
     return () => {
       stopPlayback();
+      // 卸载时中止所有进行中的「重访」下载
+      Object.values(xhrRef.current).forEach((x) => {
+        try {
+          x.abort();
+        } catch {
+          /* ignore */
+        }
+      });
+      xhrRef.current = {};
       const ctx = audioCtxRef.current;
       audioCtxRef.current = null;
       if (ctx && typeof (ctx as any).close === 'function') {
@@ -177,10 +194,76 @@ export function RecordingLibraryScreen() {
     [apiBase, playingId, stopPlayback],
   );
 
+  // 「重访」：XHR 下载整条音频(带进度条)，完成后回退(pop)回 DevTestScreen 进入回放模式。
+  const revisitItem = useCallback(
+    (item: RecordingListItem) => {
+      if (downloading[item.id] != null) return; // 已在下载
+      stopPlayback();
+      setDlError((m) => {
+        if (m[item.id] == null) return m;
+        const n = { ...m };
+        delete n[item.id];
+        return n;
+      });
+      setDownloading((m) => ({ ...m, [item.id]: 0 }));
+
+      const clearDownloading = () =>
+        setDownloading((m) => {
+          const n = { ...m };
+          delete n[item.id];
+          return n;
+        });
+
+      const xhr = new XMLHttpRequest();
+      xhrRef.current[item.id] = xhr;
+      xhr.open('GET', `${apiBase}api/dev/recordings/${item.id}`);
+      xhr.responseType = 'text';
+      xhr.onprogress = (e) => {
+        if (e.lengthComputable && e.total > 0) {
+          const pct = Math.min(100, Math.round((e.loaded / e.total) * 100));
+          setDownloading((m) => (m[item.id] == null ? m : { ...m, [item.id]: pct }));
+        }
+      };
+      xhr.onload = () => {
+        delete xhrRef.current[item.id];
+        clearDownloading();
+        if (xhr.status < 200 || xhr.status >= 300) {
+          setDlError((m) => ({ ...m, [item.id]: `下载失败 HTTP ${xhr.status}` }));
+          return;
+        }
+        let detail: RecordingDetail;
+        try {
+          detail = JSON.parse(xhr.responseText) as RecordingDetail;
+        } catch {
+          setDlError((m) => ({ ...m, [item.id]: '解析失败' }));
+          return;
+        }
+        setPendingRevisit({
+          id: detail.id,
+          title: detail.title || '',
+          durationMs: detail.duration_ms,
+          text: detail.transcribed_text || '',
+          audioBase64: detail.audio_base64 || '',
+        });
+        navigation.pop(); // 回退到已有的 DevTest，而不是推一个新页
+      };
+      xhr.onerror = () => {
+        delete xhrRef.current[item.id];
+        clearDownloading();
+        setDlError((m) => ({ ...m, [item.id]: '下载失败' }));
+      };
+      xhr.send();
+    },
+    [apiBase, downloading, navigation, stopPlayback],
+  );
+
   const renderItem = useCallback(
     ({ item }: { item: RecordingListItem }) => {
       const isPlaying = playingId === item.id;
       const isBusy = busyId === item.id;
+      const dlPct = downloading[item.id]; // number | undefined
+      const dlErr = dlError[item.id];
+      const isDownloading = dlPct != null;
       return (
         <Pressable
           onPress={() => playItem(item)}
@@ -195,9 +278,11 @@ export function RecordingLibraryScreen() {
             {isBusy ? (
               <ActivityIndicator size="small" color={colors.textSecondary} />
             ) : (
-              <Text style={[styles.playIcon, { color: isPlaying ? colors.danger : colors.textPrimary }]}>
-                {isPlaying ? '■' : '▶'}
-              </Text>
+              <Ionicons
+                name={isPlaying ? 'stop' : 'play'}
+                size={20}
+                color={isPlaying ? colors.danger : colors.textPrimary}
+              />
             )}
           </View>
           <View style={styles.itemBody}>
@@ -215,11 +300,33 @@ export function RecordingLibraryScreen() {
               <Text style={[styles.metaText, { color: colors.textMuted }]}>·</Text>
               <Text style={[styles.metaText, { color: colors.textMuted }]}>{item.created_at}</Text>
             </View>
+            {dlErr ? <Text style={[styles.dlErrText, { color: colors.danger }]}>{dlErr}</Text> : null}
           </View>
+          {isDownloading ? (
+            <View style={styles.revisitBtn}>
+              <Text style={[styles.dlPctText, { color: colors.accentLoadBar }]}>{dlPct}%</Text>
+            </View>
+          ) : (
+            <Pressable
+              onPress={() => revisitItem(item)}
+              hitSlop={8}
+              style={({ pressed }) => [styles.revisitBtn, pressed && { opacity: 0.5 }]}
+              accessibilityLabel="重访这条录音"
+            >
+              <Ionicons name="add-circle-outline" size={26} color={colors.textSecondary} />
+            </Pressable>
+          )}
+          {isDownloading ? (
+            <View style={styles.progressTrack}>
+              <View
+                style={[styles.progressFill, { width: `${dlPct}%`, backgroundColor: colors.accentLoadBar }]}
+              />
+            </View>
+          ) : null}
         </Pressable>
       );
     },
-    [playItem, deleteItem, playingId, busyId, colors, styles],
+    [playItem, deleteItem, revisitItem, playingId, busyId, downloading, dlError, colors, styles],
   );
 
   return (
@@ -263,13 +370,22 @@ export function RecordingLibraryScreen() {
           ListEmptyComponent={
             <Text style={[styles.empty, { color: colors.textMuted }]}>还没有录音，回到上一页录一条吧。</Text>
           }
-          ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+          ItemSeparatorComponent={ItemSeparator}
+          initialNumToRender={10}
+          maxToRenderPerBatch={10}
+          windowSize={7}
+          removeClippedSubviews
         />
       )}
       <Text style={[styles.hint, { color: colors.textMuted }]}>点击播放 / 再点停止 · 长按删除</Text>
     </View>
   );
 }
+
+function ItemSeparator() {
+  return <View style={separatorStyle} />;
+}
+const separatorStyle = { height: 10 };
 
 function formatDuration(ms: number): string {
   const s = Math.max(0, Math.round((ms || 0) / 1000));
@@ -328,6 +444,7 @@ function createStyles(c: AppColors, insets: { top: number; bottom: number }) {
       padding: 12,
       borderRadius: 12,
       borderWidth: StyleSheet.hairlineWidth,
+      overflow: 'hidden', // 让底部进度条贴合圆角
     },
     playBubble: {
       width: 44,
@@ -338,8 +455,24 @@ function createStyles(c: AppColors, insets: { top: number; bottom: number }) {
       justifyContent: 'center',
       marginRight: 12,
     },
-    playIcon: { fontSize: 18 },
     itemBody: { flex: 1 },
+    revisitBtn: {
+      marginLeft: 10,
+      padding: 4,
+      minWidth: 40,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    dlPctText: { fontSize: 13, fontWeight: '700' },
+    dlErrText: { fontSize: 12, marginTop: 4 },
+    progressTrack: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      height: 3,
+    },
+    progressFill: { height: 3 },
     itemText: { fontSize: 15, lineHeight: 22 },
     itemMeta: {
       flexDirection: 'row',

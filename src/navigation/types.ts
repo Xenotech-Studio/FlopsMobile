@@ -55,7 +55,7 @@ export type RootStackParamList = {
   SoulSettings: undefined;
   AppearanceSettings: undefined;
   NotificationSettings: undefined;
-  /** 开发测试页（Profile 入口） */
+  /** 开发测试页（Profile 入口）。回放数据走模块级 pendingRevisit，不经路由参数。 */
   DevTest: undefined;
   /** 录音机本地库（DevTest 子页） */
   RecordingLibrary: undefined;

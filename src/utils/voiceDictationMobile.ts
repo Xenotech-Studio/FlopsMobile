@@ -87,6 +87,177 @@ function buildAsrUrl(serverBaseUrl: string, token: string): string {
   return `${ws}/api/ws/asr?access_token=${encodeURIComponent(token)}`;
 }
 
+/** base64 → 原始字节（Hermes 上 global.atob 可用）。 */
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = global.atob(b64 || '');
+  const len = bin.length;
+  const out = new Uint8Array(len);
+  for (let i = 0; i < len; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+const PLAYBACK_INTERVAL_MS = 200; // 每拍发一个 CHUNK_BYTES(6400B ≈ 200ms)，模拟麦克风实时节奏
+
+interface PlaybackSessionOptions {
+  serverBaseUrl: string;
+  token: string;
+  audioBase64: string; // 从 API 获取的 base64 WAV（16k/16bit/mono）
+  onResult: (text: string) => void;
+  onDone: (text: string) => void;
+  onError: (msg: string) => void;
+}
+
+/**
+ * 回放会话：把一段已保存的 WAV 当作输入源，按麦克风同样的节奏流式喂给 /api/ws/asr。
+ * 与 {@link VoiceDictationSession} 协议一致，但不碰麦克风——独立实现，互不影响。
+ *
+ *   const p = createPlaybackSession({ ... });
+ *   await p.start();  // 建 WS；ready 后每 200ms 发 6400B PCM
+ *   p.stop();         // 松手：立刻停发、发 finish，等最终 result + done
+ *   // 音频喂完也会自动 finish
+ */
+export function createPlaybackSession(args: PlaybackSessionOptions): {
+  start: () => Promise<void>;
+  stop: () => void;
+} {
+  let ws: WebSocket | null = null;
+  let wsReady = false;
+  let pcm: Uint8Array = new Uint8Array(0); // 跳过 44 字节 WAV 头后的原始 PCM
+  let offset = 0;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let doneTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastText = '';
+  let finished = false; // finish 已发（音频喂完或松手）
+  let closed = false;
+
+  const clearTimer = (): void => {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+
+  const teardown = (): void => {
+    clearTimer();
+    if (doneTimer) {
+      clearTimeout(doneTimer);
+      doneTimer = null;
+    }
+    const w = ws;
+    ws = null;
+    wsReady = false;
+    if (w) {
+      w.onmessage = null;
+      w.onerror = null;
+      w.onclose = null;
+      try {
+        if (w.readyState === 0 /* CONNECTING */ || w.readyState === 1 /* OPEN */) w.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
+  const finishOk = (): void => {
+    if (closed) return;
+    closed = true;
+    teardown();
+    args.onDone(lastText);
+  };
+
+  const fail = (msg: string): void => {
+    if (closed) return;
+    closed = true;
+    teardown();
+    args.onError(msg);
+  };
+
+  /** 没有更多音频：停发、发 finish，等服务端回最终结果（带 8s 兜底）。 */
+  const sendFinish = (): void => {
+    if (finished || closed) return;
+    finished = true;
+    clearTimer();
+    try {
+      if (ws?.readyState === 1 /* OPEN */) ws.send(JSON.stringify({ type: 'finish' }));
+    } catch {
+      /* ignore */
+    }
+    doneTimer = setTimeout(() => finishOk(), 8000);
+  };
+
+  const tick = (): void => {
+    if (closed || !wsReady || ws?.readyState !== 1 /* OPEN */) return;
+    if (offset >= pcm.length) {
+      sendFinish(); // 喂完了，自动收尾
+      return;
+    }
+    const end = Math.min(offset + CHUNK_BYTES, pcm.length);
+    const chunk = pcm.slice(offset, end); // slice 复制成独立 buffer
+    offset = end;
+    try {
+      ws.send(chunk.buffer);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const onMessage = (ev: WebSocketMessageEvent): void => {
+    if (typeof ev.data !== 'string') return;
+    let msg: any;
+    try {
+      msg = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
+    if (msg.type === 'ready') {
+      wsReady = true;
+      timer = setInterval(tick, PLAYBACK_INTERVAL_MS);
+      return;
+    }
+    if (msg.type === 'result') {
+      if (typeof msg.text === 'string' && (msg.text || msg.last)) {
+        lastText = msg.text;
+        args.onResult(msg.text);
+      }
+      return;
+    }
+    if (msg.type === 'done') {
+      finishOk();
+      return;
+    }
+    if (msg.type === 'error') {
+      fail(`识别服务错误：${msg.message || msg.code || '未知'}`);
+    }
+  };
+
+  const start = async (): Promise<void> => {
+    try {
+      const bytes = base64ToBytes(args.audioBase64);
+      pcm = bytes.length > 44 ? bytes.subarray(44) : new Uint8Array(0);
+      offset = 0;
+      const w = new WebSocket(buildAsrUrl(args.serverBaseUrl, args.token));
+      ws = w;
+      w.onmessage = onMessage;
+      w.onerror = () => {
+        if (!closed) fail('听写服务连接失败');
+      };
+      w.onclose = (ev: any) => {
+        if (closed) return;
+        if (finished) finishOk(); // 收尾后服务端关闭：直接出结果
+        else fail(ev?.code === 4401 ? '登录态失效，请重新登录' : '听写连接中断');
+      };
+    } catch (e: any) {
+      fail(`回放初始化失败：${e?.message || e}`);
+    }
+  };
+
+  const stop = (): void => {
+    sendFinish(); // 松手：立刻停发，即使后面还有音频
+  };
+
+  return { start, stop };
+}
+
 export class VoiceDictationSession {
   state: SessionState = 'idle';
   lastText = '';
