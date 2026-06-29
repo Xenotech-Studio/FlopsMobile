@@ -50,6 +50,7 @@ import {
   submitSafetyDecision,
   answerAskUserQuestion,
   getConversation,
+  getConversationMeta,
   getMessagesBefore,
   CHAT_MESSAGES_INITIAL_LIMIT,
   getLayoutPreferences,
@@ -2306,15 +2307,26 @@ export function ChatScreen({
       const sess = sessionRef.current;
       const cid = conversationIdRef.current;
       if (!sess || !cid || streamInFlightRef.current) return;
-      getConversation(sess, cid, CHAT_MESSAGES_INITIAL_LIMIT)
-        .then(({ conversation, messagesWindow }) => {
-          const rid = conversation?.active_chat_v2_run_id;
+      // 先用轻量 meta 接口看有没有活动 run；绝大多数情况无 run，省掉一次全量拉取。
+      getConversationMeta(sess, cid)
+        .then(({ conversation: meta }) => {
+          const rid = meta?.active_chat_v2_run_id;
           const s = typeof rid === 'string' ? rid.trim() : '';
           if (!s) return;
-          applyConversationUsageState(conversation, messagesWindow);
-          const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
-          setMessages(truncateMessagesAfterLastUser(rawMessagesToLocal(raw)));
-          resumeV2Stream(s, cid);
+          // 确实有活动 run 才拉全量消息做 resume。
+          if (streamInFlightRef.current || conversationIdRef.current !== cid) return;
+          return getConversation(sess, cid, CHAT_MESSAGES_INITIAL_LIMIT).then(
+            ({ conversation, messagesWindow }) => {
+              const rid2 = conversation?.active_chat_v2_run_id;
+              const s2 = typeof rid2 === 'string' ? rid2.trim() : '';
+              if (!s2) return;
+              applyConversationUsageState(conversation, messagesWindow);
+              const raw =
+                conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
+              setMessages(truncateMessagesAfterLastUser(rawMessagesToLocal(raw)));
+              resumeV2Stream(s2, cid);
+            }
+          );
         })
         .catch(() => {
           /* ignore */

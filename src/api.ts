@@ -915,6 +915,30 @@ export async function getConversation(
 }
 
 /**
+ * 轻量拉取对话顶层元信息：GET /api/conversations/:id/meta
+ * 只返回顶层字段（含 active_chat_v2_run_id），不含 messages，耗时极短。
+ * 用于回前台 resume 判定——先看有没有活动 run，再决定要不要拉全量。
+ */
+export async function getConversationMeta(
+  session: Session,
+  conversationId: string
+): Promise<{ conversation: Partial<Conversation> & { active_chat_v2_run_id?: string } }> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(`${base}api/conversations/${conversationId}/meta`, {
+    method: 'GET',
+    headers: authHeaders(session.access_token),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `获取对话元信息失败: ${res.status}`);
+  }
+  const conversation = (await res.json()) as Partial<Conversation> & {
+    active_chat_v2_run_id?: string;
+  };
+  return { conversation };
+}
+
+/**
  * 加载更旧消息（上滚分页）：GET /api/conversations/:id/messages/before?before_index=&limit=
  * 返回的 older 消息密文用同会话已缓存的 K_conv 就地解密（对齐 web）。
  * @returns older 已解密的 ConversationMessage[] + 新的窗口元数据
