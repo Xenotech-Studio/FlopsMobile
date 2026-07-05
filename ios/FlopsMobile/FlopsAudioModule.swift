@@ -45,6 +45,7 @@ class FlopsAudioModule: RCTEventEmitter {
   private var wsTask: URLSessionWebSocketTask?
   private var wsSession: URLSession?
   private var wsUrlString: String = ""
+  private var realtimeMode: String = "single"  // "broadcast" | "single"
   private var shouldStreamConnect = false
   private var reconnectAttempt = 0
   private let engine = AVAudioEngine()
@@ -406,19 +407,24 @@ class FlopsAudioModule: RCTEventEmitter {
   //   AVAudioSession（.playback + audio 后台模式）→ 后台/锁屏也朗读。
   // ==================================================================
 
-  /// 连接（或按新 URL 重连）实时音频 WS。wsUrl 已含 conversation_id + access_token（JS 侧拼好）。
-  @objc(startRealtime:resolver:rejecter:)
+  /// 连接（或按新 URL 重连）实时音频 WS。wsUrl 已含鉴权（JS 侧拼好）。
+  /// mode="broadcast" → 连的是 /api/ws/audio/global，连上要发 register 声明身份；
+  /// mode="single"    → 连的是 /api/ws/audio?conversation_id=X&client=mobile，纯下行、无需 register。
+  /// 两种模式 Mobile 都**播放收到的全部 PCM**（该收什么由后端优先级裁决决定，客户端不再过滤）。
+  @objc(startRealtime:mode:resolver:rejecter:)
   func startRealtime(_ wsUrl: String,
+                     mode: String,
                      resolver resolve: @escaping RCTPromiseResolveBlock,
                      rejecter reject: @escaping RCTPromiseRejectBlock) {
     guard !wsUrl.isEmpty, let url = URL(string: wsUrl) else {
       reject("bad_ws_url", "invalid ws url", nil); return
     }
-    // 已连同一 URL：幂等忽略
-    if shouldStreamConnect, wsUrl == wsUrlString, wsTask != nil {
+    // 已连同一 URL+模式：幂等忽略
+    if shouldStreamConnect, wsUrl == wsUrlString, mode == realtimeMode, wsTask != nil {
       resolve(nil); return
     }
     wsUrlString = wsUrl
+    realtimeMode = mode
     shouldStreamConnect = true
     reconnectAttempt = 0
     configureSession(active: true)
@@ -448,6 +454,11 @@ class FlopsAudioModule: RCTEventEmitter {
     wsTask = task
     emitRealtime("connecting")
     task.resume()
+    // 全局播报端点：连上先声明身份（send 会排队直到握手完成）。单对话端点无需 register。
+    if realtimeMode == "broadcast" {
+      let register = "{\"type\":\"register\",\"client\":\"mobile\",\"mode\":\"broadcast\"}"
+      task.send(.string(register)) { _ in }
+    }
     receiveLoop(task)
   }
 
@@ -508,19 +519,22 @@ class FlopsAudioModule: RCTEventEmitter {
       emitRealtime("ready")
     case "speak_start":
       let rid = obj["run_id"] as? String ?? ""
+      let cid = obj["conversation_id"] as? String ?? ""
       if !streamRunId.isEmpty, rid != streamRunId {
         flushRealtimePlayback() // 改口：冲掉上一 run 未播的 PCM
       }
       streamRunId = rid
       player?.pause() // 与回放互斥
       startEngineIfNeeded()
-      emitRealtime("speaking", runId: rid)
+      emitRealtime("speaking", runId: rid, convId: cid)
     case "speak_end":
       // 不清队列：已排队的尾音自然播完
-      emitRealtime("ended", runId: obj["run_id"] as? String)
+      emitRealtime("ended", runId: obj["run_id"] as? String,
+                   convId: obj["conversation_id"] as? String)
     case "audio_saved":
       guard hasListeners else { return }
       var body: [String: Any] = ["runId": obj["run_id"] as? String ?? ""]
+      body["conversationId"] = obj["conversation_id"] as? String ?? ""
       if let audio = obj["audio"] { body["audio"] = audio }
       sendEvent(withName: "onAudioSaved", body: body)
     default:
@@ -582,10 +596,12 @@ class FlopsAudioModule: RCTEventEmitter {
     if engineStarted { playerNode.play() }
   }
 
-  private func emitRealtime(_ state: String, runId: String? = nil, error: String? = nil) {
+  private func emitRealtime(_ state: String, runId: String? = nil,
+                            convId: String? = nil, error: String? = nil) {
     guard hasListeners else { return }
     var body: [String: Any] = ["state": state]
     if let runId = runId { body["runId"] = runId }
+    if let convId = convId { body["conversationId"] = convId }
     if let error = error { body["error"] = error }
     sendEvent(withName: "onRealtimeState", body: body)
   }

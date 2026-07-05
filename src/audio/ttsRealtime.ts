@@ -21,7 +21,8 @@ import type { Session } from '../api';
 import { getLayoutPreferences } from '../api';
 
 type FlopsAudioRealtimeNative = {
-  startRealtime(wsUrl: string): Promise<null>;
+  /** mode: 'broadcast'（全局端点，连上发 register）| 'single'（per-conv 端点，纯下行）。 */
+  startRealtime(wsUrl: string, mode: 'broadcast' | 'single'): Promise<null>;
   stopRealtime(): Promise<null>;
 };
 
@@ -35,8 +36,10 @@ export function isTtsRealtimeSupported(): boolean {
   return !!Native;
 }
 
-/** 语音朗读开关的 layout-preferences 键名（与 Web/Desktop 同一把）。 */
+/** 对话内朗读开关（与 Web/Desktop 同一把）：控制"在对话页内是否连单对话流"。 */
 export const TTS_AUTOPLAY_PREF_KEY = 'tts_autoplay';
+/** 播报模式开关（Mobile 专属）：全局监听所有对话，独立于 tts_autoplay。 */
+export const TTS_BROADCAST_PREF_KEY = 'tts_broadcast_mode';
 
 // MARK: - 可订阅状态
 
@@ -48,10 +51,14 @@ export type RealtimeSnapshot = {
   /** 正在朗读某个 run。 */
   speaking: boolean;
   runId: string;
+  /** 正在朗读的对话（播报模式下可能是任意对话）。 */
+  conversationId: string;
   state: RealtimeState;
 };
 
-const IDLE: RealtimeSnapshot = { connected: false, speaking: false, runId: '', state: 'idle' };
+const IDLE: RealtimeSnapshot = {
+  connected: false, speaking: false, runId: '', conversationId: '', state: 'idle',
+};
 let snapshot: RealtimeSnapshot = IDLE;
 const listeners = new Set<() => void>();
 
@@ -63,12 +70,13 @@ function setSnapshot(next: RealtimeSnapshot) {
 if (emitter) {
   emitter.addListener(
     'onRealtimeState',
-    (e: { state: RealtimeState; runId?: string; error?: string }) => {
+    (e: { state: RealtimeState; runId?: string; conversationId?: string; error?: string }) => {
       const state = e.state;
       setSnapshot({
         connected: state === 'ready' || state === 'speaking' || state === 'ended',
         speaking: state === 'speaking',
         runId: e.runId ?? snapshot.runId,
+        conversationId: e.conversationId ?? snapshot.conversationId,
         state,
       });
     },
@@ -77,47 +85,79 @@ if (emitter) {
 
 // MARK: - 三要素 + reconcile
 
-let enabled = false;
-let convId = '';
+let enabled = false;          // tts_autoplay（对话内朗读开关）
+let broadcastMode = false;    // tts_broadcast_mode（全局播报）
+let convId = '';              // 最近打开的对话（单对话模式用）
 let session: Session | null = null;
 /** 当前原生已连的 wsUrl（避免重复 startRealtime）。 */
 let connectedUrl = '';
 
-/** 仿 voiceDictationMobile.buildAsrUrl：https→wss，拼 /api/ws/audio + 鉴权 + conversation_id。 */
-function buildAudioWsUrl(serverBaseUrl: string, token: string, conversationId: string): string {
-  const trimmed = (serverBaseUrl || '').replace(/\/+$/, '');
-  const ws = trimmed.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:');
+function wsBase(serverBaseUrl: string): string {
+  return (serverBaseUrl || '').replace(/\/+$/, '').replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:');
+}
+
+/** 全局播报端点（不带 conversation_id；连上由原生发 register）。 */
+function buildGlobalWsUrl(serverBaseUrl: string, token: string): string {
+  return `${wsBase(serverBaseUrl)}/api/ws/audio/global?access_token=${encodeURIComponent(token)}`;
+}
+
+/** 单对话端点，带 client=mobile 抬到优先级 P2（压制 Desktop/Web）。 */
+function buildSingleWsUrl(serverBaseUrl: string, token: string, conversationId: string): string {
   return (
-    `${ws}/api/ws/audio` +
+    `${wsBase(serverBaseUrl)}/api/ws/audio` +
     `?conversation_id=${encodeURIComponent(conversationId)}` +
-    `&access_token=${encodeURIComponent(token)}`
+    `&access_token=${encodeURIComponent(token)}` +
+    `&client=mobile`
   );
 }
 
+/**
+ * 决策连哪条 WS：
+ *  - broadcastMode          → 全局端点（收全部对话，独立于 tts_autoplay）
+ *  - !broadcast && conv && tts_autoplay → 单对话端点（只该对话）
+ *  - 否则                    → 不连
+ * 任一时刻最多一条 WS；目标变了断旧连新，同目标幂等。
+ */
 function reconcile() {
   if (!Native) return;
-  const shouldConnect = enabled && !!convId && !!session;
-  if (!shouldConnect) {
+  let target: { url: string; mode: 'broadcast' | 'single' } | null = null;
+  if (session) {
+    if (broadcastMode) {
+      target = { url: buildGlobalWsUrl(session.server_base_url, session.access_token), mode: 'broadcast' };
+    } else if (convId && enabled) {
+      target = {
+        url: buildSingleWsUrl(session.server_base_url, session.access_token, convId),
+        mode: 'single',
+      };
+    }
+  }
+  if (!target) {
     if (connectedUrl) {
       connectedUrl = '';
       void Native.stopRealtime().catch(() => {});
     }
     return;
   }
-  const url = buildAudioWsUrl(session!.server_base_url, session!.access_token, convId);
-  if (url === connectedUrl) return; // 已连同一目标
-  connectedUrl = url;
-  void Native.startRealtime(url).catch(() => {
+  if (target.url === connectedUrl) return; // 已连同一目标
+  connectedUrl = target.url;
+  void Native.startRealtime(target.url, target.mode).catch(() => {
     connectedUrl = ''; // 失败清标记，下次可重试
   });
 }
 
 // MARK: - 对外 API（供开关 / ChatScreen / app 级控制器调用）
 
-/** 开关变化（tts_autoplay）。 */
+/** 对话内朗读开关变化（tts_autoplay）。 */
 export function setRealtimeEnabled(next: boolean): void {
   if (enabled === next) return;
   enabled = next;
+  reconcile();
+}
+
+/** 播报模式开关变化（tts_broadcast_mode）。开了即全局监听，独立于 tts_autoplay。 */
+export function setBroadcastMode(next: boolean): void {
+  if (broadcastMode === next) return;
+  broadcastMode = next;
   reconcile();
 }
 
@@ -133,16 +173,18 @@ export function setActiveConversation(nextConvId: string, sess: Session | null):
 export async function refreshRealtimeFromPrefs(sess: Session | null): Promise<void> {
   session = sess;
   if (!sess) {
-    setRealtimeEnabled(false);
+    broadcastMode = false;
+    setRealtimeEnabled(false); // 登出：断流
     return;
   }
   try {
     const prefs = await getLayoutPreferences(sess);
-    const v = prefs[TTS_AUTOPLAY_PREF_KEY];
-    setRealtimeEnabled(v === true);
+    broadcastMode = prefs[TTS_BROADCAST_PREF_KEY] === true;
+    enabled = prefs[TTS_AUTOPLAY_PREF_KEY] === true;
   } catch {
     /* 拉取失败保持当前值 */
   }
+  reconcile();
 }
 
 // MARK: - React 订阅

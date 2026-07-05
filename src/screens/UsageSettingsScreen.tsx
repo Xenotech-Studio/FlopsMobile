@@ -33,7 +33,7 @@ import {
 } from '../constants/pricingDisplay';
 import { formatUsdCnyEstimate } from '../utils/usageDisplay';
 import { IOSStyleSwitch } from '../components/IOSStyleSwitch';
-import { setRealtimeEnabled } from '../audio/ttsRealtime';
+import { setRealtimeEnabled, setBroadcastMode } from '../audio/ttsRealtime';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 
@@ -129,6 +129,7 @@ export function UsageSettingsScreen() {
 
   const [showTokenUsageInChat, setShowTokenUsageInChat] = useState(true);
   const [ttsAutoplay, setTtsAutoplay] = useState(false);
+  const [ttsBroadcast, setTtsBroadcast] = useState(false);
   const [usageCurrencyDisplay, setUsageCurrencyDisplay] = useState<UsageCurrencyMode>(() =>
     normalizeUsageCurrencyMode(undefined)
   );
@@ -145,6 +146,9 @@ export function UsageSettingsScreen() {
       }
       if (typeof prefs.tts_autoplay === 'boolean') {
         setTtsAutoplay(prefs.tts_autoplay);
+      }
+      if (typeof prefs.tts_broadcast_mode === 'boolean') {
+        setTtsBroadcast(prefs.tts_broadcast_mode);
       }
       if (prefs.usage_currency_display != null) {
         setUsageCurrencyDisplay(normalizeUsageCurrencyMode(prefs.usage_currency_display));
@@ -192,6 +196,17 @@ export function UsageSettingsScreen() {
     if (!session) return;
     try {
       await setLayoutPreferences(session, { tts_autoplay: next });
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const persistTtsBroadcast = async (next: boolean) => {
+    setTtsBroadcast(next);
+    setBroadcastMode(next); // 立即驱动单例连全局流/断
+    if (!session) return;
+    try {
+      await setLayoutPreferences(session, { tts_broadcast_mode: next });
     } catch {
       /* ignore */
     }
@@ -269,6 +284,13 @@ export function UsageSettingsScreen() {
             <Text style={styles.switchLabel}>助手回复自动朗读</Text>
             <IOSStyleSwitch value={ttsAutoplay} onValueChange={persistTtsAutoplay} />
           </View>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>播报模式（全局监听所有对话）</Text>
+            <IOSStyleSwitch value={ttsBroadcast} onValueChange={persistTtsBroadcast} />
+          </View>
+          <Text style={styles.cardDesc}>
+            播报模式像导航软件：开启后监听你所有对话的语音，离开对话页、锁屏、切到其它 App 都持续朗读；此时优先于桌面端/网页端。
+          </Text>
         </View>
 
         <View style={styles.card}>
