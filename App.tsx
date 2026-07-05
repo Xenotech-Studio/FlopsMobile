@@ -28,6 +28,7 @@ import { TtsRealtimeController } from './src/components/TtsRealtimeController';
 import { DeepLinkRouter } from './src/notifications/DeepLinkRouter';
 import { UpgradeRequiredOverlay } from './src/components/UpgradeRequiredOverlay';
 import { EncryptionReloginOverlay } from './src/components/EncryptionReloginOverlay';
+import { BroadcastModeOverlay } from './src/components/BroadcastModeOverlay';
 import { setPreviewApiImpl } from './src/flowdoc-native-input/previewApi';
 import { getVideoPreviewByUrl, triggerVideoPreview } from './src/api';
 
@@ -122,6 +123,9 @@ export default function App() {
               <AppContent />
               <UpgradeRequiredOverlay />
               <EncryptionReloginOverlay />
+              {/* 播报模式沉浸式 overlay：跨所有页面套黑边 + 底部「语音播报中」横条，
+                  放在 AppContent（含 NavigationContainer）之上覆盖全部导航栈。 */}
+              <BroadcastModeOverlay />
             </SessionProvider>
           </ThemeProvider>
         </SafeAreaProvider>

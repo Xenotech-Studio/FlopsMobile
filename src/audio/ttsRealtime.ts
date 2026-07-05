@@ -18,7 +18,7 @@
 import { useSyncExternalStore } from 'react';
 import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
 import type { Session } from '../api';
-import { getLayoutPreferences } from '../api';
+import { getLayoutPreferences, setLayoutPreferences } from '../api';
 
 type FlopsAudioRealtimeNative = {
   /** mode: 'broadcast'（全局端点，连上发 register）| 'single'（per-conv 端点，纯下行）。 */
@@ -92,6 +92,24 @@ let session: Session | null = null;
 /** 当前原生已连的 wsUrl（避免重复 startRealtime）。 */
 let connectedUrl = '';
 
+// MARK: - 播报模式可订阅（供全局沉浸式 UI 用）
+//
+// broadcastMode 是纯模块变量，React 侧看不见其变化。这里单独维护一组监听者，
+// 让 useBroadcastMode() 能在开/关时重渲染（如全局黑边 + 底部横条 overlay）。
+
+const broadcastListeners = new Set<() => void>();
+
+function notifyBroadcast() {
+  broadcastListeners.forEach((l) => l());
+}
+
+/** 更新 broadcastMode 并（值变时）通知订阅者。所有改动都走这里，保持 React 侧同步。 */
+function assignBroadcastMode(next: boolean): void {
+  if (broadcastMode === next) return;
+  broadcastMode = next;
+  notifyBroadcast();
+}
+
 function wsBase(serverBaseUrl: string): string {
   return (serverBaseUrl || '').replace(/\/+$/, '').replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:');
 }
@@ -157,7 +175,7 @@ export function setRealtimeEnabled(next: boolean): void {
 /** 播报模式开关变化（tts_broadcast_mode）。开了即全局监听，独立于 tts_autoplay。 */
 export function setBroadcastMode(next: boolean): void {
   if (broadcastMode === next) return;
-  broadcastMode = next;
+  assignBroadcastMode(next);
   reconcile();
 }
 
@@ -173,13 +191,13 @@ export function setActiveConversation(nextConvId: string, sess: Session | null):
 export async function refreshRealtimeFromPrefs(sess: Session | null): Promise<void> {
   session = sess;
   if (!sess) {
-    broadcastMode = false;
+    assignBroadcastMode(false);
     setRealtimeEnabled(false); // 登出：断流
     return;
   }
   try {
     const prefs = await getLayoutPreferences(sess);
-    broadcastMode = prefs[TTS_BROADCAST_PREF_KEY] === true;
+    assignBroadcastMode(prefs[TTS_BROADCAST_PREF_KEY] === true);
     enabled = prefs[TTS_AUTOPLAY_PREF_KEY] === true;
   } catch {
     /* 拉取失败保持当前值 */
@@ -200,4 +218,31 @@ function getSnapshot(): RealtimeSnapshot {
 /** 订阅实时朗读状态（如显示"正在朗读"指示）。 */
 export function useTtsRealtime(): RealtimeSnapshot {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+function subscribeBroadcast(cb: () => void): () => void {
+  broadcastListeners.add(cb);
+  return () => broadcastListeners.delete(cb);
+}
+function getBroadcastSnapshot(): boolean {
+  return broadcastMode;
+}
+
+/** 订阅播报模式开/关（供全局沉浸式 overlay 判定是否显示）。 */
+export function useBroadcastMode(): boolean {
+  return useSyncExternalStore(subscribeBroadcast, getBroadcastSnapshot, getBroadcastSnapshot);
+}
+
+/**
+ * 关闭播报模式并写回服务端（与 UsageSettingsScreen.persistTtsBroadcast 同一套动作）：
+ * 先本地立即断全局流，再合并写 layout-preferences。供全局 overlay 的退出按钮调用。
+ */
+export async function disableBroadcastMode(sess: Session | null): Promise<void> {
+  setBroadcastMode(false);
+  if (!sess) return;
+  try {
+    await setLayoutPreferences(sess, { [TTS_BROADCAST_PREF_KEY]: false });
+  } catch {
+    /* 写回失败：本地已断流，下次 refresh 会以服务端为准 */
+  }
 }
