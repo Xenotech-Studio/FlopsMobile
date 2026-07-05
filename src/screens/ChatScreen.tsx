@@ -36,6 +36,7 @@ import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { convProfileLog } from '../debug/conversationLoadProfile';
 import { useSession } from '../context/SessionContext';
+import { useTtsPlayback, togglePlayback } from '../audio/ttsPlayer';
 import { bytesToBase64, getCachedKAgent, getCachedKConv } from '../lib/srp';
 import type { RootStackParamList } from '../navigation/types';
 import {
@@ -332,6 +333,7 @@ export function ChatScreen({
   mainPane = false,
 }: ChatScreenProps = {}) {
   const { session } = useSession();
+  const ttsPlayback = useTtsPlayback();
   const insets = useSafeAreaInsets();
   /** 宽屏（iPad）下消息列限宽放大到桌面级（READING_MAX_WIDTH），而非手机的窄列（styles.scrollContent 写死 380）。 */
   const { expanded: wideChat } = useResponsive();
@@ -3120,6 +3122,27 @@ export function ChatScreen({
         if (b.type === 'text') lastTextBlockIdx = i;
       });
     }
+    // TTS 语音播放（本条 assistant 消息服务端已合成的 metadata.audio）。
+    const msgAudio = msg.role === 'assistant' ? msg.audio : undefined;
+    const audioSegments = msgAudio?.segments;
+    const hasAudio = Array.isArray(audioSegments) && audioSegments.length > 0;
+    const audioEncrypted = !!msgAudio?.encrypted;
+    const audioIsThis = ttsPlayback.key === stableKey;
+    const audioIsPlaying = audioIsThis && ttsPlayback.state === 'playing';
+    const audioIsLoading = audioIsThis && ttsPlayback.state === 'loading';
+    const onPlayAudio = () => {
+      if (audioEncrypted) {
+        // Phase 0.5：加密对话需先下载 .mp3.enc → 本地 K_conv 解密 → 播放，暂未接入。
+        Alert.alert('语音播放', '加密对话的语音播放即将支持。');
+        return;
+      }
+      if (!hasAudio) return;
+      void togglePlayback(audioSegments as string[], {
+        key: stableKey,
+        title: (msg.content || '').trim().slice(0, 40) || 'Flops 语音',
+        subtitle: composerAgentLabel,
+      });
+    };
     const segmentUsage =
       showTokenUsageInChat && usageByAssistantIdx[idx]
         ? formatUsageTiny(usageByAssistantIdx[idx], { currencyMode: usageCurrencyDisplay })
@@ -3210,6 +3233,10 @@ export function ChatScreen({
                         text={block.content}
                         showCopyButton={isLastAssistant && bi === lastTextBlockIdx}
                         showRegenerateButton={bi === lastTextBlockIdx}
+                        showPlayButton={hasAudio && bi === lastTextBlockIdx}
+                        isPlaying={audioIsPlaying}
+                        isPlayLoading={audioIsLoading}
+                        onPlay={hasAudio && bi === lastTextBlockIdx ? onPlayAudio : undefined}
                         onRegenerate={afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined}
                         regenerateDisabled={!conversationId || loading || conversationHistoryLoading}
                         usageHint={bi === lastTextBlockIdx ? segmentUsage : undefined}
@@ -3256,12 +3283,17 @@ export function ChatScreen({
               {lastTextBlockIdx < 0 &&
               msg.role === 'assistant' &&
               (afterUserIndex >= 0 ||
+                hasAudio ||
                 (showTokenUsageInChat && Boolean(segmentUsage)) ||
                 showCompressOnThisAssistant) ? (
                 <View style={styles.assistantTextBlock}>
                   <MarkdownContent
                     text=""
                     showRegenerateButton={afterUserIndex >= 0}
+                    showPlayButton={hasAudio}
+                    isPlaying={audioIsPlaying}
+                    isPlayLoading={audioIsLoading}
+                    onPlay={hasAudio ? onPlayAudio : undefined}
                     onRegenerate={
                       afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined
                     }

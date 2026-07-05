@@ -197,6 +197,13 @@ type Props = {
   showRegenerateButton?: boolean;
   onRegenerate?: () => void;
   regenerateDisabled?: boolean;
+  /** 语音播放按钮（本条 assistant 消息有 TTS 音频时显示）。 */
+  showPlayButton?: boolean;
+  /** 本条正在播放（用于切换 播放/暂停 图标）。 */
+  isPlaying?: boolean;
+  /** 本条正在加载（缓冲）——按钮显示忙碌态。 */
+  isPlayLoading?: boolean;
+  onPlay?: () => void;
   /** 本段用量小字，与 Web/Desktop flops-chat-ui 对齐；点击查看详情 */
   usageHint?: string;
   /** 弹窗多行详情；不传则仅展示 usageHint */
@@ -216,6 +223,10 @@ function MarkdownContentImpl({
   showRegenerateButton = false,
   onRegenerate,
   regenerateDisabled = false,
+  showPlayButton = false,
+  isPlaying = false,
+  isPlayLoading = false,
+  onPlay,
   usageHint,
   usageDetail,
   compressHint,
@@ -254,6 +265,7 @@ function MarkdownContentImpl({
   const showToolbar =
     showCopyButton ||
     (showRegenerateButton && typeof onRegenerate === 'function') ||
+    (showPlayButton && typeof onPlay === 'function') ||
     hasUsage ||
     hasCompress;
 
@@ -274,6 +286,19 @@ function MarkdownContentImpl({
       {showToolbar ? (
         <View style={[styles.toolbarRow, (hasUsage || hasCompress) && styles.toolbarRowFull]}>
           <View style={styles.toolbarLeft}>
+            {showPlayButton && typeof onPlay === 'function' ? (
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.actionBtnIconOnly]}
+                onPress={onPlay}
+                accessibilityLabel={isPlaying ? '暂停语音' : '播放语音'}
+              >
+                <Ionicons
+                  name={isPlayLoading ? 'ellipsis-horizontal' : isPlaying ? 'pause' : 'play'}
+                  size={20}
+                  color={iconDefault}
+                />
+              </TouchableOpacity>
+            ) : null}
             {showRegenerateButton && typeof onRegenerate === 'function' ? (
               <TouchableOpacity
                 style={[styles.actionBtn, styles.actionBtnIconOnly, regenerateDisabled && styles.actionBtnDisabled]}
@@ -357,6 +382,9 @@ function markdownPropsEqual(a: Props, b: Props): boolean {
     a.showCopyButton === b.showCopyButton &&
     a.showRegenerateButton === b.showRegenerateButton &&
     a.regenerateDisabled === b.regenerateDisabled &&
+    a.showPlayButton === b.showPlayButton &&
+    a.isPlaying === b.isPlaying &&
+    a.isPlayLoading === b.isPlayLoading &&
     a.usageHint === b.usageHint &&
     a.usageDetail === b.usageDetail &&
     a.compressHint === b.compressHint &&

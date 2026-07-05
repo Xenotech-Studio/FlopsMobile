@@ -17,6 +17,8 @@
 		F095001000000000000000A4 /* FlopsPushModule.m in Sources */ = {isa = PBXBuildFile; fileRef = F095001000000000000000A3 /* FlopsPushModule.m */; };
 		F095001000000000000000A8 /* FlopsCryptoModule.m in Sources */ = {isa = PBXBuildFile; fileRef = F095001000000000000000A7 /* FlopsCryptoModule.m */; };
 		F095001000000000000000AA /* FlopsCryptoModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = F095001000000000000000A9 /* FlopsCryptoModule.swift */; };
+		F095001000000000000000B2 /* FlopsAudioModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = F095001000000000000000B1 /* FlopsAudioModule.swift */; };
+		F095001000000000000000B4 /* FlopsAudioModule.m in Sources */ = {isa = PBXBuildFile; fileRef = F095001000000000000000B3 /* FlopsAudioModule.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +38,8 @@
 		F095001000000000000000A5 /* FlopsMobile.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = FlopsMobile.entitlements; path = FlopsMobile/FlopsMobile.entitlements; sourceTree = "<group>"; };
 		F095001000000000000000A7 /* FlopsCryptoModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = FlopsCryptoModule.m; path = FlopsMobile/FlopsCryptoModule.m; sourceTree = "<group>"; };
 		F095001000000000000000A9 /* FlopsCryptoModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FlopsCryptoModule.swift; path = FlopsMobile/FlopsCryptoModule.swift; sourceTree = "<group>"; };
+		F095001000000000000000B1 /* FlopsAudioModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FlopsAudioModule.swift; path = FlopsMobile/FlopsAudioModule.swift; sourceTree = "<group>"; };
+		F095001000000000000000B3 /* FlopsAudioModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = FlopsAudioModule.m; path = FlopsMobile/FlopsAudioModule.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -61,6 +65,8 @@
 				F095001000000000000000A5 /* FlopsMobile.entitlements */,
 				F095001000000000000000A7 /* FlopsCryptoModule.m */,
 				F095001000000000000000A9 /* FlopsCryptoModule.swift */,
+				F095001000000000000000B1 /* FlopsAudioModule.swift */,
+				F095001000000000000000B3 /* FlopsAudioModule.m */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
@@ -269,6 +275,8 @@
 				F095001000000000000000A4 /* FlopsPushModule.m in Sources */,
 				F095001000000000000000AA /* FlopsCryptoModule.swift in Sources */,
 				F095001000000000000000A8 /* FlopsCryptoModule.m in Sources */,
+				F095001000000000000000B2 /* FlopsAudioModule.swift in Sources */,
+				F095001000000000000000B4 /* FlopsAudioModule.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

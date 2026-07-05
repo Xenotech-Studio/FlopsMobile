@@ -62,9 +62,18 @@ export type StreamBlock =
       cwd?: string;
     };
 
+/** 服务端 TTS 落库的音频元数据（挂在 assistant 消息 metadata.audio）。 */
+export type MessageAudio = {
+  format?: string;
+  sample_rate?: number;
+  /** 完整 mp3 URL 列表（encrypted 时为 .mp3.enc）。 */
+  segments: string[];
+  encrypted?: boolean;
+};
+
 export type ChatMessage = (
   | { role: 'user'; content: string; flops_refs?: FlopsRef[] }
-  | { role: 'assistant'; content: string; blocks?: StreamBlock[] }
+  | { role: 'assistant'; content: string; blocks?: StreamBlock[]; audio?: MessageAudio }
   | { role: 'task_event'; content: string; task_event: TaskEventPayload | null; arrival?: string }
   | { role: 'error'; content: string }
 ) & {
@@ -90,10 +99,27 @@ export function coalesceAssistantTurn(messages: ConversationMessage[]): ChatMess
   if (!messages || messages.length === 0) return null;
   const blocks: StreamBlock[] = [];
   let fullContent = '';
+  // 合并本轮所有 assistant 消息的 metadata.audio.segments（去重保序）。
+  // 服务端每个 run 幂等写全量 segments，但一轮可能含多个 run；累积以防漏段。
+  const audioSegments: string[] = [];
+  let audioMeta: { format?: string; sample_rate?: number; encrypted?: boolean } | null = null;
   let i = 0;
   while (i < messages.length) {
     const msg = messages[i];
     if (msg.role === 'assistant') {
+      const audioRaw = (msg.metadata as Record<string, unknown> | undefined)?.audio as
+        | MessageAudio
+        | undefined;
+      if (audioRaw && Array.isArray(audioRaw.segments)) {
+        for (const s of audioRaw.segments) {
+          if (typeof s === 'string' && s && !audioSegments.includes(s)) audioSegments.push(s);
+        }
+        audioMeta = {
+          format: audioRaw.format,
+          sample_rate: audioRaw.sample_rate,
+          encrypted: audioRaw.encrypted,
+        };
+      }
       // 思考字段（多别名兼容服务端 reasoning_wire）：若存在，先于正文渲染为可折叠思考块
       const rawAny = msg as unknown as Record<string, unknown>;
       const reasoningRaw =
@@ -159,11 +185,15 @@ export function coalesceAssistantTurn(messages: ConversationMessage[]): ChatMess
     }
   }
   if (blocks.length === 0) return null;
-  return {
+  const out: ChatMessage = {
     role: 'assistant',
     content: fullContent || '(empty)',
     blocks,
   };
+  if (audioSegments.length > 0) {
+    out.audio = { ...(audioMeta ?? {}), segments: audioSegments };
+  }
+  return out;
 }
 
 export type RawMessagesLocalResult = {
