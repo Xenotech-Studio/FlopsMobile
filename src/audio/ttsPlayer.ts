@@ -41,9 +41,7 @@ export type PlaybackMeta = {
   key: string;
   title?: string;
   subtitle?: string;
-  /** 加密对话：segments 是 .mp3.enc 密文，需先下载 + 用 K_conv 解密再播（与 Web/Desktop 一致）。 */
-  encrypted?: boolean;
-  /** 加密对话必传：用于取 K_conv。 */
+  /** 会话 id：当某段是 .mp3.enc 密文时用于取 K_conv 解密（非加密对话可省）。 */
   convId?: string;
 };
 
@@ -109,6 +107,12 @@ if (emitter) {
       position: resetProgress ? 0 : snapshot.position,
       duration: resetProgress ? 0 : snapshot.duration,
     });
+    // 自然播完：回收本条消息解密出的临时明文 mp3（原生已不再读取）。
+    if (state === 'ended' && liveTempFiles.length) {
+      const t = liveTempFiles;
+      liveTempFiles = [];
+      void deleteFiles(t);
+    }
   });
   emitter.addListener(
     'onAudioProgress',
@@ -125,57 +129,91 @@ if (emitter) {
   );
 }
 
-// MARK: - 加密对话：下载 .mp3.enc → 用 K_conv 解密 → 写临时 mp3 → 返回 file:// 路径
+// MARK: - segment 解析（唯一 code path：加密/非加密都走这里）
 
-/** 简单稳定哈希，给临时文件命名（同一 key+段可复用、避免碰撞）。 */
+/** 简单稳定哈希，给临时文件命名。 */
 function shortHash(s: string): string {
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
   return h.toString(36);
 }
 
-/**
- * 把加密 segments 逐段解密成本地明文 mp3，返回可直接播放的 file:// URL 列表。
- * 复用项目既有 AES-GCM 路径（srp.aesGcmDecrypt → 原生 FlopsCrypto，forge 兜底），
- * 与 Web/Desktop 的 MessageAudioButton 语义一致。
- */
-async function prepareEncryptedSegments(segments: string[], convId?: string): Promise<string[]> {
-  const kConv = convId ? getCachedKConv(convId) : null;
-  if (!kConv) throw new Error('no_kconv');
-  const cacheDir = ReactNativeBlobUtil.fs.dirs.CacheDir;
-  const out: string[] = [];
-  for (let i = 0; i < segments.length; i++) {
-    const url = segments[i];
-    const path = `${cacheDir}/flops-tts-${shortHash(url)}.mp3`;
-    // 已解过则直接复用（CacheDir 由系统托管，可被清理）
-    const exists = await ReactNativeBlobUtil.fs.exists(path).catch(() => false);
-    if (!exists) {
-      const res = await ReactNativeBlobUtil.fetch('GET', url); // 内存下载密文
-      const encB64 = res.base64();
-      res.flush?.();
-      const mp3Bytes = aesGcmDecrypt(base64ToBytes(encB64), kConv); // Uint8Array 明文 mp3
-      await ReactNativeBlobUtil.fs.writeFile(path, bytesToBase64(mp3Bytes), 'base64');
-    }
-    out.push(`file://${path}`);
+/** 后端加密音频落库为 .mp3.enc（明文为 .mp3）；按 URL 后缀判定单段是否密文，而非整条消息一刀切。 */
+function isCiphertextUrl(url: string): boolean {
+  return /\.enc(\?|#|$)/i.test(url);
+}
+
+/** 本次已加载消息写下的临时明文 mp3（切走 / stop 时回收，避免明文长期留盘）。 */
+let liveTempFiles: string[] = [];
+
+async function deleteFiles(paths: string[]): Promise<void> {
+  for (const p of paths) {
+    try { await ReactNativeBlobUtil.fs.unlink(p); } catch { /* 已不在则忽略 */ }
   }
-  return out;
+}
+
+/**
+ * 把一条消息的 segments 解析成可直接交给原生播放器的 URL 列表 —— 唯一的处理路径：
+ *  - 明文 mp3（.mp3）：原样返回 https URL，原生直接 GET（后台流式、不落盘）。
+ *  - 密文（.mp3.enc）：内存下载密文 → getCachedKConv 取 K_conv → srp.aesGcmDecrypt（原生
+ *    FlopsCrypto，forge 兜底，layout nonce||ct||tag 与后端 _encrypt_blob 一致）→ 写临时明文
+ *    mp3 → 返回 file://。与 Web/Desktop MessageAudioButton 同语义。
+ * 逐段判定，故"首段密文、后续明文"这类混合也能正确处理。返回同时给出本次写下的临时文件，供回收。
+ */
+async function resolveSegments(
+  segments: string[],
+  convId?: string,
+): Promise<{ urls: string[]; tempFiles: string[] }> {
+  const needsKey = segments.some(isCiphertextUrl);
+  const kConv = needsKey ? (convId ? getCachedKConv(convId) : null) : null;
+  if (needsKey && !kConv) throw new Error('no_kconv'); // 加密对话未解锁 / 密钥未缓存
+  const cacheDir = ReactNativeBlobUtil.fs.dirs.CacheDir;
+  const urls: string[] = [];
+  const tempFiles: string[] = [];
+  for (const url of segments) {
+    if (!isCiphertextUrl(url)) {
+      urls.push(url); // 明文：直接播
+      continue;
+    }
+    const path = `${cacheDir}/flops-tts-${shortHash(url)}.mp3`;
+    const res = await ReactNativeBlobUtil.fetch('GET', url); // 内存下载密文
+    const encB64 = res.base64();
+    res.flush?.();
+    const mp3Bytes = aesGcmDecrypt(base64ToBytes(encB64), kConv as Uint8Array); // Uint8Array 明文 mp3
+    await ReactNativeBlobUtil.fs.writeFile(path, bytesToBase64(mp3Bytes), 'base64');
+    tempFiles.push(path);
+    urls.push(`file://${path}`);
+  }
+  return { urls, tempFiles };
 }
 
 // MARK: - 命令（对外 API）
 
-/** 从头播放一条消息的 segments。非加密：直接播 mp3 URL；加密：先下载解密成本地 mp3 再播。 */
+/** 从头播放一条消息的 segments。加密/非加密共用同一路径（resolveSegments 按段判定）。 */
 export async function playSegments(segments: string[], meta: PlaybackMeta): Promise<void> {
   if (!Native || !segments?.length) return;
-  // 乐观置 loading，避免点击到首个原生事件之间按钮无反馈（加密解密期间也是 loading）
+  // 乐观置 loading，避免点击到首个原生事件之间按钮无反馈（加密段下载解密期间也是 loading）
   setSnapshot({ ...IDLE, key: meta.key, state: 'loading' });
+  const prevTemp = liveTempFiles;
+  let newTemp: string[] = [];
   try {
-    const playable = meta.encrypted
-      ? await prepareEncryptedSegments(segments, meta.convId)
-      : segments;
-    // 解密期间用户可能已点了别的消息；若已不是本 key 则放弃，避免抢占
-    if (snapshot.key !== meta.key) return;
-    await Native.loadAndPlay(playable, { key: meta.key, title: meta.title, subtitle: meta.subtitle });
+    const resolved = await resolveSegments(segments, meta.convId);
+    newTemp = resolved.tempFiles;
+    // 下载/解密期间用户可能已点了别的消息；若已不是本 key 则放弃 + 回收本次刚写的临时文件
+    if (snapshot.key !== meta.key) {
+      await deleteFiles(newTemp);
+      return;
+    }
+    await Native.loadAndPlay(resolved.urls, {
+      key: meta.key,
+      title: meta.title,
+      subtitle: meta.subtitle,
+    });
+    // 新消息已接管播放 → 回收上一条消息的临时明文（当前这条仍在播，其文件保留）
+    liveTempFiles = newTemp;
+    await deleteFiles(prevTemp.filter((p) => !newTemp.includes(p)));
   } catch {
+    await deleteFiles(newTemp); // 失败：回收本次半成品，不留明文
     if (snapshot.key === meta.key) setSnapshot({ ...IDLE, key: meta.key, state: 'error' });
   }
 }
@@ -193,6 +231,10 @@ export async function resumePlayback(): Promise<void> {
 export async function stopPlayback(): Promise<void> {
   if (!Native) return;
   try { await Native.stop(); } catch { /* noop */ }
+  // 停止即回收当前消息的临时明文 mp3（播放已结束，文件不再被原生读取）
+  const toDelete = liveTempFiles;
+  liveTempFiles = [];
+  await deleteFiles(toDelete);
 }
 
 /**

@@ -3126,7 +3126,6 @@ export function ChatScreen({
     const msgAudio = msg.role === 'assistant' ? msg.audio : undefined;
     const audioSegments = msgAudio?.segments;
     const hasAudio = Array.isArray(audioSegments) && audioSegments.length > 0;
-    const audioEncrypted = !!msgAudio?.encrypted;
     const audioIsThis = ttsPlayback.key === stableKey;
     const audioIsPlaying = audioIsThis && ttsPlayback.state === 'playing';
     const audioIsLoading = audioIsThis && ttsPlayback.state === 'loading';
@@ -3136,8 +3135,7 @@ export function ChatScreen({
         key: stableKey,
         title: (msg.content || '').trim().slice(0, 40) || 'Flops 语音',
         subtitle: composerAgentLabel,
-        // 加密对话：ttsPlayer 会下载 .mp3.enc → getCachedKConv 解密 → 本地 mp3 再播（同 Web/Desktop）
-        encrypted: audioEncrypted,
+        // 传 convId：某段是 .mp3.enc 密文时 ttsPlayer 用 getCachedKConv 解密再播（同 Web/Desktop）
         convId: conversationId ?? undefined,
       });
     };
