@@ -24,6 +24,7 @@ import { RootNavigator } from './src/navigation/RootNavigator';
 import { navigationRef } from './src/navigation/navigationRef';
 import { PushTokenLifecycle } from './src/notifications/PushTokenLifecycle';
 import { PresenceReporter } from './src/notifications/PresenceReporter';
+import { TtsRealtimeController } from './src/components/TtsRealtimeController';
 import { DeepLinkRouter } from './src/notifications/DeepLinkRouter';
 import { UpgradeRequiredOverlay } from './src/components/UpgradeRequiredOverlay';
 import { EncryptionReloginOverlay } from './src/components/EncryptionReloginOverlay';
@@ -117,6 +118,7 @@ export default function App() {
             <SessionProvider>
               <PushTokenLifecycle />
               <PresenceReporter />
+              <TtsRealtimeController />
               <AppContent />
               <UpgradeRequiredOverlay />
               <EncryptionReloginOverlay />

@@ -1,0 +1,161 @@
+/**
+ * 实时流式 TTS —— app 级单例控制器（不绑定任何页面生命周期）。
+ *
+ * WS 与 PCM 播放全在原生 FlopsAudio（见 ios/FlopsMobile/FlopsAudioModule.swift）；本模块只：
+ *  - 持有 { enabled(tts_autoplay), convId, session } 三要素，reconcile 出"该连谁/该不该连"
+ *  - 把拼好鉴权的 wsUrl 交给原生 startRealtime / stopRealtime
+ *  - 订阅原生 onRealtimeState → useTtsRealtime() 暴露 {connected, speaking, runId}
+ *
+ * 与 Web/Desktop 对齐：开关键名 `tts_autoplay`（layout-preferences，跨端同步）；
+ * 连接时机 = enabled && convId && session；切对话断旧连新；关开关/登出断。
+ *
+ * ChatScreen 卸载**不**清 convId（单例保留）→ 原生 WS 续 → 不断流（与 Web 的卸载即断不同，
+ * 因移动端每对话页独立卸载，若随之断流会打断正在朗读的这一句）。
+ *
+ * 仅 iOS。Android / 原生模块缺失 → 全 no-op。
+ */
+
+import { useSyncExternalStore } from 'react';
+import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
+import type { Session } from '../api';
+import { getLayoutPreferences } from '../api';
+
+type FlopsAudioRealtimeNative = {
+  startRealtime(wsUrl: string): Promise<null>;
+  stopRealtime(): Promise<null>;
+};
+
+const isIOS = Platform.OS === 'ios';
+const Native: FlopsAudioRealtimeNative | undefined = isIOS
+  ? (NativeModules as any).FlopsAudio
+  : undefined;
+const emitter = Native ? new NativeEventEmitter(Native as any) : null;
+
+export function isTtsRealtimeSupported(): boolean {
+  return !!Native;
+}
+
+/** 语音朗读开关的 layout-preferences 键名（与 Web/Desktop 同一把）。 */
+export const TTS_AUTOPLAY_PREF_KEY = 'tts_autoplay';
+
+// MARK: - 可订阅状态
+
+export type RealtimeState = 'idle' | 'connecting' | 'ready' | 'speaking' | 'ended' | 'closed' | 'error';
+
+export type RealtimeSnapshot = {
+  /** WS 已连上（ready 之后为 true；断开/错误为 false）。 */
+  connected: boolean;
+  /** 正在朗读某个 run。 */
+  speaking: boolean;
+  runId: string;
+  state: RealtimeState;
+};
+
+const IDLE: RealtimeSnapshot = { connected: false, speaking: false, runId: '', state: 'idle' };
+let snapshot: RealtimeSnapshot = IDLE;
+const listeners = new Set<() => void>();
+
+function setSnapshot(next: RealtimeSnapshot) {
+  snapshot = next;
+  listeners.forEach((l) => l());
+}
+
+if (emitter) {
+  emitter.addListener(
+    'onRealtimeState',
+    (e: { state: RealtimeState; runId?: string; error?: string }) => {
+      const state = e.state;
+      setSnapshot({
+        connected: state === 'ready' || state === 'speaking' || state === 'ended',
+        speaking: state === 'speaking',
+        runId: e.runId ?? snapshot.runId,
+        state,
+      });
+    },
+  );
+}
+
+// MARK: - 三要素 + reconcile
+
+let enabled = false;
+let convId = '';
+let session: Session | null = null;
+/** 当前原生已连的 wsUrl（避免重复 startRealtime）。 */
+let connectedUrl = '';
+
+/** 仿 voiceDictationMobile.buildAsrUrl：https→wss，拼 /api/ws/audio + 鉴权 + conversation_id。 */
+function buildAudioWsUrl(serverBaseUrl: string, token: string, conversationId: string): string {
+  const trimmed = (serverBaseUrl || '').replace(/\/+$/, '');
+  const ws = trimmed.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:');
+  return (
+    `${ws}/api/ws/audio` +
+    `?conversation_id=${encodeURIComponent(conversationId)}` +
+    `&access_token=${encodeURIComponent(token)}`
+  );
+}
+
+function reconcile() {
+  if (!Native) return;
+  const shouldConnect = enabled && !!convId && !!session;
+  if (!shouldConnect) {
+    if (connectedUrl) {
+      connectedUrl = '';
+      void Native.stopRealtime().catch(() => {});
+    }
+    return;
+  }
+  const url = buildAudioWsUrl(session!.server_base_url, session!.access_token, convId);
+  if (url === connectedUrl) return; // 已连同一目标
+  connectedUrl = url;
+  void Native.startRealtime(url).catch(() => {
+    connectedUrl = ''; // 失败清标记，下次可重试
+  });
+}
+
+// MARK: - 对外 API（供开关 / ChatScreen / app 级控制器调用）
+
+/** 开关变化（tts_autoplay）。 */
+export function setRealtimeEnabled(next: boolean): void {
+  if (enabled === next) return;
+  enabled = next;
+  reconcile();
+}
+
+/** ChatScreen 获焦时报告当前活跃对话；卸载**不要**调用清除，交给切换到新对话时覆盖。 */
+export function setActiveConversation(nextConvId: string, sess: Session | null): void {
+  const changed = nextConvId !== convId || sess !== session;
+  convId = nextConvId || '';
+  session = sess;
+  if (changed) reconcile();
+}
+
+/** app 启动 / session 就绪时从服务端拉 tts_autoplay（与 Web/Desktop 同一份偏好）；登出(null)即断流。 */
+export async function refreshRealtimeFromPrefs(sess: Session | null): Promise<void> {
+  session = sess;
+  if (!sess) {
+    setRealtimeEnabled(false);
+    return;
+  }
+  try {
+    const prefs = await getLayoutPreferences(sess);
+    const v = prefs[TTS_AUTOPLAY_PREF_KEY];
+    setRealtimeEnabled(v === true);
+  } catch {
+    /* 拉取失败保持当前值 */
+  }
+}
+
+// MARK: - React 订阅
+
+function subscribe(cb: () => void): () => void {
+  listeners.add(cb);
+  return () => listeners.delete(cb);
+}
+function getSnapshot(): RealtimeSnapshot {
+  return snapshot;
+}
+
+/** 订阅实时朗读状态（如显示"正在朗读"指示）。 */
+export function useTtsRealtime(): RealtimeSnapshot {
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}

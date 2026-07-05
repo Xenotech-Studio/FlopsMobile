@@ -33,6 +33,7 @@ import {
 } from '../constants/pricingDisplay';
 import { formatUsdCnyEstimate } from '../utils/usageDisplay';
 import { IOSStyleSwitch } from '../components/IOSStyleSwitch';
+import { setRealtimeEnabled } from '../audio/ttsRealtime';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 
@@ -127,6 +128,7 @@ export function UsageSettingsScreen() {
   const gestureStartX = React.useRef(0);
 
   const [showTokenUsageInChat, setShowTokenUsageInChat] = useState(true);
+  const [ttsAutoplay, setTtsAutoplay] = useState(false);
   const [usageCurrencyDisplay, setUsageCurrencyDisplay] = useState<UsageCurrencyMode>(() =>
     normalizeUsageCurrencyMode(undefined)
   );
@@ -140,6 +142,9 @@ export function UsageSettingsScreen() {
       const prefs = await getLayoutPreferences(session);
       if (typeof prefs.show_token_usage_in_chat === 'boolean') {
         setShowTokenUsageInChat(prefs.show_token_usage_in_chat);
+      }
+      if (typeof prefs.tts_autoplay === 'boolean') {
+        setTtsAutoplay(prefs.tts_autoplay);
       }
       if (prefs.usage_currency_display != null) {
         setUsageCurrencyDisplay(normalizeUsageCurrencyMode(prefs.usage_currency_display));
@@ -176,6 +181,17 @@ export function UsageSettingsScreen() {
     if (!session) return;
     try {
       await setLayoutPreferences(session, { show_token_usage_in_chat: next });
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const persistTtsAutoplay = async (next: boolean) => {
+    setTtsAutoplay(next);
+    setRealtimeEnabled(next); // 立即驱动单例连/断（与服务端写回并行）
+    if (!session) return;
+    try {
+      await setLayoutPreferences(session, { tts_autoplay: next });
     } catch {
       /* ignore */
     }
@@ -241,6 +257,17 @@ export function UsageSettingsScreen() {
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>在对话中显示 token 用量</Text>
             <IOSStyleSwitch value={showTokenUsageInChat} onValueChange={persistShowUsage} />
+          </View>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>语音朗读</Text>
+          <Text style={styles.cardDesc}>
+            打开后进入对话即连实时语音，助手回复时边生成边朗读；离开对话页或锁屏也会继续。与 Web / Desktop 共用同一开关。
+          </Text>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>助手回复自动朗读</Text>
+            <IOSStyleSwitch value={ttsAutoplay} onValueChange={persistTtsAutoplay} />
           </View>
         </View>
 

@@ -37,6 +37,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { convProfileLog } from '../debug/conversationLoadProfile';
 import { useSession } from '../context/SessionContext';
 import { useTtsPlayback, togglePlayback } from '../audio/ttsPlayer';
+import { setActiveConversation as setRealtimeActiveConversation } from '../audio/ttsRealtime';
 import { bytesToBase64, getCachedKAgent, getCachedKConv } from '../lib/srp';
 import type { RootStackParamList } from '../navigation/types';
 import {
@@ -838,6 +839,15 @@ export function ChatScreen({
         getModelsConfig(session).then(applyModelsConfig).catch(() => {});
       }
     }, [reloadLayoutPrefs, session, applyModelsConfig])
+  );
+
+  /* 报告"当前活跃对话"给 app 级实时 TTS 单例（它据此连 /api/ws/audio 朗读本对话）。
+     只在获焦时报告、conversationId/session 变化时更新；**不在 blur/卸载时清除** ——
+     离开对话页时正在朗读的这一句要继续播完（不断流），由切到别的对话时覆盖。 */
+  useFocusEffect(
+    useCallback(() => {
+      setRealtimeActiveConversation(conversationId, session);
+    }, [conversationId, session])
   );
 
   /* 切页回来（如看完文档返回对话）重对齐 composer。

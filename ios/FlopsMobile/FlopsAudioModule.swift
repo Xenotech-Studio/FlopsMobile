@@ -41,6 +41,22 @@ class FlopsAudioModule: RCTEventEmitter {
   private var commandsWired = false
   private var lastReportedState = ""
 
+  // MARK: - 实时流式 TTS 状态（/api/ws/audio → PCM）
+  private var wsTask: URLSessionWebSocketTask?
+  private var wsSession: URLSession?
+  private var wsUrlString: String = ""
+  private var shouldStreamConnect = false
+  private var reconnectAttempt = 0
+  private let engine = AVAudioEngine()
+  private let playerNode = AVAudioPlayerNode()
+  private var engineWired = false
+  private var engineStarted = false
+  /// 后端固定 24kHz s16le mono；引擎侧统一转 Float32（引擎原生偏好）。
+  private let streamFormat = AVAudioFormat(
+    commonFormat: .pcmFormatFloat32, sampleRate: 24000, channels: 1, interleaved: false)!
+  private var streamRunId = ""
+  private var byteCarry: UInt8?
+
   // MARK: - RCTEventEmitter 约定
 
   override static func requiresMainQueueSetup() -> Bool {
@@ -53,7 +69,7 @@ class FlopsAudioModule: RCTEventEmitter {
   }
 
   override func supportedEvents() -> [String]! {
-    return ["onAudioState", "onAudioProgress"]
+    return ["onAudioState", "onAudioProgress", "onRealtimeState", "onAudioSaved"]
   }
 
   override func startObserving() { hasListeners = true }
@@ -76,6 +92,8 @@ class FlopsAudioModule: RCTEventEmitter {
       reject("no_segments", "empty segments", nil)
       return
     }
+    // 与实时朗读互斥：开始回放前冲掉实时流已排队的 PCM，避免叠音
+    if engineStarted { flushRealtimePlayback() }
     self.urls = cleaned
     self.currentKey = (meta["key"] as? String) ?? ""
     self.nowPlayingTitle = (meta["title"] as? String) ?? "Flops 语音"
@@ -293,12 +311,14 @@ class FlopsAudioModule: RCTEventEmitter {
     switch type {
     case .began:
       player?.pause()
+      if engineStarted { engine.pause() }
     case .ended:
       if let optRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt {
         let opts = AVAudioSession.InterruptionOptions(rawValue: optRaw)
         if opts.contains(.shouldResume) {
           configureSession(active: true)
           player?.play()
+          if engineStarted { try? engine.start(); playerNode.play() }
         }
       }
     @unknown default: break
@@ -377,5 +397,196 @@ class FlopsAudioModule: RCTEventEmitter {
 
   private func clearNowPlaying() {
     MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+  }
+
+  // ==================================================================
+  // MARK: - 实时流式 TTS（/api/ws/audio → PCM，边生边朗读）
+  //   见 docs/tts-realtime-streaming-design.md。WS 与 PCM 播放全在原生，
+  //   JS 只传已拼好鉴权的 wsUrl + 开关。与回放 AVQueuePlayer 共用同一
+  //   AVAudioSession（.playback + audio 后台模式）→ 后台/锁屏也朗读。
+  // ==================================================================
+
+  /// 连接（或按新 URL 重连）实时音频 WS。wsUrl 已含 conversation_id + access_token（JS 侧拼好）。
+  @objc(startRealtime:resolver:rejecter:)
+  func startRealtime(_ wsUrl: String,
+                     resolver resolve: @escaping RCTPromiseResolveBlock,
+                     rejecter reject: @escaping RCTPromiseRejectBlock) {
+    guard !wsUrl.isEmpty, let url = URL(string: wsUrl) else {
+      reject("bad_ws_url", "invalid ws url", nil); return
+    }
+    // 已连同一 URL：幂等忽略
+    if shouldStreamConnect, wsUrl == wsUrlString, wsTask != nil {
+      resolve(nil); return
+    }
+    wsUrlString = wsUrl
+    shouldStreamConnect = true
+    reconnectAttempt = 0
+    configureSession(active: true)
+    startEngineIfNeeded()
+    openWebSocket(url)
+    resolve(nil)
+  }
+
+  @objc(stopRealtime:rejecter:)
+  func stopRealtime(_ resolve: @escaping RCTPromiseResolveBlock,
+                    rejecter reject: @escaping RCTPromiseRejectBlock) {
+    shouldStreamConnect = false
+    closeWebSocket()
+    stopEngine()
+    emitRealtime("closed")
+    if player == nil { configureSession(active: false) } // 回放也没在才释放 session
+    resolve(nil)
+  }
+
+  // MARK: WebSocket
+
+  private func openWebSocket(_ url: URL) {
+    closeWebSocket()
+    let s = URLSession(configuration: .default)
+    wsSession = s
+    let task = s.webSocketTask(with: url)
+    wsTask = task
+    emitRealtime("connecting")
+    task.resume()
+    receiveLoop(task)
+  }
+
+  private func closeWebSocket() {
+    wsTask?.cancel(with: .goingAway, reason: nil)
+    wsTask = nil
+    wsSession?.invalidateAndCancel()
+    wsSession = nil
+  }
+
+  /// URLSession 回调在后台线程；把触及引擎/事件的处理统一切回主线程（顺序由 main 串行保证）。
+  private func receiveLoop(_ task: URLSessionWebSocketTask) {
+    task.receive { [weak self] result in
+      guard let self = self else { return }
+      switch result {
+      case .failure:
+        DispatchQueue.main.async { self.handleWsClosed(task) }
+      case .success(let message):
+        DispatchQueue.main.async {
+          guard task === self.wsTask else { return } // 旧 task 的回调丢弃
+          self.reconnectAttempt = 0
+          switch message {
+          case .data(let d): self.handlePcm(d)
+          case .string(let str): self.handleJson(str)
+          @unknown default: break
+          }
+        }
+        self.receiveLoop(task) // 继续收（回调线程链式）
+      }
+    }
+  }
+
+  private func handleWsClosed(_ task: URLSessionWebSocketTask) {
+    guard task === wsTask || wsTask == nil else { return }
+    wsTask = nil
+    guard shouldStreamConnect else { emitRealtime("closed"); return }
+    reconnectAttempt += 1
+    if reconnectAttempt > 5 { emitRealtime("error", error: "ws_reconnect_failed"); return }
+    let delays = [1.0, 2.0, 5.0, 5.0, 5.0]
+    let delay = delays[min(reconnectAttempt - 1, delays.count - 1)]
+    emitRealtime("connecting")
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+      guard let self = self, self.shouldStreamConnect,
+            let url = URL(string: self.wsUrlString) else { return }
+      self.openWebSocket(url)
+    }
+  }
+
+  // MARK: 帧处理
+
+  private func handleJson(_ str: String) {
+    guard let data = str.data(using: .utf8),
+          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let type = obj["type"] as? String else { return }
+    switch type {
+    case "ready":
+      startEngineIfNeeded()
+      emitRealtime("ready")
+    case "speak_start":
+      let rid = obj["run_id"] as? String ?? ""
+      if !streamRunId.isEmpty, rid != streamRunId {
+        flushRealtimePlayback() // 改口：冲掉上一 run 未播的 PCM
+      }
+      streamRunId = rid
+      player?.pause() // 与回放互斥
+      startEngineIfNeeded()
+      emitRealtime("speaking", runId: rid)
+    case "speak_end":
+      // 不清队列：已排队的尾音自然播完
+      emitRealtime("ended", runId: obj["run_id"] as? String)
+    case "audio_saved":
+      guard hasListeners else { return }
+      var body: [String: Any] = ["runId": obj["run_id"] as? String ?? ""]
+      if let audio = obj["audio"] { body["audio"] = audio }
+      sendEvent(withName: "onAudioSaved", body: body)
+    default:
+      break
+    }
+  }
+
+  private func handlePcm(_ incoming: Data) {
+    startEngineIfNeeded()
+    var bytes = incoming
+    if let carry = byteCarry { bytes = Data([carry]) + bytes; byteCarry = nil }
+    if bytes.count % 2 == 1 { byteCarry = bytes.last; bytes = bytes.dropLast() }
+    let sampleCount = bytes.count / 2
+    guard sampleCount > 0,
+          let buffer = AVAudioPCMBuffer(pcmFormat: streamFormat,
+                                        frameCapacity: AVAudioFrameCount(sampleCount)) else { return }
+    buffer.frameLength = AVAudioFrameCount(sampleCount)
+    let dst = buffer.floatChannelData![0]
+    // 手动按字节读 s16le，避开 Data 非 2 字节对齐时 bindMemory(Int16) 的对齐风险
+    bytes.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+      let base = raw.bindMemory(to: UInt8.self).baseAddress!
+      for i in 0..<sampleCount {
+        let lo = UInt16(base[i * 2])
+        let hi = UInt16(base[i * 2 + 1])
+        dst[i] = Float(Int16(bitPattern: lo | (hi << 8))) / 32768.0
+      }
+    }
+    if !playerNode.isPlaying { playerNode.play() }
+    playerNode.scheduleBuffer(buffer, completionHandler: nil)
+  }
+
+  // MARK: AVAudioEngine
+
+  private func startEngineIfNeeded() {
+    if !engineWired {
+      engine.attach(playerNode)
+      engine.connect(playerNode, to: engine.mainMixerNode, format: streamFormat)
+      engineWired = true
+    }
+    if !engineStarted {
+      engine.prepare()
+      do { try engine.start(); engineStarted = true }
+      catch { NSLog("[FlopsAudio] engine start error: %@", error.localizedDescription); return }
+    }
+    if !playerNode.isPlaying { playerNode.play() }
+  }
+
+  private func stopEngine() {
+    if playerNode.isPlaying { playerNode.stop() }
+    if engineStarted { engine.stop(); engineStarted = false }
+    streamRunId = ""
+    byteCarry = nil
+  }
+
+  /// 冲掉已排队未播的 PCM（改口 / 开始回放时用），保持 node 可继续接收新 buffer。
+  private func flushRealtimePlayback() {
+    playerNode.stop() // 清空 scheduleBuffer 队列
+    byteCarry = nil
+    if engineStarted { playerNode.play() }
+  }
+
+  private func emitRealtime(_ state: String, runId: String? = nil, error: String? = nil) {
+    guard hasListeners else { return }
+    var body: [String: Any] = ["state": state]
+    if let runId = runId { body["runId"] = runId }
+    if let error = error { body["error"] = error }
+    sendEvent(withName: "onRealtimeState", body: body)
   }
 }
