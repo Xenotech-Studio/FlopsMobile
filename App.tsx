@@ -28,7 +28,7 @@ import { TtsRealtimeController } from './src/components/TtsRealtimeController';
 import { DeepLinkRouter } from './src/notifications/DeepLinkRouter';
 import { UpgradeRequiredOverlay } from './src/components/UpgradeRequiredOverlay';
 import { EncryptionReloginOverlay } from './src/components/EncryptionReloginOverlay';
-import { BroadcastModeOverlay } from './src/components/BroadcastModeOverlay';
+import { BroadcastModeOverlay, BroadcastInsetProvider } from './src/components/BroadcastModeOverlay';
 import { setPreviewApiImpl } from './src/flowdoc-native-input/previewApi';
 import { getVideoPreviewByUrl, triggerVideoPreview } from './src/api';
 
@@ -120,7 +120,10 @@ export default function App() {
               <PushTokenLifecycle />
               <PresenceReporter />
               <TtsRealtimeController />
-              <AppContent />
+              {/* 播报激活时把页面树底部 inset 顶高，让所有页面内容为底部横条让路（不逐页改）。 */}
+              <BroadcastInsetProvider>
+                <AppContent />
+              </BroadcastInsetProvider>
               <UpgradeRequiredOverlay />
               <EncryptionReloginOverlay />
               {/* 播报模式沉浸式 overlay：跨所有页面套黑边 + 底部「语音播报中」横条，

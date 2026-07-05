@@ -16,20 +16,21 @@
 
 import React, { useEffect, useRef } from 'react';
 import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaInsetsContext, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSession } from '../context/SessionContext';
 import { disableBroadcastMode, useBroadcastMode } from '../audio/ttsRealtime';
 
 /** 边框粗细（"明显黑色边框"）。 */
 const BORDER_WIDTH = 5;
-/** 底部横条内容高度（不含安全区避让）。 */
+/** 手机屏幕物理圆角半径（≈ iPhone 40px）：黑边 / 底部横条底角都按它取圆角，贴合屏幕。 */
+const SCREEN_RADIUS = 40;
+/** 底部横条整体高度（贴屏幕最底部、覆盖安全区，不额外避让）。 */
 const BAR_HEIGHT = 54;
 /** 播报态强调色（暖橙，区别于常规 UI）。 */
 const ACCENT = '#FF8A34';
 
 export function BroadcastModeOverlay(): React.ReactElement | null {
   const active = useBroadcastMode();
-  const insets = useSafeAreaInsets();
   const { session } = useSession();
 
   // 呼吸动画：让边框 + 指示点缓慢明暗，传达"正在监听"的活体感。
@@ -72,10 +73,11 @@ export function BroadcastModeOverlay(): React.ReactElement | null {
         style={[styles.frame, { opacity: pulseOpacity }]}
       />
 
-      {/* 底部横条：黑底，左侧呼吸点 + "语音播报中"，右侧退出按钮。 */}
+      {/* 底部横条：黑底，左侧呼吸点 + "语音播报中"，右侧退出按钮。
+          bottom:0 且不加安全区偏移 → 贴屏幕最底部、覆盖 SafeArea 底边。 */}
       <View
         pointerEvents="box-none"
-        style={[styles.barWrap, { paddingBottom: insets.bottom }]}
+        style={styles.barWrap}
       >
         <View style={[styles.bar, { height: BAR_HEIGHT }]}>
           <View style={styles.labelRow}>
@@ -99,11 +101,41 @@ export function BroadcastModeOverlay(): React.ReactElement | null {
   );
 }
 
+/**
+ * 播报态下把整棵页面树的底部安全区 inset 顶高，给底部横条让路——避免逐页改 marginBottom。
+ *
+ * 底部横条现在贴屏幕最底 (bottom:0) 且高 BAR_HEIGHT，覆盖了原本的 SafeArea 底边。各页面统一用
+ * useSafeAreaInsets().bottom 做底部避让，这里在播报激活时把该 inset 覆写为 max(真实 bottom Y,
+ * 横条高度 Z)：页面原来"距底 = Y + 自身 marginBottom X"，覆写后变成"距底 = max(Y,Z) + X"，
+ * 即内容恰好落在横条顶沿之上 X 处，既让开横条又不与 home indicator 重叠。
+ *
+ * 只覆写 insets context（不动 frame context），非播报态原样透传、零影响。
+ */
+export function BroadcastInsetProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}): React.ReactElement {
+  const active = useBroadcastMode();
+  const insets = useSafeAreaInsets();
+
+  if (!active) return <>{children}</>;
+
+  const lifted = { ...insets, bottom: Math.max(insets.bottom, BAR_HEIGHT) };
+  return (
+    <SafeAreaInsetsContext.Provider value={lifted}>
+      {children}
+    </SafeAreaInsetsContext.Provider>
+  );
+}
+
 const styles = StyleSheet.create({
   frame: {
     ...StyleSheet.absoluteFillObject,
     borderWidth: BORDER_WIDTH,
     borderColor: '#000',
+    // 贴合手机屏幕物理圆角，四角走圆弧而非直角。
+    borderRadius: SCREEN_RADIUS,
   },
   barWrap: {
     position: 'absolute',
@@ -119,6 +151,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     backgroundColor: '#000',
+    // 底角随屏幕圆角收圆（减去黑边宽度得内侧半径），黑条不越出圆角落到屏幕方角外。
+    borderBottomLeftRadius: SCREEN_RADIUS - BORDER_WIDTH,
+    borderBottomRightRadius: SCREEN_RADIUS - BORDER_WIDTH,
   },
   labelRow: {
     flexDirection: 'row',
