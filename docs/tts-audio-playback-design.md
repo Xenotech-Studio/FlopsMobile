@@ -79,8 +79,8 @@
 - `src/components/MarkdownContent.tsx`：加 `showPlayButton/isPlaying/onPlay` props + 工具栏播放/暂停按钮 + memo 比较键。
 - `src/screens/ChatScreen.tsx`：`useTtsPlayback()`；在最后一个 text block（及 tool-only 分支）根据 `msg.audio?.segments` 给 MarkdownContent 传 play 相关 props；onPlay 做 toggle。
 
-**加密对话（`encrypted=true`）**：Phase 0 **暂不播放**，按钮 onPlay 弹一次性提示"加密对话语音播放即将支持"。
-（原生 `loadAndPlay` 接口已按 URL 设计；未来 Phase 0.5：JS 下载 `.enc` → `FlopsCrypto.decryptAesGcmBase64(kConvB64, blobB64)` → 明文 mp3 base64 → 新增原生 `enqueueLocalData` 写临时文件播 `file://`。）
+**加密对话（`encrypted=true`）**：**已支持**，与 Web/Desktop MessageAudioButton 语义一致。
+`ttsPlayer.playSegments` 在 `encrypted` 时走 `prepareEncryptedSegments`：逐段用 `react-native-blob-util` 内存下载 `.mp3.enc` → `srp.aesGcmDecrypt`（原生 FlopsCrypto，forge 兜底）用 `getCachedKConv(convId)` 解密 → 写 `CacheDir/flops-tts-<hash>.mp3`（存在则复用）→ 交原生播 `file://`。原生 `loadAndPlay` 对 https/file 无差别。
 
 ## 4. Phase 1 — 后台 / 锁屏（改动清单，同一原生文件内叠加）
 
@@ -109,7 +109,6 @@
 
 - Android 播放（全 no-op）。
 - 流式/实时 TTS（走 `/api/ws/audio` PCM 流）——Phase 0 只播已落库 mp3。
-- 加密对话音频播放（Phase 0.5）。
 - 灵动岛 Live Activity（Phase 2）。
 - 远程唤醒被 kill 的 App（PushKit/CallKit，Phase 2+）。
 </content>

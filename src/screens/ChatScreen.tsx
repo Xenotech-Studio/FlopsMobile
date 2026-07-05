@@ -3131,16 +3131,14 @@ export function ChatScreen({
     const audioIsPlaying = audioIsThis && ttsPlayback.state === 'playing';
     const audioIsLoading = audioIsThis && ttsPlayback.state === 'loading';
     const onPlayAudio = () => {
-      if (audioEncrypted) {
-        // Phase 0.5：加密对话需先下载 .mp3.enc → 本地 K_conv 解密 → 播放，暂未接入。
-        Alert.alert('语音播放', '加密对话的语音播放即将支持。');
-        return;
-      }
       if (!hasAudio) return;
       void togglePlayback(audioSegments as string[], {
         key: stableKey,
         title: (msg.content || '').trim().slice(0, 40) || 'Flops 语音',
         subtitle: composerAgentLabel,
+        // 加密对话：ttsPlayer 会下载 .mp3.enc → getCachedKConv 解密 → 本地 mp3 再播（同 Web/Desktop）
+        encrypted: audioEncrypted,
+        convId: conversationId ?? undefined,
       });
     };
     const segmentUsage =

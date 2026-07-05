@@ -13,6 +13,8 @@
 
 import { useSyncExternalStore } from 'react';
 import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
+import ReactNativeBlobUtil from 'react-native-blob-util';
+import { getCachedKConv, aesGcmDecrypt, base64ToBytes, bytesToBase64 } from '../lib/srp';
 
 export type AudioPlaybackState =
   | 'idle'
@@ -39,6 +41,10 @@ export type PlaybackMeta = {
   key: string;
   title?: string;
   subtitle?: string;
+  /** 加密对话：segments 是 .mp3.enc 密文，需先下载 + 用 K_conv 解密再播（与 Web/Desktop 一致）。 */
+  encrypted?: boolean;
+  /** 加密对话必传：用于取 K_conv。 */
+  convId?: string;
 };
 
 export type PlaybackSnapshot = {
@@ -119,17 +125,58 @@ if (emitter) {
   );
 }
 
+// MARK: - 加密对话：下载 .mp3.enc → 用 K_conv 解密 → 写临时 mp3 → 返回 file:// 路径
+
+/** 简单稳定哈希，给临时文件命名（同一 key+段可复用、避免碰撞）。 */
+function shortHash(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+/**
+ * 把加密 segments 逐段解密成本地明文 mp3，返回可直接播放的 file:// URL 列表。
+ * 复用项目既有 AES-GCM 路径（srp.aesGcmDecrypt → 原生 FlopsCrypto，forge 兜底），
+ * 与 Web/Desktop 的 MessageAudioButton 语义一致。
+ */
+async function prepareEncryptedSegments(segments: string[], convId?: string): Promise<string[]> {
+  const kConv = convId ? getCachedKConv(convId) : null;
+  if (!kConv) throw new Error('no_kconv');
+  const cacheDir = ReactNativeBlobUtil.fs.dirs.CacheDir;
+  const out: string[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    const url = segments[i];
+    const path = `${cacheDir}/flops-tts-${shortHash(url)}.mp3`;
+    // 已解过则直接复用（CacheDir 由系统托管，可被清理）
+    const exists = await ReactNativeBlobUtil.fs.exists(path).catch(() => false);
+    if (!exists) {
+      const res = await ReactNativeBlobUtil.fetch('GET', url); // 内存下载密文
+      const encB64 = res.base64();
+      res.flush?.();
+      const mp3Bytes = aesGcmDecrypt(base64ToBytes(encB64), kConv); // Uint8Array 明文 mp3
+      await ReactNativeBlobUtil.fs.writeFile(path, bytesToBase64(mp3Bytes), 'base64');
+    }
+    out.push(`file://${path}`);
+  }
+  return out;
+}
+
 // MARK: - 命令（对外 API）
 
-/** 从头播放一条消息的 segments（完整 mp3 URL，非加密对话）。 */
+/** 从头播放一条消息的 segments。非加密：直接播 mp3 URL；加密：先下载解密成本地 mp3 再播。 */
 export async function playSegments(segments: string[], meta: PlaybackMeta): Promise<void> {
   if (!Native || !segments?.length) return;
-  // 乐观置 loading，避免点击到首个原生事件之间按钮无反馈
+  // 乐观置 loading，避免点击到首个原生事件之间按钮无反馈（加密解密期间也是 loading）
   setSnapshot({ ...IDLE, key: meta.key, state: 'loading' });
   try {
-    await Native.loadAndPlay(segments, { key: meta.key, title: meta.title, subtitle: meta.subtitle });
+    const playable = meta.encrypted
+      ? await prepareEncryptedSegments(segments, meta.convId)
+      : segments;
+    // 解密期间用户可能已点了别的消息；若已不是本 key 则放弃，避免抢占
+    if (snapshot.key !== meta.key) return;
+    await Native.loadAndPlay(playable, { key: meta.key, title: meta.title, subtitle: meta.subtitle });
   } catch {
-    setSnapshot({ ...IDLE, key: meta.key, state: 'error' });
+    if (snapshot.key === meta.key) setSnapshot({ ...IDLE, key: meta.key, state: 'error' });
   }
 }
 
