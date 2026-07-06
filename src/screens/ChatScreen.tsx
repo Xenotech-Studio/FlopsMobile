@@ -142,7 +142,7 @@ import {
 } from '../utils/toolCardParsers';
 import { ReadPagesDetailSheet } from '../components/ReadPagesDetailSheet';
 import { ModelSelectSheet } from '../components/ModelSelectSheet';
-import { TtsSettingsSheet } from '../components/TtsSettingsSheet';
+import { IOSStyleSwitch } from '../components/IOSStyleSwitch';
 import { resolveAgentDisplayLabel } from '../utils/agentDisplay';
 import { VoiceDictationSession } from '../utils/voiceDictationMobile';
 import { UsageDetailModal } from '../components/UsageDetailModal';
@@ -457,10 +457,9 @@ export function ChatScreen({
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
   const [usageRuns, setUsageRuns] = useState<UsageRun[]>([]);
   const [showTokenUsageInChat, setShowTokenUsageInChat] = useState(true);
-  /** 语音「自动播报」(tts_autoplay) 当前值：⋯ 菜单 → 语音播报 sheet 里的开关。播报模式(tts_broadcast_mode)
-   *  是全局态、由 ttsRealtime 单例 + BroadcastModeOverlay 管，这里不本地镜像。 */
+  /** 语音「自动播报」(tts_autoplay) 当前值：⋯ 菜单里那行开关的勾选态（iOS UIMenu state / Android Switch）。
+   *  播报模式(tts_broadcast_mode) 是全局态、由 ttsRealtime 单例 + BroadcastModeOverlay 管，这里不本地镜像。 */
   const [ttsAutoplay, setTtsAutoplay] = useState(false);
-  const [ttsSheetOpen, setTtsSheetOpen] = useState(false);
   const [usageCurrencyDisplay, setUsageCurrencyDisplay] = useState<UsageCurrencyMode>(() =>
     normalizeUsageCurrencyMode(undefined)
   );
@@ -2282,8 +2281,8 @@ export function ChatScreen({
     },
     [session],
   );
-  /** 「开启播报模式」：弹二次确认 Alert，确认后开全局播报（沉浸式 overlay 由 BroadcastModeOverlay 呈现），
-   *  同时写回偏好并收起 sheet。退出播报走 overlay 底部横条，不在这里管。 */
+  /** 「开启播报模式」：弹二次确认 Alert，确认后开全局播报（沉浸式 overlay 由 BroadcastModeOverlay 呈现）
+   *  并写回偏好。退出播报走 overlay 底部横条，不在这里管。 */
   const handleEnableBroadcast = useCallback(() => {
     Alert.alert(
       '开启播报模式',
@@ -2294,7 +2293,6 @@ export function ChatScreen({
           text: '开启',
           onPress: () => {
             setBroadcastMode(true);
-            setTtsSheetOpen(false);
             if (session) {
               setLayoutPreferences(session, { tts_broadcast_mode: true }).catch(() => {});
             }
@@ -2304,22 +2302,36 @@ export function ChatScreen({
     );
   }, [session]);
 
+  /* ⋯ 菜单项：自动播报是带勾选（state on/off）的开关行；开启播报模式是纯选项行（点了弹确认 Alert）。
+     依赖 ttsAutoplay → 切换后 UIMenu 重建、勾选态刷新。iOS MenuView / Liquid Glass UIMenu 都吃 state+image。 */
   const convMenuActions = useMemo(
     () => [
       { id: 'info', title: '对话信息', image: 'info.circle' },
-      { id: 'tts', title: '语音播报', image: 'speaker.wave.2' },
+      {
+        id: 'tts',
+        title: '自动播报',
+        image: 'speaker.wave.2',
+        state: ttsAutoplay ? ('on' as const) : ('off' as const),
+      },
+      { id: 'broadcast', title: '开启播报模式', image: 'dot.radiowaves.left.and.right' },
       { id: 'diag', title: '复制诊断资料', image: 'doc.on.clipboard' },
     ],
-    [],
+    [ttsAutoplay],
+  );
+  const onConvMenuAction = useCallback(
+    (id: string) => {
+      if (id === 'info') handleConvInfo();
+      else if (id === 'tts') persistTtsAutoplay(!ttsAutoplay);
+      else if (id === 'broadcast') handleEnableBroadcast();
+      else if (id === 'diag') handleConvDiagCopy();
+    },
+    [handleConvInfo, handleConvDiagCopy, persistTtsAutoplay, ttsAutoplay, handleEnableBroadcast],
   );
   const onConvMenuPressAction = useCallback(
     (e: { nativeEvent: { event: string } }) => {
-      const id = e.nativeEvent.event;
-      if (id === 'info') handleConvInfo();
-      else if (id === 'tts') setTtsSheetOpen(true);
-      else if (id === 'diag') handleConvDiagCopy();
+      onConvMenuAction(e.nativeEvent.event);
     },
-    [handleConvInfo, handleConvDiagCopy],
+    [onConvMenuAction],
   );
 
   /** iOS MenuView 是 native UIButton.menu，press 事件抢不到，只能拿
@@ -3659,13 +3671,14 @@ export function ChatScreen({
           <AnimatedCircleButton
             style={[styles.circleBtn, !conversationId ? styles.circleBtnDisabled : null]}
             disabled={!conversationId}
-            menuActions={convMenuActions.map((a) => ({ id: a.id, title: a.title }))}
+            menuActions={convMenuActions.map((a) => ({
+              id: a.id,
+              title: a.title,
+              image: a.image,
+              ...('state' in a ? { state: a.state } : null),
+            }))}
             iosSfSymbol={{ name: 'ellipsis', size: 16, color: colors.textSecondary }}
-            onMenuAction={(id) => {
-              if (id === 'info') handleConvInfo();
-              else if (id === 'tts') setTtsSheetOpen(true);
-              else if (id === 'diag') handleConvDiagCopy();
-            }}
+            onMenuAction={onConvMenuAction}
           >
             <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
           </AnimatedCircleButton>
@@ -4401,13 +4414,6 @@ export function ChatScreen({
       options={modelSheetOptions}
       onSelectModel={(id) => void handleSelectModel(id)}
     />
-    <TtsSettingsSheet
-      visible={ttsSheetOpen}
-      onClose={() => setTtsSheetOpen(false)}
-      autoplay={ttsAutoplay}
-      onToggleAutoplay={persistTtsAutoplay}
-      onPressBroadcast={handleEnableBroadcast}
-    />
     <ModelSelectSheet
       visible={agentPickerOpen}
       onClose={() => setAgentPickerOpen(false)}
@@ -4611,16 +4617,24 @@ export function ChatScreen({
             <Text style={styles.convMenuItemText}>对话信息</Text>
           </TouchableOpacity>
           <View style={styles.convMenuDivider} />
+          {/* 自动播报：带 Switch 的行（不关菜单，方便看开关翻转 / 连续操作） */}
+          <View style={styles.convMenuItem}>
+            <Ionicons name="volume-high-outline" size={20} color={colors.textPrimary} />
+            <Text style={[styles.convMenuItemText, styles.convMenuItemTextGrow]}>自动播报</Text>
+            <IOSStyleSwitch value={ttsAutoplay} onValueChange={persistTtsAutoplay} />
+          </View>
+          <View style={styles.convMenuDivider} />
+          {/* 开启播报模式：纯选项行 → 弹确认 Alert */}
           <TouchableOpacity
             style={styles.convMenuItem}
             activeOpacity={0.6}
             onPress={() => {
               closeConvMenu();
-              setTtsSheetOpen(true);
+              handleEnableBroadcast();
             }}
           >
-            <Ionicons name="volume-high-outline" size={20} color={colors.textPrimary} />
-            <Text style={styles.convMenuItemText}>语音播报</Text>
+            <Ionicons name="radio-outline" size={20} color={colors.textPrimary} />
+            <Text style={styles.convMenuItemText}>开启播报模式</Text>
           </TouchableOpacity>
           <View style={styles.convMenuDivider} />
           <TouchableOpacity

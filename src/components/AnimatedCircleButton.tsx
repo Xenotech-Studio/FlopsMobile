@@ -37,6 +37,10 @@ export type AnimatedCircleButtonMenuAction = {
   id: string;
   /** 菜单显示的标题（必填） */
   title: string;
+  /** SF Symbol 名（左侧图标），如 'speaker.wave.2'。空/缺省 = 无图标 */
+  image?: string;
+  /** 勾选态：'on' 显示 ✓、'off' 不显示。用于把菜单项当开关（切换后重建 UIMenu 生效） */
+  state?: 'on' | 'off' | 'mixed';
   /** 显示成"危险/红字"风格 */
   destructive?: boolean;
   /** 灰掉不可选 */
@@ -222,6 +226,8 @@ function IosNativeBouncy({
       menuActions.map((a) => ({
         id: a.id,
         title: a.title,
+        ...(a.image ? { image: a.image } : null),
+        ...(a.state ? { state: a.state } : null),
         ...(a.destructive ? { destructive: true } : null),
         ...(a.disabled ? { disabled: true } : null),
       })),

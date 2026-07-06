@@ -267,6 +267,8 @@ export function createChatStyles(c: AppColors) {
     paddingVertical: 12,
   },
   convMenuItemText: { fontSize: 15, color: c.textPrimary, fontWeight: '500' },
+  /** Switch 行里让文字占满、把 Switch 推到右缘 */
+  convMenuItemTextGrow: { flex: 1 },
   convMenuDivider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: c.borderMuted,

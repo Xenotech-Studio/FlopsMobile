@@ -464,8 +464,14 @@ static const CGFloat kReleaseBounce = 0.35;
     BOOL destructive = [item[@"destructive"] boolValue];
     BOOL disabled = [item[@"disabled"] boolValue];
     NSString *capturedId = [actionId copy];
+    /* image：SF Symbol 名 → UIImage（做菜单项左侧图标）。 */
+    UIImage *actionImage = nil;
+    NSString *imageName = item[@"image"];
+    if ([imageName isKindOfClass:[NSString class]] && imageName.length > 0) {
+      actionImage = [UIImage systemImageNamed:imageName];
+    }
     UIAction *uia = [UIAction actionWithTitle:title
-                                        image:nil
+                                        image:actionImage
                                    identifier:nil
                                       handler:^(__kindof UIAction *_Nonnull _action) {
                                         [weakSelf emitMenuActionId:capturedId];
@@ -474,6 +480,12 @@ static const CGFloat kReleaseBounce = 0.35;
     if (destructive) attrs |= UIMenuElementAttributesDestructive;
     if (disabled) attrs |= UIMenuElementAttributesDisabled;
     if (attrs != 0) uia.attributes = attrs;
+    /* state：'on' 显示 ✓、'mixed' 显示 -、其它/缺省为 off。用于把菜单项当开关。 */
+    NSString *stateStr = item[@"state"];
+    if ([stateStr isKindOfClass:[NSString class]]) {
+      if ([stateStr isEqualToString:@"on"]) uia.state = UIMenuElementStateOn;
+      else if ([stateStr isEqualToString:@"mixed"]) uia.state = UIMenuElementStateMixed;
+    }
     [uiActions addObject:uia];
   }
 
