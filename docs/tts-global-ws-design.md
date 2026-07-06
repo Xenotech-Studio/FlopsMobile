@@ -73,6 +73,9 @@ deliver(user, conv, frame):
 - `is_delivered` **同时驱动**合成闸门与投递 → 不会"合成一堆没人收"。
 - 渠道集变化（连/断/interest 更新/播报开关）→ 下一次 `publish` 自然用新裁决；**无需断开任何 WS**（回答"Desktop WS 不用断，只是不投递"）。
 - 获胜类型中途变化（如播报模式刚开）：正在合成的 burst 在 `:324` 复查 `is_delivered`，命中就续投给新赢家、不命中就收尾。
+- **on_winning_change → `channel_status` 控制帧**：渠道集变化时 `register`/`unregister` 调 `_sync_status(user)` 重算获胜类型；每渠道的 `active = (ctype==winning)` 与上次已通知值不同才入队一帧 `channel_status`（新渠道 `active=None` 必得初始一帧）。被压制渠道收 `{active:false, suppressed_by:<获胜方标签>}`，回落为赢家时收 `{active:true}`。这让 Desktop 知道自己"连着但被手机压制"（否则它只知连上、却收不到任何音频）。`interest` 更新不改获胜类型 → 不发。
+
+
 
 ## 5. 与合成闸门 `has_subscribers` 的关系
 
@@ -111,6 +114,7 @@ reconcile():
 - **出声过滤（decision ②）**：后端按 openTabIds 投递（这样各 tab 的 `audio_saved` 都到、回放按钮即时亮）；**客户端只播 `conversation_id == 聚焦 panel` 的 PCM**，其余丢弃。
   - 取舍已定：上报 openTabIds、只播聚焦。好处：非聚焦 tab 的回放按钮也即时点亮；坏处：会合成 openTabIds 内正在生成的对话（这些是用户开着的 tab，成本可接受）。
 - panel 不再各自建 subscriber；由 ChatTab/context 持有单例，用 `{ttsAutoplay, session, openTabIds, focusedConvId}` 驱动。
+- **压制可视化**：`globalVoiceAudio` 解析 `channel_status`，维护 `_suppressed` 并经 `onStatusChange(cb)` 通知；ChatTab 把它传给 `VoiceToggleButton` 的 `suppressed` prop——开着但被手机压制时喇叭转琥珀色 + tooltip"手机正在语音播报，Desktop 暂不发声"。断连回落为未压制（重连后后端重发校正）。
 
 ## 8. Web —— 不变
 继续 `/api/ws/audio?conversation_id=X`，每 tab 一条。P1/P2/P3 在场时被 DecisionRouter 静音（连接不断、只是不投递）。控制帧多出的 `conversation_id` 字段被忽略。
@@ -123,6 +127,7 @@ reconcile():
   <二进制 s16le PCM>        # 归属"最近 speak_start 的 conversation_id"（每用户 burst 串行保证不交错）
   {"type":"speak_end","conversation_id":cid,"run_id":rid}
   {"type":"audio_saved","conversation_id":cid,"run_id":rid,"audio":{...}}
+  {"type":"channel_status","active":bool,"suppressed_by":<label>?}   # 本渠道是否为获胜类型；无 conversation 归属
 
 上行（仅 global 端点）:
   {"type":"register","client":"mobile"|"desktop","mode":"broadcast"?}

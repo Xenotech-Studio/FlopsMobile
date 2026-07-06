@@ -9,8 +9,8 @@
  * 与 Web/Desktop 对齐：开关键名 `tts_autoplay`（layout-preferences，跨端同步）；
  * 连接时机 = enabled && convId && session；切对话断旧连新；关开关/登出断。
  *
- * ChatScreen 卸载**不**清 convId（单例保留）→ 原生 WS 续 → 不断流（与 Web 的卸载即断不同，
- * 因移动端每对话页独立卸载，若随之断流会打断正在朗读的这一句）。
+ * ChatScreen 失焦（退列表 / 切页）→ clearActiveConversation() 断单对话流：离开该对话就不该再让
+ * Mobile 的 MOBILE_SINGLE(P2) 渠道滞留压制 Desktop/Web。播报模式(P1)是全局的、独立于页面，不受影响。
  *
  * 仅 iOS。Android / 原生模块缺失 → 全 no-op。
  */
@@ -179,12 +179,24 @@ export function setBroadcastMode(next: boolean): void {
   reconcile();
 }
 
-/** ChatScreen 获焦时报告当前活跃对话；卸载**不要**调用清除，交给切换到新对话时覆盖。 */
+/** ChatScreen 获焦时报告当前活跃对话（单对话模式据此连本对话流）。 */
 export function setActiveConversation(nextConvId: string, sess: Session | null): void {
   const changed = nextConvId !== convId || sess !== session;
   convId = nextConvId || '';
   session = sess;
   if (changed) reconcile();
+}
+
+/**
+ * ChatScreen 失焦时清除活跃对话 → 单对话流断连。退回列表 / 切页 = 离开该对话，Mobile 的
+ * MOBILE_SINGLE(P2) 渠道不该滞留（否则后端一直压制 Desktop/Web，其开关误显"被手机压制"）。
+ * 播报模式(P1)是全局的、由 broadcastMode 驱动，convId 与它无关——reconcile 里播报分支不看 convId，
+ * 故此清除只断单对话流、不影响播报。
+ */
+export function clearActiveConversation(): void {
+  if (!convId) return;
+  convId = '';
+  reconcile();
 }
 
 /** app 启动 / session 就绪时从服务端拉 tts_autoplay（与 Web/Desktop 同一份偏好）；登出(null)即断流。 */
