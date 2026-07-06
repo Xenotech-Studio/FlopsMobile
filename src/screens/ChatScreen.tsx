@@ -43,6 +43,8 @@ import { useTtsPlayback, togglePlayback } from '../audio/ttsPlayer';
 import {
   setActiveConversation as setRealtimeActiveConversation,
   clearActiveConversation as clearRealtimeActiveConversation,
+  setRealtimeEnabled,
+  setBroadcastMode,
 } from '../audio/ttsRealtime';
 import { bytesToBase64, getCachedKAgent, getCachedKConv } from '../lib/srp';
 import type { RootStackParamList } from '../navigation/types';
@@ -62,6 +64,7 @@ import {
   getMessagesBefore,
   CHAT_MESSAGES_INITIAL_LIMIT,
   getLayoutPreferences,
+  setLayoutPreferences,
   getModelsConfig,
   selectModel,
   marketIdOf,
@@ -139,6 +142,7 @@ import {
 } from '../utils/toolCardParsers';
 import { ReadPagesDetailSheet } from '../components/ReadPagesDetailSheet';
 import { ModelSelectSheet } from '../components/ModelSelectSheet';
+import { TtsSettingsSheet } from '../components/TtsSettingsSheet';
 import { resolveAgentDisplayLabel } from '../utils/agentDisplay';
 import { VoiceDictationSession } from '../utils/voiceDictationMobile';
 import { UsageDetailModal } from '../components/UsageDetailModal';
@@ -453,6 +457,10 @@ export function ChatScreen({
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
   const [usageRuns, setUsageRuns] = useState<UsageRun[]>([]);
   const [showTokenUsageInChat, setShowTokenUsageInChat] = useState(true);
+  /** 语音「自动播报」(tts_autoplay) 当前值：⋯ 菜单 → 语音播报 sheet 里的开关。播报模式(tts_broadcast_mode)
+   *  是全局态、由 ttsRealtime 单例 + BroadcastModeOverlay 管，这里不本地镜像。 */
+  const [ttsAutoplay, setTtsAutoplay] = useState(false);
+  const [ttsSheetOpen, setTtsSheetOpen] = useState(false);
   const [usageCurrencyDisplay, setUsageCurrencyDisplay] = useState<UsageCurrencyMode>(() =>
     normalizeUsageCurrencyMode(undefined)
   );
@@ -831,6 +839,9 @@ export function ChatScreen({
       .then((prefs) => {
         if (typeof prefs.show_token_usage_in_chat === 'boolean') {
           setShowTokenUsageInChat(prefs.show_token_usage_in_chat);
+        }
+        if (typeof prefs.tts_autoplay === 'boolean') {
+          setTtsAutoplay(prefs.tts_autoplay);
         }
         if (prefs.usage_currency_display != null) {
           setUsageCurrencyDisplay(normalizeUsageCurrencyMode(prefs.usage_currency_display));
@@ -2261,9 +2272,42 @@ export function ChatScreen({
   }, [conversationId, session]);
 
   /** iOS MenuView 的 actions（SF Symbol image），id → handler 分发 */
+  /** 自动播报开关：即时驱动 ttsRealtime 单例（连/断本对话流）+ 写回服务端偏好。无二次确认。 */
+  const persistTtsAutoplay = useCallback(
+    (next: boolean) => {
+      setTtsAutoplay(next);
+      setRealtimeEnabled(next);
+      if (!session) return;
+      setLayoutPreferences(session, { tts_autoplay: next }).catch(() => {});
+    },
+    [session],
+  );
+  /** 「开启播报模式」：弹二次确认 Alert，确认后开全局播报（沉浸式 overlay 由 BroadcastModeOverlay 呈现），
+   *  同时写回偏好并收起 sheet。退出播报走 overlay 底部横条，不在这里管。 */
+  const handleEnableBroadcast = useCallback(() => {
+    Alert.alert(
+      '开启播报模式',
+      '像导航软件一样：开启后会监听你所有对话的语音，离开对话页、锁屏、切到其它 App 都持续朗读，并盖过桌面端/网页端的播报。\n\n屏幕会套上黑色边框 + 底部「语音播报中」横条，退出点那条横条上的按钮即可。',
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '开启',
+          onPress: () => {
+            setBroadcastMode(true);
+            setTtsSheetOpen(false);
+            if (session) {
+              setLayoutPreferences(session, { tts_broadcast_mode: true }).catch(() => {});
+            }
+          },
+        },
+      ],
+    );
+  }, [session]);
+
   const convMenuActions = useMemo(
     () => [
       { id: 'info', title: '对话信息', image: 'info.circle' },
+      { id: 'tts', title: '语音播报', image: 'speaker.wave.2' },
       { id: 'diag', title: '复制诊断资料', image: 'doc.on.clipboard' },
     ],
     [],
@@ -2272,6 +2316,7 @@ export function ChatScreen({
     (e: { nativeEvent: { event: string } }) => {
       const id = e.nativeEvent.event;
       if (id === 'info') handleConvInfo();
+      else if (id === 'tts') setTtsSheetOpen(true);
       else if (id === 'diag') handleConvDiagCopy();
     },
     [handleConvInfo, handleConvDiagCopy],
@@ -3618,6 +3663,7 @@ export function ChatScreen({
             iosSfSymbol={{ name: 'ellipsis', size: 16, color: colors.textSecondary }}
             onMenuAction={(id) => {
               if (id === 'info') handleConvInfo();
+              else if (id === 'tts') setTtsSheetOpen(true);
               else if (id === 'diag') handleConvDiagCopy();
             }}
           >
@@ -4355,6 +4401,13 @@ export function ChatScreen({
       options={modelSheetOptions}
       onSelectModel={(id) => void handleSelectModel(id)}
     />
+    <TtsSettingsSheet
+      visible={ttsSheetOpen}
+      onClose={() => setTtsSheetOpen(false)}
+      autoplay={ttsAutoplay}
+      onToggleAutoplay={persistTtsAutoplay}
+      onPressBroadcast={handleEnableBroadcast}
+    />
     <ModelSelectSheet
       visible={agentPickerOpen}
       onClose={() => setAgentPickerOpen(false)}
@@ -4556,6 +4609,18 @@ export function ChatScreen({
           >
             <Ionicons name="information-circle-outline" size={20} color={colors.textPrimary} />
             <Text style={styles.convMenuItemText}>对话信息</Text>
+          </TouchableOpacity>
+          <View style={styles.convMenuDivider} />
+          <TouchableOpacity
+            style={styles.convMenuItem}
+            activeOpacity={0.6}
+            onPress={() => {
+              closeConvMenu();
+              setTtsSheetOpen(true);
+            }}
+          >
+            <Ionicons name="volume-high-outline" size={20} color={colors.textPrimary} />
+            <Text style={styles.convMenuItemText}>语音播报</Text>
           </TouchableOpacity>
           <View style={styles.convMenuDivider} />
           <TouchableOpacity
