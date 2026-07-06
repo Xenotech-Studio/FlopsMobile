@@ -1080,6 +1080,11 @@ export function ChatScreen({
     /* 语音听写有 pending 灰字时立即展开：让用户实时看到「文本在上、按钮一排在下」的编辑态。 */
     dictationPendingText.trim().length > 0;
 
+  /** 是否有可发送内容：composerDoc 有内容，或语音听写 pending 有文字（pending 只在原生层，
+   *  发送时由 handleSendMessage 打断听写并把它并进消息）。用于发送键的 enable / 停止态判定。 */
+  const composerHasSendableContent =
+    composerStats.hasContent || dictationPendingText.trim().length > 0;
+
   const canSend = Boolean(
     session && composerStats.hasContent && !loading && !conversationHistoryLoading
   );
@@ -1563,26 +1568,32 @@ export function ChatScreen({
     dictationErrorTimerRef.current = setTimeout(() => setDictationError(''), 4000);
   }, []);
 
-  /** 放弃进行中的听写：拆会话 + 丢弃 native pending 灰字 + 回 idle。无会话时也安全（幂等）。 */
-  const cancelActiveDictation = useCallback(() => {
+  /** 打断进行中的听写：拆会话 + 丢弃 native pending 灰字 + 回 idle。返回被打断时的 pending 纯文本
+   *  （取自 session.lastText，同步、无 React state 延迟），供发送路径把它并进消息 content。
+   *  无会话时返回空串。幂等。 */
+  const cancelActiveDictation = useCallback((): string => {
     const s = dictationSessionRef.current;
+    const pending = s ? s.lastText : '';
     dictationSessionRef.current = null;
     if (s) s.cancel();
     composerAdapterRef.current?.cancelDictation();
     setDictationPendingText('');
     setDictationState('idle');
+    return pending;
   }, []);
 
   /** mic 点击：idle→开始录音；recording→立刻停（回 idle，后台等 onDone 定稿）。 */
   const onMicPress = useCallback(async () => {
     if (dictationState === 'recording') {
       // 立刻回 idle（mic 图标 / 停脉冲）；session 在后台发 finish 等最终结果，onDone 里 commit
+      ReactNativeHapticFeedback.trigger('impactLight', { enableVibrateFallback: true });
       dictationSessionRef.current?.stop();
       setDictationState('idle');
       return;
     }
     // 上一段还在后台定稿（ref 仍在）时忽略，避免两段会话重叠 commit 错内容
     if (!session || dictationSessionRef.current) return;
+    ReactNativeHapticFeedback.trigger('impactLight', { enableVibrateFallback: true });
     setDictationError('');
     const s = new VoiceDictationSession({
       serverBaseUrl: session.server_base_url,
@@ -1652,14 +1663,15 @@ export function ChatScreen({
       composerDoc,
       composerRefDataByKeyRef.current,
     );
-    const text = rawContent.trim();
+    /* 打断进行中的听写并取回 pending 尾巴，并进入队文本（跟 handleSendMessage 一致的语义）。 */
+    const dictationTail = cancelActiveDictation();
+    const text = (rawContent + dictationTail).trim();
     if (!text && flops_refs.length === 0) return;
     setComposerDoc([{ type: 'paragraph', children: [{ text: '' }] }]);
     composerRefDataByKeyRef.current = new Map();
     /* 可靠清空：imperative 命令直接清 native 内容。不靠 keyed-remount 重读空 initialContent——
        Fabric view 回收 + initialContentApplied 守卫让 remount 清空不可靠（旧文本残留）；
        保持同一 native view + setContent('[]') 是可靠路径。切页回来重对齐也是同一套（见 useFocusEffect）。 */
-    cancelActiveDictation(); // 有进行中的听写先丢弃 pending，避免灰字残留
     composerAdapterRef.current?.clear();
     const tempId = `tmp-${Date.now()}`;
     setSendQueue((q) => [...q, { id: tempId, text, pending: true }]);
@@ -1704,18 +1716,36 @@ export function ChatScreen({
   );
 
   const handleSendMessage = useCallback(async () => {
-    // P2：agent 在跑时回车 → 入待发队列（不打断当前 run）
-    if (loading && session && composerStats.hasContent && conversationIdRef.current) {
+    /* 语音听写进行中按发送：pending 灰字只在原生层。先同步取 session.lastText 当"尾巴"，让它跟
+       composerDoc 的内容一起决定能否发送 / 一起拼进消息。真正打断（cancel 会话 + 丢 native 灰字）
+       放到确定要发送之后，避免 guard 未过就误杀听写。 */
+    const dictationTail = dictationSessionRef.current?.lastText ?? '';
+    const hasDictationTail = dictationTail.trim().length > 0;
+    // P2：agent 在跑时回车 → 入待发队列（不打断当前 run）；enqueue 内部会自己打断听写并并入 tail
+    if (
+      loading &&
+      session &&
+      (composerStats.hasContent || hasDictationTail) &&
+      conversationIdRef.current
+    ) {
       void enqueueCurrentComposer();
       return;
     }
-    if (!session || !composerStats.hasContent || loading || conversationHistoryLoading) return;
+    if (
+      !session ||
+      (!composerStats.hasContent && !hasDictationTail) ||
+      loading ||
+      conversationHistoryLoading
+    )
+      return;
     /* 序列化 composerDoc → content（pill 还原为 mention_text）+ flops_refs（按 pill 出现顺序） */
     const { content: rawContent, flops_refs } = serializeSlateDocumentToUserMessage(
       composerDoc,
       composerRefDataByKeyRef.current,
     );
-    const nextMessage = rawContent.trim();
+    /* 确定发送 → 立刻打断听写（cancel 会话 + 丢 native 灰字），pending 文字通过 dictationTail 并进 content。 */
+    cancelActiveDictation();
+    const nextMessage = (rawContent + dictationTail).trim();
     if (!nextMessage && flops_refs.length === 0) return;
     /* 清空 composer：把 SlateDocument 重置为单段空 paragraph，refDataByKey 清空，再 bump key 强制 remount native */
     setComposerDoc([{ type: 'paragraph', children: [{ text: '' }] }]);
@@ -1723,7 +1753,6 @@ export function ChatScreen({
     /* 可靠清空：imperative 命令直接清 native 内容。不靠 keyed-remount 重读空 initialContent——
        Fabric view 回收 + initialContentApplied 守卫让 remount 清空不可靠（旧文本残留）；
        保持同一 native view + setContent('[]') 是可靠路径。切页回来重对齐也是同一套（见 useFocusEffect）。 */
-    cancelActiveDictation(); // 有进行中的听写先丢弃 pending，避免灰字随消息一起被清/残留
     composerAdapterRef.current?.clear();
     setError('');
     setLoading(true);
@@ -4005,10 +4034,12 @@ export function ChatScreen({
                    - 运行中且内容为空 → 停止键（handleStop）
                    - 否则 → 发送键（handleSendMessage；idle=发送 / 运行中有内容=入待发队列）
                    - idle 且无内容 → 发送禁用（灰） */
-                const sendIsStop = loading && !composerStats.hasContent;
+                /* 语音听写 pending 也算"有内容"：录音中按发送要能点（会打断听写并把 pending 一起发），
+                   所以停止态 / 禁用态都用 composerHasSendableContent 而非纯 composerStats.hasContent。 */
+                const sendIsStop = loading && !composerHasSendableContent;
                 const sendDisabled =
                   !sendIsStop &&
-                  (!session || conversationHistoryLoading || !composerStats.hasContent);
+                  (!session || conversationHistoryLoading || !composerHasSendableContent);
                 const renderSendBtn = showSendBtn ? (
                   <TouchableOpacity
                     style={[
