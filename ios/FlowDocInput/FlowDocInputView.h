@@ -73,6 +73,14 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)applyMark:(NSString *)mark value:(NSString *)value;
 /** 移除当前选区上对应 mark 的全部痕迹 */
 - (void)removeMark:(NSString *)mark;
+/** 实时语音听写：在文本**尾部**渲染一段灰色 pending 文字。不进入 currentContentJson、
+ *  不触发 emitContentChange。反复调用整体替换这段 pending，实现流式听写。text 为空 = 清空
+ *  pending 文字（仍保持 pending 态）。 */
+- (void)setDictationPending:(NSString *)text;
+/** 提交 pending：把灰色 pending 文字转成正文色，清空 pending 态，触发一次内容变化。无 pending no-op */
+- (void)commitDictation;
+/** 取消 pending：删除灰色 pending 文字，不进入内容。无 pending no-op */
+- (void)cancelDictation;
 - (void)focusInput;
 /** 编程式聚焦 + 把光标摆到指定逻辑字符 offset；offset < 0 表示放末尾 */
 - (void)focusInputAtOffset:(NSInteger)offset;

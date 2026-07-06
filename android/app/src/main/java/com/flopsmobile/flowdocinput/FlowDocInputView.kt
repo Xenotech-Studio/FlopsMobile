@@ -53,11 +53,17 @@ private val CODE_TEXT_COLOR = Color.parseColor("#eb5757")
 private val CODE_BG_COLOR = Color.argb((0.15f * 255).toInt(), 135, 131, 120)
 private const val CODE_TEXT_HEX = "#EB5757" // "#%06X".format 产出大写，用于反查时识别"code 红字"
 
+/** 语音听写 pending 文字的标记 span：继承 ForegroundColorSpan 拿到灰色渲染，同时作为可识别的
+ *  类型用于定位 pending 段。带此 span 的文字 = 临时听写文字，不参与 currentContentJson 序列化。 */
+private class DictationPendingSpan(color: Int) : ForegroundColorSpan(color)
+
 class FlowDocInputView(context: Context) : AppCompatEditText(context) {
 
   private var initialContentApplied = false
   private var suppressTextWatcher = false
   var enterCreatesBlock: Boolean = true
+  /** 当前语音听写 pending 段的标记 span（挂在 editableText 尾部）。null = 无 pending。 */
+  private var dictationPendingSpan: DictationPendingSpan? = null
 
   var pillBackgroundColor: Int = Color.parseColor("#EBEBEB")
     set(value) {
@@ -351,6 +357,7 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
    *  文本就泄漏进输入框。清空时压住 textWatcher，避免误触 onChangeContent。 */
   fun resetForRecycle() {
     initialContentApplied = false
+    dictationPendingSpan = null
     suppressTextWatcher = true
     setText("")
     suppressTextWatcher = false
@@ -451,6 +458,73 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
       "color" -> removeSpansInRange(t, start, end, ForegroundColorSpan::class.java)
     }
     emitContentChange()
+  }
+
+  // MARK: - Voice dictation pending text
+
+  /** pending 文字灰色：正文色叠 50% alpha（对齐 Web 版 asrPending opacity 0.5、iOS 同款）。 */
+  private fun dictationPendingColor(): Int =
+    (currentTextColor and 0x00FFFFFF) or (0x80 shl 24)
+
+  /** 在尾部渲染/整体替换一段灰色 pending 文字。不 emitContentChange（pending 不算已提交内容）。 */
+  fun setDictationPending(pendingText: String) {
+    val t = editableText ?: return
+    val span = dictationPendingSpan
+    // pending 段恒在尾部：已有则整体替换其区间，否则从当前末尾新开一段
+    val from = if (span != null) t.getSpanStart(span).coerceAtLeast(0) else t.length
+    val to = if (span != null) t.getSpanEnd(span).coerceAtLeast(from) else t.length
+
+    suppressTextWatcher = true
+    if (span != null) t.removeSpan(span)
+    t.replace(from, to, pendingText)
+    val newSpan = DictationPendingSpan(dictationPendingColor())
+    if (pendingText.isNotEmpty()) {
+      t.setSpan(newSpan, from, from + pendingText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+      dictationPendingSpan = newSpan
+      setSelection(from + pendingText.length)
+    } else {
+      // 空 pending：不挂 span，但仍处于 pending 态（下次调用从末尾重开）
+      dictationPendingSpan = null
+      setSelection(from.coerceAtMost(t.length))
+    }
+    suppressTextWatcher = false
+    requestLayout()
+  }
+
+  /** 提交 pending：抹掉灰色标记 span，文字转正常色成为正式内容，触发一次内容变化。 */
+  fun commitDictation() {
+    val t = editableText
+    val span = dictationPendingSpan
+    if (t == null || span == null) {
+      dictationPendingSpan = null
+      return
+    }
+    val end = t.getSpanEnd(span).coerceAtLeast(0)
+    suppressTextWatcher = true
+    t.removeSpan(span) // 去掉灰色 ForegroundColorSpan → 恢复默认正文色
+    dictationPendingSpan = null
+    setSelection(end.coerceAtMost(t.length))
+    suppressTextWatcher = false
+    emitContentChange()
+  }
+
+  /** 取消 pending：删除灰色文字，不进入内容。 */
+  fun cancelDictation() {
+    val t = editableText
+    val span = dictationPendingSpan
+    if (t == null || span == null) {
+      dictationPendingSpan = null
+      return
+    }
+    val from = t.getSpanStart(span).coerceAtLeast(0)
+    val to = t.getSpanEnd(span).coerceAtLeast(from)
+    suppressTextWatcher = true
+    t.removeSpan(span)
+    if (to > from) t.delete(from, to)
+    dictationPendingSpan = null
+    setSelection(from.coerceAtMost(t.length))
+    suppressTextWatcher = false
+    requestLayout()
   }
 
   /** 给 [start,end) 加一个 BOLD / ITALIC StyleSpan；先合并区间内已有 StyleSpan 防止叠加 */
@@ -570,6 +644,8 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
 
     suppressTextWatcher = true
     setText(builder)
+    // 全量替换文本作废任何尾部 pending（setText 已清掉其 span）
+    dictationPendingSpan = null
     if (moveCursorToEnd) {
       setSelection(builder.length)
     }
@@ -675,6 +751,9 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
     val t = text ?: return "[]"
     val arr = JSONArray()
 
+    /* 灰色语音 pending 文字恒在尾部，不算已提交内容：序列化只覆盖 [0, serializeEnd)。 */
+    val serializeEnd = dictationPendingSpan?.let { t.getSpanStart(it).coerceIn(0, t.length) } ?: t.length
+
     /* 收集原子对象（pill + equation），按位置排序后与中间文字交错。
        两类都以 1 个 U+FFFC 占位，跟 iOS 的 attachment 序列化同思路。 */
     val atoms = ArrayList<Triple<Int, Int, JSONObject>>()
@@ -697,6 +776,7 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
 
     var cursor = 0
     for ((start, end, json) in atoms) {
+      if (start >= serializeEnd) break // 落在 pending 尾部（正常不会有原子，防御性跳过）
       if (start > cursor) {
         // 把 [cursor, start) 这段文字按 mark 边界拆成多个 text part
         appendTextPartsByMarks(arr, t, cursor, start)
@@ -704,8 +784,8 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
       arr.put(json)
       cursor = end
     }
-    if (cursor < t.length) {
-      appendTextPartsByMarks(arr, t, cursor, t.length)
+    if (cursor < serializeEnd) {
+      appendTextPartsByMarks(arr, t, cursor, serializeEnd)
     }
     return arr.toString()
   }

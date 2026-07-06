@@ -142,6 +142,18 @@ interface NativeCommands {
     viewRef: React.ElementRef<FlowDocInputViewType>,
     mark: string,
   ) => void;
+  /** 实时语音听写：在编辑器**尾部**渲染一段灰色 pending 文字（不进已提交内容、不触发
+   *  onChangeContent、不参与序列化）。反复调用整体替换这段 pending 文字，实现流式听写文字
+   *  随 ASR 结果实时增删。text 为空串 = 清空 pending 文字但仍保持 pending 态。 */
+  setDictationPending: (
+    viewRef: React.ElementRef<FlowDocInputViewType>,
+    text: string,
+  ) => void;
+  /** 提交 pending：把当前灰色 pending 文字转成正式内容（正常颜色），并触发一次
+   *  onChangeContent；随后 pending 态清空。无 pending 时 no-op。 */
+  commitDictation: (viewRef: React.ElementRef<FlowDocInputViewType>) => void;
+  /** 取消 pending：直接删除当前灰色 pending 文字，不进入内容。无 pending 时 no-op。 */
+  cancelDictation: (viewRef: React.ElementRef<FlowDocInputViewType>) => void;
   /** 编程式聚焦 */
   focus: (viewRef: React.ElementRef<FlowDocInputViewType>) => void;
   /** 编程式聚焦 + 把 cursor 摆到指定逻辑字符 offset（pill 算 1 个字符）。
@@ -161,6 +173,9 @@ export const Commands: NativeCommands = codegenNativeCommands<NativeCommands>({
     'setContent',
     'applyMark',
     'removeMark',
+    'setDictationPending',
+    'commitDictation',
+    'cancelDictation',
     'focus',
     'focusAtOffset',
     'blur',

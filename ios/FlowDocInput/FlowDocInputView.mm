@@ -87,6 +87,10 @@
 }
 @end
 
+/** 语音听写 pending 文字段的标记属性（值恒为 @YES）。带此属性的 run = 灰色临时听写文字：
+ *  不参与 currentContentJson 序列化、不进已提交内容。commitDictation 时抹掉该属性转正。 */
+static NSString *const FlowDocDictationPendingAttributeName = @"FlowDocDictationPending";
+
 @interface FlowDocInputView () <UITextViewDelegate, UIGestureRecognizerDelegate>
 @property (nonatomic, strong) UITextView *textView;
 @property (nonatomic, strong) UILabel *placeholderLabel;
@@ -97,6 +101,8 @@
 @implementation FlowDocInputView {
   /** 上次上报给 JS 的内容尺寸；避免每帧都重复 emit 同样的值 */
   CGSize _lastReportedContentSize;
+  /** 当前语音听写 pending 文字段的 range（始终位于 textStorage 尾部）。length==0 表示无 pending。 */
+  NSRange _dictationPendingRange;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -483,6 +489,8 @@
   }];
 
   self.textView.attributedText = attr;
+  // 全量替换文本会连带清掉尾部 pending run，pending 态一并作废
+  _dictationPendingRange = NSMakeRange(0, 0);
   if (toEnd) {
     self.textView.selectedRange = NSMakeRange(attr.length, 0);
   }
@@ -605,6 +613,92 @@
   [self emitContentChange];
 }
 
+// MARK: - Voice dictation pending text
+
+/** pending 文字用的灰色（对齐 Web 版 opacity 0.5 的 asrPending 视觉）：正文色叠 0.5 alpha。 */
+- (UIColor *)dictationPendingColor {
+  UIColor *base = self.textColor ?: [UIColor labelColor];
+  return [base colorWithAlphaComponent:0.5];
+}
+
+- (void)setDictationPending:(NSString *)text {
+  NSString *incoming = [text isKindOfClass:[NSString class]] ? text : @"";
+  NSTextStorage *storage = self.textView.textStorage;
+
+  /* pending 段恒在尾部：首次进入时 location = 当前末尾；后续更新沿用旧 location 整体替换。
+     旧 range 万一越界（外部 setContent 把文本换短了）则回退到当前末尾，重开一段。 */
+  NSUInteger loc = _dictationPendingRange.length > 0 ? _dictationPendingRange.location : storage.length;
+  if (loc > storage.length) loc = storage.length;
+  NSRange oldRange = NSMakeRange(loc, MIN(_dictationPendingRange.length, storage.length - loc));
+
+  NSDictionary *attrs = @{
+    NSFontAttributeName: [self baseFontOfSize:self.fontSize],
+    NSForegroundColorAttributeName: [self dictationPendingColor],
+    FlowDocDictationPendingAttributeName: @YES,
+  };
+  NSAttributedString *pendingStr = [[NSAttributedString alloc] initWithString:incoming attributes:attrs];
+
+  [storage beginEditing];
+  [storage replaceCharactersInRange:oldRange withAttributedString:pendingStr];
+  [storage endEditing];
+
+  _dictationPendingRange = NSMakeRange(loc, incoming.length);
+  // 光标跟到 pending 末尾，营造"文字随说话实时冒出"的体感
+  NSUInteger caret = loc + incoming.length;
+  if (caret <= storage.length) self.textView.selectedRange = NSMakeRange(caret, 0);
+
+  [self refreshPlaceholderLayout];
+  [self setNeedsLayout];
+  [self layoutIfNeeded];
+}
+
+- (void)commitDictation {
+  if (_dictationPendingRange.length == 0) {
+    _dictationPendingRange = NSMakeRange(0, 0);
+    return;
+  }
+  NSTextStorage *storage = self.textView.textStorage;
+  NSRange range = _dictationPendingRange;
+  if (range.location + range.length > storage.length) {
+    range.length = storage.length > range.location ? storage.length - range.location : 0;
+  }
+  if (range.length > 0) {
+    [storage beginEditing];
+    [storage removeAttribute:FlowDocDictationPendingAttributeName range:range];
+    [storage addAttribute:NSForegroundColorAttributeName
+                    value:(self.textColor ?: [UIColor labelColor])
+                    range:range];
+    [storage endEditing];
+    NSUInteger caret = range.location + range.length;
+    if (caret <= storage.length) self.textView.selectedRange = NSMakeRange(caret, 0);
+  }
+  _dictationPendingRange = NSMakeRange(0, 0);
+  [self emitContentChange];
+}
+
+- (void)cancelDictation {
+  if (_dictationPendingRange.length == 0) {
+    _dictationPendingRange = NSMakeRange(0, 0);
+    return;
+  }
+  NSTextStorage *storage = self.textView.textStorage;
+  NSRange range = _dictationPendingRange;
+  if (range.location + range.length > storage.length) {
+    range.length = storage.length > range.location ? storage.length - range.location : 0;
+  }
+  if (range.length > 0) {
+    [storage beginEditing];
+    [storage deleteCharactersInRange:range];
+    [storage endEditing];
+    NSUInteger caret = range.location <= storage.length ? range.location : storage.length;
+    self.textView.selectedRange = NSMakeRange(caret, 0);
+  }
+  _dictationPendingRange = NSMakeRange(0, 0);
+  [self refreshPlaceholderLayout];
+  [self setNeedsLayout];
+  [self layoutIfNeeded];
+}
+
 /** apply=YES：加上对应 mark 属性；apply=NO：移除。
  *  bold/italic：通过修改 NSFont 的 symbolic traits 实现，保留原字号
  *  code：换字族 + 加背景色（apply）/ 还原系统字体 + 去背景色（remove）
@@ -677,6 +771,7 @@
      当 setInitialContent 应用之后会被新内容覆盖，体感比闪更轻。 */
   self.initialContentApplied = NO;
   _lastReportedContentSize = CGSizeZero;
+  _dictationPendingRange = NSMakeRange(0, 0);
 
   // 跟 spec 里 `WithDefault<Double, 16>` 等保持一致
   self.fontSize = 16.0;
@@ -906,6 +1001,8 @@
     } else if ([attachment isKindOfClass:[EquationAttachment class]]) {
       EquationAttachment *eq = (EquationAttachment *)attachment;
       [items addObject:@{ @"type": @"equation", @"tex": eq.tex ?: @"" }];
+    } else if (attrs[FlowDocDictationPendingAttributeName]) {
+      // 灰色语音 pending 文字：视觉在框里但不算已提交内容，跳过不序列化
     } else {
       NSString *chunk = [storage.string substringWithRange:effective];
       if (chunk.length > 0) {

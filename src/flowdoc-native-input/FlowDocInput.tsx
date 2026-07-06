@@ -60,6 +60,13 @@ export type FlowDocInputHandle = {
   /** 给当前选区加 mark。color 用 value 传 hex；布尔型 mark 不需要 value */
   applyMark: (mark: FlowDocMarkName, value?: string) => void;
   removeMark: (mark: FlowDocMarkName) => void;
+  /** 实时语音听写：在编辑器尾部渲染一段灰色 pending 文字（不进已提交内容、不触发
+   *  onChangeContent）。反复调用整体替换，实现流式听写。空串 = 清空 pending 文字。 */
+  setDictationPending: (text: string) => void;
+  /** 提交 pending 文字为正式内容（正常颜色），触发一次 onChangeContent。无 pending 时 no-op */
+  commitDictation: () => void;
+  /** 丢弃 pending 文字（不进入内容）。无 pending 时 no-op */
+  cancelDictation: () => void;
   focus: () => void;
   /** 聚焦并把光标放到指定逻辑字符 offset（pill 算 1 个字符）；offset<0 表示放末尾 */
   focusAtOffset: (offset: number) => void;
@@ -158,6 +165,18 @@ export const FlowDocInput = forwardRef(
       removeMark: (mark) => {
         if (!nativeRef.current) return;
         NativeCommands.removeMark(nativeRef.current, mark);
+      },
+      setDictationPending: (text) => {
+        if (!nativeRef.current) return;
+        NativeCommands.setDictationPending(nativeRef.current, text ?? '');
+      },
+      commitDictation: () => {
+        if (!nativeRef.current) return;
+        NativeCommands.commitDictation(nativeRef.current);
+      },
+      cancelDictation: () => {
+        if (!nativeRef.current) return;
+        NativeCommands.cancelDictation(nativeRef.current);
       },
       focus: () => {
         if (!nativeRef.current) return;

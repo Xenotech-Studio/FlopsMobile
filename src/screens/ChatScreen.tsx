@@ -30,6 +30,9 @@ import Reanimated, {
   useSharedValue,
   withSpring,
   withTiming,
+  withRepeat,
+  cancelAnimation,
+  Easing,
 } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -137,6 +140,7 @@ import {
 import { ReadPagesDetailSheet } from '../components/ReadPagesDetailSheet';
 import { ModelSelectSheet } from '../components/ModelSelectSheet';
 import { resolveAgentDisplayLabel } from '../utils/agentDisplay';
+import { VoiceDictationSession } from '../utils/voiceDictationMobile';
 import { UsageDetailModal } from '../components/UsageDetailModal';
 import { ContextCompressDividerRow } from '../components/ContextCompressDividerRow';
 import { SearchEngineCard } from './chat-cards/SearchEngineCard';
@@ -1027,6 +1031,11 @@ export function ChatScreen({
 
   /** 主 composer 状态：可发送 / 是否含 pill / 文本总长度 / CJK 字符数。
    *  发送靠键盘 Return，没有发送按钮；这些 flags 给布局切换用。 */
+  /** 语音听写当前的 pending 灰字（只在原生层渲染，不进 composerDoc）。RN 侧留一份镜像，
+   *  用于让 composer 布局实时感知 pending 的存在并切到展开模式（见 composerTall）。
+   *  刻意不并进 composerStats.hasContent —— 那会误开 Send，而发送会先取消听写、丢掉 pending。 */
+  const [dictationPendingText, setDictationPendingText] = useState('');
+
   const composerStats = useMemo(() => {
     let hasContent = false;
     let hasPill = false;
@@ -1067,7 +1076,9 @@ export function ChatScreen({
     composerStats.hasPill ||
     composerDoc.length > 1 ||
     composerStats.cjkCount > 15 ||
-    composerStats.textLen > 30;
+    composerStats.textLen > 30 ||
+    /* 语音听写有 pending 灰字时立即展开：让用户实时看到「文本在上、按钮一排在下」的编辑态。 */
+    dictationPendingText.trim().length > 0;
 
   const canSend = Boolean(
     session && composerStats.hasContent && !loading && !conversationHistoryLoading
@@ -1530,6 +1541,109 @@ export function ChatScreen({
     },
     [session, _extractQueueText],
   );
+
+  /* ==================== 语音听写（实时 ASR → composer pending 灰字） ====================
+     mic 按钮 tap-to-toggle：idle ↔ recording。点第二下立刻回 idle（mic 图标），不留中间态；
+     session.stop() 只是发 finish 后在后台等服务端最终结果，onDone 到达时再把 pending commit
+     成正式内容——这段"后台定稿"不再用一个可见状态表示，避免图标闪一下三个点。
+     onResult 把累计文本整体写进 native pending（灰字，不进 composerDoc、不触发 onChangeContent）；
+     onDone 把 pending commit 成正式内容；onError 也 commit 已识别部分（别让用户白说）+ 弹提示；
+     cancel 丢弃 pending。发送 / 清空 composer 前若有进行中的听写先 cancel。 */
+  type DictationState = 'idle' | 'recording';
+  const [dictationState, setDictationState] = useState<DictationState>('idle');
+  const dictationSessionRef = useRef<VoiceDictationSession | null>(null);
+  const [dictationError, setDictationError] = useState('');
+  const dictationErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 录音中麦克风红色脉冲：0↔1 往复驱动 scale/opacity（见 micPulseStyle）。 */
+  const micPulse = useSharedValue(0);
+
+  const flashDictationError = useCallback((message: string) => {
+    setDictationError(message);
+    if (dictationErrorTimerRef.current) clearTimeout(dictationErrorTimerRef.current);
+    dictationErrorTimerRef.current = setTimeout(() => setDictationError(''), 4000);
+  }, []);
+
+  /** 放弃进行中的听写：拆会话 + 丢弃 native pending 灰字 + 回 idle。无会话时也安全（幂等）。 */
+  const cancelActiveDictation = useCallback(() => {
+    const s = dictationSessionRef.current;
+    dictationSessionRef.current = null;
+    if (s) s.cancel();
+    composerAdapterRef.current?.cancelDictation();
+    setDictationPendingText('');
+    setDictationState('idle');
+  }, []);
+
+  /** mic 点击：idle→开始录音；recording→立刻停（回 idle，后台等 onDone 定稿）。 */
+  const onMicPress = useCallback(async () => {
+    if (dictationState === 'recording') {
+      // 立刻回 idle（mic 图标 / 停脉冲）；session 在后台发 finish 等最终结果，onDone 里 commit
+      dictationSessionRef.current?.stop();
+      setDictationState('idle');
+      return;
+    }
+    // 上一段还在后台定稿（ref 仍在）时忽略，避免两段会话重叠 commit 错内容
+    if (!session || dictationSessionRef.current) return;
+    setDictationError('');
+    const s = new VoiceDictationSession({
+      serverBaseUrl: session.server_base_url,
+      token: session.access_token,
+      onResult: (text) => {
+        // ASR 每次回全量累计文本 → 整体替换 native pending 灰字（流式增删）
+        composerAdapterRef.current?.setDictationPending(text);
+        setDictationPendingText(text); // RN 镜像，驱动 composerTall 实时展开
+      },
+      onDone: (finalText) => {
+        if (dictationSessionRef.current === s) dictationSessionRef.current = null;
+        if (finalText) composerAdapterRef.current?.setDictationPending(finalText);
+        composerAdapterRef.current?.commitDictation();
+        setDictationPendingText(''); // 已 commit 进 composerDoc，pending 镜像清空
+        setDictationState('idle');
+        composerAdapterRef.current?.focus();
+      },
+      onError: (message) => {
+        if (dictationSessionRef.current === s) dictationSessionRef.current = null;
+        composerAdapterRef.current?.commitDictation(); // 已识别的部分照样落地
+        setDictationPendingText('');
+        setDictationState('idle');
+        flashDictationError(message);
+      },
+    });
+    dictationSessionRef.current = s;
+    setDictationState('recording'); // 乐观：权限被拒时 onError 会回 idle
+    await s.start();
+  }, [dictationState, session, flashDictationError]);
+
+  // 录音中脉冲；非录音态停脉冲并归零
+  useEffect(() => {
+    if (dictationState === 'recording') {
+      micPulse.value = withRepeat(
+        withTiming(1, { duration: 800, easing: Easing.inOut(Easing.ease) }),
+        -1,
+        true,
+      );
+    } else {
+      cancelAnimation(micPulse);
+      micPulse.value = withTiming(0, { duration: 150 });
+    }
+  }, [dictationState, micPulse]);
+
+  /* 录音中的红色涟漪：图标后面的圆形背景往外扩散并淡出（对齐 Desktop .mic-recording-pulse
+     的 box-shadow ripple）。图标本身不变色——只有这个背景圆在脉冲。 */
+  const micPulseStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: 1 + micPulse.value * 0.35 }],
+    opacity: 0.35 * (1 - micPulse.value),
+  }));
+
+  // 切换对话 / 卸载时放弃进行中的听写，避免会话泄漏
+  useEffect(() => {
+    return () => {
+      const s = dictationSessionRef.current;
+      dictationSessionRef.current = null;
+      if (s) s.cancel();
+      if (dictationErrorTimerRef.current) clearTimeout(dictationErrorTimerRef.current);
+    };
+  }, [conversationId]);
+
   /** 入队当前 composer 内容（agent 跑时回车走这里）。乐观显示 + 失败回滚。 */
   const enqueueCurrentComposer = useCallback(async () => {
     const id = String(conversationIdRef.current || '').trim();
@@ -1545,6 +1659,7 @@ export function ChatScreen({
     /* 可靠清空：imperative 命令直接清 native 内容。不靠 keyed-remount 重读空 initialContent——
        Fabric view 回收 + initialContentApplied 守卫让 remount 清空不可靠（旧文本残留）；
        保持同一 native view + setContent('[]') 是可靠路径。切页回来重对齐也是同一套（见 useFocusEffect）。 */
+    cancelActiveDictation(); // 有进行中的听写先丢弃 pending，避免灰字残留
     composerAdapterRef.current?.clear();
     const tempId = `tmp-${Date.now()}`;
     setSendQueue((q) => [...q, { id: tempId, text, pending: true }]);
@@ -1555,7 +1670,7 @@ export function ChatScreen({
       setSendQueue((q) => q.filter((it) => it.id !== tempId));
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [session, composerDoc]);
+  }, [session, composerDoc, cancelActiveDictation]);
   const deleteQueueItem = useCallback(
     async (itemId: string) => {
       const id = String(conversationIdRef.current || '').trim();
@@ -1608,6 +1723,7 @@ export function ChatScreen({
     /* 可靠清空：imperative 命令直接清 native 内容。不靠 keyed-remount 重读空 initialContent——
        Fabric view 回收 + initialContentApplied 守卫让 remount 清空不可靠（旧文本残留）；
        保持同一 native view + setContent('[]') 是可靠路径。切页回来重对齐也是同一套（见 useFocusEffect）。 */
+    cancelActiveDictation(); // 有进行中的听写先丢弃 pending，避免灰字随消息一起被清/残留
     composerAdapterRef.current?.clear();
     setError('');
     setLoading(true);
@@ -1751,6 +1867,7 @@ export function ChatScreen({
     applyConversationUsageState,
     draftAgentId,
     enqueueCurrentComposer,
+    cancelActiveDictation,
   ]);
 
   // 打开对话 / 流式起止时同步待发队列；流结束清掉乐观穿插钉
@@ -3848,6 +3965,14 @@ export function ChatScreen({
                   全部 inline 在卡片底部 — 不再走绝对 meta row（避免位置错位）。
                   发送统一靠键盘 Return（FlowDocSlateAdapter.onSubmitOnEnter） — 没有发送按钮。
                   loading 时把 + 换成 ⏹ 停止键。 */}
+              {/* 语音听写错误：贴在 composer 上方的临时气泡（4s 自动消失） */}
+              {dictationError ? (
+                <View style={styles.composerDictationError} pointerEvents="none">
+                  <Text style={styles.composerDictationErrorText} numberOfLines={2}>
+                    {dictationError}
+                  </Text>
+                </View>
+              ) : null}
               {(() => {
                 /* iOS：右侧加发送/停止键（对齐桌面/web）→ 左侧 + 永远只做"引用文档"，不再兼任停止。
                    其它平台保持原样（+ 在 loading 时兼任停止，因为没有右侧键）。 */
@@ -3910,6 +4035,38 @@ export function ChatScreen({
                     />
                   </TouchableOpacity>
                 ) : null;
+                /* 麦克风键：card 的 absolute child，在发送键左边（其它平台贴右，镜像 +）。
+                   tap-to-toggle 语音听写。录音中：图标（空心 mic-outline）变深红 colors.danger，
+                   图标后面出现一个红色背景圆 + 往外扩散淡出的涟漪（对齐 Desktop .mic-recording-pulse）。 */
+                const dictationActive = dictationState === 'recording';
+                const renderMicBtn = (
+                  <View style={styles.composerMicBtnAbsolute} pointerEvents="box-none">
+                    <TouchableOpacity
+                      style={styles.composerMicBtnInner}
+                      onPress={onMicPress}
+                      disabled={!session}
+                      accessibilityLabel={dictationActive ? '结束语音输入' : '语音输入'}
+                      activeOpacity={0.7}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      {/* 先画背景圆 / 涟漪（绝对定位、在图标下面），最后画图标 → 图标永远在最上层 */}
+                      {dictationActive ? (
+                        <>
+                          <View style={styles.composerMicActiveDisc} pointerEvents="none" />
+                          <Reanimated.View
+                            style={[styles.composerMicPulseRing, micPulseStyle]}
+                            pointerEvents="none"
+                          />
+                        </>
+                      ) : null}
+                      <Ionicons
+                        name="mic-outline"
+                        size={20}
+                        color={dictationActive ? colors.danger : colors.placeholder}
+                      />
+                    </TouchableOpacity>
+                  </View>
+                );
                 const renderChips = session ? (
                   <>
                     <TouchableOpacity
@@ -4075,6 +4232,8 @@ export function ChatScreen({
                     {adapter}
                     {/* + 按钮：card 的 absolute child；跟左侧半圆同心 */}
                     {renderPlusBtn}
+                    {/* 麦克风键：card 的 absolute child；在发送键左边 */}
+                    {renderMicBtn}
                     {/* 发送/停止键（iOS）：card 的 absolute child；跟右侧半圆同心 */}
                     {renderSendBtn}
                   </>

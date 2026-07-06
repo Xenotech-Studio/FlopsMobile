@@ -39,6 +39,15 @@ const COMPOSER_SEND_BTN_INSET =
   (COMPOSER_PILL_SIZE - COMPOSER_SEND_BTN_SIZE) / 2;
 /** + 右沿到输入区 cursor 左边缘的视觉间距 */
 const COMPOSER_PLUS_TO_INPUT_GAP = 6;
+/** 麦克风键：与发送键同尺寸（背景圆 / 涟漪跟发送圆钮一样大，视觉成比例），跟 +/发送键同心一排。 */
+const COMPOSER_MIC_BTN_SIZE = COMPOSER_SEND_BTN_SIZE;
+/** mic 与发送键之间的间隙：两者都有 38px touch target 但 icon 只有 20px，用小间隙让视觉更紧凑。 */
+const COMPOSER_MIC_TO_SEND_GAP = 2;
+/** mic 右沿 inset：iOS 落在发送键左边（贴近，只留 MIC_TO_SEND_GAP）；其它平台没有发送键 → 贴右（镜像 +）。 */
+const COMPOSER_MIC_BTN_RIGHT =
+  Platform.OS === 'ios'
+    ? COMPOSER_SEND_BTN_INSET + COMPOSER_SEND_BTN_SIZE + COMPOSER_MIC_TO_SEND_GAP
+    : COMPOSER_PLUS_BTN_INSET;
 /** Card 整体水平 padding（short / tall 同值）；inputShort 内部还有自己的 paddingH = 同值 */
 const COMPOSER_CARD_PADDING_H = 8;
 /** Tall 模式 card 顶部空白（让输入区跟胶囊顶有呼吸） */
@@ -81,12 +90,9 @@ export const COMPOSER_TEXT_INSET_SHORT = {
     COMPOSER_INPUT_PAD_LEFT_SHORT +
     COMPOSER_CARD_PADDING_H,
   bottom: 9,
-  /* iOS 右侧有发送/停止键（跟右半圆同心）→ 右 inset 按发送键几何让位（按钮右沿 + GAP），文字不被压住；
-     其它平台右边没按钮，保持原来的小 inset。 */
-  right:
-    Platform.OS === 'ios'
-      ? COMPOSER_SEND_BTN_INSET + COMPOSER_SEND_BTN_SIZE + COMPOSER_PLUS_TO_INPUT_GAP
-      : COMPOSER_CARD_PADDING_H + COMPOSER_CARD_PADDING_H,
+  /* 右侧最靠里的键是麦克风（iOS 上它又在发送键左边）→ 右 inset 一律按 mic 左沿让位（mic 左沿 + GAP），
+     文字不被 mic / 发送键压住。 */
+  right: COMPOSER_MIC_BTN_RIGHT + COMPOSER_MIC_BTN_SIZE + COMPOSER_PLUS_TO_INPUT_GAP,
 };
 /** Tall 模式（多行卡片）四边 inset：
  *  - left/right: 原 card.paddingH + composerInputTall.paddingH (= 8 + 12 = 20)
@@ -1171,6 +1177,58 @@ export function createChatStyles(c: AppColors) {
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 5,
+  },
+  /** 麦克风键：card-absolute 圆钮，在发送键左边（其它平台贴右）；尺寸同发送键。脉冲 transform 挂在内部涟漪层。 */
+  composerMicBtnAbsolute: {
+    position: 'absolute',
+    /* 尺寸与发送键相同 → 用发送键 inset 让两者垂直中心对齐（跟 + / 发送键同一排居中）。 */
+    bottom: COMPOSER_SEND_BTN_INSET,
+    right: COMPOSER_MIC_BTN_RIGHT,
+    width: COMPOSER_MIC_BTN_SIZE,
+    height: COMPOSER_MIC_BTN_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 6,
+  },
+  composerMicBtnInner: {
+    width: COMPOSER_MIC_BTN_SIZE,
+    height: COMPOSER_MIC_BTN_SIZE,
+    borderRadius: COMPOSER_MIC_BTN_SIZE / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  /** 录音态图标后面的稳定红色背景圆（低透明度），提供持续的"正在录音"底色。
+   *  铺满整个按钮 → 跟右边的发送圆钮同样大小（视觉成比例）。 */
+  composerMicActiveDisc: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: COMPOSER_MIC_BTN_SIZE / 2,
+    backgroundColor: c.danger,
+    opacity: 0.16,
+  },
+  /** 录音态涟漪：跟背景圆同位同色，由 micPulseStyle 驱动 scale 往外扩散 + opacity 淡出。
+   *  opacity 由动画提供（这里不设），overflow 默认 visible 让它能溢出按钮边界扩散。 */
+  composerMicPulseRing: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: COMPOSER_MIC_BTN_SIZE / 2,
+    backgroundColor: c.danger,
+  },
+  /** 语音听写错误气泡：贴在 composer 上方的临时提示（4s 自动消失）。 */
+  composerDictationError: {
+    alignSelf: 'center',
+    maxWidth: '90%',
+    marginHorizontal: 12,
+    marginBottom: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: c.surface,
+    borderWidth: 1,
+    borderColor: c.danger,
+  },
+  composerDictationErrorText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: c.danger,
   },
   });
 }

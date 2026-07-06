@@ -141,6 +141,18 @@ using namespace facebook::react;
   [_inputView removeMark:mark];
 }
 
+- (void)setDictationPending:(NSString *)text {
+  [_inputView setDictationPending:text];
+}
+
+- (void)commitDictation {
+  [_inputView commitDictation];
+}
+
+- (void)cancelDictation {
+  [_inputView cancelDictation];
+}
+
 - (void)focus {
   [_inputView focusInput];
 }

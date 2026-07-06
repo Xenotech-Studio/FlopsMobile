@@ -151,6 +151,18 @@ class FlowDocInputViewManager : SimpleViewManager<FlowDocInputView>(),
     view.removeMark(mark)
   }
 
+  override fun setDictationPending(view: FlowDocInputView, text: String) {
+    view.setDictationPending(text)
+  }
+
+  override fun commitDictation(view: FlowDocInputView) {
+    view.commitDictation()
+  }
+
+  override fun cancelDictation(view: FlowDocInputView) {
+    view.cancelDictation()
+  }
+
   override fun focus(view: FlowDocInputView) {
     view.focusInput()
   }
