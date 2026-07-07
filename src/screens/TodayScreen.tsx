@@ -148,7 +148,7 @@ export function TodayScreen() {
    * 下面所有底部间距 / SafeAreaView 下 padding 都用它，而不是直接用 insets.bottom。 */
   const bottomInset = useMemo(() => {
     const sync = getBottomInsetSync();
-    return sync != null ? sync : insets.bottom;
+    return Math.max(sync ?? 0, insets.bottom);
   }, [insets.bottom]);
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);

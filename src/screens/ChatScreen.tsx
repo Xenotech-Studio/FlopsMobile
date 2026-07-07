@@ -391,7 +391,7 @@ export function ChatScreen({
    * 切换 / 转屏。iOS getBottomInsetSync 返回 null → 用 safe-area（配 initialWindowMetrics 已无首帧闪）。 */
   const bottomInset = useMemo(() => {
     const sync = getBottomInsetSync();
-    return sync != null ? sync : insets.bottom;
+    return Math.max(sync ?? 0, insets.bottom);
   }, [insets.bottom]);
   /** 键盘收起时输入簇要抬起的底部间距（导航栏 / 安全区）。不再依赖 keyboardOpen state —— 改由下面
    *  navInsetAnimStyle 在 UI 线程随键盘高度插值，避免长对话页 React 重渲染慢导致"偏移非常延迟"。 */
