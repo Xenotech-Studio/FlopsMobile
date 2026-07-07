@@ -452,7 +452,11 @@ static const CGFloat kReleaseBounce = 0.35;
   }
 
   __weak __typeof(self) weakSelf = self;
-  NSMutableArray<UIAction *> *uiActions = [NSMutableArray arrayWithCapacity:items.count];
+  /* 按 sectionBreakBefore 把 actions 分成若干区段：>1 段时每段包成一个 displayInline 子菜单，
+     iOS 在区段之间自动画分隔线；只有 1 段时退回扁平 children（视觉与不分段一致）。 */
+  NSMutableArray<NSMutableArray<UIAction *> *> *groups = [NSMutableArray array];
+  NSMutableArray<UIAction *> *currentGroup = [NSMutableArray array];
+  [groups addObject:currentGroup];
   for (id raw in items) {
     if (![raw isKindOfClass:[NSDictionary class]]) continue;
     NSDictionary *item = (NSDictionary *)raw;
@@ -460,6 +464,10 @@ static const CGFloat kReleaseBounce = 0.35;
     NSString *title = item[@"title"];
     if (![actionId isKindOfClass:[NSString class]] || ![title isKindOfClass:[NSString class]]) {
       continue;
+    }
+    if ([item[@"sectionBreakBefore"] boolValue] && currentGroup.count > 0) {
+      currentGroup = [NSMutableArray array];
+      [groups addObject:currentGroup];
     }
     BOOL destructive = [item[@"destructive"] boolValue];
     BOOL disabled = [item[@"disabled"] boolValue];
@@ -486,16 +494,34 @@ static const CGFloat kReleaseBounce = 0.35;
       if ([stateStr isEqualToString:@"on"]) uia.state = UIMenuElementStateOn;
       else if ([stateStr isEqualToString:@"mixed"]) uia.state = UIMenuElementStateMixed;
     }
-    [uiActions addObject:uia];
+    [currentGroup addObject:uia];
   }
 
-  if (uiActions.count == 0) {
+  /* 收集非空区段。 */
+  NSMutableArray<NSArray<UIAction *> *> *sections = [NSMutableArray array];
+  for (NSMutableArray<UIAction *> *g in groups) {
+    if (g.count > 0) [sections addObject:g];
+  }
+
+  if (sections.count == 0) {
     _glassButton.menu = nil;
     _glassButton.showsMenuAsPrimaryAction = NO;
     return;
   }
 
-  _glassButton.menu = [UIMenu menuWithChildren:uiActions];
+  if (sections.count == 1) {
+    _glassButton.menu = [UIMenu menuWithChildren:sections.firstObject];
+  } else {
+    NSMutableArray<UIMenu *> *inlineMenus = [NSMutableArray arrayWithCapacity:sections.count];
+    for (NSArray<UIAction *> *g in sections) {
+      [inlineMenus addObject:[UIMenu menuWithTitle:@""
+                                             image:nil
+                                        identifier:nil
+                                           options:UIMenuOptionsDisplayInline
+                                          children:g]];
+    }
+    _glassButton.menu = [UIMenu menuWithChildren:inlineMenus];
+  }
   _glassButton.showsMenuAsPrimaryAction = YES;
   /* 进 menu 模式：把任何残留的手挂 scale 重置回 identity，让系统 morph 的起点干净。
      非 menu 模式的动画现在动的是 _glassButton + 每个 child，不是 self.layer，所以这里

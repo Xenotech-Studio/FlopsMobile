@@ -41,6 +41,8 @@ export type AnimatedCircleButtonMenuAction = {
   image?: string;
   /** 勾选态：'on' 显示 ✓、'off' 不显示。用于把菜单项当开关（切换后重建 UIMenu 生效） */
   state?: 'on' | 'off' | 'mixed';
+  /** 在该项前起一条分隔线（native 把它之前 / 之后拆成两个 displayInline 区段，中间画线） */
+  sectionBreakBefore?: boolean;
   /** 显示成"危险/红字"风格 */
   destructive?: boolean;
   /** 灰掉不可选 */
@@ -228,6 +230,7 @@ function IosNativeBouncy({
         title: a.title,
         ...(a.image ? { image: a.image } : null),
         ...(a.state ? { state: a.state } : null),
+        ...(a.sectionBreakBefore ? { sectionBreakBefore: true } : null),
         ...(a.destructive ? { destructive: true } : null),
         ...(a.disabled ? { disabled: true } : null),
       })),

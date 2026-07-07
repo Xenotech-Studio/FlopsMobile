@@ -103,7 +103,7 @@ import { normalizeUsageCurrencyMode, type UsageCurrencyMode } from '../constants
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import Svg, { Path } from 'react-native-svg';
 import Clipboard from '@react-native-clipboard/clipboard';
-import { MenuView, type MenuAction } from '@react-native-menu/menu';
+import { MenuView } from '@react-native-menu/menu';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
@@ -116,6 +116,7 @@ import { HamburgerButton } from './shell/HamburgerButton';
 import {
   AnimatedCircleButton,
   IS_IOS_LIQUID_GLASS,
+  type AnimatedCircleButtonMenuAction,
 } from '../components/AnimatedCircleButton';
 import {
   createChatStyles,
@@ -2302,52 +2303,51 @@ export function ChatScreen({
     );
   }, [session]);
 
-  /* ⋯ 菜单项：自动播报是带勾选（state on/off）的开关行；开启播报模式是纯选项行（点了弹确认 Alert）。
-     依赖 ttsAutoplay → 切换后 UIMenu 重建、勾选态刷新。iOS MenuView / Liquid Glass UIMenu 都吃 state+image。
-     sectionBreakBefore：在该项前起一条分隔线，把语音相关项跟其它项隔开（各平台各自实现，见下方渲染）。 */
-  type ConvMenuItem = {
-    id: string;
-    title: string;
-    image: string;
-    state?: 'on' | 'off';
-    sectionBreakBefore?: boolean;
-  };
-  const convMenuActions = useMemo<ConvMenuItem[]>(
+  /* ⋯ 菜单项。自动播报是带勾选（state on/off）的开关行；开启播报模式是纯选项行（点了弹确认 Alert）。
+     语音相关两项放在一个 displayInline 子菜单里 —— iOS UIMenu 对 displayInline 子菜单会自动在跟兄弟项
+     之间画分隔线（这就是原生分组语义，@react-native-menu/menu 的 MenuAction 也直接支持 displayInline+
+     subactions）。顺序：对话信息 / 复制诊断资料在上，语音组在下，中间自动分隔。依赖 ttsAutoplay →
+     切换后 UIMenu 重建、勾选态刷新。 */
+  type ConvLeafAction = { id: string; title: string; image: string; state?: 'on' | 'off' };
+  type ConvMenuEntry =
+    | ConvLeafAction
+    | { id: string; title: string; displayInline: true; subactions: ConvLeafAction[] };
+  const convMenuActions = useMemo<ConvMenuEntry[]>(
     () => [
       { id: 'info', title: '对话信息', image: 'info.circle' },
       { id: 'diag', title: '复制诊断资料', image: 'doc.on.clipboard' },
       {
-        id: 'tts',
-        title: '语音合成',
-        image: 'speaker.wave.2',
-        state: ttsAutoplay ? 'on' : 'off',
-        sectionBreakBefore: true,
+        id: 'voice',
+        title: '',
+        displayInline: true,
+        subactions: [
+          {
+            id: 'tts',
+            title: '语音合成',
+            image: 'speaker.wave.2',
+            state: ttsAutoplay ? 'on' : 'off',
+          },
+          { id: 'broadcast', title: '开启播报模式', image: 'dot.radiowaves.left.and.right' },
+        ],
       },
-      { id: 'broadcast', title: '开启播报模式', image: 'dot.radiowaves.left.and.right' },
     ],
     [ttsAutoplay],
   );
-  /* MenuView（iOS<26）用原生 section 分隔：按 sectionBreakBefore 把扁平项切成若干组，每组包成一个
-     displayInline 子菜单——iOS 会在组之间画一条分隔线。只有一组时退回扁平，不额外包。 */
-  const menuViewActions = useMemo<MenuAction[]>(() => {
-    const groups: MenuAction[][] = [];
-    let cur: MenuAction[] = [];
-    for (const item of convMenuActions) {
-      const { sectionBreakBefore, ...action } = item;
-      if (sectionBreakBefore && cur.length > 0) {
-        groups.push(cur);
-        cur = [];
+  /* Liquid Glass（iOS26）走我们自绘的 UIMenu builder（BouncyButton），它吃扁平数组 + sectionBreakBefore
+     标记来分区段。把上面的嵌套结构摊平：displayInline 组的首项打 sectionBreakBefore，native 会在此起新
+     的 displayInline 区段，效果跟 MenuView 的原生分组一致。 */
+  const glassMenuActions = useMemo<AnimatedCircleButtonMenuAction[]>(() => {
+    const out: AnimatedCircleButtonMenuAction[] = [];
+    for (const entry of convMenuActions) {
+      if ('subactions' in entry) {
+        entry.subactions.forEach((sub, i) => {
+          out.push({ ...sub, ...(i === 0 ? { sectionBreakBefore: true } : null) });
+        });
+      } else {
+        out.push(entry);
       }
-      cur.push(action);
     }
-    if (cur.length > 0) groups.push(cur);
-    if (groups.length <= 1) return groups[0] ?? [];
-    return groups.map((subactions, i) => ({
-      id: `sec${i}`,
-      title: '',
-      displayInline: true,
-      subactions,
-    }));
+    return out;
   }, [convMenuActions]);
   const onConvMenuAction = useCallback(
     (id: string) => {
@@ -3702,13 +3702,7 @@ export function ChatScreen({
           <AnimatedCircleButton
             style={[styles.circleBtn, !conversationId ? styles.circleBtnDisabled : null]}
             disabled={!conversationId}
-            menuActions={convMenuActions.map((a) => ({
-              id: a.id,
-              title: a.title,
-              image: a.image,
-              ...(a.state ? { state: a.state } : null),
-              ...(a.sectionBreakBefore ? { sectionBreakBefore: true } : null),
-            }))}
+            menuActions={glassMenuActions}
             iosSfSymbol={{ name: 'ellipsis', size: 16, color: colors.textSecondary }}
             onMenuAction={onConvMenuAction}
           >
@@ -3717,7 +3711,7 @@ export function ChatScreen({
         ) : Platform.OS === 'ios' ? (
           <MenuView
             title=""
-            actions={menuViewActions}
+            actions={convMenuActions}
             onPressAction={onConvMenuPressAction}
             onOpenMenu={animateConvMenuPressDown}
             onCloseMenu={animateConvMenuPressUp}
