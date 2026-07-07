@@ -274,6 +274,12 @@ export function createChatStyles(c: AppColors) {
     backgroundColor: c.borderMuted,
     marginHorizontal: 8,
   },
+  convMenuSectionDivider: {
+    height: 4,
+    backgroundColor: c.borderMuted,
+    marginVertical: 4,
+    marginHorizontal: -8,
+  },
   leftEdgeGesture: {
     position: 'absolute',
     left: 0,
