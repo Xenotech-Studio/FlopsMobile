@@ -2309,7 +2309,7 @@ export function ChatScreen({
       { id: 'info', title: '对话信息', image: 'info.circle' },
       {
         id: 'tts',
-        title: '自动播报',
+        title: '语音合成',
         image: 'speaker.wave.2',
         state: ttsAutoplay ? ('on' as const) : ('off' as const),
       },
@@ -4620,7 +4620,7 @@ export function ChatScreen({
           {/* 自动播报：带 Switch 的行（不关菜单，方便看开关翻转 / 连续操作） */}
           <View style={styles.convMenuItem}>
             <Ionicons name="volume-high-outline" size={20} color={colors.textPrimary} />
-            <Text style={[styles.convMenuItemText, styles.convMenuItemTextGrow]}>自动播报</Text>
+            <Text style={[styles.convMenuItemText, styles.convMenuItemTextGrow]}>语音合成</Text>
             <IOSStyleSwitch value={ttsAutoplay} onValueChange={persistTtsAutoplay} />
           </View>
           <View style={styles.convMenuDivider} />
