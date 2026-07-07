@@ -132,6 +132,10 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 
+    // 实时语音播报（FlopsAudioModule）用 OkHttp WebSocket。RN 已传递依赖 okhttp3:4.12.0，
+    // 这里显式声明同版本，保证 import okhttp3.* 稳定可解析（不引入版本冲突）。
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
     // flowdoc 行内 LaTeX 公式渲染（对齐 iOS 的 iosMath）。EquationSpan 用 MTMathView → Bitmap。
     // AndroidMath 把 junit / androidx.test / 一个 jitpack 占位包错放进了 implementation（应是 testImplementation），
     // 会把 guava:18.0 带进 app 运行时，跟 androidx 的 listenablefuture:1.0 撞类（duplicate class ListenableFuture）。

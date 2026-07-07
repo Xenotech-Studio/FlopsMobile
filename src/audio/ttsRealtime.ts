@@ -12,11 +12,12 @@
  * ChatScreen 失焦（退列表 / 切页）→ clearActiveConversation() 断单对话流：离开该对话就不该再让
  * Mobile 的 MOBILE_SINGLE(P2) 渠道滞留压制 Desktop/Web。播报模式(P1)是全局的、独立于页面，不受影响。
  *
- * 仅 iOS。Android / 原生模块缺失 → 全 no-op。
+ * iOS（FlopsAudioModule.swift）与 Android（FlopsAudioModule.kt）都实现了同一套原生接口
+ * （startRealtime / stopRealtime + onRealtimeState 事件）；原生模块缺失（旧包）→ 全 no-op。
  */
 
 import { useSyncExternalStore } from 'react';
-import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
+import { NativeModules, NativeEventEmitter } from 'react-native';
 import type { Session } from '../api';
 import { getLayoutPreferences, setLayoutPreferences } from '../api';
 
@@ -26,10 +27,8 @@ type FlopsAudioRealtimeNative = {
   stopRealtime(): Promise<null>;
 };
 
-const isIOS = Platform.OS === 'ios';
-const Native: FlopsAudioRealtimeNative | undefined = isIOS
-  ? (NativeModules as any).FlopsAudio
-  : undefined;
+// iOS / Android 均有原生 FlopsAudio；缺失（未 rebuild 的旧包）时为 undefined → 全链路 no-op。
+const Native: FlopsAudioRealtimeNative | undefined = (NativeModules as any).FlopsAudio;
 const emitter = Native ? new NativeEventEmitter(Native as any) : null;
 
 export function isTtsRealtimeSupported(): boolean {

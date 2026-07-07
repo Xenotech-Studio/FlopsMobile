@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 应用内更新：安装已下载的 APK（Android 8+ 必需） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 实时语音播报后台 / 锁屏继续朗读：前台服务（type mediaPlayback，Android 14+ 需专项权限） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
       android:name=".MainApplication"
@@ -39,5 +43,10 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
       </activity>
+      <!-- 实时语音播报前台服务：保活进程 + MediaSession 锁屏通知，后台/锁屏继续朗读 -->
+      <service
+        android:name=".FlopsAudioService"
+        android:exported="false"
+        android:foregroundServiceType="mediaPlayback" />
     </application>
 </manifest>

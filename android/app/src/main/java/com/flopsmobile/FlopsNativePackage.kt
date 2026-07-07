@@ -8,7 +8,7 @@ import com.flopsmobile.flowdocinput.FlowDocInputViewManager
 
 class FlopsNativePackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
-    listOf(ScreenInfoModule(reactContext), FlopsCryptoModule(reactContext))
+    listOf(ScreenInfoModule(reactContext), FlopsCryptoModule(reactContext), FlopsAudioModule(reactContext))
 
   override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> =
     listOf(SystemGestureExclusionViewManager(), FlowDocInputViewManager())
