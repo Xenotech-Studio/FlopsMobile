@@ -1115,6 +1115,33 @@ export function createChatStyles(c: AppColors) {
     marginTop: 12,
     marginBottom: 18,
   },
+  /** Android（及需要时旧 iOS）现代兜底：对齐 iOS 26 玻璃版的圆角 / 布局，但 RN Android 无 backdrop-filter，
+   *  故用半透明底色 c.composerModernBg + 细描边 c.hairlineBorder 近似玻璃层次；**不上** shadowMenu 重阴影。
+   *  圆角用 COMPOSER_CARD_RADIUS（= 玻璃版 cornerRadius），保证三路视觉一致。 */
+  composerCardShortModern: {
+    position: 'relative',
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    backgroundColor: c.composerModernBg,
+    borderRadius: COMPOSER_CARD_RADIUS,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.hairlineBorder,
+    minHeight: COMPOSER_PILL_SIZE,
+    marginHorizontal: COMPOSER_ROW_PADDING_H,
+    marginTop: 12,
+    marginBottom: 18,
+  },
+  composerCardTallModern: {
+    position: 'relative',
+    flexDirection: 'column',
+    backgroundColor: c.composerModernBg,
+    borderRadius: COMPOSER_CARD_RADIUS,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.hairlineBorder,
+    marginHorizontal: COMPOSER_ROW_PADDING_H,
+    marginTop: 12,
+    marginBottom: 18,
+  },
   /** Adapter 撑满 card：alignSelf stretch（沿 flex 横轴 / 纵轴自动 stretch），flex 1 让它
    *  在轴向也吃满。配合 FlowDocInput 内部 autoHeight 用 minHeight（不是 height）的改造,
    *  adapter UIView 一方面跟着 native 测出的 content 高度走 minHeight，一方面允许 flex 父

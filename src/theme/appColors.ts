@@ -28,6 +28,8 @@ export type AppColors = {
   /** 与分割线宽度配对；Android 浅色下在 withLightPlatformListCanvas 中改为 androidCircleFabHairline */
   headerBarBottomBorderColor: string;
   inputBg: string;
+  /** Composer 卡片"现代"半透明底色（Android 兜底 iOS 26 玻璃观感；无 blur，靠半透明 + 细边框）。 */
+  composerModernBg: string;
   overlayScrim: string;
   /** 全屏 Modal、下拉菜单等自定义遮罩；暗色加重以压住底层 */
   modalBackdrop: string;
@@ -141,6 +143,7 @@ export const lightColors: AppColors = {
   headerBarBottomBorderWidth: 1,
   headerBarBottomBorderColor: '#e5e7eb',
   inputBg: '#ffffff',
+  composerModernBg: 'rgba(255,255,255,0.82)',
   overlayScrim: 'rgba(255,255,255,0.88)',
   modalBackdrop: 'rgba(0,0,0,0.38)',
   bottomSheetBackdropOpacity: 0.4,
@@ -224,6 +227,7 @@ export const darkColors: AppColors = {
   headerBarBottomBorderWidth: 0,
   headerBarBottomBorderColor: '#3f3f46',
   inputBg: '#1c1c1e',
+  composerModernBg: 'rgba(28,28,30,0.82)',
   overlayScrim: 'rgba(0,0,0,0.88)',
   modalBackdrop: 'rgba(0,0,0,0.82)',
   bottomSheetBackdropOpacity: 0.68,

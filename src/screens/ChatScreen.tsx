@@ -4386,8 +4386,18 @@ export function ChatScreen({
                         onTouchEnd={onComposerTouchEnd}
                         onTouchCancel={onComposerTouchCancel}
                       >
+                        {/* Android：现代兜底卡（半透明 + 细边框、无重阴影，圆角/布局对齐 iOS 玻璃版）。
+                            旧 iOS 15-25：保持原款（inputBg 实底 + shadowMenu）。 */}
                         <View
-                          style={composerTall ? styles.composerCardTall : styles.composerCardShort}
+                          style={
+                            Platform.OS === 'android'
+                              ? composerTall
+                                ? styles.composerCardTallModern
+                                : styles.composerCardShortModern
+                              : composerTall
+                                ? styles.composerCardTall
+                                : styles.composerCardShort
+                          }
                           pointerEvents="box-none"
                         >
                           {innerCardContent}
