@@ -4088,9 +4088,9 @@ export function ChatScreen({
                 </View>
               ) : null}
               {(() => {
-                /* iOS：右侧加发送/停止键（对齐桌面/web）→ 左侧 + 永远只做"引用文档"，不再兼任停止。
-                   其它平台保持原样（+ 在 loading 时兼任停止，因为没有右侧键）。 */
-                const showSendBtn = Platform.OS === 'ios';
+                /* iOS + Android 都有右下角发送/停止键（对齐桌面/web）→ 左侧 + 永远只做"引用文档"，
+                   不再兼任停止（停止交给发送键的停止态）。 */
+                const showSendBtn = Platform.OS === 'ios' || Platform.OS === 'android';
                 const renderPlusBtn = (
                   <TouchableOpacity
                     style={styles.composerPlusBtnAbsolute}

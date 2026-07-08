@@ -43,11 +43,9 @@ const COMPOSER_PLUS_TO_INPUT_GAP = 6;
 const COMPOSER_MIC_BTN_SIZE = COMPOSER_SEND_BTN_SIZE;
 /** mic 与发送键之间的间隙：两者都有 38px touch target 但 icon 只有 20px，用小间隙让视觉更紧凑。 */
 const COMPOSER_MIC_TO_SEND_GAP = 2;
-/** mic 右沿 inset：iOS 落在发送键左边（贴近，只留 MIC_TO_SEND_GAP）；其它平台没有发送键 → 贴右（镜像 +）。 */
+/** mic 右沿 inset：iOS / Android 都有发送键 → mic 一律落在发送键左边（贴近，只留 MIC_TO_SEND_GAP）。 */
 const COMPOSER_MIC_BTN_RIGHT =
-  Platform.OS === 'ios'
-    ? COMPOSER_SEND_BTN_INSET + COMPOSER_SEND_BTN_SIZE + COMPOSER_MIC_TO_SEND_GAP
-    : COMPOSER_PLUS_BTN_INSET;
+  COMPOSER_SEND_BTN_INSET + COMPOSER_SEND_BTN_SIZE + COMPOSER_MIC_TO_SEND_GAP;
 /** Card 整体水平 padding（short / tall 同值）；inputShort 内部还有自己的 paddingH = 同值 */
 const COMPOSER_CARD_PADDING_H = 8;
 /** Tall 模式 card 顶部空白（让输入区跟胶囊顶有呼吸） */
@@ -1213,7 +1211,7 @@ export function createChatStyles(c: AppColors) {
     justifyContent: 'center',
     zIndex: 5,
   },
-  /** 麦克风键：card-absolute 圆钮，在发送键左边（其它平台贴右）；尺寸同发送键。脉冲 transform 挂在内部涟漪层。 */
+  /** 麦克风键：card-absolute 圆钮，在发送键左边（iOS / Android 同）；尺寸同发送键。脉冲 transform 挂在内部涟漪层。 */
   composerMicBtnAbsolute: {
     position: 'absolute',
     /* 尺寸与发送键相同 → 用发送键 inset 让两者垂直中心对齐（跟 + / 发送键同一排居中）。 */
