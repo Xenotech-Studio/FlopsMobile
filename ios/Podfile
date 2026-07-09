@@ -6,6 +6,14 @@ require Pod::Executable.execute_command('node', ['-p',
   )', __dir__]).strip
 
 platform :ios, min_ios_version_supported
+
+# Build React Native Core from source (default). The prebuilt (release) rncore tarball omits the
+# RN_DEBUG_STRING_CONVERTIBLE symbols (Sealable/ShadowNode::getDebugName/DebugStringConvertible…)
+# that Debug-built Fabric component pods reference → "Undefined symbols for architecture arm64" at
+# link. Building core from source in Debug keeps those symbols consistent. Set the env to '1'
+# explicitly (e.g. CI/Release) to opt back into the prebuilt tarball.
+ENV['RCT_USE_PREBUILT_RNCORE'] ||= '0'
+
 prepare_react_native_project!
 
 linkage = ENV['USE_FRAMEWORKS']
@@ -48,5 +56,28 @@ target 'FlopsMobile' do
       :mac_catalyst_enabled => false,
       # :ccache_enabled => true
     )
+
+    # Xcode's Swift "explicit modules" can't resolve some CocoaPods C/Clang modules (e.g. `argon2`
+    # in RNArgon2 → "Unable to find module dependency: 'argon2'"). Disable explicit modules across
+    # pod targets so those C modules resolve via header search paths as before.
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |cfg|
+        cfg.build_settings['SWIFT_ENABLE_EXPLICIT_MODULES'] = 'NO'
+      end
+    end
+    installer.pods_project.build_configurations.each do |cfg|
+      cfg.build_settings['SWIFT_ENABLE_EXPLICIT_MODULES'] = 'NO'
+    end
+
+    # Same setting on the app target (its bridging-header PCH also uses explicit modules).
+    installer.aggregate_targets.each do |agg|
+      next unless agg.user_project
+      agg.user_project.native_targets.each do |target|
+        target.build_configurations.each do |cfg|
+          cfg.build_settings['SWIFT_ENABLE_EXPLICIT_MODULES'] = 'NO'
+        end
+      end
+      agg.user_project.save
+    end
   end
 end

@@ -30,6 +30,7 @@ import { useAppTheme } from '../../context/ThemeContext';
 import type { AppColors } from '../../theme/appColors';
 import { useResponsive, READING_MAX_WIDTH } from '../../hooks/useResponsive';
 import { PaperView, type ViewMode } from './PaperView';
+import { FlowBaseScreen } from '../../flowbase/FlowBaseScreen';
 
 const EMPTY_DOC: FlowDocDocument = [
   { type: 'paragraph', children: [{ text: '' }] },
@@ -172,6 +173,22 @@ export const DocBodyView = React.forwardRef<DocBodyViewHandle, DocBodyViewProps>
           docId={docId}
           meta={meta}
           viewMode={paperViewMode ?? 'pdf'}
+          contentTopInset={contentTopInset}
+          contentBottomInset={contentBottomInset}
+        />
+      );
+    }
+
+    // flowbase：多维表格（独立组件，自带数据加载；base_id 存在 flowdoc 节点 meta.base_id）
+    if (docType === 'flowbase') {
+      const baseId =
+        (typeof meta?.base_id === 'string' && meta.base_id) ||
+        (typeof meta?.baseId === 'string' && meta.baseId) ||
+        null;
+      return (
+        <FlowBaseScreen
+          docId={docId}
+          baseId={baseId}
           contentTopInset={contentTopInset}
           contentBottomInset={contentBottomInset}
         />
