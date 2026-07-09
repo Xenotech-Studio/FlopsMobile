@@ -40,6 +40,8 @@ import type { TableViewHandle } from './viewHandle';
 const ROW_H = FB_ROW_HEIGHT;
 const HEADER_H = FB_ROW_HEIGHT;
 const PAGE = 50;
+// 行号（#）列：宽度 = 内容左边距 16px，兼作左侧留白让数据列与顶部 page tab 对齐。
+const INDEX_W = 17;
 
 const TYPE_WIDTH: Partial<Record<FieldType, number>> = {
   checkbox: 64,
@@ -106,7 +108,7 @@ export const GridView = forwardRef<GridViewHandle, GridViewProps>(function GridV
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const widths = useMemo(() => schema.map(colWidth), [schema]);
-  const totalW = useMemo(() => widths.reduce((a, b) => a + b, 0), [widths]);
+  const totalW = useMemo(() => INDEX_W + widths.reduce((a, b) => a + b, 0), [widths]);
   const firstFieldId = schema[0]?.id;
 
   const [rows, setRows] = useState<RowRecord[]>([]);
@@ -260,12 +262,17 @@ export const GridView = forwardRef<GridViewHandle, GridViewProps>(function GridV
       <CellContent field={field} value={item.data[field.id]} colors={colors} />
     );
 
-  const renderRow = ({ item }: { item: RowRecord }) => (
+  const renderRow = ({ item, index }: { item: RowRecord; index: number }) => (
     <TouchableOpacity
       style={[styles.row, { width: totalW, height: ROW_H }]}
       activeOpacity={0.6}
       onPress={() => onRowPress(item)}
     >
+      <View style={[styles.indexCell, { width: INDEX_W, height: ROW_H }]}>
+        <Text style={styles.indexText} numberOfLines={1}>
+          {index + 1}
+        </Text>
+      </View>
       {schema.map((f, i) => {
         const occ = occupantAt(item.row_id, f.id);
         return (
@@ -297,6 +304,9 @@ export const GridView = forwardRef<GridViewHandle, GridViewProps>(function GridV
           <ScrollView horizontal showsHorizontalScrollIndicator bounces={false}>
             <View style={{ width: totalW, height: containerH }}>
               <View style={[styles.headerRow, { width: totalW, height: HEADER_H }]}>
+                <View style={[styles.indexCell, styles.indexHead, { width: INDEX_W, height: HEADER_H }]}>
+                  <Text style={styles.indexText}>#</Text>
+                </View>
                 {schema.map((f, i) => (
                   <View key={f.id} style={[styles.headerCell, { width: widths[i], height: HEADER_H }]}>
                     <Text style={styles.headerText} numberOfLines={1}>
@@ -359,6 +369,19 @@ function createStyles(c: AppColors) {
       borderBottomColor: c.borderSubtle,
     },
     remoteValue: { fontSize: 13, fontStyle: 'italic' },
+    // 行号（#）列：无横向 padding（16px 太窄），居中小号淡字。
+    // 右边缘纵向分割线用 borderD4（比横向行线深、更明显）；序号文字比这条线更淡。
+    indexCell: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: c.borderSubtle,
+      borderRightWidth: StyleSheet.hairlineWidth,
+      borderRightColor: c.borderD4,
+    },
+    indexHead: { backgroundColor: c.surfaceMuted, borderBottomColor: c.border },
+    // 比竖线(borderD4)更淡：亮色更接近白底、暗色更接近黑底，两个主题都低对比。
+    indexText: { fontSize: 10, color: c.borderMuted },
     headerRow: { flexDirection: 'row' },
     headerCell: {
       justifyContent: 'center',

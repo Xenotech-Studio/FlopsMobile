@@ -17,6 +17,7 @@ import React, {
   useState,
 } from 'react';
 import {
+  Platform,
   Pressable,
   StyleSheet,
   type StyleProp,
@@ -47,6 +48,11 @@ import { FolderView } from './FolderView';
 import { DocBodyView, type DocBodyViewHandle } from './DocBodyView';
 import { paperHasHtml, normalizeSubdocRefs, type ViewMode } from './PaperView';
 import { HeaderCircleButton } from '../../components/HeaderCircleButton';
+import { MenuView } from '@react-native-menu/menu';
+import {
+  IS_IOS_LIQUID_GLASS,
+  type AnimatedCircleButtonMenuAction,
+} from '../../components/AnimatedCircleButton';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 const FOLDER_LIKE_TYPES = new Set(['folder', 'cooperateInbox']);
@@ -202,6 +208,11 @@ export function DocPreviewScreen({
     ? subdocNames[activeSubdoc.id] || '笔记'
     : headerTitle;
 
+  /** 顶栏渐变基色：默认与其它页一致(chatScreenBackground)；flowbase 的表格是纯白背景，
+   *  这里精确改用 background(纯白)，避免渐变与表格产生色差。 */
+  const headerGradientBase =
+    bodyDocType === 'flowbase' ? colors.background : colors.chatScreenBackground;
+
   /** 回到文档树（目录）。prop 优先(手机抽屉式 = 半开露目录)；否则整页路由 popToTop 回到树。 */
   const onGoTree = useCallback(() => {
     setOptionsOpen(false);
@@ -239,6 +250,43 @@ export function DocPreviewScreen({
   const onOptionsPress = useCallback(() => {
     setOptionsOpen((v) => !v);
   }, []);
+
+  /** flowbase 刷新：docBodyRef.reload 只作用于 flowdoc 正文，对 flowbase 无效 → 用 nonce 改 key
+   *  让 FlowBaseScreen 整块重挂、重新拉数据。 */
+  const [flowbaseNonce, setFlowbaseNonce] = useState(0);
+  const onFlowbaseRefresh = useCallback(() => setFlowbaseNonce((n) => n + 1), []);
+
+  /** ⋯ 菜单项按当前文档类型决定；三种渲染路径（iOS26 glass / iOS15-25 MenuView / Android popover）
+   *  与 Android 弹层都从这一份数据生成。sf=SF Symbol（iOS 原生菜单图标），ion=Ionicons（Android 弹层）。 */
+  type DocMenuItem = { id: string; title: string; sf: string; ion: string; run: () => void };
+  const menuItems = useMemo<DocMenuItem[]>(() => {
+    if (bodyDocType === 'flowbase') {
+      return [{ id: 'refresh', title: '刷新', sf: 'arrow.clockwise', ion: 'refresh', run: onFlowbaseRefresh }];
+    }
+    if (isFolder) {
+      return [{ id: 'reloadTree', title: '刷新文档树', sf: 'arrow.clockwise', ion: 'refresh', run: () => {} }];
+    }
+    if (item) {
+      return [
+        { id: 'copyMd', title: '复制为 Markdown', sf: 'doc.on.clipboard', ion: 'copy-outline', run: onCopyMarkdown },
+        { id: 'reload', title: '刷新文档', sf: 'arrow.clockwise', ion: 'refresh', run: onReload },
+      ];
+    }
+    return [];
+  }, [bodyDocType, isFolder, item, onFlowbaseRefresh, onCopyMarkdown, onReload]);
+
+  const nativeMenuActions = useMemo<AnimatedCircleButtonMenuAction[]>(
+    () => menuItems.map((m) => ({ id: m.id, title: m.title, image: m.sf })),
+    [menuItems],
+  );
+  const onMenuSelect = useCallback(
+    (id: string) => menuItems.find((m) => m.id === id)?.run(),
+    [menuItems],
+  );
+  const onMenuViewPress = useCallback(
+    (e: { nativeEvent: { event: string } }) => onMenuSelect(e.nativeEvent.event),
+    [onMenuSelect],
+  );
 
   const headerHeight = insets.top + 8 + 12 + HEADER_CIRCLE_BTN_SIZE;
   /** 底部渐变遮罩带高度（长缓渐变，从顶端就掉透明度、无纯色平台）。 */
@@ -334,7 +382,7 @@ export function DocPreviewScreen({
           </PagerView>
         ) : (
           <DocBodyView
-            key={bodyDocId}
+            key={bodyDocType === 'flowbase' ? `${bodyDocId}:${flowbaseNonce}` : bodyDocId}
             ref={docBodyRef}
             docId={bodyDocId}
             docType={bodyDocType}
@@ -375,7 +423,7 @@ export function DocPreviewScreen({
         <BlurHeaderBackground
           style={StyleSheet.absoluteFill}
           topSolidHeight={insets.top + 8}
-          gradientBaseHex={colors.chatScreenBackground}
+          gradientBaseHex={headerGradientBase}
         />
         {/* 左上角=目录按钮：回到文档树（预览不叠层，等价于"返回到目录"）。
          *  外层 Animated.View 随半开降低 opacity，跟白遮罩一起变淡（native 按钮挡不住，靠变淡等效被盖）。 */}
@@ -403,14 +451,35 @@ export function DocPreviewScreen({
             </Text>
           ) : null}
         </View>
-        <TouchableOpacity
-          style={styles.circleBtn}
-          onPress={onOptionsPress}
-          activeOpacity={0.7}
-          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-        >
-          <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
-        </TouchableOpacity>
+        {/* ⋯ 菜单三条路（对齐 ChatScreen）：iOS26 glass 原生 UIMenu / iOS15-25 MenuView 原生 UIMenu /
+            Android 走下方 JS 弹层。无菜单项（如空文档）则不显示按钮。 */}
+        {menuItems.length === 0 ? null : IS_IOS_LIQUID_GLASS ? (
+          <HeaderCircleButton
+            ionicon="ellipsis-horizontal"
+            sfSymbol="ellipsis"
+            menuActions={nativeMenuActions}
+            onMenuAction={onMenuSelect}
+            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+          />
+        ) : Platform.OS === 'ios' ? (
+          <MenuView
+            title=""
+            actions={nativeMenuActions}
+            onPressAction={onMenuViewPress}
+            shouldOpenOnLongPress={false}
+          >
+            <View style={styles.circleBtn}>
+              <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
+            </View>
+          </MenuView>
+        ) : (
+          <HeaderCircleButton
+            ionicon="ellipsis-horizontal"
+            sfSymbol="ellipsis"
+            onPress={onOptionsPress}
+            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+          />
+        )}
 
         {/* 切换器始终绝对居中（左右对称留出按钮区，与左侧标题无关）。box-none 让两侧穿透到按钮。 */}
         {showPaperTabs ? (
@@ -420,8 +489,8 @@ export function DocPreviewScreen({
         ) : null}
       </View>
 
-      {/* 更多菜单 */}
-      {optionsOpen ? (
+      {/* 更多菜单（Android 弹层；iOS 走原生 UIMenu 不进这里）。菜单项与原生一致，来自同一份 menuItems。 */}
+      {optionsOpen && menuItems.length > 0 ? (
         <>
           <Pressable
             style={StyleSheet.absoluteFill}
@@ -433,41 +502,19 @@ export function DocPreviewScreen({
               { top: insets.top + 8 + HEADER_CIRCLE_BTN_SIZE + 4, right: 16 },
             ]}
           >
-            {item && !isFolder ? (
-              <>
-                <TouchableOpacity style={styles.optionsItem} onPress={onCopyMarkdown}>
-                  <Ionicons
-                    name="copy-outline"
-                    size={16}
-                    color={colors.textPrimary}
-                    style={styles.optionsIcon}
-                  />
-                  <Text style={styles.optionsItemText}>复制为 Markdown</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.optionsItem} onPress={onReload}>
-                  <Ionicons
-                    name="refresh"
-                    size={16}
-                    color={colors.textPrimary}
-                    style={styles.optionsIcon}
-                  />
-                  <Text style={styles.optionsItemText}>刷新文档</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
+            {menuItems.map((m) => (
               <TouchableOpacity
+                key={m.id}
                 style={styles.optionsItem}
-                onPress={() => setOptionsOpen(false)}
+                onPress={() => {
+                  setOptionsOpen(false);
+                  m.run();
+                }}
               >
-                <Ionicons
-                  name="refresh"
-                  size={16}
-                  color={colors.textPrimary}
-                  style={styles.optionsIcon}
-                />
-                <Text style={styles.optionsItemText}>刷新文档树</Text>
+                <Ionicons name={m.ion} size={16} color={colors.textPrimary} style={styles.optionsIcon} />
+                <Text style={styles.optionsItemText}>{m.title}</Text>
               </TouchableOpacity>
-            )}
+            ))}
           </View>
         </>
       ) : null}
