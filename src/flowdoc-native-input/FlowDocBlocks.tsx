@@ -1304,6 +1304,57 @@ function FileAttachmentRenderer({
   );
 }
 
+/**
+ * 独立附件渲染器（供文档之外复用，如聊天气泡）：卡片 / inline 链接 + 自带全屏预览弹窗。
+ * 对齐 web —— 用户消息附件走 display='inline'（小图标 + 文件名链接），
+ * assistant / 任务产出文件走 display='card'（300 卡片，图标 + 名/大小 + 下载）。
+ * 点击本体即在应用内全屏预览（本组件自持一个单附件的预览弹窗，不依赖 FlowDocBlocks 容器）。
+ */
+export function FlowDocAttachment({
+  url,
+  filename,
+  mimeType,
+  size,
+  display = 'card',
+}: {
+  url?: string;
+  filename?: string;
+  mimeType?: string;
+  size?: number;
+  display?: 'card' | 'inline';
+}) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  const [preview, setPreview] = React.useState<AttachmentInfo | null>(null);
+  const openPreview = React.useCallback((block: FileAttachmentBlock) => {
+    const u = (block.url ?? '').trim();
+    if (!u) return;
+    setPreview({ url: u, filename: block.filename, mimeType: block.mime_type, size: block.size });
+  }, []);
+  const closePreview = React.useCallback(() => setPreview(null), []);
+
+  const block: FileAttachmentBlock = {
+    type: 'file_attachment',
+    url,
+    filename,
+    mime_type: mimeType,
+    size,
+    display,
+    children: [{ text: '' }],
+  };
+  // FileAttachmentRenderer 只读 ctx.styles / ctx.colors，其余 RendererCtx 字段用不到 → 造最小 ctx。
+  const ctx = { styles, colors } as unknown as RendererCtx;
+
+  return (
+    <AttachmentPreviewContext.Provider value={openPreview}>
+      <FileAttachmentRenderer ctx={ctx} block={block} />
+      {preview ? (
+        <AttachmentPreviewModal attachments={[preview]} initialIndex={0} onClose={closePreview} />
+      ) : null}
+    </AttachmentPreviewContext.Provider>
+  );
+}
+
 /** 附件 preview 媒体类型（对齐 web attachmentPreviewKind）：image/video/pdf 原生渲染，
  *  splatv 走 WebView 嵌 4D viewer（web 也是 iframe），其余回落大卡片。 */
 const PREVIEW_IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|avif|heic|ico)$/i;

@@ -71,8 +71,44 @@ export type MessageAudio = {
   encrypted?: boolean;
 };
 
+/** 用户消息附件（对齐 web metadata.flops_attachments）：聊天里渲染成可点击的文件链/卡片。 */
+export type FlopsAttachment = {
+  url: string;
+  filename: string;
+  mime_type?: string;
+  /** 字节大小（若服务端给了 size / size_bytes）。 */
+  size?: number;
+};
+
+/** 从服务端 metadata.flops_attachments 归一化出附件列表；无 url 的丢弃。 */
+export function normalizeFlopsAttachments(raw: unknown): FlopsAttachment[] {
+  if (!Array.isArray(raw)) return [];
+  const out: FlopsAttachment[] = [];
+  for (const a of raw) {
+    if (!a || typeof a !== 'object') continue;
+    const rec = a as Record<string, unknown>;
+    const url = typeof rec.url === 'string' ? rec.url.trim() : '';
+    if (!url) continue;
+    const filename =
+      (typeof rec.filename === 'string' && rec.filename.trim()) ||
+      (typeof rec.name === 'string' && (rec.name as string).trim()) ||
+      '附件';
+    const mime =
+      typeof rec.mime_type === 'string' && rec.mime_type.trim() ? rec.mime_type.trim() : undefined;
+    const sizeRaw = rec.size ?? rec.size_bytes;
+    const size = typeof sizeRaw === 'number' && Number.isFinite(sizeRaw) ? sizeRaw : undefined;
+    out.push({
+      url,
+      filename,
+      ...(mime ? { mime_type: mime } : {}),
+      ...(size !== undefined ? { size } : {}),
+    });
+  }
+  return out;
+}
+
 export type ChatMessage = (
-  | { role: 'user'; content: string; flops_refs?: FlopsRef[] }
+  | { role: 'user'; content: string; flops_refs?: FlopsRef[]; attachments?: FlopsAttachment[] }
   | { role: 'assistant'; content: string; blocks?: StreamBlock[]; audio?: MessageAudio }
   | { role: 'task_event'; content: string; task_event: TaskEventPayload | null; arrival?: string }
   | { role: 'error'; content: string }
@@ -327,14 +363,13 @@ export function rawMessagesToLocalWithUsageMap(raw: ConversationMessage[]): RawM
       if (rawUserMessageIsMetaOnly(msg)) continue;
       flushAssistant();
       const content = typeof msg.content === 'string' ? msg.content : '';
-      const refs = normalizeFlopsRefs(
-        (msg.metadata && (msg.metadata as Record<string, unknown>).flops_refs) || null,
-      );
-      messages.push(
-        refs.length > 0
-          ? { role: 'user', content, flops_refs: refs, _key: i }
-          : { role: 'user', content, _key: i },
-      );
+      const md = (msg.metadata && (msg.metadata as Record<string, unknown>)) || null;
+      const refs = normalizeFlopsRefs((md && md.flops_refs) || null);
+      const attachments = normalizeFlopsAttachments(md && md.flops_attachments);
+      const userMsg: Extract<ChatMessage, { role: 'user' }> = { role: 'user', content, _key: i };
+      if (refs.length > 0) userMsg.flops_refs = refs;
+      if (attachments.length > 0) userMsg.attachments = attachments;
+      messages.push(userMsg);
       continue;
     }
     if (msg.role === 'assistant' || msg.role === 'tool') {

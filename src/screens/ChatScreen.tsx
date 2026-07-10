@@ -3572,6 +3572,7 @@ export function ChatScreen({
                 <UserMessageContent
                   content={msg.content}
                   flopsRefs={msg.role === 'user' ? msg.flops_refs : undefined}
+                  attachments={msg.role === 'user' ? msg.attachments : undefined}
                   textStyle={styles.userText}
                 />
               </Pressable>
