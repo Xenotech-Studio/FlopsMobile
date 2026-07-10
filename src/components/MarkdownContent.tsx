@@ -1,18 +1,125 @@
 /**
  * Markdown 渲染 + 可选复制按钮，与 FlopsDesktop 的 MarkdownContent 能力对齐
  */
-import React, { useMemo, useState } from 'react';
+import React, { useContext, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, type ViewStyle } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import FitImage from 'react-native-fit-image';
 import Clipboard from '@react-native-clipboard/clipboard';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import { FlowDocAttachment } from '../flowdoc-native-input/FlowDocBlocks';
+import { ConversationAttachmentsContext } from '../chat/ConversationAttachmentsContext';
+
+/** react-native-markdown-display 的 AST 节点（只用到这几个字段）。 */
+type MdNode = {
+  type?: string;
+  content?: string;
+  attributes?: { href?: string };
+  children?: MdNode[];
+  key?: string;
+};
+
+/**
+ * 递归判定：段落是否「仅由链接（+空白）组成」，并收集所有链接 href。
+ * - link：收 href，不下探其 label 文本（label 是链接文字，不算段落正文）
+ * - 非空白 text / 其它 inline 节点（image/code/strong…）→ 判定不纯（clean=false）
+ * - textgroup/paragraph：容器，继续下探；softbreak/hardbreak：视作空白
+ */
+function analyzeParagraphLinks(node: MdNode): { hrefs: string[]; clean: boolean } {
+  const hrefs: string[] = [];
+  let clean = true;
+  const visit = (n: MdNode | undefined) => {
+    if (!n || typeof n !== 'object') return;
+    const t = n.type;
+    if (t === 'link') {
+      const href = typeof n.attributes?.href === 'string' ? n.attributes.href.trim() : '';
+      if (href) hrefs.push(href);
+      return;
+    }
+    if (t === 'text') {
+      if (typeof n.content === 'string' && n.content.trim()) clean = false;
+      return;
+    }
+    if (t === 'softbreak' || t === 'hardbreak') return;
+    if (t === 'textgroup' || t === 'paragraph') {
+      (n.children ?? []).forEach(visit);
+      return;
+    }
+    clean = false;
+  };
+  visit(node);
+  return { hrefs, clean };
+}
+
+const attachmentBlockStyles = StyleSheet.create({
+  /* 附件卡片段落：纵向堆叠（卡片是块级），覆盖库默认 paragraph 的 row/wrap。
+     paragraphStyle 里的 marginBottom 等间距仍保留（数组合并、后者只覆盖同名键）。 */
+  block: {
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+});
+
+/**
+ * 段落渲染包装：命中「仅由会话附件链接组成」的段落时，抬成块级文件卡片（display='card'），
+ * 否则回落库默认段落渲染（原样 <Text> 内联）。附件数据来自 ConversationAttachmentsContext，
+ * 无 provider（如 Doc 页 / 摘要弹窗）时 attMap=null，永远走回落，不影响其它场景。
+ */
+function AttachmentAwareParagraph({
+  node,
+  fallback,
+  paragraphStyle,
+}: {
+  node: MdNode;
+  fallback: React.ReactNode;
+  paragraphStyle: ViewStyle | undefined;
+}) {
+  const attMap = useContext(ConversationAttachmentsContext);
+  if (attMap && attMap.size > 0) {
+    const { hrefs, clean } = analyzeParagraphLinks(node);
+    if (clean && hrefs.length >= 1 && hrefs.length <= 2 && hrefs.every((h) => attMap.has(h))) {
+      return (
+        <View style={[paragraphStyle, attachmentBlockStyles.block]}>
+          {hrefs.map((h, i) => {
+            const att = attMap.get(h)!;
+            return (
+              <FlowDocAttachment
+                key={`att-${i}-${h}`}
+                url={att.url}
+                filename={att.filename}
+                mimeType={att.mime_type}
+                display="card"
+              />
+            );
+          })}
+        </View>
+      );
+    }
+  }
+  return <View style={paragraphStyle}>{fallback}</View>;
+}
 
 /* 默认 image 规则的实现里 imageProps 包含 key 然后做 spread，React 18+ 会 warn。
    我们这里自己实现一份等价规则、把 key 单独传，避免 console 噪声。
    规则签名跟 react-native-markdown-display 的 RenderRule 一致：
    (node, children, parent, styles, allowedImageHandlers, defaultImageHandler) */
 const MD_RENDER_RULES = {
+  /* 段级识别附件链接：仅由会话附件链接组成的段落 → 文件卡片（RN 的 <Text> 不能嵌 <View>，
+     所以只能在段落级别、而非 web 那样内联替换）。其余段落走库默认（<View>{children}</View>）。 */
+  paragraph: (
+    node: MdNode & { key: string },
+    children: React.ReactNode,
+    _parent: unknown,
+    styles: Record<string, unknown>,
+  ) => (
+    <AttachmentAwareParagraph
+      key={node.key}
+      node={node}
+      fallback={children}
+      paragraphStyle={(styles as { _VIEW_SAFE_paragraph?: ViewStyle })._VIEW_SAFE_paragraph}
+    />
+  ),
   image: (
     node: { key: string; attributes: { src?: string; alt?: string } },
     _children: unknown,

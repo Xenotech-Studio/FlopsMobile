@@ -591,12 +591,22 @@ export type MessageWindow = {
   userCountBefore: number;
 };
 
+/** 会话级附件（对齐 web conversation.attachments）：助手/任务产出的文件，assistant markdown
+ *  里以指向该 url 的链接引用；渲染时把「仅由此类链接组成的段落」抬成文件卡片。 */
+export type ConversationAttachment = {
+  url: string;
+  filename: string;
+  mime_type?: string;
+};
+
 export type Conversation = {
   id: string;
   title?: string;
   created_at?: string;
   updated_at?: string;
   messages?: ConversationMessage[];
+  /** 会话级附件列表（助手/任务产出文件）；见 ConversationAttachment。 */
+  attachments?: ConversationAttachment[];
   /** 服务端仍有进行中的 chat_v2 run 时存在，用于 subscribe_only 恢复 */
   active_chat_v2_run_id?: string;
   usage_stats?: UsageStats;

@@ -75,6 +75,7 @@ import {
   type ChatV2StreamStart,
   type ConversationMessage,
   type Conversation,
+  type ConversationAttachment,
   type UsageStats,
   type UsageRun,
   type AgentProfile,
@@ -106,6 +107,7 @@ import Clipboard from '@react-native-clipboard/clipboard';
 import { MenuView } from '@react-native-menu/menu';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { MarkdownContent } from '../components/MarkdownContent';
+import { ConversationAttachmentsContext } from '../chat/ConversationAttachmentsContext';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { BouncyGlassCard } from '../components/BouncyGlassCard';
 import { HEADER_CIRCLE_BTN_SIZE, bottomInsetTotal } from '../theme/layout';
@@ -457,6 +459,8 @@ export function ChatScreen({
   const [contextProjectionL1, setContextProjectionL1] = useState<Record<string, unknown> | null>(null);
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
   const [usageRuns, setUsageRuns] = useState<UsageRun[]>([]);
+  /** 会话级附件（助手/任务产出文件）：assistant markdown 里指向这些 url 的链接段落会渲染成文件卡片。 */
+  const [conversationAttachments, setConversationAttachments] = useState<ConversationAttachment[]>([]);
   const [showTokenUsageInChat, setShowTokenUsageInChat] = useState(true);
   /** 语音「自动播报」(tts_autoplay) 当前值：⋯ 菜单里那行开关的勾选态（iOS UIMenu state / Android Switch）。
    *  播报模式(tts_broadcast_mode) 是全局态、由 ttsRealtime 单例 + BroadcastModeOverlay 管，这里不本地镜像。 */
@@ -644,6 +648,9 @@ export function ChatScreen({
     }
     setUsageStats(conversation.usage_stats ?? null);
     setUsageRuns(Array.isArray(conversation.usage_runs) ? conversation.usage_runs : []);
+    setConversationAttachments(
+      Array.isArray(conversation.attachments) ? conversation.attachments : [],
+    );
     const sums = conversation.context_summaries;
     setContextSummaries(Array.isArray(sums) ? sums : []);
     const aid = conversation.active_context_summary_id;
@@ -665,6 +672,18 @@ export function ChatScreen({
     () => rawMessagesToLocalWithUsageMap(serverRawMessages).rawToLocalAssistantIndex,
     [serverRawMessages]
   );
+
+  /** 会话附件 url→attachment Map（对齐 web conversationAttachmentsMap）：MarkdownContent 段级识别用。 */
+  const conversationAttachmentsMap = useMemo(() => {
+    if (!Array.isArray(conversationAttachments) || conversationAttachments.length === 0) return null;
+    const m = new Map<string, ConversationAttachment>();
+    for (const att of conversationAttachments) {
+      const url = typeof att?.url === 'string' ? att.url.trim() : '';
+      if (!url || m.has(url)) continue;
+      m.set(url, att);
+    }
+    return m.size > 0 ? m : null;
+  }, [conversationAttachments]);
 
   const conversationForContextCompress = useMemo(
     () => ({
@@ -3828,6 +3847,7 @@ export function ChatScreen({
              * minIndexForVisible:1 以首个可见消息的下一条为锚，避开最顶一条在边缘时的抖动。 */
             maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
           >
+            <ConversationAttachmentsContext.Provider value={conversationAttachmentsMap}>
             <FlowDocItemMetaProvider
               conversationId={conversationId}
               serverBaseUrl={session.server_base_url}
@@ -3949,6 +3969,7 @@ export function ChatScreen({
               </View>
             ) : null}
             </FlowDocItemMetaProvider>
+            </ConversationAttachmentsContext.Provider>
             {reloadPending ? (
               <View style={styles.reloadPendingBanner}>
                 <ActivityIndicator size="small" color={colors.textSecondary} />
