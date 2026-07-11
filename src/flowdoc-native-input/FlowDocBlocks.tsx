@@ -46,7 +46,12 @@ import Video, { type VideoRef } from 'react-native-video';
 import Pdf from 'react-native-pdf';
 import { WebView } from 'react-native-webview';
 import Orientation from 'react-native-orientation-locker';
-import { downloadAttachment } from './attachmentDownload';
+import {
+  downloadAttachment,
+  downloadToSandbox,
+  getDownloadedLocalPath,
+  shareLocalFile,
+} from './attachmentDownload';
 import {
   hasPreviewApiSupport,
   readPreviewByUrl,
@@ -55,6 +60,7 @@ import {
 } from './previewApi';
 import { Element as SlateElement, type Descendant } from 'slate';
 import { useAppTheme } from '../context/ThemeContext';
+import { useSession } from '../context/SessionContext';
 import type { AppColors } from '../theme/appColors';
 import {
   FlowDocInput,
@@ -1210,15 +1216,46 @@ function FileAttachmentRenderer({
   // 点击附件本体 → 应用内预览弹窗（对齐 web）；拿不到 context 时退回外跳
   const openPreview = React.useContext(AttachmentPreviewContext);
   const onPressBody = url && openPreview ? () => openPreview(block) : open;
-  // 下载键 → 应用内下载（Android 进系统下载目录；iOS 下完弹保存/分享菜单），不再跳浏览器
-  const [downloading, setDownloading] = React.useState(false);
+  // 下载键 → 对齐 Desktop 两段式：先下载（出进度条），完成后图标变文件夹、再点弹系统分享菜单。
+  // 传 serverBaseUrl 用于把相对路径 url 绝对化（否则 Android DownloadManager 遇非 http(s) URI 会崩）。
+  const { serverBaseUrl } = useSession();
+  const [dl, setDl] = React.useState<{
+    downloading: boolean;
+    progress: number; // 0-100
+    localPath: string | null;
+  }>({ downloading: false, progress: 0, localPath: null });
+  // 退出对话再回来时 state 已丢：挂载时按 filename 推断沙盒落点，已存在则直接回到「已下载」态（图标显示文件夹）。
+  React.useEffect(() => {
+    let cancelled = false;
+    getDownloadedLocalPath(block.filename).then((p) => {
+      if (!cancelled && p) {
+        setDl((s) => (s.downloading ? s : { downloading: false, progress: 100, localPath: p }));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [block.filename]);
   const handleDownload = url
     ? () => {
-        if (downloading) return;
-        setDownloading(true);
-        downloadAttachment(url, block.filename)
-          .catch(() => {})
-          .finally(() => setDownloading(false));
+        if (dl.downloading) return;
+        // 已下载完成 → 再点 = 弹系统分享菜单（对齐 Desktop 的「文件夹」按钮）
+        if (dl.localPath) {
+          shareLocalFile(dl.localPath).catch(() => {});
+          return;
+        }
+        setDl({ downloading: true, progress: 0, localPath: null });
+        downloadToSandbox(url, block.filename, serverBaseUrl, (p) =>
+          setDl((s) => (s.downloading ? { ...s, progress: p } : s)),
+        )
+          .then((r) =>
+            setDl(
+              r?.localPath
+                ? { downloading: false, progress: 100, localPath: r.localPath }
+                : { downloading: false, progress: 0, localPath: null },
+            ),
+          )
+          .catch(() => setDl({ downloading: false, progress: 0, localPath: null }));
       }
     : undefined;
   const iconColor = ctx.colors.textMuted;
@@ -1253,6 +1290,7 @@ function FileAttachmentRenderer({
   return (
     <View onLayout={onLayout}>
       <View style={[ctx.styles.fileCard, { width: cardW }]}>
+      <View style={ctx.styles.fileCardRow}>
       <TouchableOpacity
         style={ctx.styles.fileCardBody}
         onPress={onPressBody}
@@ -1276,10 +1314,24 @@ function FileAttachmentRenderer({
           style={ctx.styles.fileCardDownload}
           onPress={handleDownload}
           activeOpacity={0.7}
-          accessibilityLabel="下载"
+          accessibilityLabel={dl.localPath ? '用其他应用打开' : '下载'}
         >
-          {downloading ? (
+          {dl.downloading ? (
             <ActivityIndicator size="small" color={iconColor} />
+          ) : dl.localPath ? (
+            // 下载完成 → 文件夹图标（lucide folder），点击弹分享菜单（对齐 Desktop）
+            <Svg
+              width={18}
+              height={18}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke={iconColor}
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <Path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+            </Svg>
           ) : (
             // 下载图标（lucide download）
             <Svg
@@ -1298,6 +1350,15 @@ function FileAttachmentRenderer({
             </Svg>
           )}
         </TouchableOpacity>
+      ) : null}
+      </View>
+      {/* 下载中 → 卡片底部水平进度条（对齐 Desktop） */}
+      {dl.downloading ? (
+        <View style={ctx.styles.fileCardProgressTrack}>
+          <View
+            style={[ctx.styles.fileCardProgressFill, { width: `${dl.progress}%` }]}
+          />
+        </View>
       ) : null}
       </View>
     </View>
@@ -2918,7 +2979,7 @@ function createStyles(c: AppColors) {
     } as TextStyle,
     // 文件卡片对齐 web .assistant-attachment-card：1px 边框、圆角 10、muted 底。宽度由 caller 实测注入。
     fileCard: {
-      flexDirection: 'row',
+      flexDirection: 'column',
       alignItems: 'stretch',
       borderWidth: 1,
       borderColor: c.borderMuted,
@@ -2926,6 +2987,20 @@ function createStyles(c: AppColors) {
       backgroundColor: c.surfaceMuted,
       overflow: 'hidden',
       marginVertical: 4,
+    } as ViewStyle,
+    // 卡片主行：左 body（图标+名/大小）、右下载/文件夹按钮；进度条在此行下方
+    fileCardRow: {
+      flexDirection: 'row',
+      alignItems: 'stretch',
+    } as ViewStyle,
+    // 下载进度条（对齐 Desktop）：卡片底部一条细轨道 + 高亮填充
+    fileCardProgressTrack: {
+      height: 3,
+      backgroundColor: c.borderMuted,
+    } as ViewStyle,
+    fileCardProgressFill: {
+      height: 3,
+      backgroundColor: c.textPrimary,
     } as ViewStyle,
     fileCardBody: {
       flex: 1,
