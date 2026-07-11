@@ -597,6 +597,10 @@ export type ConversationAttachment = {
   url: string;
   filename: string;
   mime_type?: string;
+  /** 服务端字节大小；用于附件 chip / 预览弹窗展示（对齐 web attachment.size_bytes）。 */
+  size_bytes?: number;
+  /** 附件来源：user（用户上传）/ agent（助手或任务产出）。 */
+  source?: string;
 };
 
 export type Conversation = {

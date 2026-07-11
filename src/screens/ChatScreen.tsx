@@ -679,8 +679,17 @@ export function ChatScreen({
     const m = new Map<string, ConversationAttachment>();
     for (const att of conversationAttachments) {
       const url = typeof att?.url === 'string' ? att.url.trim() : '';
-      if (!url || m.has(url)) continue;
-      m.set(url, att);
+      if (!url) continue;
+      if (!m.has(url)) m.set(url, att);
+      // markdown-it 会 percent-encode 链接 href；原始 url 常含中文/空格。同时存一份 decode 后的 key，
+      // 与 MarkdownContent 侧比较时的 decode 兜底构成双向归一，保证两种形态都能命中。
+      let decoded = url;
+      try {
+        decoded = decodeURIComponent(url);
+      } catch {
+        // 非法编码序列：退回原值，不额外存 key
+      }
+      if (decoded !== url && !m.has(decoded)) m.set(decoded, att);
     }
     return m.size > 0 ? m : null;
   }, [conversationAttachments]);

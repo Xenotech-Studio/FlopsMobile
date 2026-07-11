@@ -2,13 +2,21 @@
  * Markdown 渲染 + 可选复制按钮，与 FlopsDesktop 的 MarkdownContent 能力对齐
  */
 import React, { useContext, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, type ViewStyle } from 'react-native';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  type ViewStyle,
+  type TextStyle,
+} from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import FitImage from 'react-native-fit-image';
 import Clipboard from '@react-native-clipboard/clipboard';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { FlowDocAttachment } from '../flowdoc-native-input/FlowDocBlocks';
 import { ConversationAttachmentsContext } from '../chat/ConversationAttachmentsContext';
+import type { ConversationAttachment } from '../api';
 
 /** react-native-markdown-display 的 AST 节点（只用到这几个字段）。 */
 type MdNode = {
@@ -19,85 +27,124 @@ type MdNode = {
   key?: string;
 };
 
-/**
- * 递归判定：段落是否「仅由链接（+空白）组成」，并收集所有链接 href。
- * - link：收 href，不下探其 label 文本（label 是链接文字，不算段落正文）
- * - 非空白 text / 其它 inline 节点（image/code/strong…）→ 判定不纯（clean=false）
- * - textgroup/paragraph：容器，继续下探；softbreak/hardbreak：视作空白
- */
-function analyzeParagraphLinks(node: MdNode): { hrefs: string[]; clean: boolean } {
-  const hrefs: string[] = [];
-  let clean = true;
-  const visit = (n: MdNode | undefined) => {
-    if (!n || typeof n !== 'object') return;
-    const t = n.type;
-    if (t === 'link') {
-      const href = typeof n.attributes?.href === 'string' ? n.attributes.href.trim() : '';
-      if (href) hrefs.push(href);
-      return;
-    }
-    if (t === 'text') {
-      if (typeof n.content === 'string' && n.content.trim()) clean = false;
-      return;
-    }
-    if (t === 'softbreak' || t === 'hardbreak') return;
-    if (t === 'textgroup' || t === 'paragraph') {
-      (n.children ?? []).forEach(visit);
-      return;
-    }
-    clean = false;
-  };
-  visit(node);
-  return { hrefs, clean };
+/** markdown-it 会把链接 href percent-encode（原始 url 常含中文/空格），而会话附件 Map 的 key
+ *  是服务端原始 url，两端形态不一致会导致 has() 恒 false。比较时对 href 做 decode 兜底，
+ *  解码失败（非法编码序列）退回原值，保证编码差异不阻断匹配。 */
+function safeDecodeHref(h: string): string {
+  try {
+    return decodeURIComponent(h);
+  } catch {
+    return h;
+  }
+}
+
+/** 用原始 href 与 decode 后的 href 双形态查会话附件 Map（Map 侧也已存 decode key，双向归一）。 */
+function resolveAttachment(
+  attMap: Map<string, ConversationAttachment>,
+  href: string,
+): ConversationAttachment | undefined {
+  if (attMap.has(href)) return attMap.get(href);
+  const decoded = safeDecodeHref(href);
+  if (decoded !== href && attMap.has(decoded)) return attMap.get(decoded);
+  return undefined;
+}
+
+/** 该 inline 节点是否是「空白」（纯空格 text / 换行）——拆卡片时两侧只剩空白的文本段不单独成行。 */
+function isBlankInline(n: MdNode | undefined): boolean {
+  if (!n) return true;
+  if (n.type === 'text') return !(typeof n.content === 'string' && n.content.trim());
+  if (n.type === 'softbreak' || n.type === 'hardbreak') return true;
+  return false;
 }
 
 const attachmentBlockStyles = StyleSheet.create({
-  /* 附件卡片段落：纵向堆叠（卡片是块级），覆盖库默认 paragraph 的 row/wrap。
-     paragraphStyle 里的 marginBottom 等间距仍保留（数组合并、后者只覆盖同名键）。 */
-  block: {
+  /* 含附件的 textgroup 拆分容器：文本段 <Text> 与文件卡片 <View> 纵向交替堆叠。 */
+  split: {
     flexDirection: 'column',
     alignItems: 'flex-start',
-    gap: 8,
+    gap: 6,
   },
 });
 
 /**
- * 段落渲染包装：命中「仅由会话附件链接组成」的段落时，抬成块级文件卡片（display='card'），
- * 否则回落库默认段落渲染（原样 <Text> 内联）。附件数据来自 ConversationAttachmentsContext，
- * 无 provider（如 Doc 页 / 摘要弹窗）时 attMap=null，永远走回落，不影响其它场景。
+ * textgroup 渲染包装：对齐 web 逐链接把命中会话附件的链接替换成文件卡片，但因 RN 的 <Text> 不能嵌
+ * <View>（卡片是块级 View），改在 textgroup（inline 内容的容器，其父恒为块级 View）层做拆分——
+ * 把这一段 inline 拆成「文本段 <Text> + 卡片 <View>」纵向交替。textgroup 覆盖 paragraph / 紧凑列表项
+ * （omitListItemParagraph 会去掉列表项内的 paragraph）/ 表格单元格等所有 inline 场景，因此列表/表格/
+ * 句中的附件链接都能出卡片，解决「附件几乎全在行内、段级判定命不中」的根因。
+ *
+ * 无附件链接（绝大多数普通文本段）→ 原样返回库默认的 inline <Text>，不改任何布局。
+ * 卡片用已 export 的 FlowDocAttachment（display='card'，自带预览弹窗），与文档里的文件卡片视觉一致。
  */
-function AttachmentAwareParagraph({
+function AttachmentAwareTextgroup({
   node,
-  fallback,
-  paragraphStyle,
+  rendered,
+  textgroupStyle,
 }: {
   node: MdNode;
-  fallback: React.ReactNode;
-  paragraphStyle: ViewStyle | undefined;
+  /** 库已渲染好的各 inline 子节点，与 node.children 一一对齐（AstRenderer 用 map 生成，下标不漂移）。 */
+  rendered: React.ReactNode;
+  textgroupStyle: TextStyle | undefined;
 }) {
   const attMap = useContext(ConversationAttachmentsContext);
+  const kids = node.children ?? [];
+  // rendered 即 AstRenderer 的 node.children.map(...) 结果（含 null 占位、保序），直接按下标取，
+  // 与 kids 一一对齐。不能用 React.Children.toArray——它会丢弃 null 并重排下标，破坏对齐。
+  const renderedArr: React.ReactNode[] = Array.isArray(rendered) ? rendered : [rendered];
+
+  // 先定位命中会话附件的链接子节点下标
+  const attByIndex = new Map<number, ConversationAttachment>();
   if (attMap && attMap.size > 0) {
-    const { hrefs, clean } = analyzeParagraphLinks(node);
-    if (clean && hrefs.length >= 1 && hrefs.length <= 2 && hrefs.every((h) => attMap.has(h))) {
-      return (
-        <View style={[paragraphStyle, attachmentBlockStyles.block]}>
-          {hrefs.map((h, i) => {
-            const att = attMap.get(h)!;
-            return (
-              <FlowDocAttachment
-                key={`att-${i}-${h}`}
-                url={att.url}
-                filename={att.filename}
-                mimeType={att.mime_type}
-                display="card"
-              />
-            );
-          })}
-        </View>
+    kids.forEach((c, i) => {
+      if (c?.type !== 'link') return;
+      const href = typeof c.attributes?.href === 'string' ? c.attributes.href.trim() : '';
+      const att = href ? resolveAttachment(attMap, href) : undefined;
+      if (att) attByIndex.set(i, att);
+    });
+  }
+
+  // 无附件 → 原样库默认 inline 文本，布局不变
+  if (attByIndex.size === 0) {
+    return <Text style={textgroupStyle}>{rendered}</Text>;
+  }
+
+  // 有附件 → 文本段 / 卡片交替拆分
+  const out: React.ReactNode[] = [];
+  let buf: React.ReactNode[] = [];
+  let bufBlank = true;
+  const flush = (seed: string | number) => {
+    if (buf.length > 0 && !bufBlank) {
+      out.push(
+        <Text key={`tg-txt-${seed}`} style={textgroupStyle}>
+          {buf}
+        </Text>,
       );
     }
-  }
-  return <View style={paragraphStyle}>{fallback}</View>;
+    buf = [];
+    bufBlank = true;
+  };
+  kids.forEach((c, i) => {
+    const att = attByIndex.get(i);
+    if (att) {
+      flush(i);
+      out.push(
+        <FlowDocAttachment
+          key={`tg-att-${i}-${att.url}`}
+          url={att.url}
+          filename={att.filename}
+          mimeType={att.mime_type}
+          size={att.size_bytes}
+          display="card"
+        />,
+      );
+    } else {
+      buf.push(renderedArr[i]);
+      if (!isBlankInline(c)) bufBlank = false;
+    }
+  });
+  flush('end');
+
+  return <View style={attachmentBlockStyles.split}>{out}</View>;
 }
 
 /* 默认 image 规则的实现里 imageProps 包含 key 然后做 spread，React 18+ 会 warn。
@@ -105,19 +152,20 @@ function AttachmentAwareParagraph({
    规则签名跟 react-native-markdown-display 的 RenderRule 一致：
    (node, children, parent, styles, allowedImageHandlers, defaultImageHandler) */
 const MD_RENDER_RULES = {
-  /* 段级识别附件链接：仅由会话附件链接组成的段落 → 文件卡片（RN 的 <Text> 不能嵌 <View>，
-     所以只能在段落级别、而非 web 那样内联替换）。其余段落走库默认（<View>{children}</View>）。 */
-  paragraph: (
+  /* inline 内容容器：命中会话附件的链接 → 抽成块级文件卡片（display='card'），其余文本原样。
+     textgroup 覆盖 paragraph / 紧凑列表项 / 表格单元格等所有 inline 场景，故列表/表格/句中的附件
+     链接都能出卡片。非附件段原样返回库默认 inline <Text>，不改布局。 */
+  textgroup: (
     node: MdNode & { key: string },
     children: React.ReactNode,
     _parent: unknown,
     styles: Record<string, unknown>,
   ) => (
-    <AttachmentAwareParagraph
+    <AttachmentAwareTextgroup
       key={node.key}
       node={node}
-      fallback={children}
-      paragraphStyle={(styles as { _VIEW_SAFE_paragraph?: ViewStyle })._VIEW_SAFE_paragraph}
+      rendered={children}
+      textgroupStyle={(styles as { textgroup?: TextStyle }).textgroup}
     />
   ),
   image: (
@@ -347,6 +395,7 @@ function MarkdownContentImpl({
 
   const [copied, setCopied] = useState(false);
   const [usageDetailOpen, setUsageDetailOpen] = useState(false);
+
   const source = String(text ?? '').trim();
   const hasUsage = typeof usageHint === 'string' && usageHint.trim().length > 0;
   const hasCompress = typeof compressHint === 'string' && compressHint.trim().length > 0;
