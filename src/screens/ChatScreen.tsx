@@ -39,6 +39,7 @@ import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { convProfileLog } from '../debug/conversationLoadProfile';
 import { useSession } from '../context/SessionContext';
+import { useSetActiveConversation } from '../context/ConversationContext';
 import { useTtsPlayback, togglePlayback } from '../audio/ttsPlayer';
 import {
   setActiveConversation as setRealtimeActiveConversation,
@@ -897,6 +898,19 @@ export function ChatScreen({
         clearRealtimeActiveConversation();
       };
     }, [conversationId, session])
+  );
+
+  /* 向 ConversationContext 上报「当前正打开着的对话」→ 未读闪点守卫：正看着的对话完成时收到的
+     unread=true 被就地吞掉，不再「蓝点亮一下又被 mark-read 灭掉」。失焦（返回列表/切页）清 null，
+     该对话恢复正常未读语义。新对话首发拿到 id 后 conversationId 变化会重跑、补登记。 */
+  const setActiveConversation = useSetActiveConversation();
+  useFocusEffect(
+    useCallback(() => {
+      setActiveConversation(conversationId || null);
+      return () => {
+        setActiveConversation(null);
+      };
+    }, [conversationId, setActiveConversation])
   );
 
   /* 切页回来（如看完文档返回对话）重对齐 composer。

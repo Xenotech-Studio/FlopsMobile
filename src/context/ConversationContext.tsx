@@ -50,6 +50,8 @@ type ConversationContextValue = {
   refreshConversations: () => Promise<void>;
   addConversationOptimistic: (conv: ConversationListItem) => void;
   removeConversationOptimistic: (id: string) => void;
+  /** 声明「当前正打开着的对话」（ChatScreen 获焦时上报、失焦清 null）。用于未读闪点守卫：见下。 */
+  setActiveConversation: (id: string | null) => void;
 };
 
 const ConversationContext = createContext<ConversationContextValue | null>(null);
@@ -85,6 +87,17 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
 
   const lastLoadRef = useRef<number>(0);
   const localInstanceIdRef = useRef<string | null>(null);
+
+  /** 当前正打开着的对话 id（ChatScreen 上报）。SSE handler 用 ref 同步读，清点 effect 用 state 触发。
+   *  根因见 conversation_unread 守卫处：「正看着的对话即已读」，收到它的 unread=true 直接吞掉，
+   *  修掉「完成瞬间蓝点亮一下又灭」的闪点（对齐 FlopsDesktop 的活动会话守卫）。 */
+  const [activeConversationId, setActiveConversationIdState] = useState<string | null>(null);
+  const activeConversationIdRef = useRef<string | null>(null);
+  const setActiveConversation = useCallback((id: string | null) => {
+    const norm = id ? String(id) : null;
+    activeConversationIdRef.current = norm;
+    setActiveConversationIdState(norm);
+  }, []);
 
   useEffect(() => {
     getOrCreateClientInstanceId()
@@ -221,7 +234,10 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
         const id = String(msg.conversation_id);
         setUnreadMap((prev) => {
           const next = { ...prev };
-          if (msg.unread) next[id] = true;
+          // 「正打开着的对话即已读」：本端刚跑完、或别端跑完而我正开着它，收到的 unread=true 直接吞掉。
+          // 否则会先亮蓝点、再被 ChatScreen 打开对话触发的 mark-read 广播（unread=false）灭掉 → 闪一下。
+          // 服务端仍会因打开对话 GET 而清 chat_v2_unread，收敛一致；这里只把视觉/本地态提前收口。
+          if (msg.unread && id !== activeConversationIdRef.current) next[id] = true;
           else delete next[id];
           return next;
         });
@@ -287,6 +303,20 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
     };
   }, [session]);
 
+  /** 活动会话未读兜底清点：只要「正打开着的对话」出现在 unreadMap 里就地灭点。
+   *  覆盖 SSE 守卫吞不掉的入口——inbox_snapshot 整表 / loadConvs 的 mergeFlag（列表 chat_v2_unread）
+   *  可能把它重新点亮；以及打开一个本就未读的对话时的即时本地灭点（打开对话的 GET 会让服务端清
+   *  chat_v2_unread + 广播 unread=False，这里先于往返把本地态收口）。 */
+  useEffect(() => {
+    if (!activeConversationId) return;
+    setUnreadMap((prev) => {
+      if (!prev[activeConversationId]) return prev;
+      const next = { ...prev };
+      delete next[activeConversationId];
+      return next;
+    });
+  }, [activeConversationId, unreadMap]);
+
   const refreshConversations = useCallback(async () => {
     await loadConvs({ force: true });
   }, [loadConvs]);
@@ -336,6 +366,7 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
     refreshConversations,
     addConversationOptimistic,
     removeConversationOptimistic,
+    setActiveConversation,
   };
 
   return <ConversationContext.Provider value={value}>{children}</ConversationContext.Provider>;
@@ -369,6 +400,12 @@ export function useRunningConvMap(): BoolMap {
 /** 「未读」状态 map（conversationId → true）。 */
 export function useUnreadConvMap(): BoolMap {
   return useConversationContext().unreadMap;
+}
+
+/** 上报「当前正打开着的对话」（ChatScreen 获焦调 setActiveConversation(id)、失焦调 null）。
+ *  用于未读闪点守卫：正看着的对话不点未读蓝点。 */
+export function useSetActiveConversation(): (id: string | null) => void {
+  return useConversationContext().setActiveConversation;
 }
 
 /** 列表加载态 / 错误态 / SSE 连接态。 */
