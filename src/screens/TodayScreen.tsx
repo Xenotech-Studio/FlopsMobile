@@ -62,10 +62,15 @@ import { useSession } from '../context/SessionContext';
 import {
   createConversation,
   deleteConversation,
-  listConversations,
-  runInboxStream,
   type ConversationListItem,
 } from '../api';
+import {
+  useConversations,
+  useRunningConvMap,
+  useUnreadConvMap,
+  useConversationsStatus,
+  useConversationActions,
+} from '../context/ConversationContext';
 import type { RootStackParamList } from '../navigation/types';
 import type { TaskItem, Project } from '../taskApi';
 import { TaskRow } from '../components/TaskRow';
@@ -215,125 +220,18 @@ export function TodayScreen() {
     AsyncStorage.setItem(SHOW_PROJECT_KEY, String(showProjectName));
   }, [showProjectName]);
 
-  /* ---------- 对话段 ---------- */
-  const [convList, setConvList] = useState<ConversationListItem[]>([]);
-  const [convLoading, setConvLoading] = useState(false);
+  /* ---------- 对话段（数据源为全局 ConversationContext）---------- */
+  const convList = useConversations();
+  const chatV2RunningByConv = useRunningConvMap();
+  const chatV2UnreadByConv = useUnreadConvMap();
+  const { loading: convLoading } = useConversationsStatus();
+  const { refreshConversations, removeConversationOptimistic } = useConversationActions();
   /** 客户端分页：footer 只渲染前 convVisibleCount 条对话，滚到底每次 +CONV_PAGE_SIZE。
    *  根因——之前 convList 全量 .map() 渲染在 footer（零虚拟化），几百条对话一次性 mount → 卡。
    *  纯客户端切片：滚动位置不跳变（footer 尾部追加内容，已有项偏移不变，自然向下延伸）。iOS/Android 同生效。 */
   const CONV_PAGE_SIZE = 10;
   const [convVisibleCount, setConvVisibleCount] = useState(CONV_PAGE_SIZE);
-  const [chatV2RunningByConv, setChatV2RunningByConv] = useState<Record<string, boolean>>({});
-  const [chatV2UnreadByConv, setChatV2UnreadByConv] = useState<Record<string, boolean>>({});
   const [deleteConvTarget, setDeleteConvTarget] = useState<ConversationListItem | null>(null);
-
-  const loadConvs = useCallback(async () => {
-    if (!session) return;
-    setConvLoading(true);
-    try {
-      const { conversations } = await listConversations(session);
-      const rows = conversations ?? [];
-      setConvList(rows);
-      /** 重新拉取（首次 / 下拉刷新）→ 可见数回到首页大小，从头分页。 */
-      setConvVisibleCount(CONV_PAGE_SIZE);
-      setChatV2RunningByConv((prev) => {
-        const next = { ...prev };
-        rows.forEach((c) => {
-          if (Object.prototype.hasOwnProperty.call(c, 'chat_v2_running')) {
-            if (c.chat_v2_running) next[c.id] = true;
-            else delete next[c.id];
-          }
-        });
-        return next;
-      });
-      setChatV2UnreadByConv((prev) => {
-        const next = { ...prev };
-        rows.forEach((c) => {
-          if (Object.prototype.hasOwnProperty.call(c, 'chat_v2_unread')) {
-            if (c.chat_v2_unread) next[c.id] = true;
-            else delete next[c.id];
-          }
-        });
-        return next;
-      });
-    } catch {
-      setConvList([]);
-    } finally {
-      setConvLoading(false);
-    }
-  }, [session]);
-
-  useEffect(() => {
-    loadConvs();
-  }, [loadConvs]);
-
-  /** inbox/stream SSE：与 ConversationListScreen 一致 */
-  useEffect(() => {
-    if (!session) return undefined;
-    const ac = new AbortController();
-    let cancelled = false;
-    (async () => {
-      try {
-        await runInboxStream(session, ac.signal, (msg) => {
-          if (cancelled) return;
-          const type = msg.type;
-          if (
-            type === 'inbox_snapshot' &&
-            msg.running &&
-            typeof msg.running === 'object'
-          ) {
-            setChatV2RunningByConv(
-              Object.fromEntries(
-                Object.entries(msg.running as Record<string, unknown>).filter(
-                  ([, v]) => v === true
-                )
-              ) as Record<string, boolean>
-            );
-          }
-          if (
-            type === 'inbox_snapshot' &&
-            Object.prototype.hasOwnProperty.call(msg, 'unread') &&
-            msg.unread &&
-            typeof msg.unread === 'object'
-          ) {
-            setChatV2UnreadByConv(
-              Object.fromEntries(
-                Object.entries(msg.unread as Record<string, unknown>).filter(
-                  ([, v]) => v === true
-                )
-              ) as Record<string, boolean>
-            );
-          }
-          if (type === 'conversation_run' && msg.conversation_id != null) {
-            const id = String(msg.conversation_id);
-            setChatV2RunningByConv((prev) => {
-              const next = { ...prev };
-              if (msg.running) next[id] = true;
-              else delete next[id];
-              return next;
-            });
-          } else if (type === 'conversation_unread' && msg.conversation_id != null) {
-            const id = String(msg.conversation_id);
-            setChatV2UnreadByConv((prev) => {
-              const next = { ...prev };
-              if (msg.unread) next[id] = true;
-              else delete next[id];
-              return next;
-            });
-          }
-        });
-      } catch (e: unknown) {
-        const name = e && typeof e === 'object' && 'name' in e ? (e as { name?: string }).name : '';
-        if (name !== 'AbortError') {
-          /* 断线后无自动重连；下拉刷新会同步状态 */
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-      ac.abort();
-    };
-  }, [session]);
 
   /* ---------- 键盘避让（react-native-keyboard-controller frame-perfect 路径）----------
    *  上方 import 的 KAV 是 lib 版（drop-in for RN KAV，API 一致，但 native frame timing：
@@ -402,7 +300,9 @@ export function TodayScreen() {
     clearError();
     const startedAt = Date.now();
     try {
-      await Promise.all([loadTasks(true), loadProjects(true), loadConvs()]);
+      // 下拉刷新：可见数回到首页大小，从头分页（对齐旧 loadConvs 行为）
+      setConvVisibleCount(CONV_PAGE_SIZE);
+      await Promise.all([loadTasks(true), loadProjects(true), refreshConversations()]);
     } finally {
       const elapsed = Date.now() - startedAt;
       const remain = MIN_REFRESH_DURATION_MS - elapsed;
@@ -415,7 +315,7 @@ export function TodayScreen() {
         setRefreshing(false);
       }
     }
-  }, [clearError, loadTasks, loadProjects, loadConvs]);
+  }, [clearError, loadTasks, loadProjects, refreshConversations]);
 
   /** session 切换 / 挂载首拉 */
   useEffect(() => {
@@ -484,11 +384,11 @@ export function TodayScreen() {
       // getConversation 会用本机 K_user 从 k_conv_blob 派生并缓存 K_conv。
       const { id } = await createConversation(session, { encrypted: true });
       navigation.navigate('Chat', { conversationId: id, conversationTitle: '新对话' });
-      loadConvs();
+      refreshConversations();
     } catch (e) {
       Alert.alert('新建对话失败', e instanceof Error ? e.message : String(e));
     }
-  }, [session, navigation, loadConvs]);
+  }, [session, navigation, refreshConversations]);
 
   /* ---------- 右下 FAB 菜单 ---------- */
   /* "新建对话 / 新建任务" 两选项菜单。iOS 26 走 UIButton 原生 UIMenu（AnimatedCircleButton
@@ -760,21 +660,11 @@ export function TodayScreen() {
     setDeleteConvTarget(null);
     try {
       await deleteConversation(session, conv.id);
-      setConvList((prev) => prev.filter((c) => c.id !== conv.id));
-      setChatV2RunningByConv((prev) => {
-        const next = { ...prev };
-        delete next[conv.id];
-        return next;
-      });
-      setChatV2UnreadByConv((prev) => {
-        const next = { ...prev };
-        delete next[conv.id];
-        return next;
-      });
+      removeConversationOptimistic(conv.id);
     } catch (e) {
       Alert.alert('删除失败', e instanceof Error ? e.message : '请稍后重试');
     }
-  }, [session, deleteConvTarget]);
+  }, [session, deleteConvTarget, removeConversationOptimistic]);
 
   /* ---------- 渲染 ---------- */
   if (!session) {

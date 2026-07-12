@@ -17,6 +17,7 @@ import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-c
 import { ThemeProvider, useAppTheme } from './src/context/ThemeContext';
 import { SessionProvider, useSession } from './src/context/SessionContext';
 import { TaskProvider } from './src/context/TaskContext';
+import { ConversationProvider } from './src/context/ConversationContext';
 import { VersionWelcomeProvider } from './src/context/VersionWelcomeContext';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { VersionWelcomeScreen } from './src/screens/VersionWelcomeScreen';
@@ -120,15 +121,19 @@ export default function App() {
               <PushTokenLifecycle />
               <PresenceReporter />
               <TtsRealtimeController />
-              {/* 播报激活时把页面树底部 inset 顶高，让所有页面内容为底部横条让路（不逐页改）。 */}
-              <BroadcastInsetProvider>
-                <AppContent />
-              </BroadcastInsetProvider>
-              <UpgradeRequiredOverlay />
-              <EncryptionReloginOverlay />
-              {/* 播报模式沉浸式 overlay：跨所有页面套黑边 + 底部「语音播报中」横条，
-                  放在 AppContent（含 NavigationContainer）之上覆盖全部导航栈。 */}
-              <BroadcastModeOverlay />
+              {/* 全局对话列表 + inbox SSE 保活单例：常驻在 SessionProvider 下、NavigationContainer 外，
+                  让 Today / Project / Drawer 三处零加载即用，SSE 不随页面卸载断开。 */}
+              <ConversationProvider>
+                {/* 播报激活时把页面树底部 inset 顶高，让所有页面内容为底部横条让路（不逐页改）。 */}
+                <BroadcastInsetProvider>
+                  <AppContent />
+                </BroadcastInsetProvider>
+                <UpgradeRequiredOverlay />
+                <EncryptionReloginOverlay />
+                {/* 播报模式沉浸式 overlay：跨所有页面套黑边 + 底部「语音播报中」横条，
+                    放在 AppContent（含 NavigationContainer）之上覆盖全部导航栈。 */}
+                <BroadcastModeOverlay />
+              </ConversationProvider>
             </SessionProvider>
           </ThemeProvider>
         </SafeAreaProvider>

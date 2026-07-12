@@ -10,7 +10,7 @@
  *
  * 当前 active 顶层页用 [[useDrawer]] 取，project 条目展开时高亮当前 projectId。
  * Project 数据走 useTask().projects；archived 字段后端目前未提供，未来加上时在此处过滤。
- * Recents 走 listConversations，挂载时拉一次，前 5 条。
+ * Recents 取自全局 ConversationContext（useConversations），前 5 条，零加载即用。
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -39,9 +39,9 @@ import { useSession } from '../../context/SessionContext';
 import { useAppTheme } from '../../context/ThemeContext';
 import {
   getCurrentUserInfo,
-  listConversations,
   type ConversationListItem,
 } from '../../api';
+import { useConversations } from '../../context/ConversationContext';
 import type { AppColors } from '../../theme/appColors';
 import { IS_IOS_LIQUID_GLASS } from '../../components/AnimatedCircleButton';
 import { BouncyGlassCard } from '../../components/BouncyGlassCard';
@@ -128,21 +128,8 @@ export function DrawerContent() {
       .catch(() => {});
   }, [session, serverBaseUrl]);
 
-  /** Recents 列表（前 5 条），每次抽屉 mount 拉一次 */
-  const [recents, setRecents] = useState<ConversationListItem[]>([]);
-  useEffect(() => {
-    if (!session) return;
-    let cancelled = false;
-    listConversations(session)
-      .then(({ conversations }) => {
-        if (cancelled) return;
-        setRecents((conversations ?? []).slice(0, 5));
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [session]);
+  /** Recents 列表（前 5 条）：取自全局 ConversationContext，零加载即用 */
+  const recents = useConversations().slice(0, 5);
 
   /** Project context 在首次渲染时也要拉一遍，确保抽屉刚打开就能看到列表 */
   useEffect(() => {

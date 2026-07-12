@@ -45,12 +45,16 @@ import { useTask } from '../context/TaskContext';
 import { useSession } from '../context/SessionContext';
 import {
   createConversation,
-  listConversations,
   listFlowtaskFolders,
   placeConversation,
   type ConversationListItem,
   type FlowtaskFolder,
 } from '../api';
+import {
+  useProjectConversations,
+  useConversationsStatus,
+  useConversationActions,
+} from '../context/ConversationContext';
 import { ConversationRow } from '../components/ConversationRow';
 import type { RootStackParamList } from '../navigation/types';
 import { fetchTasks, type TaskItem } from '../taskApi';
@@ -184,41 +188,41 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
   const [showOnlyMineCalendar, setShowOnlyMineCalendar] = useState(false);
   const [statusLevelCalendar, setStatusLevelCalendar] = useState<StatusLevel>(3);
 
-  /* ---------- 项目对话段 ---------- */
+  /* ---------- 项目对话段（对话数据源为全局 ConversationContext，folder 仍本地拉）---------- */
   const { session } = useSession();
-  const [convList, setConvList] = useState<ConversationListItem[]>([]);
   const [folders, setFolders] = useState<FlowtaskFolder[]>([]);
-  const [convLoading, setConvLoading] = useState(false);
+  const [foldersLoading, setFoldersLoading] = useState(false);
   /** null = 「默认」段（flowtask_folder_id 为空的对话），string = 某 folder.id */
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
 
-  const loadConvs = useCallback(async () => {
+  /** 跟 Web ConversationList 的语义一致：按 conversation.flowtask_project_id 等于当前项目 ID 过滤 */
+  const projectConvs = useProjectConversations(projectId);
+  const { loading: convsLoading } = useConversationsStatus();
+  const { refreshConversations } = useConversationActions();
+  /** 下拉刷新 spinner：对话（全局）或 folder（本地）任一在加载都转。 */
+  const convLoading = convsLoading || foldersLoading;
+
+  const loadFolders = useCallback(async () => {
     if (!session) return;
-    setConvLoading(true);
+    setFoldersLoading(true);
     try {
-      const [convRes, folderRes] = await Promise.all([
-        listConversations(session),
-        listFlowtaskFolders(session, projectId).catch(() => ({ folders: [] as FlowtaskFolder[] })),
-      ]);
-      setConvList(convRes.conversations ?? []);
+      const folderRes = await listFlowtaskFolders(session, projectId).catch(
+        () => ({ folders: [] as FlowtaskFolder[] })
+      );
       setFolders(folderRes.folders ?? []);
-    } catch {
-      setConvList([]);
-      setFolders([]);
     } finally {
-      setConvLoading(false);
+      setFoldersLoading(false);
     }
   }, [session, projectId]);
 
   useEffect(() => {
-    loadConvs();
-  }, [loadConvs]);
+    loadFolders();
+  }, [loadFolders]);
 
-  /** 跟 Web ConversationList 的语义一致：按 conversation.flowtask_project_id 等于当前项目 ID 过滤 */
-  const projectConvs = useMemo(
-    () => convList.filter((c) => c.flowtask_project_id === projectId),
-    [convList, projectId]
-  );
+  /** 下拉刷新：全局对话列表 + 本项目 folder 一起刷。 */
+  const onRefreshConvs = useCallback(async () => {
+    await Promise.all([refreshConversations(), loadFolders()]);
+  }, [refreshConversations, loadFolders]);
 
   /** 按 folder 分组：null key = "默认"；string key = folder.id。计数给 capsule tab 用 */
   const convCountByFolder = useMemo(() => {
@@ -271,12 +275,12 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
         flowtask_folder_id: activeFolderId,
       }).catch(() => undefined);
       navigation.navigate('Chat', { conversationId: id, conversationTitle: '新对话' });
-      // 不 await，让导航先发生；列表刷新跟在后台
-      loadConvs();
+      // 不 await，让导航先发生；全局对话列表刷新跟在后台
+      refreshConversations();
     } catch (e) {
       Alert.alert('新建对话失败', e instanceof Error ? e.message : String(e));
     }
-  }, [session, projectId, activeFolderId, navigation, loadConvs]);
+  }, [session, projectId, activeFolderId, navigation, refreshConversations]);
 
   const statusKey = useMemo(() => `statusLevel_project_${projectId}`, [projectId]);
   const statusLevelCalendarKey = useMemo(
@@ -569,7 +573,7 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
                     refreshControl={
                       <RefreshControl
                         refreshing={convLoading}
-                        onRefresh={loadConvs}
+                        onRefresh={onRefreshConvs}
                         tintColor={colors.primary}
                       />
                     }
