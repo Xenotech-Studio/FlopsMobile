@@ -156,6 +156,16 @@ class FlopsPushModule: RCTEventEmitter {
     }
   }
 
+  // MARK: - JS 拉取本 app 的 bundle identifier（= APNs topic）
+
+  /// dev / release 双 bundle ID 下，device token 只能用「本 app 的 bundle ID」当 apns-topic 才推得进去。
+  /// JS 注册 token 时带上这个值上报后端，后端按 token 存的 topic 逐条推（见 push.ts / flops_push_apns.py）。
+  @objc(getBundleIdentifier:rejecter:)
+  func getBundleIdentifier(_ resolve: @escaping RCTPromiseResolveBlock,
+                           rejecter reject: @escaping RCTPromiseRejectBlock) {
+    resolve(["bundleId": Bundle.main.bundleIdentifier ?? ""])
+  }
+
   // MARK: - JS 主动拉取（拿不到则 reject "no_token"）
 
   @objc(getDeviceToken:rejecter:)

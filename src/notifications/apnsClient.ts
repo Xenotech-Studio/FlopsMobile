@@ -25,6 +25,7 @@ type FlopsPushModuleType = {
   getAuthorizationStatus(): Promise<{ status: string }>;
   registerSilently(): Promise<{ status: string; registered: boolean }>;
   getDeviceToken(): Promise<{ token: string; env: 'sandbox' | 'production' }>;
+  getBundleIdentifier(): Promise<{ bundleId: string }>;
   getPendingDeepLink(): Promise<{ payload: ApnsDeepLinkPayload | null }>;
 };
 
@@ -95,6 +96,24 @@ export async function getCachedDeviceToken(): Promise<DeviceTokenResult> {
     const msg: string = e?.message || String(e);
     if (code === 'no_token') return { ok: false, kind: 'pending' };
     return { ok: false, kind: 'register_failed', error: `${code}: ${msg}` };
+  }
+}
+
+/**
+ * 本 app 的 bundle identifier（= APNs topic）。dev build 是 com.xenotech.FlopsMobile.dev，
+ * release 是 com.xenotech.FlopsMobile。注册 token 时随 payload 上报，后端据此逐条推。
+ * 运行期不变，缓存一次即可。拿不到（非 iOS / 原生异常）返回 undefined，让后端 fallback 到默认 topic。
+ */
+let cachedApnsTopic: string | undefined;
+export async function getApnsTopic(): Promise<string | undefined> {
+  if (cachedApnsTopic) return cachedApnsTopic;
+  if (!FlopsPushModule) return undefined;
+  try {
+    const r = await FlopsPushModule.getBundleIdentifier();
+    cachedApnsTopic = r?.bundleId || undefined;
+    return cachedApnsTopic;
+  } catch {
+    return undefined;
   }
 }
 

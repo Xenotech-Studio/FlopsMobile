@@ -1,7 +1,7 @@
 /**
  * Flops 服务端 APNs 推送 API（与 flops_push_apns.py 对齐）
  *
- * - registerApnsToken：登记本机 device token + env（sandbox/production）
+ * - registerApnsToken：登记本机 device token + env（sandbox/production）+ topic（bundle ID，dev/release 各异）
  * - listApnsTokens：列出本人已登记 token（调试展示）
  * - removeApnsToken：移除某条 token
  * - requestDebugApnsPush：让服务端给该用户所有 token 发一条调试推送
@@ -44,7 +44,7 @@ export type ApnsDebugResultRow = {
 export async function registerApnsToken(
   baseUrl: string,
   accessToken: string,
-  payload: { device_token: string; env: ApnsEnv; device_name?: string; ua?: string }
+  payload: { device_token: string; env: ApnsEnv; topic?: string; device_name?: string; ua?: string }
 ): Promise<{ ok: boolean; meta?: Record<string, unknown> }> {
   const res = await fetchWithDebugLog(buildUrl(baseUrl, '/api/push/apns/register'), {
     method: 'POST',

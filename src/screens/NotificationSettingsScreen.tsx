@@ -35,6 +35,7 @@ import {
   requestApnsPermission,
   getApnsAuthorizationStatus,
   getCachedDeviceToken,
+  getApnsTopic,
   addApnsTokenListener,
   addApnsErrorListener,
   type ApnsAuthStatus,
@@ -217,6 +218,7 @@ export function NotificationSettingsScreen() {
           await registerApnsToken(serverBaseUrl, session.access_token, {
             device_token: token!,
             env: env!,
+            topic: await getApnsTopic(),
           });
           await setPushEnabled(true);
           setPushEnabledState(true);

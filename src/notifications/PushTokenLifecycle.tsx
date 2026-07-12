@@ -21,6 +21,7 @@ import {
   getApnsAuthorizationStatus,
   registerApnsSilently,
   getCachedDeviceToken,
+  getApnsTopic,
   addApnsTokenListener,
 } from './apnsClient';
 import { getPushEnabled, setPushEnabled } from './pushSettings';
@@ -40,9 +41,11 @@ export function PushTokenLifecycle(): null {
       const sig = `${token}|${env}`;
       if (sig === lastSyncedRef.current) return;
       try {
+        const topic = await getApnsTopic();
         await registerApnsToken(serverBaseUrl, session.access_token, {
           device_token: token,
           env,
+          topic,
         });
         if (!cancelled) lastSyncedRef.current = sig;
       } catch (e) {
