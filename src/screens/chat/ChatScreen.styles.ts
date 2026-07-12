@@ -235,6 +235,28 @@ export function createChatStyles(c: AppColors) {
   },
   /** ⋯ 圆按钮在没 conversationId 时灰化（MenuView 不能直接 disable，靠样式 + pointerEvents） */
   circleBtnDisabled: { opacity: 0.4 },
+  /** 左上角按钮槽：相对定位容器，让未读 badge 绝对锚在按钮右上角。宽高交给内部按钮撑。 */
+  headerLeftSlot: { position: 'relative' },
+  /** 未读对话数 badge：锚在返回/汉堡按钮右上角。灰底白字，无描边。 */
+  headerUnreadBadge: {
+    position: 'absolute',
+    top: -5,
+    right: -6,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: c.textSecondary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerUnreadBadgeText: {
+    color: '#ffffff',
+    fontSize: 11,
+    lineHeight: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
   /** Android ⋯ 菜单 popover：iOS 走 MenuView native，本组只给 Android 用。
    *  backdrop = 整屏透明遮罩（点空白关）；卡片 absolute 锚定在右上角圆按钮下方。
    *  设计跟 TodayScreen FAB 菜单同款：常驻 mount + SharedValue 驱动可见性,

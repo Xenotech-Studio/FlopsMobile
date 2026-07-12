@@ -56,6 +56,26 @@ type ConversationContextValue = {
 
 const ConversationContext = createContext<ConversationContextValue | null>(null);
 
+/** 对话行「点击守卫」：菜单（原生 UIMenu / 自绘 popover）打开或刚关 <300ms 内，抑制行的按下高亮 + 点击。
+ *  为什么单独一个 context（而非塞进上面那个大 value）：这里的 value 必须是**恒定引用**（refs + 稳定
+ *  回调，identity 永不变），这样 ConversationRow 消费它不会随 convList/SSE 每次更新而重渲染。
+ *  为什么必须 ref + 实时函数（而非 render 快照 prop）：iOS 原生 UIMenu 在 RN 视图树之外，它 dismiss
+ *  那一下 touch 会穿透回底层 Pressable；而 ref 变更不触发 re-render，UIMenu 开→关→穿透全程没有渲染，
+ *  render 时求值的 suppress 永远是滞后快照。ConversationRow 必须在 Pressable 的 style callback 里
+ *  **实时**调用 isRowTapSuppressed() 读当前 ref 值，才能在按下那一刻正确压住高亮、消除闪烁。 */
+type RowTapGuardValue = {
+  /** 菜单开合上报：true=打开，false=关闭（关闭时记录时间戳，起 300ms 抑制窗）。 */
+  setMenuOpen: (open: boolean) => void;
+  /** 实时判定是否应吞掉这次行点击/高亮。必须在触摸发生的那一刻调用（读 ref 现值）。 */
+  isRowTapSuppressed: () => boolean;
+};
+const RowTapGuardContext = createContext<RowTapGuardValue | null>(null);
+/** 无 Provider 时的安全默认：从不抑制（让 ConversationRow 在任意上下文/测试里都能独立渲染）。 */
+const NOOP_ROW_TAP_GUARD: RowTapGuardValue = {
+  setMenuOpen: () => {},
+  isRowTapSuppressed: () => false,
+};
+
 /** 把列表项自带的 chat_v2_running / chat_v2_unread 合并进现有 map（保留 SSE 增量、不整表清空）。 */
 function mergeFlag(prev: BoolMap, rows: ConversationListItem[], key: 'chat_v2_running' | 'chat_v2_unread'): BoolMap {
   const next = { ...prev };
@@ -87,6 +107,21 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
 
   const lastLoadRef = useRef<number>(0);
   const localInstanceIdRef = useRef<string | null>(null);
+
+  /* 行点击守卫的两个 ref + 恒定引用的 value（见 RowTapGuardContext 注释）。 */
+  const menuOpenRef = useRef(false);
+  const menuClosedAtRef = useRef(0);
+  const rowTapGuard = useMemo<RowTapGuardValue>(
+    () => ({
+      setMenuOpen: (open: boolean) => {
+        menuOpenRef.current = open;
+        if (!open) menuClosedAtRef.current = Date.now();
+      },
+      isRowTapSuppressed: () =>
+        menuOpenRef.current || Date.now() - menuClosedAtRef.current < 300,
+    }),
+    [],
+  );
 
   /** 当前正打开着的对话 id（ChatScreen 上报）。SSE handler 用 ref 同步读，清点 effect 用 state 触发。
    *  根因见 conversation_unread 守卫处：「正看着的对话即已读」，收到它的 unread=true 直接吞掉，
@@ -369,7 +404,17 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
     setActiveConversation,
   };
 
-  return <ConversationContext.Provider value={value}>{children}</ConversationContext.Provider>;
+  return (
+    <ConversationContext.Provider value={value}>
+      <RowTapGuardContext.Provider value={rowTapGuard}>{children}</RowTapGuardContext.Provider>
+    </ConversationContext.Provider>
+  );
+}
+
+/** 对话行点击守卫：菜单开合上报 + 实时抑制判定。value 恒定引用，消费不会随列表更新重渲染。
+ *  无 Provider 时返回 no-op 默认（从不抑制）。 */
+export function useRowTapGuard(): RowTapGuardValue {
+  return useContext(RowTapGuardContext) ?? NOOP_ROW_TAP_GUARD;
 }
 
 function useConversationContext(): ConversationContextValue {

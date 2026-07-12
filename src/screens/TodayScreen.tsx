@@ -56,6 +56,8 @@ import Animated, {
   withSpring,
   withTiming,
   runOnUI,
+  FadeIn,
+  FadeOut,
 } from 'react-native-reanimated';
 import { useTask } from '../context/TaskContext';
 import { useSession } from '../context/SessionContext';
@@ -70,6 +72,7 @@ import {
   useUnreadConvMap,
   useConversationsStatus,
   useConversationActions,
+  useRowTapGuard,
 } from '../context/ConversationContext';
 import type { RootStackParamList } from '../navigation/types';
 import type { TaskItem, Project } from '../taskApi';
@@ -95,6 +98,7 @@ import {
   IS_IOS_LIQUID_GLASS,
   type AnimatedCircleButtonMenuAction,
 } from '../components/AnimatedCircleButton';
+import { MenuView } from '@react-native-menu/menu';
 import { Fab, FAB_SIZE } from '../components/Fab';
 import { BouncyGlassCard } from '../components/BouncyGlassCard';
 import { useAppTheme } from '../context/ThemeContext';
@@ -224,6 +228,8 @@ export function TodayScreen() {
   const convList = useConversations();
   const chatV2RunningByConv = useRunningConvMap();
   const chatV2UnreadByConv = useUnreadConvMap();
+  const [showUnreadOnly, setShowUnreadOnly] = useState(false);
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const { loading: convLoading } = useConversationsStatus();
   const { refreshConversations, removeConversationOptimistic } = useConversationActions();
   /** 客户端分页：footer 只渲染前 convVisibleCount 条对话，滚到底每次 +CONV_PAGE_SIZE。
@@ -341,13 +347,25 @@ export function TodayScreen() {
     [updatePullDistance]
   );
 
+  /* 行点击守卫（全局 context，恒定引用）：菜单开合上报 + 实时抑制判定。
+   *  为什么要它、为什么必须实时读 ref：iOS 原生 UIMenu 在 RN 视图树之外，dismiss 那一下 touch 会
+   *  穿透回底层行；JS backdrop 拦不住原生 UIMenu，且 ref 变更不触发 re-render，UIMenu 开→关→穿透
+   *  全程无渲染，render 时求值的 suppress 是滞后快照 → 高亮闪一下。ConversationRow 现在在 Pressable
+   *  的 style callback / onPress 里**实时**调 isRowTapSuppressed() 自守，行点击的抑制不再走这里；
+   *  这里只负责：菜单开合上报（setMenuOpen）+ 任务行（TaskRow 无自守）的导航抑制。 */
+  const { setMenuOpen, isRowTapSuppressed } = useRowTapGuard();
+
   /* ---------- 跳转 ---------- */
   const onTaskPress = useCallback(
-    (task: TaskItem) => navigation.navigate('TaskDetail', { taskId: task.id }),
-    [navigation]
+    (task: TaskItem) => {
+      if (isRowTapSuppressed()) return;
+      navigation.navigate('TaskDetail', { taskId: task.id });
+    },
+    [navigation, isRowTapSuppressed]
   );
 
-  /** 对话行点击：作为二级页 push 出来，返回箭头回到今日页（与抽屉 Recents 的「顶层切换」区分开） */
+  /** 对话行点击：作为二级页 push 出来，返回箭头回到今日页（与抽屉 Recents 的「顶层切换」区分开）。
+   *  抑制守卫由 ConversationRow 内部实时自守，这里不再重复判断。 */
   const onConvPress = useCallback(
     (conv: ConversationListItem) => {
       navigation.navigate('Chat', {
@@ -418,16 +436,18 @@ export function TodayScreen() {
    * duration 80ms 是 menu 进入感觉"瞬间"的上限，用户感受不到延迟。 */
   const fabMenuShow = useSharedValue(0);
   const openFabMenu = useCallback(() => {
+    setMenuOpen(true);
     fabMenuShow.value = withTiming(1, { duration: 80 });
     searchCollapsed.value = withTiming(1, { duration: 220 });
     setFabMenuOpen(true);
-  }, [searchCollapsed, fabMenuShow]);
+  }, [searchCollapsed, fabMenuShow, setMenuOpen]);
   const closeFabMenu = useCallback(() => {
+    setMenuOpen(false);
     fabMenuJustClosedAtRef.current = Date.now();
     fabMenuShow.value = withTiming(0, { duration: 100 });
     searchCollapsed.value = withTiming(0, { duration: 220 });
     setFabMenuOpen(false);
-  }, [searchCollapsed, fabMenuShow]);
+  }, [searchCollapsed, fabMenuShow, setMenuOpen]);
 
   const fabMenuActions = useMemo<ReadonlyArray<AnimatedCircleButtonMenuAction>>(
     () => [
@@ -702,13 +722,65 @@ export function TodayScreen() {
     </View>
   );
 
+  /** 对话筛选菜单：两项互斥，iOS 走原生 UIMenu / Android 走自绘 popover */
+  const convFilterMenuActions = useMemo<ReadonlyArray<AnimatedCircleButtonMenuAction>>(
+    () => [
+      { id: 'all',    title: '全部对话', image: 'tray.full',          state: (showUnreadOnly ? 'off' : 'on') as 'on' | 'off' },
+      { id: 'unread', title: '仅未读',   image: 'circle.badge.fill',  state: (showUnreadOnly ? 'on'  : 'off') as 'on' | 'off' },
+    ],
+    [showUnreadOnly],
+  );
+  const onConvFilterSelect = useCallback((id: string) => {
+    setShowUnreadOnly(id === 'unread');
+  }, []);
+  const onConvFilterMenuView = useCallback(
+    (e: { nativeEvent: { event: string } }) => onConvFilterSelect(e.nativeEvent.event),
+    [onConvFilterSelect],
+  );
+
+  /* 筛选按钮：filter 菜单键与"×"清除键**条件渲染**，同一时刻只有一个挂在 DOM 上 —— 彻底
+   *  消灭"透明却仍吃点击"的幽灵层，也不再需要小框 + padding hack 那套（会被父节点裁掉命中区）。
+   *  filter ↔ ✕ 的切换靠 Reanimated 的 entering/exiting（FadeIn/FadeOut）做出现/消失动画。
+   *  filterMenuOpenSV 只管一件事：菜单打开时把 filter 图标整枚淡到 0，关闭淡回 1（原生 UIMenu
+   *  弹出时图标让位）。它跟 unread 无关；返回 filter 视图时在 × 的 onPress 里顺手归 0 复位。 */
+  const filterMenuOpenSV = useSharedValue(0);
+  const onFilterMenuOpen = useCallback(() => {
+    setMenuOpen(true);
+    filterMenuOpenSV.value = withTiming(1, { duration: 150 });
+  }, [filterMenuOpenSV, setMenuOpen]);
+  const onFilterMenuClose = useCallback(() => {
+    setMenuOpen(false);
+    filterMenuOpenSV.value = withTiming(0, { duration: 150 });
+  }, [filterMenuOpenSV, setMenuOpen]);
+  const filterIconAnimStyle = useAnimatedStyle(() => ({
+    opacity: 1 - filterMenuOpenSV.value,
+  }));
+
+  /* Android 自绘 popover 的落点：按下时用按钮 ref measureInWindow 拿到屏幕坐标，让菜单贴按钮
+   *  下边缘**向下**弹。之前写死 top=headerHeight+120，可按钮在 footer 里、位置随列表长度浮动，
+   *  菜单永远飘在 list 上方 → 看着像"向上展开"。iOS 走原生 UIMenu，不用这套。 */
+  const filterBtnRef = useRef<View>(null);
+  const [filterMenuPos, setFilterMenuPos] = useState({ top: 0, right: 20 });
+  const openAndroidFilterMenu = useCallback(() => {
+    const show = () => { setFilterMenuOpen(true); onFilterMenuOpen(); };
+    const node = filterBtnRef.current;
+    if (node?.measureInWindow) {
+      node.measureInWindow((x, y, w, h) => {
+        setFilterMenuPos({ top: y + h + 6, right: Math.max(12, layoutWidth - (x + w)) });
+        show();
+      });
+    } else {
+      show();
+    }
+  }, [onFilterMenuOpen, layoutWidth]);
+
   /** 当前可见对话切片 + 是否还有更多 */
-  const visibleConvs = convList.slice(0, convVisibleCount);
-  const hasMoreConvs = convVisibleCount < convList.length;
-  /** 滚到底：再放出一页对话。纯切片，无网络；位置不跳变（尾部追加）。 */
+  const filteredConvList = showUnreadOnly ? convList.filter((c) => chatV2UnreadByConv[c.id]) : convList;
+  const visibleConvs = filteredConvList.slice(0, convVisibleCount);
+  const hasMoreConvs = convVisibleCount < filteredConvList.length;
   const loadMoreConvs = useCallback(() => {
-    setConvVisibleCount((n) => (n < convList.length ? n + CONV_PAGE_SIZE : n));
-  }, [convList.length]);
+    setConvVisibleCount((n) => (n < filteredConvList.length ? n + CONV_PAGE_SIZE : n));
+  }, [filteredConvList.length]);
 
   /** 列表尾：[结束今天]（新建任务已去掉，走右下角 FAB）+ 对话段 */
   const ListFooter = (
@@ -724,6 +796,49 @@ export function TodayScreen() {
       <View style={styles.sectionRow}>
         <Text style={styles.sectionTitle}>对话</Text>
         <View style={{ flex: 1 }} />
+        {/* filter 菜单键 ↔ "×"清除键 条件渲染：任一时刻只有一个挂载，无叠层、无裁剪父节点，
+         *  命中区就是按钮自身（内层 filterBtn padding 撑出 ≈40x40，不再被小框裁掉）。
+         *  切换用 FadeIn/FadeOut 做交叉出现/消失动画。iOS 仍走原生 MenuView。 */}
+        {showUnreadOnly ? (
+          <Animated.View key="filter-clear" entering={FadeIn.duration(300)} exiting={FadeOut.duration(300)}>
+            <TouchableOpacity
+              onPress={() => { setShowUnreadOnly(false); filterMenuOpenSV.value = 0; }}
+              activeOpacity={0.7}
+              hitSlop={8}
+            >
+              <View style={styles.filterBtn}>
+                <Ionicons name="close-circle" size={20} color={colors.primary} />
+              </View>
+            </TouchableOpacity>
+          </Animated.View>
+        ) : (
+          <Animated.View key="filter-menu" entering={FadeIn.duration(300)} style={filterIconAnimStyle}>
+            {Platform.OS === 'ios' ? (
+              <MenuView
+                title=""
+                actions={convFilterMenuActions as unknown as any[]}
+                onPressAction={onConvFilterMenuView}
+                onOpenMenu={onFilterMenuOpen}
+                onCloseMenu={onFilterMenuClose}
+                shouldOpenOnLongPress={false}
+              >
+                <View style={styles.filterBtn}>
+                  <Ionicons name="filter-outline" size={20} color={colors.textSecondary} />
+                </View>
+              </MenuView>
+            ) : (
+              <TouchableOpacity
+                onPress={openAndroidFilterMenu}
+                activeOpacity={0.7}
+                hitSlop={8}
+              >
+                <View ref={filterBtnRef} style={styles.filterBtn}>
+                  <Ionicons name="filter-outline" size={20} color={colors.textSecondary} />
+                </View>
+              </TouchableOpacity>
+            )}
+          </Animated.View>
+        )}
       </View>
 
       {convLoading && convList.length === 0 ? (
@@ -1106,6 +1221,49 @@ export function TodayScreen() {
         onCancelAheadOfToday={cancelAheadOfToday}
       />
 
+      {/* Android 对话筛选 popover（iOS 走原生 UIMenu 不进这里） */}
+      {!IS_IOS_LIQUID_GLASS && Platform.OS !== 'ios' && filterMenuOpen ? (
+        <>
+          {/* backdrop 必须**真吞掉** outside tap，否则触摸会穿透到底层 FlatList / ConversationRow
+           *  触发误触（点进对话）。Pressable+onPress 不够：它只在 touchEnd 兜底，且 Android 上
+           *  elevation 0 的 backdrop 不压制底层触摸。改成显式 responder：onStart/onMove 都 return
+           *  true 抢下 responder，terminationRequest return false 拒绝被 RNGH Pan 抢走，
+           *  onResponderRelease 里才关菜单。zIndex/elevation 9000（< 菜单卡 9999）压制底层。 */}
+          <View
+            style={[StyleSheet.absoluteFill, styles.menuBackdrop]}
+            pointerEvents="auto"
+            onStartShouldSetResponder={() => true}
+            onMoveShouldSetResponder={() => true}
+            onResponderTerminationRequest={() => false}
+            onResponderRelease={() => { setFilterMenuOpen(false); onFilterMenuClose(); }}
+          />
+          <View style={[styles.filterMenuCard, {
+            top: filterMenuPos.top,
+            right: filterMenuPos.right,
+          }]}>
+            <TouchableOpacity
+              style={styles.fabMenuItem}
+              activeOpacity={0.6}
+              onPress={() => { setFilterMenuOpen(false); onFilterMenuClose(); setShowUnreadOnly(false); }}
+            >
+              <Ionicons name="chatbubbles-outline" size={20} color={colors.textPrimary} />
+              <Text style={styles.fabMenuItemText}>全部对话</Text>
+              {!showUnreadOnly ? <Ionicons name="checkmark" size={16} color={colors.primary} style={{ marginLeft: 'auto' }} /> : null}
+            </TouchableOpacity>
+            <View style={styles.fabMenuDivider} />
+            <TouchableOpacity
+              style={styles.fabMenuItem}
+              activeOpacity={0.6}
+              onPress={() => { setFilterMenuOpen(false); onFilterMenuClose(); setShowUnreadOnly(true); }}
+            >
+              <Ionicons name="mail-unread-outline" size={20} color={colors.textPrimary} />
+              <Text style={styles.fabMenuItemText}>仅未读</Text>
+              {showUnreadOnly ? <Ionicons name="checkmark" size={16} color={colors.primary} style={{ marginLeft: 'auto' }} /> : null}
+            </TouchableOpacity>
+          </View>
+        </>
+      ) : null}
+
       {/* 非 iOS 26 走自绘 popover；iOS 26 走原生 UIMenu 不渲染。
        *
        * 改造历史：以前用 <Modal>，Android 上 native dialog 冷启动 200-400ms；后来去掉
@@ -1121,7 +1279,15 @@ export function TodayScreen() {
           <Animated.View
             style={[StyleSheet.absoluteFill, styles.fabMenuBackdrop, fabMenuBackdropAnimStyle]}
           >
-            <Pressable style={StyleSheet.absoluteFill} onPress={closeFabMenu} />
+            {/* 同 filter backdrop：显式 responder 真吞掉 outside tap，杜绝穿透到底层误触。
+             *  外层 Animated.View 已用 fabMenuBackdropAnimStyle 的 pointerEvents 控开合。 */}
+            <View
+              style={StyleSheet.absoluteFill}
+              onStartShouldSetResponder={() => true}
+              onMoveShouldSetResponder={() => true}
+              onResponderTerminationRequest={() => false}
+              onResponderRelease={closeFabMenu}
+            />
           </Animated.View>
           <Animated.View
             style={[
@@ -1217,6 +1383,8 @@ function createStyles(c: AppColors) {
       paddingHorizontal: 18,
     },
     sectionTitle: { fontSize: 14, fontWeight: '600', color: c.textSecondary },
+    /* 筛选按钮命中区：正常 padding 把 20px 图标撑到 ≈40x40，父节点自然尺寸不裁剪，命中区真实生效 */
+    filterBtn: { padding: 10 },
     errorBar: { backgroundColor: c.errorBg, padding: 12, borderRadius: 8, marginBottom: 8, marginHorizontal: 18 },
     errorText: { fontSize: 14, color: c.danger, textAlign: 'center' },
     taskEmpty: { paddingVertical: 32, alignItems: 'center' },
@@ -1424,6 +1592,20 @@ function createStyles(c: AppColors) {
       height: StyleSheet.hairlineWidth,
       backgroundColor: c.conversationListSeparator,
       marginHorizontal: 8,
+    },
+    /* 透明全屏 tap-catcher：只吞 outside tap 关菜单，不变暗。Android 靠 elevation 9000
+     *  （< 菜单卡 9999）压在底层内容之上、菜单之下，确保触摸落到 backdrop 而非底层行。 */
+    menuBackdrop: { backgroundColor: 'transparent', zIndex: 9000, elevation: 9000 },
+    filterMenuCard: {
+      position: 'absolute',
+      minWidth: 180,
+      backgroundColor: c.surface,
+      borderRadius: 14,
+      overflow: 'hidden',
+      paddingVertical: 6,
+      zIndex: 9999,
+      elevation: 9999,
+      ...shadowMenu,
     },
     fabMenuItemText: { fontSize: 15, color: c.textPrimary },
     /* 删除 modal */

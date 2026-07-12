@@ -39,7 +39,7 @@ import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { convProfileLog } from '../debug/conversationLoadProfile';
 import { useSession } from '../context/SessionContext';
-import { useSetActiveConversation } from '../context/ConversationContext';
+import { useSetActiveConversation, useUnreadConvMap } from '../context/ConversationContext';
 import { useTtsPlayback, togglePlayback } from '../audio/ttsPlayer';
 import {
   setActiveConversation as setRealtimeActiveConversation,
@@ -911,6 +911,44 @@ export function ChatScreen({
         setActiveConversation(null);
       };
     }, [conversationId, setActiveConversation])
+  );
+
+  /* 打开 / 离开对话都向服务端真正标记已读——清 chat_v2_unread，而非仅本地压蓝点。
+     服务端无独立 mark-read 接口：GET /api/conversations/:id 默认 mark_read=true 即会 pop
+     chat_v2_unread + 广播 unread=False（对齐 FlopsDesktop index.js 的「活动会话即已读」收口，
+     它同样用一次轻量 getConversation(id,{messagesLimit:1}) 触发）。路由首开的 mark-read 已由
+     上面的 getConversation 承担，这里只补它漏掉的两个入口：
+     - 聚焦：仅当服务端确有未读时发一次轻量 GET。覆盖「已加载会话被重新聚焦」——路由 effect 因
+       loadedConversationIdRef 命中而跳过重拉、不再自带 mark-read（如离开去别的对话、期间本会话被
+       别端点亮未读，再切回来）。
+     - 失焦（离开会话）：无条件补发一次。聚焦期间本端/别端跑完时服务端会重新点亮 chat_v2_unread，
+       本地蓝点被「活动会话守卫」吞掉不闪，但服务端仍是 unread=true，下拉刷新 loadConvs 会回灌。
+       离开时清一次收口，避免蓝点复活。
+     用 ref 读 unreadMap 只为聚焦时的判空，不进依赖——否则聚焦期间未读态每变一次就会重跑、
+     误触发失焦分支的 GET。GET 结果丢弃（messagesLimit=1，纯为服务端副作用，不动本页 state）。 */
+  const unreadMap = useUnreadConvMap();
+  const unreadMapRef = useRef(unreadMap);
+  unreadMapRef.current = unreadMap;
+  /** 微信式左上角未读数：排除当前正打开的对话，统计其余仍未读的对话条数（>99 显 99+）。 */
+  const otherUnreadCount = useMemo(() => {
+    const curId = String(conversationId || '').trim();
+    let n = 0;
+    for (const id in unreadMap) {
+      if (unreadMap[id] && id !== curId) n += 1;
+    }
+    return n;
+  }, [unreadMap, conversationId]);
+  useFocusEffect(
+    useCallback(() => {
+      const id = String(conversationId || '').trim();
+      if (!id || !session) return;
+      if (unreadMapRef.current[id]) {
+        void getConversation(session, id, 1).catch(() => {});
+      }
+      return () => {
+        void getConversation(session, id, 1).catch(() => {});
+      };
+    }, [conversationId, session])
   );
 
   /* 切页回来（如看完文档返回对话）重对齐 composer。
@@ -3717,19 +3755,29 @@ export function ChatScreen({
         />
         {/* inDrawer（compact 覆盖式抽屉顶层）= 永远汉堡；否则能返回就显返回箭头（mainPane pop 嵌套栈 /
          *  iPhone pop 根栈），不能返回（mainPane 栈底）兜底汉堡。 */}
-        {inDrawer || (mainPane && !canGoBack) ? (
-          <HamburgerButton />
-        ) : canGoBack ? (
-          <AnimatedCircleButton
-            style={styles.circleBtn}
-            onPress={() => navigation.goBack()}
-            iosSfSymbol={{ name: 'chevron.backward', size: 16, color: colors.textSecondary }}
-          >
-            <Ionicons name="chevron-back" size={24} color={colors.textSecondary} />
-          </AnimatedCircleButton>
-        ) : (
-          <View style={styles.circleBtn} />
-        )}
+        {/* 左上角按钮槽：返回箭头 / 汉堡 / 占位，其余对话有未读时右上角挂微信式红点数字 badge。 */}
+        <View style={styles.headerLeftSlot}>
+          {inDrawer || (mainPane && !canGoBack) ? (
+            <HamburgerButton />
+          ) : canGoBack ? (
+            <AnimatedCircleButton
+              style={styles.circleBtn}
+              onPress={() => navigation.goBack()}
+              iosSfSymbol={{ name: 'chevron.backward', size: 16, color: colors.textSecondary }}
+            >
+              <Ionicons name="chevron-back" size={24} color={colors.textSecondary} />
+            </AnimatedCircleButton>
+          ) : (
+            <View style={styles.circleBtn} />
+          )}
+          {otherUnreadCount > 0 ? (
+            <View style={styles.headerUnreadBadge} pointerEvents="none">
+              <Text style={styles.headerUnreadBadgeText} numberOfLines={1}>
+                {otherUnreadCount > 99 ? '99+' : otherUnreadCount}
+              </Text>
+            </View>
+          ) : null}
+        </View>
         <View style={styles.headerTitleWrap}>
           <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
             {conversationId ? (conversationTitle || '新对话') : 'Flops'}

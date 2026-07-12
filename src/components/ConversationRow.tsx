@@ -7,6 +7,7 @@ import React, { useMemo } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAppTheme } from '../context/ThemeContext';
+import { useRowTapGuard } from '../context/ConversationContext';
 import type { AppColors } from '../theme/appColors';
 import { LIST_ROW_TITLE_SIZE } from '../theme/typography';
 import { InboxRunSpinner, InboxUnreadCheck } from './InboxListIndicators';
@@ -31,10 +32,16 @@ export function ConversationRow({
 }: Props) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  /* 菜单开/刚关时的行点击守卫。必须在 style callback / onPress 里**实时**调用（读 ref 现值），
+   *  不能用 render 快照——iOS 原生 UIMenu dismiss→穿透全程不触发 re-render，快照永远滞后而闪一下。 */
+  const { isRowTapSuppressed } = useRowTapGuard();
   return (
     <Pressable
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-      onPress={onPress}
+      style={({ pressed }) => [styles.row, pressed && !isRowTapSuppressed() && styles.rowPressed]}
+      onPress={() => {
+        if (isRowTapSuppressed()) return;
+        onPress();
+      }}
       onLongPress={onLongPress}
       android_ripple={{ color: colors.surfaceMuted }}
     >

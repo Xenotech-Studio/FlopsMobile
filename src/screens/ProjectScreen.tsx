@@ -54,6 +54,8 @@ import {
   useProjectConversations,
   useConversationsStatus,
   useConversationActions,
+  useRunningConvMap,
+  useUnreadConvMap,
 } from '../context/ConversationContext';
 import { ConversationRow } from '../components/ConversationRow';
 import type { RootStackParamList } from '../navigation/types';
@@ -197,6 +199,12 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
 
   /** 跟 Web ConversationList 的语义一致：按 conversation.flowtask_project_id 等于当前项目 ID 过滤 */
   const projectConvs = useProjectConversations(projectId);
+  /** running / unread 一律读 SSE 增量维护的 map（与今日页 useUnreadConvMap 及 Web ConversationList
+   *  的 chatV2UnreadByConv 同源）。绝不直接读 conv.chat_v2_unread——那份只由整表 loadConvs 刷新，
+   *  inbox SSE 的 conversation_unread / inbox_snapshot / 活动会话守卫都只动 map、不回写 convList，
+   *  直接读会漏掉「别端已读→SSE 广播 unread=False」这类增量，绿勾残留到下次整表重拉才灭。 */
+  const runningByConv = useRunningConvMap();
+  const unreadByConv = useUnreadConvMap();
   const { loading: convsLoading } = useConversationsStatus();
   const { refreshConversations } = useConversationActions();
   /** 下拉刷新 spinner：对话（全局）或 folder（本地）任一在加载都转。 */
@@ -588,8 +596,8 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
                           key={c.id}
                           title={(c.title && c.title.trim()) || '新对话'}
                           timeLabel={c.updated_at ? formatConvTime(c.updated_at) : null}
-                          running={c.chat_v2_running}
-                          unread={c.chat_v2_unread}
+                          running={runningByConv[c.id]}
+                          unread={unreadByConv[c.id]}
                           onPress={() => onConvPress(c)}
                         />
                       ))
