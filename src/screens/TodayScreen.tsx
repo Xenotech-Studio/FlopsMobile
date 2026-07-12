@@ -707,11 +707,12 @@ export function TodayScreen() {
           今日 {filteredTodayTasks.length} 个任务
         </Text>
         <TouchableOpacity
-          style={styles.smallCircleBtn}
           onPress={() => setFilterVisible(true)}
           activeOpacity={0.7}
         >
-          <Ionicons name="filter-outline" size={18} color={colors.textSecondary} />
+          <View style={styles.filterBtn}>
+            <Ionicons name="filter-outline" size={20} color={colors.textSecondary} />
+          </View>
         </TouchableOpacity>
       </View>
       {errorMessage ? (
