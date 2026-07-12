@@ -1,5 +1,13 @@
 [
   {
+    "version": "0.1.10",
+    "date": "2026-07-12",
+    "changes": [
+      "对话列表全局实时更新 — inbox SSE 保活重连",
+      "iOS dev/release 双版本共存"
+    ]
+  },
+  {
     "version": "0.1.9",
     "date": "2026-07-11",
     "changes": [
