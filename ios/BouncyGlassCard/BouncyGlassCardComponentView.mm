@@ -93,6 +93,8 @@ static UIColor *_bgc_uiColorFromHex(NSString *hex) {
   [super prepareForRecycle];
   _interactive = YES;
   _cornerRadius = 0;
+  self.layer.cornerRadius = 0;
+  _effectView.layer.cornerRadius = 0;
   _tintColorHex = nil;
   [self refreshEffect];
   [self refreshTap];
@@ -126,6 +128,26 @@ static UIColor *_bgc_uiColorFromHex(NSString *hex) {
   }
 
   [super updateProps:props oldProps:oldProps];
+}
+
+// MARK: - Layout
+
+/* 每次 layout 无条件重申圆角 + clip + effectView frame。
+   动机：+ 按钮的 UIMenu（iOS 26 context menu）弹出后，系统对 composer 所在层做 dim/morph 快照，
+   dismiss 回来时圆角会被丢一帧（"圆角没了、等一下才恢复"）。圆角是静态 prop，updateProps 只在值
+   变化时才写 layer，menu 关闭不会重设。
+   关键：不能用 `if (self.layer.cornerRadius != _cornerRadius)` 跳过——UIMenu 的 morph 动画作用在
+   presentation layer 上，model layer 的 cornerRadius 保持不变，`!=` 检查永远为假 → 重申被跳过、
+   直角残留。改成无条件写：morph-back 每一帧 layout 都把 cornerRadius 重新提交到模型层（并触发
+   presentation 层重算），回来的每一帧就是圆角，消除闪烁。self / effectView 两层都写，masksToBounds
+   兜住 glass 材质填充，顺带把 effectView.frame 对齐 bounds 防错位。 */
+- (void)layoutSubviews {
+  [super layoutSubviews];
+  self.layer.cornerRadius = _cornerRadius;
+  self.layer.masksToBounds = YES;
+  _effectView.layer.cornerRadius = _cornerRadius;
+  _effectView.layer.masksToBounds = YES;
+  _effectView.frame = self.bounds;
 }
 
 // MARK: - Glass effect + tap setup

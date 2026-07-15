@@ -1221,6 +1221,111 @@ export function createChatStyles(c: AppColors) {
     justifyContent: 'center',
     zIndex: 5,
   },
+  /** MenuView / TouchableOpacity 内层：撑满 + 居中「+」图标（承载图标淡出动画）。 */
+  composerPlusBtnInner: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  /** 「发送文件」待发附件 chips 行：贴在 composer 上方，可换行。 */
+  composerAttachRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingBottom: 6,
+  },
+  /** 附件卡片：缩略图 + 文件名/大小 + × 移除。圆角 + 淡底 + 细边，对齐 Desktop attachment-chip-image。 */
+  composerAttachChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    maxWidth: 240,
+    paddingVertical: 6,
+    paddingLeft: 6,
+    paddingRight: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: c.borderMuted,
+    backgroundColor: c.surfaceMuted,
+  },
+  composerAttachChipError: {
+    borderColor: c.danger,
+  },
+  /** 48 方形缩略图 / 文件类型图标容器：圆角、裁切、居中。 */
+  composerAttachThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: 9,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.surface,
+  },
+  composerAttachThumbImg: {
+    width: '100%',
+    height: '100%',
+  },
+  /** 上传中 / 失败：盖在缩略图上的半透明蒙层 + 转圈 / 图标。 */
+  composerAttachThumbOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  composerAttachThumbOverlayErr: {
+    backgroundColor: 'rgba(185,28,28,0.82)',
+  },
+  /** 文件名 + 大小 文本列。 */
+  composerAttachMeta: {
+    flexShrink: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+    gap: 1,
+  },
+  composerAttachName: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: c.textBody,
+  },
+  composerAttachSize: {
+    fontSize: 11,
+    color: c.textSecondary,
+  },
+  composerAttachErrText: {
+    fontSize: 11,
+    color: c.danger,
+  },
+  /** × 移除键：小圆按钮，靠右。 */
+  composerAttachRemove: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  /** Android「+」附件菜单 popover 卡片：位置（left/bottom）由 measure 后 inline 注入。 */
+  composerAttachMenuCard: {
+    position: 'absolute',
+    minWidth: 200,
+    backgroundColor: c.surface,
+    borderRadius: 16,
+    overflow: 'hidden',
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    zIndex: 9999,
+    elevation: 9999,
+    ...shadowMenu,
+  },
+  /** 「+」附件 popover 里 FlowDoc / 发送文件 之间的分隔线：把发送文件分到底部独立组（对齐 Desktop）。
+   *  用中性半透明灰（明暗两主题都清晰），marginVertical 拉开视觉分组。 */
+  composerAttachMenuDivider: {
+    height: 1,
+    backgroundColor: 'rgba(128,128,128,0.2)',
+    marginVertical: 4,
+    marginHorizontal: 8,
+  },
   /** 发送/停止键（iOS）：跟 + 镜像，靠右、跟右半圆同心。 */
   composerSendBtnAbsolute: {
     position: 'absolute',

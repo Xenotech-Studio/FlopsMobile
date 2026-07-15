@@ -1398,7 +1398,9 @@ export class NonLatestRegenerateConfirmError extends Error {
 }
 
 export type ChatV2StreamStart =
-  | { tag: 'new_message'; message: string; flops_refs?: unknown[] }
+  /** message：纯字符串（旧行为），或多模态 content 数组（含 flops_attachment 附件 part）。
+   *  server _normalize_client_chat_message 兼容两者；附件只在数组形态下才被解析。 */
+  | { tag: 'new_message'; message: string | Array<Record<string, unknown>>; flops_refs?: unknown[] }
   | {
       tag: 'regenerate';
       after_user_index?: number;

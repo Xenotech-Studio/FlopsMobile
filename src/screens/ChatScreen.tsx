@@ -6,7 +6,7 @@ import {
   Pressable,
   StyleSheet,
   ScrollView,
-  Keyboard,
+  Image,
   Platform,
   Modal,
   PanResponder,
@@ -106,6 +106,12 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import Svg, { Path } from 'react-native-svg';
 import Clipboard from '@react-native-clipboard/clipboard';
 import { MenuView } from '@react-native-menu/menu';
+import { pick, types, errorCodes, isErrorWithCode } from '@react-native-documents/picker';
+import {
+  launchImageLibrary,
+  launchCamera,
+  type ImagePickerResponse,
+} from 'react-native-image-picker';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { ConversationAttachmentsContext } from '../chat/ConversationAttachmentsContext';
@@ -175,6 +181,14 @@ import {
 } from '../chat/flopsRefs';
 import { UserMessageContent } from '../chat/UserMessageContent';
 import { FlowDocPickerModal } from '../chat/FlowDocPickerModal';
+import {
+  uploadComposerFile,
+  buildOutboundChatMessage,
+  readyAttachmentsToFlops,
+  formatFileSize,
+  fileTypeMeta,
+  type PendingAttachment,
+} from '../chat/composerAttachments';
 import { FlowDocEditCard } from './chat-cards/FlowDocEditCard';
 import { FlowDocPatchCard } from './chat-cards/FlowDocPatchCard';
 import { FlowDocWriteCard } from './chat-cards/FlowDocWriteCard';
@@ -370,20 +384,10 @@ export function ChatScreen({
    * useReanimatedKeyboardAnimation: keyboard frame SharedValue（height **负数** offset 语义,
    * -300 = 键盘 300pt 高）。 */
   const { height: kbAnimHeight } = useReanimatedKeyboardAnimation();
-  /* JS 端的键盘开/关 boolean：JSX conditional rendering 用（隐藏 meta row + composer card
-   * marginBottom 18→8）。SharedValue 在 UI 线程读不到 JSX 条件，所以保留这条 state，但只用
-   * Keyboard.addListener 切 boolean，不再驱动 SharedValue。 */
-  const [keyboardOpen, setKeyboardOpen] = useState(false);
-  useEffect(() => {
-    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const showSub = Keyboard.addListener(showEvt, () => setKeyboardOpen(true));
-    const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardOpen(false));
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
-  }, []);
+  /* 键盘开/关不再走 React state：唯一的消费点（meta row 淡出 + pointerEvents）已改由 kbAnimHeight
+   * SharedValue 在 UI 线程驱动（见 kbMetaRowStyle）。去掉 keyboardOpen state + Keyboard 监听后，
+   * 键盘每次开合不再触发 composer 重渲染 —— 这正是「+」菜单弹出/关闭时 glass card 圆角闪烁的根因
+   * （菜单弹出令键盘收起→setKeyboardOpen(false)、关闭令其弹回→(true)，两次重渲染各闪一帧方角）。 */
   /* 底部 inset：edge-to-edge 下 SafeAreaView 不再吃 bottom（否则导航栏后面糊一条纯白 padding 带、
    * 跟内容割裂）。改成把 inset 让给 bottomOverlay —— 渐变铺到屏幕物理底边、盖在透明导航栏后面，
    * 输入簇 (bottomOverlayInner) 整块抬 navInset 避开三键导航 / 屏底。bottomInsetTotal 按设备安全区
@@ -418,11 +422,18 @@ export function ChatScreen({
     const kbHeight = -kbAnimHeight.value; // 0=收起，正值=键盘高度
     return { bottom: Math.max(0, restingNavInset - kbHeight) };
   });
-  /* Meta row 的淡出：opacity 跟键盘动画绑，键盘弹起 → 渐淡出消失。lib height 是负数，- 它转正。 */
+  /* Meta row 的淡出：opacity 跟键盘动画绑，键盘弹起 → 渐淡出消失。lib height 是负数，- 它转正。
+     pointerEvents 也一并由 SharedValue 驱动（键盘弹起淡出时不接收 touch）：以前靠 keyboardOpen
+     React state 控制，会在键盘每次开合触发整棵 composer 重渲染 —— 「+」菜单弹出使键盘收起、关闭又
+     使其弹回，两次 setState 重渲染那一帧原生 glass card 会闪一下方角（圆角"消失→恢复"）。改成纯
+     worklet 驱动、与重渲染解耦后，菜单开合不再触发 composer 重渲染，圆角不再闪。 */
   const kbMetaRowStyle = useAnimatedStyle(() => {
     const h = -kbAnimHeight.value;
     const ratio = Math.min(h / 50, 1);
-    return { opacity: 1 - ratio };
+    return {
+      opacity: 1 - ratio,
+      pointerEvents: h > 4 ? ('none' as const) : ('auto' as const),
+    };
   });
   /** drawer / mainPane 模式下用 props 覆盖；stack-push 模式下读 route.params */
   const params: ChatRouteParams | undefined =
@@ -560,6 +571,21 @@ export function ChatScreen({
     composerPressScale.value = withSpring(1, { mass: 1, stiffness: 220, damping: 14 });
   }, [composerPressScale]);
   const [composerPickerOpen, setComposerPickerOpen] = useState(false);
+  /** 「发送文件」待发附件（上传中 / 就绪 / 失败）；发送时就绪项进 flops_attachment 数组消息。 */
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const pendingAttachmentsRef = useRef<PendingAttachment[]>([]);
+  useEffect(() => {
+    pendingAttachmentsRef.current = pendingAttachments;
+  }, [pendingAttachments]);
+  /** 「+」附件菜单开合：iOS 走 MenuView（打开时图标淡），Android 走自绘 popover。
+   *  纯 SharedValue 驱动可见性 / 图标淡出 / pointerEvents，不需要额外 boolean state。 */
+  const composerAttachMenuShow = useSharedValue(0);
+  const composerAttachBtnRef = useRef<View>(null);
+  /** popover 落点：top（window 坐标，向上弹）+ left（对齐按钮）。用 top 而非 bottom —— composer
+   *  聚焦时键盘顶起会改变父容器底边，bottom 基准会漂；top 用 measureInWindow 的稳定屏幕坐标。 */
+  const [composerAttachMenuPos, setComposerAttachMenuPos] = useState({ left: 16, top: 0 });
+  /** popover 卡片实测高度（常驻 mount 后 onLayout 写入）：用于算 top = 按钮顶 - 卡片高 - 间距。 */
+  const composerAttachMenuHeightRef = useRef(0);
   /** 编辑 Modal 内是否打开 picker（与主 composer 用同一个 modal 不同 ref 表） */
   const [editPickerOpen, setEditPickerOpen] = useState(false);
   /** picker dismiss 之后是否要把 firstResponder 还给对应 adapter。
@@ -1173,8 +1199,10 @@ export function ChatScreen({
 
   /** 是否有可发送内容：composerDoc 有内容，或语音听写 pending 有文字（pending 只在原生层，
    *  发送时由 handleSendMessage 打断听写并把它并进消息）。用于发送键的 enable / 停止态判定。 */
+  /** 至少一个附件上传就绪 → 即便正文为空也可发送。 */
+  const hasReadyAttachment = pendingAttachments.some((a) => a.status === 'ready' && a.url);
   const composerHasSendableContent =
-    composerStats.hasContent || dictationPendingText.trim().length > 0;
+    composerStats.hasContent || dictationPendingText.trim().length > 0 || hasReadyAttachment;
 
   const canSend = Boolean(
     session && composerStats.hasContent && !loading && !conversationHistoryLoading
@@ -1822,9 +1850,11 @@ export function ChatScreen({
       void enqueueCurrentComposer();
       return;
     }
+    /* 「发送文件」就绪附件：即便正文为空也可发送（对齐 web —— 会自动补一句提示文案）。 */
+    const readyAtts = readyAttachmentsToFlops(pendingAttachmentsRef.current);
     if (
       !session ||
-      (!composerStats.hasContent && !hasDictationTail) ||
+      (!composerStats.hasContent && !hasDictationTail && readyAtts.length === 0) ||
       loading ||
       conversationHistoryLoading
     )
@@ -1837,7 +1867,11 @@ export function ChatScreen({
     /* 确定发送 → 立刻打断听写（cancel 会话 + 丢 native 灰字），pending 文字通过 dictationTail 并进 content。 */
     cancelActiveDictation();
     const nextMessage = (rawContent + dictationTail).trim();
-    if (!nextMessage && flops_refs.length === 0) return;
+    if (!nextMessage && flops_refs.length === 0 && readyAtts.length === 0) return;
+    /* 有附件 → message 走多模态数组（text + flops_attachment parts）；无附件保持纯字符串旧行为。 */
+    const outboundMessage = buildOutboundChatMessage(nextMessage, readyAtts);
+    /* 附件已随本次发送带走 → 清空待发附件 chips。 */
+    if (readyAtts.length > 0) setPendingAttachments([]);
     /* 清空 composer：把 SlateDocument 重置为单段空 paragraph，refDataByKey 清空，再 bump key 强制 remount native */
     setComposerDoc([{ type: 'paragraph', children: [{ text: '' }] }]);
     composerRefDataByKeyRef.current = new Map();
@@ -1852,9 +1886,12 @@ export function ChatScreen({
     setStreamStatus('thinking');
     setMessages((prev) => [
       ...prev,
-      flops_refs.length > 0
-        ? { role: 'user', content: nextMessage, flops_refs }
-        : { role: 'user', content: nextMessage },
+      {
+        role: 'user',
+        content: nextMessage,
+        ...(flops_refs.length > 0 ? { flops_refs } : {}),
+        ...(readyAtts.length > 0 ? { attachments: readyAtts } : {}),
+      },
     ]);
     shouldScrollToEndRef.current = true;
 
@@ -1901,7 +1938,7 @@ export function ChatScreen({
     try {
       const { streamDone, finalText, localBlocks, lastConvId } = await runV2WithHandlers({
         convId,
-        start: { tag: 'new_message', message: nextMessage, flops_refs },
+        start: { tag: 'new_message', message: outboundMessage, flops_refs },
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -2502,6 +2539,184 @@ export function ChatScreen({
     setConvMenuOpen(false);
   }, [convMenuShow]);
 
+  /* ---------- composer「+」附件菜单（引用 FlowDoc 文档 / 发送文件）---------- */
+  /** 菜单打开时把「+」图标淡到 0.4（iOS 让位给 UIMenu / Android 让位给 popover）。 */
+  const composerAttachIconAnimStyle = useAnimatedStyle(() => ({
+    opacity: 1 - composerAttachMenuShow.value * 0.6,
+  }));
+  /** Android popover 卡片：从「+」按钮（左下）向上长出来。 */
+  const composerAttachCardAnimStyle = useAnimatedStyle(() => ({
+    opacity: composerAttachMenuShow.value,
+    transform: [{ scale: 0.6 + composerAttachMenuShow.value * 0.4 }],
+    transformOrigin: 'left bottom',
+    pointerEvents: composerAttachMenuShow.value > 0.5 ? 'auto' : 'none',
+  }));
+  const composerAttachBackdropAnimStyle = useAnimatedStyle(() => ({
+    pointerEvents: composerAttachMenuShow.value > 0.5 ? 'auto' : 'none',
+  }));
+  const openComposerAttachMenu = useCallback(() => {
+    composerAttachMenuShow.value = withTiming(1, { duration: 120 });
+  }, [composerAttachMenuShow]);
+  const closeComposerAttachMenu = useCallback(() => {
+    composerAttachMenuShow.value = withTiming(0, { duration: 120 });
+  }, [composerAttachMenuShow]);
+  /** Android：按下时 measure「+」按钮屏幕坐标，把 popover 贴在按钮**上方**（向上弹，不盖 composer）。
+   *  top = 按钮顶 Y − 卡片高 − 8；卡片高取常驻 onLayout 实测值（未测到时用 2 项估算兜底）。 */
+  const openAndroidComposerAttachMenu = useCallback(() => {
+    const node = composerAttachBtnRef.current;
+    if (node?.measureInWindow) {
+      node.measureInWindow((x, y) => {
+        const menuH = composerAttachMenuHeightRef.current || 112;
+        const top = Math.max(insets.top + 8, y - menuH - 8);
+        setComposerAttachMenuPos({ left: Math.max(8, x), top });
+        openComposerAttachMenu();
+      });
+    } else {
+      openComposerAttachMenu();
+    }
+  }, [openComposerAttachMenu, insets.top]);
+
+  /** iOS MenuView 的两项（SF Symbol image）：对齐 Desktop lucide 图标 —— FlowDoc 用 FileText
+   *  (=doc.text)，发送文件用 Upload (=square.and.arrow.up 托盘+上箭头)。
+   *  imageColor 必填：新架构下 @react-native-menu/menu 对未指定 imageColor 的 action 会默认传 0
+   *  （= 透明色），而 native 端无条件 image.withTintColor(uiColor(imageColor), .alwaysOriginal) →
+   *  SF Symbol 被染成全透明、完全看不见。显式给 textPrimary（随主题翻转）让图标以标签同色渲染。 */
+  /* 「+」菜单向上弹（composer 在屏底 → UIMenu 在按钮上方展开）。iOS 对**向上展开**的 UIMenu 会把
+     数组顺序上下翻转，让首项贴近按钮（落在最下）—— 所以数组顺序要跟期望视觉顺序**相反**：
+       - 发送文件放数组首位 → 翻转后落在视觉**底部**
+       - FlowDoc 裸项放数组末位 → 翻转后落在视觉**顶部**
+     发送文件用 displayInline 分组，UIMenu 在它与 FlowDoc 之间自动画分隔线。
+     （⋯ 菜单在顶栏、向下展开不翻转，所以那边是「裸项在前 / inline 组在后」；这里向上必须反过来。）
+     leaf id 仍是 'flowdoc' / 'file'，onPressAction 分发不受影响。对齐 Desktop「文档 / 分隔线 / 发送文件」。 */
+  const composerAttachMenuActions = useMemo(
+    () => [
+      /* 发送文件拆成三个子项，同放一个 displayInline 组（组内无分隔线，只跟 FlowDoc 之间有）。
+         组内顺序同样受向上翻转影响：数组 [文件, 拍照, 相册] → 视觉自上而下 [相册, 拍照, 文件]。 */
+      {
+        id: 'file-group',
+        title: '',
+        displayInline: true,
+        subactions: [
+          { id: 'file-pick', title: '从文件选择', image: 'square.and.arrow.up', imageColor: colors.textPrimary },
+          { id: 'camera', title: '拍照', image: 'camera', imageColor: colors.textPrimary },
+          { id: 'photo-pick', title: '从相册选择', image: 'photo.on.rectangle', imageColor: colors.textPrimary },
+        ],
+      },
+      { id: 'flowdoc', title: '引用 FlowDoc 文档', image: 'doc.text', imageColor: colors.textPrimary },
+    ],
+    [colors.textPrimary],
+  );
+  const removePendingAttachment = useCallback((id: string) => {
+    setPendingAttachments((prev) => prev.filter((a) => a.id !== id));
+  }, []);
+  /** 单个文件/资源 → 入队 pendingAttachments 并上传到 /api/file_to_url。相册 / 拍照 / 文件三条
+   *  路径共用。文件走 flops_attachment 通道（发送时拼进数组 message），与 FlowDoc 的 flops_refs 无关。 */
+  const enqueueAttachmentUpload = useCallback(
+    (file: { uri: string; name: string; mime: string; size?: number }) => {
+      const sess = session;
+      if (!sess) return;
+      const id = `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const name = (file.name && file.name.trim()) || 'attachment';
+      const mime = (file.mime && file.mime.trim()) || 'application/octet-stream';
+      const size = typeof file.size === 'number' ? file.size : undefined;
+      setPendingAttachments((prev) => [
+        ...prev,
+        { id, name, mime, size, uri: file.uri, status: 'uploading' },
+      ]);
+      void (async () => {
+        try {
+          const { url } = await uploadComposerFile(sess, { uri: file.uri, name, mime });
+          setPendingAttachments((prev) =>
+            prev.map((a) => (a.id === id ? { ...a, status: 'ready', url } : a)),
+          );
+        } catch (e) {
+          setPendingAttachments((prev) =>
+            prev.map((a) =>
+              a.id === id
+                ? { ...a, status: 'error', error: e instanceof Error ? e.message : '上传失败' }
+                : a,
+            ),
+          );
+        }
+      })();
+    },
+    [session],
+  );
+  /** react-native-image-picker 结果 → 逐个资源入队上传（相册 / 拍照共用）。 */
+  const processImagePickerResult = useCallback(
+    (result: ImagePickerResponse, failMsg: string) => {
+      if (result?.didCancel) return;
+      if (result?.errorCode) {
+        setError(result.errorMessage || failMsg);
+        return;
+      }
+      for (const asset of result?.assets || []) {
+        if (!asset?.uri) continue;
+        enqueueAttachmentUpload({
+          uri: asset.uri,
+          name: asset.fileName || `image-${Date.now()}.jpg`,
+          mime: asset.type || 'image/jpeg',
+          size: asset.fileSize,
+        });
+      }
+    },
+    [enqueueAttachmentUpload],
+  );
+  /** 从相册选择（可多选）→ 上传。 */
+  const handlePhotoLibraryPick = useCallback(async () => {
+    if (!session) return;
+    try {
+      const result = await launchImageLibrary({ mediaType: 'photo', selectionLimit: 0 });
+      processImagePickerResult(result, '相册出错');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '打开相册失败');
+    }
+  }, [session, processImagePickerResult]);
+  /** 拍照（不存进系统相册）→ 上传。 */
+  const handleCameraPick = useCallback(async () => {
+    if (!session) return;
+    try {
+      const result = await launchCamera({ mediaType: 'photo', saveToPhotos: false, presentationStyle: 'fullScreen' });
+      processImagePickerResult(result, '相机出错');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '打开相机失败');
+    }
+  }, [session, processImagePickerResult]);
+  /** 从文件选择（系统文件选择器，可多选）→ 上传。 */
+  const handleFilePick = useCallback(async () => {
+    if (!session) return;
+    let picked;
+    try {
+      picked = await pick({ type: [types.allFiles], allowMultiSelection: true });
+    } catch (err) {
+      if (isErrorWithCode(err) && err.code === errorCodes.OPERATION_CANCELED) return;
+      setError(err instanceof Error ? err.message : '选择文件失败');
+      return;
+    }
+    for (const f of (picked || []).filter((x) => x && x.uri)) {
+      enqueueAttachmentUpload({
+        uri: f.uri,
+        name: (f.name && f.name.trim()) || 'attachment',
+        mime: (f.type && f.type.trim()) || 'application/octet-stream',
+        size: typeof f.size === 'number' ? f.size : undefined,
+      });
+    }
+  }, [session, enqueueAttachmentUpload]);
+  /** 菜单项分发（iOS MenuView / Android popover 共用）。 */
+  const onComposerAttachAction = useCallback(
+    (id: string) => {
+      if (id === 'flowdoc') setComposerPickerOpen(true);
+      else if (id === 'photo-pick') void handlePhotoLibraryPick();
+      else if (id === 'camera') void handleCameraPick();
+      else if (id === 'file-pick') void handleFilePick();
+    },
+    [handlePhotoLibraryPick, handleCameraPick, handleFilePick],
+  );
+  const onComposerAttachMenuView = useCallback(
+    (e: { nativeEvent: { event: string } }) => onComposerAttachAction(e.nativeEvent.event),
+    [onComposerAttachAction],
+  );
+
   const handleNewConversation = useCallback(async () => {
     if (loading) return;
     const bidForCreate = String(draftAgentId || '').trim();
@@ -2510,6 +2725,7 @@ export function ChatScreen({
     conversationIdRef.current = '';
     setConversationTitle('');
     setMessages([]);
+    setPendingAttachments([]);
     setServerRawMessages([]);
     setContextSummaries([]);
     setActiveContextSummaryId('');
@@ -4180,32 +4396,124 @@ export function ChatScreen({
                   </Text>
                 </View>
               ) : null}
+              {/* 「发送文件」待发附件 chips（对齐 Desktop）：圆角卡片 + 48 缩略图（图片直接预览 /
+                  文件按类型彩色图标）+ 文件名 + 大小；上传中暗蒙层转圈、失败红蒙层；右上角 × 移除。 */}
+              {pendingAttachments.length > 0 ? (
+                <View style={styles.composerAttachRow}>
+                  {pendingAttachments.map((a) => {
+                    const isImage = a.mime.startsWith('image/') && !!a.uri;
+                    const ft = fileTypeMeta(a.mime, a.name);
+                    const sizeLabel = formatFileSize(a.size);
+                    return (
+                      <View
+                        key={a.id}
+                        style={[
+                          styles.composerAttachChip,
+                          a.status === 'error' ? styles.composerAttachChipError : null,
+                        ]}
+                      >
+                        <View
+                          style={[
+                            styles.composerAttachThumb,
+                            !isImage ? { backgroundColor: ft.tint } : null,
+                          ]}
+                        >
+                          {isImage ? (
+                            <Image source={{ uri: a.uri }} style={styles.composerAttachThumbImg} />
+                          ) : (
+                            <Ionicons
+                              name={ft.icon as React.ComponentProps<typeof Ionicons>['name']}
+                              size={22}
+                              color={ft.color}
+                            />
+                          )}
+                          {a.status === 'uploading' ? (
+                            <View style={styles.composerAttachThumbOverlay}>
+                              <ActivityIndicator size="small" color="#ffffff" />
+                            </View>
+                          ) : null}
+                          {a.status === 'error' ? (
+                            <View
+                              style={[
+                                styles.composerAttachThumbOverlay,
+                                styles.composerAttachThumbOverlayErr,
+                              ]}
+                            >
+                              <Ionicons name="alert-circle" size={20} color="#ffffff" />
+                            </View>
+                          ) : null}
+                        </View>
+                        <View style={styles.composerAttachMeta}>
+                          <Text numberOfLines={1} style={styles.composerAttachName}>
+                            {a.name}
+                          </Text>
+                          {a.status === 'error' ? (
+                            <Text numberOfLines={1} style={styles.composerAttachErrText}>
+                              {a.error || '上传失败'}
+                            </Text>
+                          ) : a.status === 'uploading' ? (
+                            <Text numberOfLines={1} style={styles.composerAttachSize}>
+                              上传中…
+                            </Text>
+                          ) : sizeLabel ? (
+                            <Text numberOfLines={1} style={styles.composerAttachSize}>
+                              {sizeLabel}
+                            </Text>
+                          ) : null}
+                        </View>
+                        <TouchableOpacity
+                          onPress={() => removePendingAttachment(a.id)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          accessibilityLabel="移除附件"
+                          activeOpacity={0.7}
+                          style={styles.composerAttachRemove}
+                        >
+                          <Ionicons name="close" size={13} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : null}
               {(() => {
                 /* iOS + Android 都有右下角发送/停止键（对齐桌面/web）→ 左侧 + 永远只做"引用文档"，
                    不再兼任停止（停止交给发送键的停止态）。 */
                 const showSendBtn = Platform.OS === 'ios' || Platform.OS === 'android';
-                const renderPlusBtn = (
+                /* 「+」是附件菜单触发器：点开 → 引用 FlowDoc 文档 / 发送文件（停止交给右下角发送键的停止态）。
+                   iOS 走原生 MenuView（打开时图标淡）；Android 走自绘 popover。 */
+                const plusDisabled = !session || conversationHistoryLoading;
+                const plusIcon = (
+                  <Reanimated.View style={composerAttachIconAnimStyle}>
+                    <Ionicons name="add" size={22} color={colors.textSecondary} />
+                  </Reanimated.View>
+                );
+                const renderPlusBtn = plusDisabled ? (
+                  <View style={[styles.composerPlusBtnAbsolute, { opacity: 0.4 }]}>
+                    <Ionicons name="add" size={22} color={colors.textSecondary} />
+                  </View>
+                ) : Platform.OS === 'ios' ? (
+                  <MenuView
+                    title=""
+                    style={styles.composerPlusBtnAbsolute}
+                    actions={composerAttachMenuActions as unknown as any[]}
+                    onPressAction={onComposerAttachMenuView}
+                    onOpenMenu={openComposerAttachMenu}
+                    onCloseMenu={closeComposerAttachMenu}
+                    shouldOpenOnLongPress={false}
+                  >
+                    <View style={styles.composerPlusBtnInner}>{plusIcon}</View>
+                  </MenuView>
+                ) : (
                   <TouchableOpacity
                     style={styles.composerPlusBtnAbsolute}
-                    onPress={
-                      loading && !showSendBtn
-                        ? handleStop
-                        : () => setComposerPickerOpen(true)
-                    }
-                    disabled={
-                      (showSendBtn || !loading) && (!session || conversationHistoryLoading)
-                    }
-                    accessibilityLabel={
-                      loading && !showSendBtn ? '停止' : '引用 FlowDoc 文档'
-                    }
+                    onPress={openAndroidComposerAttachMenu}
+                    accessibilityLabel="添加附件"
                     activeOpacity={0.7}
                     hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                   >
-                    <Ionicons
-                      name={loading && !showSendBtn ? 'stop' : 'add'}
-                      size={22}
-                      color={loading && !showSendBtn ? colors.danger : colors.textSecondary}
-                    />
+                    <View ref={composerAttachBtnRef} style={styles.composerPlusBtnInner}>
+                      {plusIcon}
+                    </View>
                   </TouchableOpacity>
                 );
                 /* 右下角发送键（仅 iOS，跟右侧半圆同心）：
@@ -4498,14 +4806,12 @@ export function ChatScreen({
                       </Reanimated.View>
                     )}
                     {/* 模型 / 助手 chips：永远在 card 外的绝对 meta row。键盘弹起时由 kbMetaRowStyle
-                     * 平滑淡出（opacity 1→0），pointerEvents 由 keyboardOpen JS state 控制（不可见
-                     * 时不接收 touch）。原本 `&& !keyboardOpen ? ... : null` 的瞬间 unmount 会跟
-                     * composer marginBottom 切换一起造成抖动，所以这里改成 always-render + 透明度。 */}
+                     * 平滑淡出（opacity 1→0）+ 关闭 pointerEvents（不可见时不接收 touch）——两者都在
+                     * kbMetaRowStyle 里由 kbAnimHeight worklet 驱动，不再依赖 keyboardOpen React state
+                     * （避免键盘/菜单开合触发 composer 重渲染 → glass 圆角闪烁）。always-render + 透明度
+                     * 避免瞬间 unmount 抖动。 */}
                     {session ? (
-                      <Reanimated.View
-                        style={[styles.composerMetaRowAbsolute, kbMetaRowStyle]}
-                        pointerEvents={keyboardOpen ? 'none' : 'auto'}
-                      >
+                      <Reanimated.View style={[styles.composerMetaRowAbsolute, kbMetaRowStyle]}>
                         <View style={styles.composerMetaPills}>{renderChips}</View>
                         {renderUsage}
                       </Reanimated.View>
@@ -4707,6 +5013,75 @@ export function ChatScreen({
         }
       }}
     />
+
+    {/* Android：composer「+」附件菜单 popover（iOS 走 MenuView native）。常驻 mount + SharedValue 驱动，
+     *  卡片从「+」按钮（左下）向上长出来；backdrop 透明点空白关。 */}
+    {Platform.OS === 'android' ? (
+      <>
+        <Reanimated.View
+          style={[StyleSheet.absoluteFill, styles.convMenuBackdrop, composerAttachBackdropAnimStyle]}
+        >
+          <Pressable style={StyleSheet.absoluteFill} onPress={closeComposerAttachMenu} />
+        </Reanimated.View>
+        <Reanimated.View
+          onLayout={(e) => {
+            composerAttachMenuHeightRef.current = e.nativeEvent.layout.height;
+          }}
+          style={[
+            styles.composerAttachMenuCard,
+            { left: composerAttachMenuPos.left, top: composerAttachMenuPos.top },
+            composerAttachCardAnimStyle,
+          ]}
+        >
+          <TouchableOpacity
+            style={styles.convMenuItem}
+            activeOpacity={0.6}
+            onPress={() => {
+              closeComposerAttachMenu();
+              onComposerAttachAction('flowdoc');
+            }}
+          >
+            <Ionicons name="document-text-outline" size={20} color={colors.textPrimary} />
+            <Text style={styles.convMenuItemText}>引用 FlowDoc 文档</Text>
+          </TouchableOpacity>
+          <View style={styles.composerAttachMenuDivider} />
+          {/* 发送文件三子项（组内无分隔线）。Android 自绘 popover 按渲染顺序自上而下，无 UIMenu 翻转。 */}
+          <TouchableOpacity
+            style={styles.convMenuItem}
+            activeOpacity={0.6}
+            onPress={() => {
+              closeComposerAttachMenu();
+              onComposerAttachAction('photo-pick');
+            }}
+          >
+            <Ionicons name="images-outline" size={20} color={colors.textPrimary} />
+            <Text style={styles.convMenuItemText}>从相册选择</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.convMenuItem}
+            activeOpacity={0.6}
+            onPress={() => {
+              closeComposerAttachMenu();
+              onComposerAttachAction('camera');
+            }}
+          >
+            <Ionicons name="camera-outline" size={20} color={colors.textPrimary} />
+            <Text style={styles.convMenuItemText}>拍照</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.convMenuItem}
+            activeOpacity={0.6}
+            onPress={() => {
+              closeComposerAttachMenu();
+              onComposerAttachAction('file-pick');
+            }}
+          >
+            <Ionicons name="share-outline" size={20} color={colors.textPrimary} />
+            <Text style={styles.convMenuItemText}>从文件选择</Text>
+          </TouchableOpacity>
+        </Reanimated.View>
+      </>
+    ) : null}
 
     {/* Android：⋯ 菜单。设计跟 TodayScreen FAB 菜单同款：
      *  - 不用 Modal（消除 native dialog 启动延迟）
