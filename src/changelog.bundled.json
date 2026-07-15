@@ -1,5 +1,12 @@
 [
   {
+    "version": "0.1.11",
+    "date": "2026-07-14",
+    "changes": [
+      "composer + 附件菜单 — FlowDoc 引用 + 相册/拍照/文件发送"
+    ]
+  },
+  {
     "version": "0.1.10",
     "date": "2026-07-12",
     "changes": [
