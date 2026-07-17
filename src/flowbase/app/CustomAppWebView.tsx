@@ -28,6 +28,12 @@ export type CustomAppWebViewProps = {
   /** 本 Base 的表（名字→id 解析用；锁在本 Base 内）。 */
   tables: Table[];
   contentBottomInset?: number;
+  /**
+   * 全屏模式（类小程序 Applet）：WebView 直接 flex:1 铺满，由 App 内部滚动，
+   * 不走「自测高 + 外层 ScrollView」那套（那套是给 FlowBase 页内嵌入用的）。
+   * 缺省 false，保持页内嵌入行为不变。
+   */
+  fillHeight?: boolean;
 };
 
 // 注入 WebView 的 SDK shim：RN 版走 ReactNativeWebView.postMessage + window.__flowbaseDeliver 回传。
@@ -94,7 +100,7 @@ function splitOrderBy(orderBy: unknown): { sort: string | null; order: string } 
   return { sort: null, order: 'asc' };
 }
 
-export function CustomAppWebView({ baseId, appId, tables, contentBottomInset }: CustomAppWebViewProps) {
+export function CustomAppWebView({ baseId, appId, tables, contentBottomInset, fillHeight }: CustomAppWebViewProps) {
   const { session } = useSession();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -265,25 +271,35 @@ export function CustomAppWebView({ baseId, appId, tables, contentBottomInset }: 
     );
   }
 
+  const webView = (
+    <WebView
+      ref={webRef}
+      source={{ html }}
+      originWhitelist={['about:*']}
+      javaScriptEnabled
+      onMessage={onMessage}
+      // 全屏模式让 App 自己滚；页内嵌入模式关滚动，由外层 ScrollView + 自测高承载。
+      scrollEnabled={!!fillHeight}
+      setSupportMultipleWindows={false}
+      allowFileAccess={false}
+      allowUniversalAccessFromFileURLs={false}
+      // 禁止 App 内导航到外部（放行 about:/data: 等初始加载，拒绝 http(s)/file）；CSP 已封网，双保险。
+      onShouldStartLoadWithRequest={(req) => !/^(https?|file):/i.test(req.url || '')}
+      style={fillHeight ? styles.webFill : [styles.web, { height }]}
+    />
+  );
+
+  // 全屏 Applet：WebView 直接铺满，忽略自测高度（App 内部滚动）。
+  if (fillHeight) {
+    return <View style={styles.root}>{webView}</View>;
+  }
+
   return (
     <ScrollView
       style={styles.root}
       contentContainerStyle={[styles.content, contentBottomInset ? { paddingBottom: contentBottomInset + 24 } : null]}
     >
-      <WebView
-        ref={webRef}
-        source={{ html }}
-        originWhitelist={['about:*']}
-        javaScriptEnabled
-        onMessage={onMessage}
-        scrollEnabled={false}
-        setSupportMultipleWindows={false}
-        allowFileAccess={false}
-        allowUniversalAccessFromFileURLs={false}
-        // 禁止 App 内导航到外部（放行 about:/data: 等初始加载，拒绝 http(s)/file）；CSP 已封网，双保险。
-        onShouldStartLoadWithRequest={(req) => !/^(https?|file):/i.test(req.url || '')}
-        style={[styles.web, { height }]}
-      />
+      {webView}
     </ScrollView>
   );
 }
@@ -293,6 +309,7 @@ function createStyles(c: AppColors) {
     root: { flex: 1, backgroundColor: c.background },
     content: { padding: 12 },
     web: { width: '100%', backgroundColor: c.surface, borderRadius: 8 },
+    webFill: { flex: 1, width: '100%', backgroundColor: c.surface },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
     hint: { fontSize: 13, color: c.placeholder },
   });

@@ -27,6 +27,7 @@ import { PushTokenLifecycle } from './src/notifications/PushTokenLifecycle';
 import { PresenceReporter } from './src/notifications/PresenceReporter';
 import { TtsRealtimeController } from './src/components/TtsRealtimeController';
 import { DeepLinkRouter } from './src/notifications/DeepLinkRouter';
+import { AppletLinkRouter } from './src/navigation/AppletLinkRouter';
 import { UpgradeRequiredOverlay } from './src/components/UpgradeRequiredOverlay';
 import { EncryptionReloginOverlay } from './src/components/EncryptionReloginOverlay';
 import { BroadcastModeOverlay, BroadcastInsetProvider } from './src/components/BroadcastModeOverlay';
@@ -96,6 +97,7 @@ function AppContent() {
               <TaskProvider>
                 <RootNavigator />
                 <DeepLinkRouter />
+                <AppletLinkRouter />
               </TaskProvider>
             </BottomSheetModalProvider>
           </NavigationContainer>

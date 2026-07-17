@@ -369,3 +369,18 @@ export async function getApp(session: Session, baseId: string, appId: string): P
   );
   return data.app;
 }
+
+/**
+ * GET /apps/{app_id}/base —— 反查 app 所属的 base_id（app.id 全局唯一）。
+ * 用于全屏 Applet 的 deep-link：只知道 app_id 时先解析出它属于哪个 Base。
+ * 后端仅要求已登录、不校验 owner；app 不存在/软删返回 404（→ 抛 FlowBaseApiError）。
+ */
+export async function getAppBase(session: Session, appId: string): Promise<string> {
+  const data = await request<Envelope<{ base_id?: string }>>(
+    session,
+    'GET',
+    `/apps/${encodeURIComponent(appId)}/base`,
+  );
+  if (!data.base_id) throw new FlowBaseApiError('反查失败：未返回 base_id', 500, data);
+  return data.base_id;
+}

@@ -42,6 +42,13 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
+        <!-- 深链：flops://applet/{appId} → 全屏 Applet（singleTask + 下方 onNewIntent 支持热启动） -->
+        <intent-filter>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="flops" />
+        </intent-filter>
       </activity>
       <!-- 实时语音播报前台服务：保活进程 + MediaSession 锁屏通知，后台/锁屏继续朗读 -->
       <service

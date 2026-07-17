@@ -1,4 +1,5 @@
 import UIKit
+import React  // RCTLinkingManager：把 URL scheme 深链（flops://…）转发给 RN 的 Linking
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   var window: UIWindow?
@@ -30,5 +31,16 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
       in: window,
       launchOptions: nil
     )
+
+    // 冷启动深链：应用因 flops:// url 被拉起时，url 在 connectionOptions 里 → 转交
+    // RCTLinkingManager，RN 侧 Linking.getInitialURL() 才拿得到。
+    if !connectionOptions.urlContexts.isEmpty {
+      RCTLinkingManager.scene(scene, openURLContexts: connectionOptions.urlContexts)
+    }
+  }
+
+  // 热启动 / 前台深链：系统把 flops:// url 投递到 scene → 转给 RN Linking 的 'url' 事件。
+  func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+    RCTLinkingManager.scene(scene, openURLContexts: URLContexts)
   }
 }

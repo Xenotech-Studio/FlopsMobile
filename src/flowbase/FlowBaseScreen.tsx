@@ -31,6 +31,9 @@ import { RecordSheet } from './views/RecordSheet';
 import { DashboardView } from './dashboard/DashboardView';
 import { CustomAppWebView } from './app/CustomAppWebView';
 import { FB_ROW_HEIGHT, FB_ROW_RADIUS } from './constants';
+import { useNavigation } from '@react-navigation/native';
+import type { StackNavigationProp } from '@react-navigation/stack';
+import type { RootStackParamList } from '../navigation/types';
 
 type PageKind = 'table' | 'dashboard' | 'app';
 type PageEntry = { kind: PageKind; id: string; name: string };
@@ -74,6 +77,7 @@ export function FlowBaseScreen({
   const { session } = useSession();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
 
   const [base, setBase] = useState<Base | null>(null);
   const [tables, setTables] = useState<Table[]>([]);
@@ -156,6 +160,10 @@ export function FlowBaseScreen({
   const activeTableId = activePage?.kind === 'table' ? activePage.id : null;
   const activeDashId = activePage?.kind === 'dashboard' ? activePage.id : null;
   const activeAppId = activePage?.kind === 'app' ? activePage.id : null;
+  const activeApp = useMemo(
+    () => (activeAppId ? apps.find((a) => a.id === activeAppId) ?? null : null),
+    [apps, activeAppId],
+  );
 
   // 切到别的表 → 回到该表默认视图
   useEffect(() => {
@@ -333,12 +341,33 @@ export function FlowBaseScreen({
       {activePage?.kind === 'dashboard' && activeDashId ? (
         <DashboardView baseId={baseId!} dashId={activeDashId} contentBottomInset={contentBottomInset} />
       ) : activePage?.kind === 'app' && activeAppId ? (
-        <CustomAppWebView
-          baseId={baseId!}
-          appId={activeAppId}
-          tables={tables}
-          contentBottomInset={contentBottomInset}
-        />
+        activeApp?.config?.platform === 'mobile' ? (
+          // 手机版 app：不页内嵌入，改引导到全屏 Applet（类小程序体验）
+          <View style={styles.appletCard}>
+            <Ionicons name="phone-portrait-outline" size={34} color={colors.textMuted} />
+            <Text style={styles.appletCardText}>该应用是手机版，点击全屏打开</Text>
+            <TouchableOpacity
+              style={styles.appletCardBtn}
+              onPress={() =>
+                navigation.navigate('Applet', {
+                  appId: activeAppId,
+                  baseId: baseId!,
+                  appName: activeApp?.name,
+                })
+              }
+              activeOpacity={0.85}
+            >
+              <Text style={styles.appletCardBtnText}>打开</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <CustomAppWebView
+            baseId={baseId!}
+            appId={activeAppId}
+            tables={tables}
+            contentBottomInset={contentBottomInset}
+          />
+        )
       ) : tables.length === 0 ? (
         <View style={styles.centered}>
           <Text style={styles.hint}>这个 Base 还没有数据表</Text>
@@ -473,5 +502,22 @@ function createStyles(c: AppColors) {
       backgroundColor: c.surface,
     },
     retryText: { fontSize: 13, color: c.textPrimary },
+    // 手机版 app 引导卡：居中图标 + 说明 + 打开按钮
+    appletCard: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 32,
+      gap: 14,
+    },
+    appletCardText: { fontSize: 14, color: c.textMuted, textAlign: 'center' },
+    appletCardBtn: {
+      paddingVertical: 9,
+      paddingHorizontal: 28,
+      borderRadius: 18,
+      backgroundColor: c.primary,
+    },
+    // c.background 作 on-primary：亮色白字压深底、暗色深字压亮底，两主题都够对比
+    appletCardBtnText: { fontSize: 14, fontWeight: '600', color: c.background },
   });
 }

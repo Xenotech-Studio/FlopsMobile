@@ -27,6 +27,7 @@ import { SlateRNSpikeScreen } from '../screens/SlateRNSpikeScreen';
 import { DevTestScreen } from '../screens/DevTestScreen';
 import { RecordingLibraryScreen } from '../screens/RecordingLibraryScreen';
 import { DocPreviewScreen } from '../screens/docs/DocPreviewScreen';
+import { AppletScreen } from '../flowbase/app/AppletScreen';
 import type { RootStackParamList } from './types';
 import { useAppTheme } from '../context/ThemeContext';
 
@@ -178,6 +179,16 @@ export function RootNavigator() {
       <Stack.Screen
         name="DocPreview"
         component={DocPreviewRoute}
+        options={{
+          headerShown: false,
+          gestureEnabled: true,
+          cardStyleInterpolator: rightCardStyleInterpolator,
+        }}
+      />
+      {/* 全屏 Applet（类小程序）：整页右滑入 + 左缘滑回。route.params: {appId, baseId?, appName?}。 */}
+      <Stack.Screen
+        name="Applet"
+        component={AppletScreen}
         options={{
           headerShown: false,
           gestureEnabled: true,

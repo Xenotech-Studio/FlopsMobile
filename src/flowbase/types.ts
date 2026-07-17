@@ -144,6 +144,8 @@ export type App = {
   name: string;
   config?: {
     source?: string;
+    /** 'mobile' = 手机版 app（全屏 Applet 承载）；缺省/'web' = 页内嵌入。 */
+    platform?: 'web' | 'mobile' | string;
     runtime?: unknown;
     permissions?: unknown;
     tables_declared?: string[];
