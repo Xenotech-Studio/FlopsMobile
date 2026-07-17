@@ -49,6 +49,9 @@ target 'FlopsMobile' do
   # In-app native Fabric view: 通用 Liquid Glass card 容器（UIVisualEffectView + UIGlassEffect）
   pod 'BouncyGlassCard', :path => './BouncyGlassCard'
 
+  # In-app native Fabric view: 全屏 Applet 右上角胶囊（CALayer 绘制的三圆点 | 圆环，两半可点）
+  pod 'AppletCapsule', :path => './AppletCapsule'
+
   post_install do |installer|
     react_native_post_install(
       installer,

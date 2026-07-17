@@ -1,4 +1,25 @@
 PODS:
+  - AppletCapsule (0.1.10):
+    - hermes-engine
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - ReactNativeDependencies
+    - Yoga
   - Argon2Swift (1.0.4)
   - BouncyButton (0.1.10):
     - hermes-engine
@@ -2606,6 +2627,7 @@ PODS:
   - Yoga (0.0.0)
 
 DEPENDENCIES:
+  - AppletCapsule (from `./AppletCapsule`)
   - BouncyButton (from `./BouncyButton`)
   - BouncyGlassCard (from `./BouncyGlassCard`)
   - BouncySegmentedControl (from `./BouncySegmentedControl`)
@@ -2719,6 +2741,8 @@ SPEC REPOS:
     - SwiftUIIntrospect
 
 EXTERNAL SOURCES:
+  AppletCapsule:
+    :path: "./AppletCapsule"
   BouncyButton:
     :path: "./BouncyButton"
   BouncyGlassCard:
@@ -2928,6 +2952,7 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native/ReactCommon/yoga"
 
 SPEC CHECKSUMS:
+  AppletCapsule: db6972c357262b18d1bebcabe1ecf3eb9938ba61
   Argon2Swift: 295b8bde7ba61434f227f5610b8813c42e866f74
   BouncyButton: c87f455546579f83a9103db3d494090bc9f6a280
   BouncyGlassCard: 8b99c8f874b437ba072071bab8725e89d733ef79
@@ -3017,7 +3042,7 @@ SPEC CHECKSUMS:
   React-utils: d9660d29b23d446de68caa0e6cb9260c8052be3b
   React-webperformancenativemodule: cb75c8543846cf1d22662cd97f41d3d3231f8607
   ReactAppDependencyProvider: 6b7e8d8d974ed13fb66698d82c30c5e70c1f7d3a
-  ReactCodegen: 3b5f6f3aaa0046e06f5f507602c31d1b7454e438
+  ReactCodegen: 20e1be92535fa4341ffb7f2c3c1e09f4f31daadf
   ReactCommon: 29d84e7853265c34c504a79f8670d0b18af74b27
   ReactNativeDependencies: 2b3750b9df9552f4fbf0a3d6b9bdaec17551fc49
   RNArgon2: 138efccb99e2e3047309cdfecb989d4ee3a2f74e
@@ -3035,6 +3060,6 @@ SPEC CHECKSUMS:
   SwiftUIIntrospect: fee9aa07293ee280373a591e1824e8ddc869ba5d
   Yoga: b8206e6746bd28c028572774cece66d5348240c1
 
-PODFILE CHECKSUM: bec79c7c85cfc92817710359fb6a74b7ef5366b4
+PODFILE CHECKSUM: 779ef27e51527b73281c70be65ce4e2431ac0137
 
 COCOAPODS: 1.16.2

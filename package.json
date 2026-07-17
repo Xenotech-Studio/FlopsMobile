@@ -106,7 +106,8 @@
         "BouncyButtonView": "BouncyButtonViewComponentView",
         "BouncySegmentedControl": "BouncySegmentedControlComponentView",
         "BouncyTabBar": "BouncyTabBarComponentView",
-        "BouncyGlassCard": "BouncyGlassCardComponentView"
+        "BouncyGlassCard": "BouncyGlassCardComponentView",
+        "AppletCapsuleView": "AppletCapsuleViewComponentView"
       }
     }
   },

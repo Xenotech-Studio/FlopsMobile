@@ -31,12 +31,55 @@ export type CustomAppWebViewProps = {
   /**
    * 全屏模式（类小程序 Applet）：WebView 直接 flex:1 铺满，由 App 内部滚动，
    * 不走「自测高 + 外层 ScrollView」那套（那套是给 FlowBase 页内嵌入用的）。
-   * 缺省 false，保持页内嵌入行为不变。
+   * 缺省 false，保持页内嵌入行为不变。同时也是安全区自动内缩的开关（见 shim __SAFE_AREA_AUTO__）。
    */
   fillHeight?: boolean;
+  /**
+   * 设备信息（安全区 / 胶囊 / DPR…）。全屏 Applet 由 AppletScreen 用真实 insets 计算后传入，注入到
+   * app 的 `--fb-*` CSS 变量 + `FlowBaseSDK.device`。缺省（页内嵌入）用 ZERO_DEVICE（全 0、无胶囊）。
+   */
+  device?: FlowBaseDevice;
+};
+
+// 设备信息（与桌面 AppView.jsx 语义一比一对齐）。
+export type FlowBaseCapsule = {
+  /** 相对安全区顶的 y（=距安全区顶的间隙） */
+  top: number;
+  height: number;
+  /** 距屏幕左沿的 x（左/右两端） */
+  left: number;
+  right: number;
+  width: number;
+} | null;
+
+export type FlowBaseDevice = {
+  env: string; // 'native' | 'preview'
+  pixelRatio: number;
+  safeAreaInsets: { top: number; right: number; bottom: number; left: number };
+  statusBarHeight: number;
+  homeIndicatorHeight: number;
+  keyboardHeight: number;
+  capsule: FlowBaseCapsule;
+};
+
+// 缺省零安全区（页内嵌入 / 无设备信息时用）——全 0、无胶囊、env:'preview'。
+const ZERO_DEVICE: FlowBaseDevice = {
+  env: 'preview',
+  pixelRatio: 1,
+  safeAreaInsets: { top: 0, right: 0, bottom: 0, left: 0 },
+  statusBarHeight: 0,
+  homeIndicatorHeight: 0,
+  keyboardHeight: 0,
+  capsule: null,
 };
 
 // 注入 WebView 的 SDK shim：RN 版走 ReactNativeWebView.postMessage + window.__flowbaseDeliver 回传。
+// 设备信息（安全区/胶囊/DPR…）与桌面 AppView 完全同构：
+//   · 初值由 buildHtml 把 __*__ 占位替换成真实数值烘入（首帧即就位、不闪）；
+//   · 后续变化（转屏/键盘）由原生侧 webRef.injectJavaScript(window.__flowbaseSetDevice(...)) 推送；
+//   · CSS 变量 --fb-*（给 CSS 写 var()）与 window.FlowBaseSDK.device（给 JS 读）是同一份 _device 的两种投影。
+// __SAFE_AREA_AUTO__ 为 true（全屏 Applet）时，还会把上下安全区 padding 自动贴到 <html>、由 <body> 接管
+// 滚动——多数 app 不写任何 CSS 也自动避让状态栏 / home indicator（想全出血：html{padding:0!important}）。
 const SDK_SHIM = `(function(){
   var seq=0, pending={};
   function rpc(method,args){
@@ -51,6 +94,57 @@ const SDK_SHIM = `(function(){
     var p=pending[d.id]; if(!p)return; delete pending[d.id];
     if(d.error)p.reject(new Error(d.error)); else p.resolve(d.result);
   };
+  // —— 设备信息 ——（占位由 buildHtml 烘入）
+  var _device={
+    env:__DEVICE_ENV__,
+    pixelRatio:__DEVICE_PIXEL_RATIO__,
+    safeAreaInsets:{top:__SAFE_AREA_TOP__,right:__SAFE_AREA_RIGHT__,bottom:__SAFE_AREA_BOTTOM__,left:__SAFE_AREA_LEFT__},
+    statusBarHeight:__STATUS_BAR_HEIGHT__,
+    homeIndicatorHeight:__HOME_INDICATOR_HEIGHT__,
+    keyboardHeight:__KEYBOARD_HEIGHT__,
+    capsule:__DEVICE_CAPSULE__
+  };
+  var _safeAreaAuto=__SAFE_AREA_AUTO__;
+  var _deviceListeners=[];
+  function _applyDeviceCSS(d){
+    var root=document.documentElement; if(!root)return;
+    var s=d.safeAreaInsets||{};
+    root.style.setProperty('--fb-safe-area-top',(s.top||0)+'px');
+    root.style.setProperty('--fb-safe-area-right',(s.right||0)+'px');
+    root.style.setProperty('--fb-safe-area-bottom',(s.bottom||0)+'px');
+    root.style.setProperty('--fb-safe-area-left',(s.left||0)+'px');
+    root.style.setProperty('--fb-status-bar-height',(d.statusBarHeight||0)+'px');
+    root.style.setProperty('--fb-home-indicator-height',(d.homeIndicatorHeight||0)+'px');
+    root.style.setProperty('--fb-keyboard-height',(d.keyboardHeight||0)+'px');
+    root.style.setProperty('--fb-pixel-ratio',String(d.pixelRatio||1));
+    // 右上角胶囊：top 相对安全区顶、left/right 距屏幕左沿；无胶囊 → 全 0（app 用 var(--fb-capsule-*,0px) 降级）。
+    var c=d.capsule||{};
+    root.style.setProperty('--fb-capsule-top',(c.top||0)+'px');
+    root.style.setProperty('--fb-capsule-height',(c.height||0)+'px');
+    root.style.setProperty('--fb-capsule-left',(c.left||0)+'px');
+    root.style.setProperty('--fb-capsule-right',(c.right||0)+'px');
+  }
+  // 全屏 Applet 才做：<html> 占满 viewport + 上下安全区 padding + 关 viewport 滚动，<body> 接管滚动。
+  // 页内嵌入(_safeAreaAuto=false)不动 html/body，保持外层 ScrollView 自测高。
+  function _applySafeArea(){
+    var b=document.body; if(!b)return;
+    var root=document.documentElement;
+    var cs=getComputedStyle(root);
+    root.style.height='100%'; root.style.width='100%'; root.style.boxSizing='border-box'; root.style.overflow='hidden';
+    root.style.paddingTop=cs.getPropertyValue('--fb-safe-area-top')||'0px';
+    root.style.paddingBottom=cs.getPropertyValue('--fb-safe-area-bottom')||'0px';
+    b.style.minHeight='100%'; b.style.boxSizing='border-box'; b.style.overflow='auto';
+  }
+  _applyDeviceCSS(_device);
+  if(_safeAreaAuto){
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',_applySafeArea); else _applySafeArea();
+  }
+  // 原生侧推送设备信息变化（转屏/键盘/尺寸）：更新 _device → 刷 CSS 变量(+安全区内缩) → 通知 onChange 订阅者。
+  window.__flowbaseSetDevice=function(d){
+    if(!d||typeof d!=='object')return;
+    _device=d; _applyDeviceCSS(_device); if(_safeAreaAuto)_applySafeArea();
+    for(var i=0;i<_deviceListeners.length;i++){ try{_deviceListeners[i](_device);}catch(e){} }
+  };
   function tableHandle(name){return{
     list:function(){return rpc('table.list',{name:name});},
     query:function(opts){return rpc('table.query',{name:name,opts:opts||{}});},
@@ -60,7 +154,28 @@ const SDK_SHIM = `(function(){
     list:function(){return rpc('dashboard.list',{});},
     results:function(){return rpc('dashboard.results',{name:name});}
   };}
-  window.FlowBaseSDK={version:1,baseId:__BASE_ID__,table:function(n){return tableHandle(n);},dashboard:function(n){return dashboardHandle(n);}};
+  window.FlowBaseSDK={
+    version:1,
+    baseId:__BASE_ID__,
+    table:function(n){return tableHandle(n);},
+    dashboard:function(n){return dashboardHandle(n);},
+    // 设备信息：同步只读快照 + onChange 订阅（首帧即可同步读，勿 await）。安全区读这里或 var(--fb-*)。
+    device:{
+      get env(){return _device.env;},
+      get pixelRatio(){return _device.pixelRatio;},
+      get safeAreaInsets(){return _device.safeAreaInsets;},
+      get statusBarHeight(){return _device.statusBarHeight;},
+      get homeIndicatorHeight(){return _device.homeIndicatorHeight;},
+      get keyboardHeight(){return _device.keyboardHeight;},
+      get capsule(){return _device.capsule;},
+      get:function(){return _device;},
+      onChange:function(cb){
+        if(typeof cb!=='function')return function(){};
+        _deviceListeners.push(cb);
+        return function(){_deviceListeners=_deviceListeners.filter(function(f){return f!==cb;});};
+      }
+    }
+  };
   function reportHeight(){
     var h=Math.max(document.body?document.body.scrollHeight:0,document.documentElement?document.documentElement.scrollHeight:0);
     window.ReactNativeWebView.postMessage(JSON.stringify({__flowbase_resize:true,height:h}));
@@ -70,8 +185,37 @@ const SDK_SHIM = `(function(){
   setTimeout(reportHeight,50);
 })();`;
 
-function buildHtml(source: string, baseId: string): string {
-  const shim = SDK_SHIM.replace('__BASE_ID__', JSON.stringify(String(baseId || '')));
+// 把 shim 里的占位符替换成真实/模拟数值（与桌面 buildSrcDoc 同风格；全局替换避免遗漏）。
+function bakeShim(baseId: string, device: FlowBaseDevice | undefined, safeAreaAuto: boolean): string {
+  const dev = device || ZERO_DEVICE;
+  const sa = dev.safeAreaInsets || { top: 0, right: 0, bottom: 0, left: 0 };
+  const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const cap = dev.capsule;
+  const capLiteral = cap
+    ? JSON.stringify({
+        top: num(cap.top),
+        height: num(cap.height),
+        left: num(cap.left),
+        right: num(cap.right),
+        width: num(cap.width != null ? cap.width : num(cap.right) - num(cap.left)),
+      })
+    : 'null';
+  return SDK_SHIM.replace(/__BASE_ID__/g, JSON.stringify(String(baseId || '')))
+    .replace(/__DEVICE_ENV__/g, JSON.stringify(String(dev.env || 'preview')))
+    .replace(/__DEVICE_PIXEL_RATIO__/g, String(num(dev.pixelRatio) || 1))
+    .replace(/__SAFE_AREA_TOP__/g, String(num(sa.top)))
+    .replace(/__SAFE_AREA_RIGHT__/g, String(num(sa.right)))
+    .replace(/__SAFE_AREA_BOTTOM__/g, String(num(sa.bottom)))
+    .replace(/__SAFE_AREA_LEFT__/g, String(num(sa.left)))
+    .replace(/__STATUS_BAR_HEIGHT__/g, String(num(dev.statusBarHeight)))
+    .replace(/__HOME_INDICATOR_HEIGHT__/g, String(num(dev.homeIndicatorHeight)))
+    .replace(/__KEYBOARD_HEIGHT__/g, String(num(dev.keyboardHeight)))
+    .replace(/__DEVICE_CAPSULE__/g, capLiteral)
+    .replace(/__SAFE_AREA_AUTO__/g, safeAreaAuto ? 'true' : 'false');
+}
+
+function buildHtml(source: string, baseId: string, device: FlowBaseDevice | undefined, safeAreaAuto: boolean): string {
+  const shim = bakeShim(baseId, device, safeAreaAuto);
   // default-src 'none' 封死一切网络；仅放行内联脚本/样式 + data: 图片，供 App 源码运行。
   const csp =
     "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
@@ -100,11 +244,22 @@ function splitOrderBy(orderBy: unknown): { sort: string | null; order: string } 
   return { sort: null, order: 'asc' };
 }
 
-export function CustomAppWebView({ baseId, appId, tables, contentBottomInset, fillHeight }: CustomAppWebViewProps) {
+export function CustomAppWebView({
+  baseId,
+  appId,
+  tables,
+  contentBottomInset,
+  fillHeight,
+  device,
+}: CustomAppWebViewProps) {
   const { session } = useSession();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const webRef = useRef<WebView>(null);
+  // 设备信息初值烘进 HTML（首帧就位、不闪）；后续变化经 injectJavaScript 推送，不重建 WebView。
+  // 用 ref 读当前值供 html 首次烘焙，避免把 device 放进 html 的 useMemo 依赖（否则一变就重载丢状态）。
+  const deviceRef = useRef(device);
+  deviceRef.current = device;
 
   const [app, setApp] = useState<App | null>(null);
   const [loading, setLoading] = useState(true);
@@ -247,7 +402,27 @@ export function CustomAppWebView({ baseId, appId, tables, contentBottomInset, fi
     [handleRpc],
   );
 
-  const html = useMemo(() => (app ? buildHtml(app.config?.source || '', baseId) : ''), [app, baseId]);
+  const html = useMemo(
+    () => (app ? buildHtml(app.config?.source || '', baseId, deviceRef.current, !!fillHeight) : ''),
+    [app, baseId, fillHeight],
+  );
+
+  // device 运行时变化（转屏 / 键盘 / 尺寸）→ 推进 WebView，无需重建（守 __flowbaseSetDevice 已就绪）。
+  useEffect(() => {
+    if (!device) return;
+    webRef.current?.injectJavaScript(
+      `window.__flowbaseSetDevice && window.__flowbaseSetDevice(${JSON.stringify(device)}); true;`,
+    );
+  }, [device]);
+
+  // 每次加载完成后按当前 device 再刷一次：兜住「加载期间 device 变过 / 首帧注入早于 shim 就绪」的竞态。
+  const onLoadEnd = useCallback(() => {
+    const d = deviceRef.current;
+    if (!d) return;
+    webRef.current?.injectJavaScript(
+      `window.__flowbaseSetDevice && window.__flowbaseSetDevice(${JSON.stringify(d)}); true;`,
+    );
+  }, []);
 
   if (loading) {
     return (
@@ -278,6 +453,7 @@ export function CustomAppWebView({ baseId, appId, tables, contentBottomInset, fi
       originWhitelist={['about:*']}
       javaScriptEnabled
       onMessage={onMessage}
+      onLoadEnd={onLoadEnd}
       // 全屏模式让 App 自己滚；页内嵌入模式关滚动，由外层 ScrollView + 自测高承载。
       scrollEnabled={!!fillHeight}
       setSupportMultipleWindows={false}

@@ -30,9 +30,6 @@ import Reanimated, {
   useSharedValue,
   withSpring,
   withTiming,
-  withRepeat,
-  cancelAnimation,
-  Easing,
 } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -1678,8 +1675,8 @@ export function ChatScreen({
   const dictationSessionRef = useRef<VoiceDictationSession | null>(null);
   const [dictationError, setDictationError] = useState('');
   const dictationErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** 录音中麦克风红色脉冲：0↔1 往复驱动 scale/opacity（见 micPulseStyle）。 */
-  const micPulse = useSharedValue(0);
+  /** 实时麦克风振幅（0~1 归一化 RMS）：由 onAmplitude 回调驱动 scale/opacity（见 micPulseStyle）。 */
+  const micAmplitude = useSharedValue(0);
 
   const flashDictationError = useCallback((message: string) => {
     setDictationError(message);
@@ -1717,6 +1714,9 @@ export function ChatScreen({
     const s = new VoiceDictationSession({
       serverBaseUrl: session.server_base_url,
       token: session.access_token,
+      onAmplitude: (rms) => {
+        micAmplitude.value = rms; // 实时振幅 → 红圈涨落（高频，直接戳 SharedValue）
+      },
       onResult: (text) => {
         // ASR 每次回全量累计文本 → 整体替换 native pending 灰字（流式增删）
         composerAdapterRef.current?.setDictationPending(text);
@@ -1743,25 +1743,18 @@ export function ChatScreen({
     await s.start();
   }, [dictationState, session, flashDictationError]);
 
-  // 录音中脉冲；非录音态停脉冲并归零
+  // 非录音态：振幅归零（缩回底圆）。录音态由 onAmplitude 回调实时驱动 micAmplitude。
   useEffect(() => {
-    if (dictationState === 'recording') {
-      micPulse.value = withRepeat(
-        withTiming(1, { duration: 800, easing: Easing.inOut(Easing.ease) }),
-        -1,
-        true,
-      );
-    } else {
-      cancelAnimation(micPulse);
-      micPulse.value = withTiming(0, { duration: 150 });
+    if (dictationState !== 'recording') {
+      micAmplitude.value = withTiming(0, { duration: 150 });
     }
-  }, [dictationState, micPulse]);
+  }, [dictationState, micAmplitude]);
 
-  /* 录音中的红色涟漪：图标后面的圆形背景往外扩散并淡出（对齐 Desktop .mic-recording-pulse
-     的 box-shadow ripple）。图标本身不变色——只有这个背景圆在脉冲。 */
+  /* 录音中的红色涟漪：图标后面的圆形背景随麦克风实时振幅往外扩散并淡出——说话响则放大、
+     涟漪扩散，安静则缩回 1x 底圆。图标本身不变色，只有这个背景圆在动。 */
   const micPulseStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: 1 + micPulse.value * 0.35 }],
-    opacity: 0.35 * (1 - micPulse.value),
+    transform: [{ scale: 1 + micAmplitude.value * 0.4 }],
+    opacity: 0.35 * (1 - micAmplitude.value * 0.5),
   }));
 
   // 切换对话 / 卸载时放弃进行中的听写，避免会话泄漏
