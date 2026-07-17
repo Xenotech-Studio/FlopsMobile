@@ -4,3 +4,4 @@
 //  调 Orientation.getOrientation() 做动态屏幕方向控制需要从这里引入。
 //
 #import <react-native-orientation-locker/Orientation.h>
+#import <React/RCTLinkingManager.h>

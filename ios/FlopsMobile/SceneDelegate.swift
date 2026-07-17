@@ -1,5 +1,5 @@
 import UIKit
-import React  // RCTLinkingManager：把 URL scheme 深链（flops://…）转发给 RN 的 Linking
+import React  // RCTReactNativeFactory + RCTLinkingManager（通过 bridging header 暴露）
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   var window: UIWindow?
@@ -32,15 +32,18 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
       launchOptions: nil
     )
 
-    // 冷启动深链：应用因 flops:// url 被拉起时，url 在 connectionOptions 里 → 转交
-    // RCTLinkingManager，RN 侧 Linking.getInitialURL() 才拿得到。
-    if !connectionOptions.urlContexts.isEmpty {
-      RCTLinkingManager.scene(scene, openURLContexts: connectionOptions.urlContexts)
+    // 冷启动深链：应用因 flops:// url 被拉起时 url 在 connectionOptions 里 → 转交 RCTLinkingManager。
+    // 本 RN 版本的 RCTLinkingManager 无 scene: 变体，统一走 application:openURL:options:。
+    if let url = connectionOptions.urlContexts.first?.url {
+      _ = RCTLinkingManager.application(UIApplication.shared, open: url, options: [:])
     }
   }
 
-  // 热启动 / 前台深链：系统把 flops:// url 投递到 scene → 转给 RN Linking 的 'url' 事件。
+  // 热启动 / 前台深链：系统把 flops:// url 投递到 scene → 逐个转给 RCTLinkingManager
+  //（RN 内部 post RCTOpenURLNotification → JS 侧 Linking 的 'url' 事件）。
   func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
-    RCTLinkingManager.scene(scene, openURLContexts: URLContexts)
+    for context in URLContexts {
+      _ = RCTLinkingManager.application(UIApplication.shared, open: context.url, options: [:])
+    }
   }
 }
