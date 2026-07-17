@@ -41,6 +41,11 @@ class FlopsAudioModule: RCTEventEmitter {
   private var commandsWired = false
   private var lastReportedState = ""
 
+  /// 与其它 App 的混音方式（由 JS 从 layout-preferences 的 tts_mixing_mode 下发）：
+  /// "duck" → .duckOthers（降低他人音量，默认）；"mix" → .mixWithOthers（直接叠加）。
+  /// configureSession(active:) 每次据此拼 AVAudioSession.CategoryOptions。
+  private var audioMixingMode: String = "duck"
+
   // MARK: - 实时流式 TTS 状态（/api/ws/audio → PCM）
   private var wsTask: URLSessionWebSocketTask?
   private var wsSession: URLSession?
@@ -151,6 +156,17 @@ class FlopsAudioModule: RCTEventEmitter {
       "index": currentIndex,
       "count": urls.count,
     ])
+  }
+
+  /// 设置与其它 App 的混音方式："duck"（降低他人音量，默认）| "mix"（直接叠加）。
+  /// 只写内部变量；下次 configureSession(active:) 生效。若当前正在放（回放或实时流），
+  /// 立即重设 category 让新选项即时生效。fire-and-forget，无回调。
+  @objc(setAudioMixingMode:)
+  func setAudioMixingMode(_ mode: String) {
+    audioMixingMode = (mode == "mix") ? "mix" : "duck"
+    if player?.timeControlStatus == .playing || engineStarted {
+      configureSession(active: true)
+    }
   }
 
   // MARK: - 队列构建 / 拆除
@@ -283,7 +299,10 @@ class FlopsAudioModule: RCTEventEmitter {
     let session = AVAudioSession.sharedInstance()
     do {
       if active {
-        try session.setCategory(.playback, mode: .spokenAudio, options: [])
+        // 与其它 App 共存：duck（降他人音量）| mix（直接叠加）。绝不裸 .playback 独占暂停。
+        let options: AVAudioSession.CategoryOptions =
+          (audioMixingMode == "mix") ? [.mixWithOthers] : [.duckOthers]
+        try session.setCategory(.playback, mode: .spokenAudio, options: options)
         try session.setActive(true)
         wireInterruptionsIfNeeded()
       } else {

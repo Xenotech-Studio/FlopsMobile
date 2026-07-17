@@ -22,6 +22,7 @@ import { BindEmailScreen } from '../screens/BindEmailScreen';
 import { SoulSettingsScreen } from '../screens/SoulSettingsScreen';
 import { AppearanceSettingsScreen } from '../screens/AppearanceSettingsScreen';
 import { NotificationSettingsScreen } from '../screens/NotificationSettingsScreen';
+import { TtsSettingsScreen } from '../screens/TtsSettingsScreen';
 import { ModelProviderSettingsScreen } from '../screens/ModelProviderSettingsScreen';
 import { SlateRNSpikeScreen } from '../screens/SlateRNSpikeScreen';
 import { DevTestScreen } from '../screens/DevTestScreen';
@@ -42,6 +43,22 @@ function rightCardStyleInterpolator({ current, layouts }: StackCardInterpolation
           translateX: current.progress.interpolate({
             inputRange: [0, 1],
             outputRange: [layouts.screen.width, 0],
+          }),
+        },
+      ],
+    },
+  };
+}
+
+/** 底部滑入（类小程序 Applet 用）——同 rightCardStyleInterpolator，只是走 translateY + 屏幕高度。 */
+function bottomCardStyleInterpolator({ current, layouts }: StackCardInterpolationProps) {
+  return {
+    cardStyle: {
+      transform: [
+        {
+          translateY: current.progress.interpolate({
+            inputRange: [0, 1],
+            outputRange: [layouts.screen.height, 0],
           }),
         },
       ],
@@ -140,6 +157,15 @@ export function RootNavigator() {
         }}
       />
       <Stack.Screen
+        name="TtsSettings"
+        component={TtsSettingsScreen}
+        options={{
+          headerShown: false,
+          gestureEnabled: true,
+          cardStyleInterpolator: rightCardStyleInterpolator,
+        }}
+      />
+      <Stack.Screen
         name="ModelProviderSettings"
         component={ModelProviderSettingsScreen}
         options={{
@@ -185,14 +211,14 @@ export function RootNavigator() {
           cardStyleInterpolator: rightCardStyleInterpolator,
         }}
       />
-      {/* 全屏 Applet（类小程序）：整页右滑入 + 左缘滑回。route.params: {appId, baseId?, appName?}。 */}
+      {/* 全屏 Applet（类小程序）：整页从底部滑入。route.params: {appId, baseId?, appName?}。 */}
       <Stack.Screen
         name="Applet"
         component={AppletScreen}
         options={{
           headerShown: false,
           gestureEnabled: true,
-          cardStyleInterpolator: rightCardStyleInterpolator,
+          cardStyleInterpolator: bottomCardStyleInterpolator,
         }}
       />
     </Stack.Navigator>

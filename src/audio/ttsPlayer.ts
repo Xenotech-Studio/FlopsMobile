@@ -15,6 +15,7 @@ import { useSyncExternalStore } from 'react';
 import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import { getCachedKConv, aesGcmDecrypt, base64ToBytes, bytesToBase64 } from '../lib/srp';
+import { ensureTtsMixingModeApplied } from './ttsMixingMode';
 
 export type AudioPlaybackState =
   | 'idle'
@@ -192,6 +193,8 @@ async function resolveSegments(
 /** 从头播放一条消息的 segments。加密/非加密共用同一路径（resolveSegments 按段判定）。 */
 export async function playSegments(segments: string[], meta: PlaybackMeta): Promise<void> {
   if (!Native || !segments?.length) return;
+  // 播放前把当前混音方式（duck/mix）兜底重发原生，确保回放走的是用户选择的 category 选项。
+  ensureTtsMixingModeApplied();
   // 乐观置 loading，避免点击到首个原生事件之间按钮无反馈（加密段下载解密期间也是 loading）
   setSnapshot({ ...IDLE, key: meta.key, state: 'loading' });
   const prevTemp = liveTempFiles;

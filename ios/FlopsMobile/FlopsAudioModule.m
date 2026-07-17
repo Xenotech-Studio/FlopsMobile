@@ -40,4 +40,6 @@ RCT_EXTERN_METHOD(startRealtime:(NSString *)wsUrl
 RCT_EXTERN_METHOD(stopRealtime:(RCTPromiseResolveBlock)resolve
                       rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(setAudioMixingMode:(NSString *)mode)
+
 @end

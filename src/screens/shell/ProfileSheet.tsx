@@ -332,6 +332,13 @@ export function ProfileSheet({
               colors={colors}
             />
             <Row
+              icon="mic-outline"
+              label="语音合成"
+              border
+              onPress={() => dismissAndNavigate('TtsSettings')}
+              colors={colors}
+            />
+            <Row
               icon="flask-outline"
               label="开发测试"
               border

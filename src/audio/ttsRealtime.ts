@@ -20,6 +20,7 @@ import { useSyncExternalStore } from 'react';
 import { NativeModules, NativeEventEmitter } from 'react-native';
 import type { Session } from '../api';
 import { getLayoutPreferences, setLayoutPreferences } from '../api';
+import { refreshTtsMixingModeFromPrefs } from './ttsMixingMode';
 
 type FlopsAudioRealtimeNative = {
   /** mode: 'broadcast'（全局端点，连上发 register）| 'single'（per-conv 端点，纯下行）。 */
@@ -210,6 +211,8 @@ export async function refreshRealtimeFromPrefs(sess: Session | null): Promise<vo
     const prefs = await getLayoutPreferences(sess);
     assignBroadcastMode(prefs[TTS_BROADCAST_PREF_KEY] === true);
     enabled = prefs[TTS_AUTOPLAY_PREF_KEY] === true;
+    // 同一份 prefs 里读混音方式并下发原生（duck/mix），避免二次请求。
+    void refreshTtsMixingModeFromPrefs(sess, prefs);
   } catch {
     /* 拉取失败保持当前值 */
   }
