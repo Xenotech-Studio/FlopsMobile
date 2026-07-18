@@ -13,8 +13,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export type MyApplet = {
   appId: string;
   baseId: string;
-  /** 展示名（可选；缺省时 UI 用 appId 首字符占位） */
-  name?: string;
   /** 添加时间戳（ms），用于排序 */
   addedAt: number;
 };

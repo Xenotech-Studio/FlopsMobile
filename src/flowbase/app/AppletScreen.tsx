@@ -86,7 +86,7 @@ export function AppletScreen() {
   const added = has(appId);
   const onAdd = useCallback(() => {
     if (!baseId) return;
-    add({ appId, baseId, name: appName }).catch(() => {});
+    add({ appId, baseId }).catch(() => {});
   }, [add, appId, baseId, appName]);
 
   useEffect(() => {

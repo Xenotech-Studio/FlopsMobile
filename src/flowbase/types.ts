@@ -149,6 +149,12 @@ export type App = {
     runtime?: unknown;
     permissions?: unknown;
     tables_declared?: string[];
+    /** 图标名（Lucide SVG 图标 ID，如 "star"、"sport-shoe"）。 */
+    icon?: string;
+    settings?: {
+      /** 禁用 iOS 屏幕左边缘右滑返回手势（默认 false）。 */
+      disableBackSwipe?: boolean;
+    };
   } | null;
   sort_order?: number;
   status?: string;
