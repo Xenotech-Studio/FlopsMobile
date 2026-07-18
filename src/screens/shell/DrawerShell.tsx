@@ -60,6 +60,7 @@ import { TodayScreen } from '../TodayScreen';
 import { ProjectScreen } from '../ProjectScreen';
 import { DocsScreen } from '../DocsScreen';
 import { ChatScreen } from '../ChatScreen';
+import { MiniAppListScreen } from '../MiniAppListScreen';
 import { subscribeClientOutdated } from '../../utils/clientCompatBus';
 import { getScreenCornerRadius, inferScreenCornerRadius, isSquareScreen } from '../../utils/screenInfo';
 import { SHADOW_COLOR } from '../../theme/shadows';
@@ -470,6 +471,9 @@ export function DrawerShell() {
             case 'docs':
               ctrl.goDocs();
               break;
+            case 'miniApps':
+              ctrl.goMiniApps();
+              break;
             case 'project':
               ctrl.goProject(next.projectId, next.projectName);
               break;
@@ -730,6 +734,8 @@ export function DrawerShell() {
         );
       case 'docs':
         return <DocsScreen key="docs" />;
+      case 'miniApps':
+        return <MiniAppListScreen key="miniApps" />;
       case 'chat':
         return (
           <ChatScreen

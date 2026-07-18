@@ -12,6 +12,8 @@ export type DrawerActive =
   | { kind: 'today' }
   | { kind: 'project'; projectId: string; projectName?: string }
   | { kind: 'docs' }
+  /** 「我的小应用」列表——与今天/文档同级的抽屉内部顶层页（非 stack push）。 */
+  | { kind: 'miniApps' }
   /** 从抽屉 / 今日页对话段进入的对话：作为顶层页直接渲染，而不是再 push 一层 ChatScreen。
    *  conversationId 缺省 = 新对话；nonce 用于「+ 新对话」每次点击都强制 remount。 */
   | {

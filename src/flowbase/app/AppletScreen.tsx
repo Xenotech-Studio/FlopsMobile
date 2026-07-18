@@ -49,6 +49,7 @@ import type { RootStackParamList } from '../../navigation/types';
 import { getAppBase, getBase } from '../api';
 import type { Table } from '../types';
 import { CustomAppWebView, type FlowBaseDevice } from './CustomAppWebView';
+import { useMyApplets } from '../../hooks/useMyApplets';
 // iOS 原生胶囊（CALayer 绘制，避免 RN borderWidth:0.5 + overflow 的锯齿）；Android 走下方 RN 兜底。
 import AppletCapsuleView from '../../flowdoc-native-input/spec/AppletCapsuleViewNativeComponent';
 
@@ -69,7 +70,7 @@ export function AppletScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<Nav>();
   const route = useRoute<Rt>();
-  const { appId, baseId: baseIdParam } = route.params;
+  const { appId, baseId: baseIdParam, appName } = route.params;
   const { session } = useSession();
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -79,6 +80,14 @@ export function AppletScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // 「我的小应用」：sheet 里的添加/已添加状态与操作。baseId 用解析后的值（非 param），未解析时不可加。
+  const { has, add } = useMyApplets();
+  const added = has(appId);
+  const onAdd = useCallback(() => {
+    if (!baseId) return;
+    add({ appId, baseId, name: appName }).catch(() => {});
+  }, [add, appId, baseId, appName]);
 
   useEffect(() => {
     let alive = true;
@@ -187,6 +196,9 @@ export function AppletScreen() {
           setMenuOpen(false);
           navigation.goBack();
         }}
+        added={added}
+        canAdd={baseId != null}
+        onAdd={onAdd}
       />
     </View>
   );
@@ -201,10 +213,18 @@ function AppletMenuSheet({
   visible,
   onClose,
   onCloseApplet,
+  added,
+  canAdd,
+  onAdd,
 }: {
   visible: boolean;
   onClose: () => void;
   onCloseApplet: () => void;
+  /** 是否已加入「我的小应用」 */
+  added: boolean;
+  /** baseId 已解析、可添加（未解析且未添加时不显示添加项） */
+  canAdd: boolean;
+  onAdd: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const { colors } = useAppTheme();
@@ -235,11 +255,24 @@ function AppletMenuSheet({
     [colors.bottomSheetBackdropOpacity],
   );
 
-  const items: Array<{ key: string; label: string; icon: string; run: () => void }> = [
-    { key: 'close', label: '关闭', icon: 'close-outline', run: onCloseApplet },
-    // 预留入口：后续可挂分享 / 关于 / 设置等；当前占位（只收起 sheet）。
-    { key: 'more', label: '其他', icon: 'ellipsis-horizontal', run: onClose },
-  ];
+  const items: Array<{ key: string; label: string; icon: string; run: () => void }> = [];
+  // 「添加到我的小应用」/「已添加到我的小应用」——已添加显示为状态（点击仅收起）；未添加且可加则可点击添加。
+  if (added) {
+    items.push({ key: 'added', label: '已添加到我的小应用', icon: 'checkmark-circle', run: onClose });
+  } else if (canAdd) {
+    items.push({
+      key: 'add',
+      label: '添加到我的小应用',
+      icon: 'add-circle-outline',
+      run: () => {
+        onAdd();
+        onClose();
+      },
+    });
+  }
+  items.push({ key: 'close', label: '关闭', icon: 'close-outline', run: onCloseApplet });
+  // 预留入口：后续可挂分享 / 关于 / 设置等；当前占位（只收起 sheet）。
+  items.push({ key: 'more', label: '其他', icon: 'ellipsis-horizontal', run: onClose });
 
   return (
     <BottomSheetModal

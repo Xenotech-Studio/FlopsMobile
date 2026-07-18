@@ -150,6 +150,8 @@ export function DrawerContent() {
   /** 点击事件 */
   const onPickToday = useCallback(() => setActive({ kind: 'today' }), [setActive]);
   const onPickDocs = useCallback(() => setActive({ kind: 'docs' }), [setActive]);
+  /** 小应用 = 与今天/文档同级的抽屉内部顶层页（setActive 驱动，非 stack push）。 */
+  const onPickMiniApp = useCallback(() => setActive({ kind: 'miniApps' }), [setActive]);
   const onPickProject = useCallback(
     (row: DrawerProjectRow) =>
       setActive({ kind: 'project', projectId: row.id, projectName: row.name }),
@@ -180,6 +182,7 @@ export function DrawerContent() {
   /** 当前 active 比对（高亮） */
   const isTodayActive = active.kind === 'today';
   const isDocsActive = active.kind === 'docs';
+  const isMiniAppsActive = active.kind === 'miniApps';
   const activeProjectId = active.kind === 'project' ? active.projectId : null;
   const activeChatId = active.kind === 'chat' ? active.conversationId : null;
 
@@ -234,6 +237,14 @@ export function DrawerContent() {
             icon="document-text-outline"
             active={isDocsActive}
             onPress={onPickDocs}
+            colors={colors}
+            isDark={isDark}
+          />
+          <MenuRow
+            label="小应用"
+            icon="apps-outline"
+            active={isMiniAppsActive}
+            onPress={onPickMiniApp}
             colors={colors}
             isDark={isDark}
           />

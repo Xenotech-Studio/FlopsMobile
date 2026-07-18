@@ -24,6 +24,7 @@ import { TodayScreen } from '../screens/TodayScreen';
 import { ProjectScreen } from '../screens/ProjectScreen';
 import { DocsScreen } from '../screens/DocsScreen';
 import { ChatScreen } from '../screens/ChatScreen';
+import { MiniAppListScreen } from '../screens/MiniAppListScreen';
 import { DocPreviewScreen } from '../screens/docs/DocPreviewScreen';
 import { useAppTheme } from '../context/ThemeContext';
 import type { MainPaneNavRef } from '../screens/shell/MainPaneContext';
@@ -38,6 +39,8 @@ export type MainPaneParamList = {
   Project: { projectId: string; projectName?: string };
   Docs: undefined;
   Chat: { conversationId?: string; conversationTitle?: string; createEncrypted?: boolean } | undefined;
+  /** 「我的小应用」列表——与 Today/Docs 同级的一级页。 */
+  MiniApps: undefined;
   /** 文档下钻预览页（iPad 主区内整页右滑入）：只携带 id，正文/子项由 docsTreeStore 解析。 */
   DocPreview: { id: string };
 };
@@ -130,6 +133,11 @@ function DocsRoute() {
   return <DocsScreen />;
 }
 
+function MiniAppsRoute() {
+  useBindNav(false);
+  return <MiniAppListScreen />;
+}
+
 function ChatRoute({ route }: StackScreenProps<MainPaneParamList, 'Chat'>) {
   /* iPad：对话是顶级页（openChat reset 成单条 [Chat] 栈）→ 左上角汉堡（开/合侧栏）、无返回箭头。
    *  但仍报告 isSecondary=true：这个通道只驱动 DrawerShell 的分界线胶囊手柄（跟 hamburger 那个
@@ -171,6 +179,8 @@ export function MainPaneNavigator() {
       <MainPaneStack.Screen name="Today" component={TodayRoute} />
       <MainPaneStack.Screen name="Project" component={ProjectRoute} />
       <MainPaneStack.Screen name="Docs" component={DocsRoute} />
+      {/* 小应用：与 Today/Docs 同级一级页，沿用默认瞬切。 */}
+      <MainPaneStack.Screen name="MiniApps" component={MiniAppsRoute} />
       {/* Chat 也是顶级页：沿用默认瞬切（noAnimationInterpolator + instantTransitionSpec），
           跟 Today/Project/Docs 一样直接切入、不滑入。 */}
       <MainPaneStack.Screen name="Chat" component={ChatRoute} />

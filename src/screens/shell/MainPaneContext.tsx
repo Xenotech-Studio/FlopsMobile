@@ -35,6 +35,8 @@ export type MainPaneController = {
   goToday: () => void;
   /** 重置到「文档页」 */
   goDocs: () => void;
+  /** 重置到「小应用」页 */
+  goMiniApps: () => void;
   /** 重置到某个「项目页」 */
   goProject: (projectId: string, projectName?: string) => void;
   /** 在主区栈上 push 一个对话（右滑入、可返回）。base 决定栈底是 today 还是当前 */
@@ -149,6 +151,11 @@ export function MainPaneProvider({
       goDocs: () => {
         navRef.current?.dispatch(
           CommonActions.reset({ index: 0, routes: [{ name: 'Docs' }] }),
+        );
+      },
+      goMiniApps: () => {
+        navRef.current?.dispatch(
+          CommonActions.reset({ index: 0, routes: [{ name: 'MiniApps' }] }),
         );
       },
       goProject: (projectId, projectName) => {
