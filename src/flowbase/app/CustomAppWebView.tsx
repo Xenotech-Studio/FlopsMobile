@@ -39,6 +39,18 @@ export type CustomAppWebViewProps = {
    * app 的 `--fb-*` CSS 变量 + `FlowBaseSDK.device`。缺省（页内嵌入）用 ZERO_DEVICE（全 0、无胶囊）。
    */
   device?: FlowBaseDevice;
+  /**
+   * 初始页（类小程序原生翻页）：子页 WebView 载入同一份 HTML，但通过它决定首屏展示哪个「页」。
+   * 注入到 `window.FlowBaseSDK.initialPage`，并作为 `<html data-page="...">` 属性挂上——HTML 在加载
+   * 时据此显示对应 div（JS 读 SDK.initialPage 或 CSS `html[data-page="x"] #page-x{display:block}`）。
+   * 缺省（主页 / 页内嵌入）为 undefined，行为不变。
+   */
+  initialPage?: string;
+  /**
+   * 原生翻页回调：App 内调 `FlowBaseSDK.navigate('page',{title})` 时触发（走 navigate RPC）。全屏 Applet
+   * 由承载屏据此 push 一层原生子页（右滑入 + 原生返回手势）。缺省则该调用静默解析、不做原生跳转。
+   */
+  onNavigate?: (args: { page?: string; title?: string }) => void;
 };
 
 // 设备信息（与桌面 AppView.jsx 语义一比一对齐）。
@@ -105,6 +117,16 @@ const SDK_SHIM = `(function(){
     capsule:__DEVICE_CAPSULE__
   };
   var _safeAreaAuto=__SAFE_AREA_AUTO__;
+  // —— 初始页（类小程序原生翻页）——（占位由 buildHtml 烘入；主页/无翻页时为 null）
+  // 挂到 <html data-page="...">，App 可用 CSS(html[data-page="x"] #page-x{display:block}) 或读 SDK.initialPage
+  // 来决定首屏展示哪个「页」。<html> 元素在 head 脚本执行时已存在，可即刻设属性（首帧就位、不闪）。
+  var _initialPage=__INITIAL_PAGE__;
+  function _applyInitialPage(){
+    if(!_initialPage)return; var root=document.documentElement; if(!root)return;
+    try{root.setAttribute('data-page',String(_initialPage));}catch(e){}
+  }
+  _applyInitialPage();
+  if(_initialPage&&document.readyState==='loading') document.addEventListener('DOMContentLoaded',_applyInitialPage);
   var _deviceListeners=[];
   function _applyDeviceCSS(d){
     var root=document.documentElement; if(!root)return;
@@ -157,8 +179,13 @@ const SDK_SHIM = `(function(){
   window.FlowBaseSDK={
     version:1,
     baseId:__BASE_ID__,
+    // 子页首屏应展示的「页」标识（主页/无翻页为 null）。App 加载时读它决定显示哪个 div。
+    initialPage:_initialPage,
     table:function(n){return tableHandle(n);},
     dashboard:function(n){return dashboardHandle(n);},
+    // 原生翻页：请求承载屏 push 一层原生子页（右滑入 + 原生返回）。子页会以 initialPage=page 载入同一份
+    // HTML。返回的 Promise 在原生受理后 resolve（不代表页面已切；仅表示已请求）。承载屏未接管时静默解析。
+    navigate:function(page,opts){return rpc('navigate',{page:page,title:opts&&opts.title});},
     // 设备信息：同步只读快照 + onChange 订阅（首帧即可同步读，勿 await）。安全区读这里或 var(--fb-*)。
     device:{
       get env(){return _device.env;},
@@ -186,7 +213,12 @@ const SDK_SHIM = `(function(){
 })();`;
 
 // 把 shim 里的占位符替换成真实/模拟数值（与桌面 buildSrcDoc 同风格；全局替换避免遗漏）。
-function bakeShim(baseId: string, device: FlowBaseDevice | undefined, safeAreaAuto: boolean): string {
+function bakeShim(
+  baseId: string,
+  device: FlowBaseDevice | undefined,
+  safeAreaAuto: boolean,
+  initialPage: string | undefined,
+): string {
   const dev = device || ZERO_DEVICE;
   const sa = dev.safeAreaInsets || { top: 0, right: 0, bottom: 0, left: 0 };
   const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -211,17 +243,27 @@ function bakeShim(baseId: string, device: FlowBaseDevice | undefined, safeAreaAu
     .replace(/__HOME_INDICATOR_HEIGHT__/g, String(num(dev.homeIndicatorHeight)))
     .replace(/__KEYBOARD_HEIGHT__/g, String(num(dev.keyboardHeight)))
     .replace(/__DEVICE_CAPSULE__/g, capLiteral)
-    .replace(/__SAFE_AREA_AUTO__/g, safeAreaAuto ? 'true' : 'false');
+    .replace(/__SAFE_AREA_AUTO__/g, safeAreaAuto ? 'true' : 'false')
+    .replace(/__INITIAL_PAGE__/g, initialPage ? JSON.stringify(String(initialPage)) : 'null');
 }
 
-function buildHtml(source: string, baseId: string, device: FlowBaseDevice | undefined, safeAreaAuto: boolean): string {
-  const shim = bakeShim(baseId, device, safeAreaAuto);
+function buildHtml(
+  source: string,
+  baseId: string,
+  device: FlowBaseDevice | undefined,
+  safeAreaAuto: boolean,
+  initialPage: string | undefined,
+): string {
+  const shim = bakeShim(baseId, device, safeAreaAuto, initialPage);
   // default-src 'none' 封死一切网络；仅放行内联脚本/样式 + data: 图片，供 App 源码运行。
   const csp =
     "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
     "img-src data:; font-src data:; base-uri 'none'; form-action 'none'";
+  // data-page 直接烘在 <html> 标签上：首次 parse 即就位，CSS `html[data-page="x"]{}` 无闪切；
+  // shim 里再兜一次（DOMContentLoaded），双保险。属性值转义引号，防止破坏标签。
+  const pageAttr = initialPage ? ` data-page="${String(initialPage).replace(/"/g, '&quot;')}"` : '';
   return (
-    `<!doctype html><html><head><meta charset="utf-8">` +
+    `<!doctype html><html${pageAttr}><head><meta charset="utf-8">` +
     `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
     `<meta name="viewport" content="width=device-width, initial-scale=1">` +
     `<style>html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}</style>` +
@@ -251,6 +293,8 @@ export function CustomAppWebView({
   contentBottomInset,
   fillHeight,
   device,
+  initialPage,
+  onNavigate,
 }: CustomAppWebViewProps) {
   const { session } = useSession();
   const { colors } = useAppTheme();
@@ -260,6 +304,9 @@ export function CustomAppWebView({
   // 用 ref 读当前值供 html 首次烘焙，避免把 device 放进 html 的 useMemo 依赖（否则一变就重载丢状态）。
   const deviceRef = useRef(device);
   deviceRef.current = device;
+  // onNavigate 用 ref 读，避免把它塞进 onMessage 依赖（承载屏每次 render 传新函数会白重建 onMessage）。
+  const onNavigateRef = useRef(onNavigate);
+  onNavigateRef.current = onNavigate;
 
   const [app, setApp] = useState<App | null>(null);
   const [loading, setLoading] = useState(true);
@@ -395,6 +442,15 @@ export function CustomAppWebView({
         webRef.current?.injectJavaScript(
           `window.__flowbaseDeliver(${JSON.stringify({ __flowbase_rpc_reply: true, id, ...patch })}); true;`,
         );
+      // navigate：不走数据 RPC 白名单，转交承载屏做原生 push；受理后即 resolve（承载屏未接管则静默 resolve）。
+      if (String(d.method || '') === 'navigate') {
+        const a = (d.args as { page?: unknown; title?: unknown }) || {};
+        const page = a.page != null ? String(a.page) : undefined;
+        const title = a.title != null ? String(a.title) : undefined;
+        onNavigateRef.current?.({ page, title });
+        reply({ result: { ok: true } });
+        return;
+      }
       handleRpc(String(d.method || ''), (d.args as Record<string, unknown>) || {})
         .then((result) => reply({ result }))
         .catch((e) => reply({ error: e instanceof Error ? e.message : String(e) }));
@@ -403,8 +459,8 @@ export function CustomAppWebView({
   );
 
   const html = useMemo(
-    () => (app ? buildHtml(app.config?.source || '', baseId, deviceRef.current, !!fillHeight) : ''),
-    [app, baseId, fillHeight],
+    () => (app ? buildHtml(app.config?.source || '', baseId, deviceRef.current, !!fillHeight, initialPage) : ''),
+    [app, baseId, fillHeight, initialPage],
   );
 
   // device 运行时变化（转屏 / 键盘 / 尺寸）→ 推进 WebView，无需重建（守 __flowbaseSetDevice 已就绪）。
