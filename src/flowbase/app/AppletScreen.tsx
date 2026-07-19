@@ -110,6 +110,8 @@ type AppletCtx = {
   onAdd: () => void;
   /** 关闭整个 applet（把 Applet 路由弹出 RootStack）——胶囊圆环 / 菜单「关闭」用。 */
   closeApplet: () => void;
+  /** WebView key：调 reloadKey++ 令 WebView 重新挂载，实现「重新进入」。 */
+  reloadKey: number;
 };
 const AppletContext = createContext<AppletCtx | null>(null);
 function useApplet(): AppletCtx {
@@ -210,12 +212,16 @@ export function AppletScreen() {
   // 三圆点弹出的菜单开合。胶囊固定在 applet 外壳层，故菜单态也提到本层。
   const [menuOpen, setMenuOpen] = useState(false);
 
+  // 「重新进入小应用」→ bump WebView key 令其完全重新挂载。
+  const [reloadKey, setReloadKey] = useState(0);
+  const onReload = useCallback(() => setReloadKey(k => k + 1), []);
+
   const ctx = useMemo<AppletCtx | null>(
     () =>
       baseId
-        ? { baseId, appId, tables, device, disableBackSwipe, added, canAdd: true, onAdd, closeApplet }
+        ? { baseId, appId, tables, device, disableBackSwipe, added, canAdd: true, onAdd, closeApplet, reloadKey }
         : null,
-    [baseId, appId, tables, device, disableBackSwipe, added, onAdd, closeApplet],
+    [baseId, appId, tables, device, disableBackSwipe, added, onAdd, closeApplet, reloadKey],
   );
 
   if (loading) {
@@ -281,6 +287,10 @@ export function AppletScreen() {
           added={added}
           canAdd={ctx.canAdd}
           onAdd={onAdd}
+          onReload={() => {
+            setMenuOpen(false);
+            onReload();
+          }}
         />
       </View>
     </AppletContext.Provider>
@@ -295,7 +305,7 @@ function AppletMainScreen() {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const nav = useNavigation<PageNav>();
-  const { baseId, appId, tables, device } = useApplet();
+  const { baseId, appId, tables, device, reloadKey } = useApplet();
 
   // App 内 FlowBaseSDK.navigate('page',{title}) → push 一层原生子页（右滑入 + 原生返回）。
   const onNavigate = useCallback(
@@ -305,7 +315,7 @@ function AppletMainScreen() {
 
   return (
     <View style={styles.container}>
-      <CustomAppWebView baseId={baseId} appId={appId} tables={tables} fillHeight device={device} onNavigate={onNavigate} />
+      <CustomAppWebView baseId={baseId} appId={appId} tables={tables} fillHeight device={device} onNavigate={onNavigate} key={String(reloadKey)} />
     </View>
   );
 }
@@ -410,6 +420,7 @@ function AppletMenuSheet({
   added,
   canAdd,
   onAdd,
+  onReload,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -419,6 +430,7 @@ function AppletMenuSheet({
   /** baseId 已解析、可添加（未解析且未添加时不显示添加项） */
   canAdd: boolean;
   onAdd: () => void;
+  onReload: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const { colors } = useAppTheme();
@@ -465,8 +477,7 @@ function AppletMenuSheet({
     });
   }
   items.push({ key: 'close', label: '关闭', icon: 'close-outline', run: onCloseApplet });
-  // 预留入口：后续可挂分享 / 关于 / 设置等；当前占位（只收起 sheet）。
-  items.push({ key: 'more', label: '其他', icon: 'ellipsis-horizontal', run: onClose });
+  items.push({ key: 'reload', label: '重新进入小应用', icon: 'refresh', run: onReload });
 
   return (
     <BottomSheetModal
