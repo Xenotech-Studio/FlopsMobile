@@ -15,9 +15,8 @@
  *     关闭整个 applet（goBack）——区别于桌面那份 pointerEvents:none 的纯装饰件。
  *   - **原生翻页（类微信小程序页栈）**：本页内建一个嵌套 Stack。首屏 `AppletMain` 跑主 WebView；App 内调
  *     `FlowBaseSDK.navigate('page',{title})` 会 push 一层 `AppletPage`——另起一个 WebView 实例载入同一份
- *     HTML，但以 `initialPage=page` 决定首屏 div。子页返回由原生 Stack header 的「‹ 返回」按钮承担
- *     （headerShown:true + headerBackTitle:'返回'，居中显示页标题）——胶囊不参与返回、左半永远是三圆点；
- *     并支持 iOS 左缘右滑返回（可被 app 的 disableBackSwipe 关掉）。子页也能继续 `navigate` 往更深压栈。
+ *     HTML，但以 `initialPage=page` 决定首屏 div。全屏沉浸式（headerShown:false），返回由 iOS 右滑手势 +
+ *     应用自己的 HTML 返回按钮承担。子页也能继续 `navigate` 往更深压栈。
  *     取一个新 WebView 实例载页是可接受的取舍（见需求约束）。
  *
  * 定位参数（route.params）：
@@ -242,7 +241,7 @@ export function AppletScreen() {
   //
   // 胶囊固定在 applet 外壳层（Navigator 的兄弟节点，绝对定位悬浮层），而非放进页栈每屏 —— 对齐微信小程序：
   // 压子页时胶囊不动、不重建，恒为「左三圆点(开菜单) | 右圆环(关整个 applet)」。子页返回改由原生 Stack header
-  // 的「‹ 返回」按钮承担（AppletPage 的 headerShown:true），胶囊左半永远是三圆点、行为不变。
+  // 全屏沉浸式（headerShown:false），返回由 iOS 右滑手势 + app 自己的 HTML 返回按钮承担，胶囊不参与导航。
   return (
     <AppletContext.Provider value={ctx}>
       <View style={styles.container}>
@@ -260,9 +259,7 @@ export function AppletScreen() {
             component={AppletPageScreen}
             options={({ route }) => ({
               gestureEnabled: true,
-              // 原生 header 承担子页返回：「‹ 返回」+ 居中页标题（app navigate 传入 title）。
-              headerShown: true,
-              headerBackTitle: '返回',
+              headerShown: false,
               title: route.params?.title ?? '',
             })}
           />
@@ -314,9 +311,8 @@ function AppletMainScreen() {
 }
 
 /**
- * AppletPageScreen —— 原生子页。另起一个 WebView 实例载入同一份 HTML，但以 route.params.page 作 initialPage
- * 决定首屏 div。返回由原生 Stack header 的「‹ 返回」按钮承担（见 AppletScreen 里 headerShown:true）；胶囊固定
- * 在外壳层不随子页变化。也支持继续 navigate 往更深压栈。
+ * AppletPageScreen —— 原生子页。另起一个 WebView 实例，以 route.params.page 作 initialPage。
+ * 全屏沉浸式（headerShown:false），返回由 iOS 右滑手势 + app HTML 内自己画的返回按钮承担。
  */
 function AppletPageScreen() {
   const { colors } = useAppTheme();
