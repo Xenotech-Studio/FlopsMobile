@@ -204,19 +204,15 @@ export function AppletScreen() {
   // 关闭整个 applet = 把 Applet 路由弹出 RootStack（无论当前在页栈第几层）。
   const closeApplet = useCallback(() => navigation.goBack(), [navigation]);
 
-  // 内层页栈深度计数器：子页压栈时 +1、卸载时 -1；有子页时禁外层 RootStack 的底部滑入手势，
-  // 避免外层退出手势与内层右滑返回手势竞争（否则左缘滑动会直接把整个 applet 甩下关闭）。
-  const stackDepthRef = useRef(1); // 主页 = 1
-  const onPushToSubPage = useCallback(() => {
-    stackDepthRef.current++;
+  // 永远禁止外层 RootStack 对 Applet 的手势关闭——页栈内部的返回手势若需要则由内层 Stack 独享，
+  // 暂时不区分主页/子页，一律禁掉以排除手势竞争干扰；配套深度计数逻辑保留但暂不恢复外层手势。
+  useEffect(() => {
     navigation.setOptions({ gestureEnabled: false });
   }, [navigation]);
-  const onPopFromSubPage = useCallback(() => {
-    stackDepthRef.current = Math.max(1, stackDepthRef.current - 1);
-    if (stackDepthRef.current <= 1) {
-      navigation.setOptions({ gestureEnabled: true });
-    }
-  }, [navigation]);
+
+  const stackDepthRef = useRef(1);
+  const onPushToSubPage = useCallback(() => { stackDepthRef.current++; }, []);
+  const onPopFromSubPage = useCallback(() => { stackDepthRef.current = Math.max(1, stackDepthRef.current - 1); }, []);
 
   const ctx = useMemo<AppletCtx | null>(
     () =>
