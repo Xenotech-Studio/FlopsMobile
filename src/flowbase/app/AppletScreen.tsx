@@ -256,7 +256,7 @@ export function AppletScreen() {
         <AppletStack.Screen
           name="AppletPage"
           component={AppletPageScreen}
-          options={{ gestureEnabled: !disableBackSwipe }}
+          options={{ gestureEnabled: true }}
         />
       </AppletStack.Navigator>
     </AppletContext.Provider>
