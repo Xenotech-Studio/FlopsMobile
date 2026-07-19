@@ -307,15 +307,17 @@ function AppletMainScreen() {
   const nav = useNavigation<PageNav>();
   const { baseId, appId, tables, device, reloadKey } = useApplet();
 
-  // App 内 FlowBaseSDK.navigate('page',{title}) → push 一层原生子页（右滑入 + 原生返回）。
-  const onNavigate = useCallback(
+  // WebView 回调：原生翻页 → push 一层子页。
+  const onNavigateToSub = useCallback(
     (args: { page?: string; title?: string }) => nav.push('AppletPage', { page: args.page, title: args.title }),
     [nav],
   );
+  // WebView 回调：原生返回 → pop 回上层（由 app HTML 内的返回按钮触发，非手势）。
+  const onNavigateBack = useCallback(() => nav.canGoBack() && nav.goBack(), [nav]);
 
   return (
     <View style={styles.container}>
-      <CustomAppWebView baseId={baseId} appId={appId} tables={tables} fillHeight device={device} onNavigate={onNavigate} key={String(reloadKey)} />
+      <CustomAppWebView baseId={baseId} appId={appId} tables={tables} fillHeight device={device} onNavigate={onNavigateToSub} onNavigateBack={onNavigateBack} key={String(reloadKey)} />
     </View>
   );
 }
@@ -333,10 +335,11 @@ function AppletPageScreen() {
   const { baseId, appId, tables, device } = useApplet();
 
   // 子页也能继续 navigate → 再 push 一层（类微信小程序层层深入）。
-  const onNavigate = useCallback(
+  const onNavigateToSub = useCallback(
     (args: { page?: string; title?: string }) => nav.push('AppletPage', { page: args.page, title: args.title }),
     [nav],
   );
+  const onNavigateBack = useCallback(() => nav.canGoBack() && nav.goBack(), [nav]);
 
   return (
     <View style={styles.container}>
@@ -347,7 +350,8 @@ function AppletPageScreen() {
         fillHeight
         device={device}
         initialPage={page}
-        onNavigate={onNavigate}
+        onNavigate={onNavigateToSub}
+        onNavigateBack={onNavigateBack}
       />
     </View>
   );

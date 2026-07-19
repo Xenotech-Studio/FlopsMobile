@@ -51,6 +51,11 @@ export type CustomAppWebViewProps = {
    * 由承载屏据此 push 一层原生子页（右滑入 + 原生返回手势）。缺省则该调用静默解析、不做原生跳转。
    */
   onNavigate?: (args: { page?: string; title?: string }) => void;
+  /**
+   * 原生返回回调：App 内调 `FlowBaseSDK.navigateBack()` 时触发。全屏 Applet 由承载屏据此
+   * pop 一层原生子页。缺省静默解析。
+   */
+  onNavigateBack?: () => void;
 };
 
 // 设备信息（与桌面 AppView.jsx 语义一比一对齐）。
@@ -186,6 +191,7 @@ const SDK_SHIM = `(function(){
     // 原生翻页：请求承载屏 push 一层原生子页（右滑入 + 原生返回）。子页会以 initialPage=page 载入同一份
     // HTML。返回的 Promise 在原生受理后 resolve（不代表页面已切；仅表示已请求）。承载屏未接管时静默解析。
     navigate:function(page,opts){return rpc('navigate',{page:page,title:opts&&opts.title});},
+    navigateBack:function(){return rpc('navigateBack',{});},
     // 设备信息：同步只读快照 + onChange 订阅（首帧即可同步读，勿 await）。安全区读这里或 var(--fb-*)。
     device:{
       get env(){return _device.env;},
@@ -295,6 +301,7 @@ export function CustomAppWebView({
   device,
   initialPage,
   onNavigate,
+  onNavigateBack,
 }: CustomAppWebViewProps) {
   const { session } = useSession();
   const { colors } = useAppTheme();
@@ -304,9 +311,11 @@ export function CustomAppWebView({
   // 用 ref 读当前值供 html 首次烘焙，避免把 device 放进 html 的 useMemo 依赖（否则一变就重载丢状态）。
   const deviceRef = useRef(device);
   deviceRef.current = device;
-  // onNavigate 用 ref 读，避免把它塞进 onMessage 依赖（承载屏每次 render 传新函数会白重建 onMessage）。
+  // onNavigate / onNavigateBack 用 ref 读，避免把它塞进 onMessage 依赖（承载屏每次 render 传新函数会白重建 onMessage）。
   const onNavigateRef = useRef(onNavigate);
   onNavigateRef.current = onNavigate;
+  const onNavigateBackRef = useRef(onNavigateBack);
+  onNavigateBackRef.current = onNavigateBack;
 
   const [app, setApp] = useState<App | null>(null);
   const [loading, setLoading] = useState(true);
@@ -448,6 +457,12 @@ export function CustomAppWebView({
         const page = a.page != null ? String(a.page) : undefined;
         const title = a.title != null ? String(a.title) : undefined;
         onNavigateRef.current?.({ page, title });
+        reply({ result: { ok: true } });
+        return;
+      }
+      // navigateBack：同上，转交承载屏 pop 一层原生子页。
+      if (String(d.method || '') === 'navigateBack') {
+        onNavigateBackRef.current?.();
         reply({ result: { ok: true } });
         return;
       }
