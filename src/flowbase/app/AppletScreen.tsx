@@ -8,14 +8,17 @@
  *   - **全屏无顶栏**：app HTML 从屏幕顶到底零边距铺满（含状态栏 / home indicator 区域）。安全区
  *     由 app 自己经父页注入的 `--fb-safe-area-*` CSS 变量 / `FlowBaseSDK.device` 处理，RN 层不再
  *     额外让位（不加 header、不加 safe-area padding）。
- *   - **右上角悬浮胶囊**：外观一比一对齐桌面版 AppView 的手机胶囊（宽 87×高 32、半透明深色 + 细白描边、
- *     左三圆点 | 竖线 | 右圆环）。位于安全区顶 + 15、右 12。真机上真交互：点三圆点开合菜单（关闭 / 预留
- *     「其他」）、点圆环直接关闭 applet（goBack）——区别于桌面那份 pointerEvents:none 的纯装饰件。
+ *   - **右上角悬浮胶囊（固定在 applet 外壳层）**：外观一比一对齐桌面版 AppView 的手机胶囊（宽 87×高 32、
+ *     半透明深色 + 细白描边、左三圆点 | 竖线 | 右圆环）。位于安全区顶 + 15、右 12。**恒定不变**：作为
+ *     AppletScreen 里 Navigator 的兄弟节点绝对定位悬浮（box-none 盖在整个页栈之上），压子页时不动、不重建
+ *     —— 对齐微信小程序。真机上真交互：点三圆点开合菜单（加入我的小应用 / 关闭 / 预留「其他」）、点圆环直接
+ *     关闭整个 applet（goBack）——区别于桌面那份 pointerEvents:none 的纯装饰件。
  *   - **原生翻页（类微信小程序页栈）**：本页内建一个嵌套 Stack。首屏 `AppletMain` 跑主 WebView；App 内调
  *     `FlowBaseSDK.navigate('page',{title})` 会 push 一层 `AppletPage`——另起一个 WebView 实例载入同一份
- *     HTML，但以 `initialPage=page` 决定首屏 div。子页胶囊左半改为返回箭头（‹，pop 一层）、右半仍是圆环
- *     （直接关掉整个 applet）；并支持 iOS 左缘右滑返回（可被 app 的 disableBackSwipe 关掉）。子页也能继续
- *     `navigate` 往更深压栈。取一个新 WebView 实例载页是可接受的取舍（见需求约束）。
+ *     HTML，但以 `initialPage=page` 决定首屏 div。子页返回由原生 Stack header 的「‹ 返回」按钮承担
+ *     （headerShown:true + headerBackTitle:'返回'，居中显示页标题）——胶囊不参与返回、左半永远是三圆点；
+ *     并支持 iOS 左缘右滑返回（可被 app 的 disableBackSwipe 关掉）。子页也能继续 `navigate` 往更深压栈。
+ *     取一个新 WebView 实例载页是可接受的取舍（见需求约束）。
  *
  * 定位参数（route.params）：
  *   - appId    必填。app.id 全局唯一。
@@ -108,10 +111,6 @@ type AppletCtx = {
   onAdd: () => void;
   /** 关闭整个 applet（把 Applet 路由弹出 RootStack）——胶囊圆环 / 菜单「关闭」用。 */
   closeApplet: () => void;
-  /** 子页压栈时调（每个 AppletPage mount 时 +1），禁外层底部滑入手势，避免与内层返回手势竞争。 */
-  onPushToSubPage: () => void;
-  /** 子页卸载时调（每个 AppletPage unmount 时 -1），栈回主页时恢复外层手势。 */
-  onPopFromSubPage: () => void;
 };
 const AppletContext = createContext<AppletCtx | null>(null);
 function useApplet(): AppletCtx {
@@ -204,22 +203,20 @@ export function AppletScreen() {
   // 关闭整个 applet = 把 Applet 路由弹出 RootStack（无论当前在页栈第几层）。
   const closeApplet = useCallback(() => navigation.goBack(), [navigation]);
 
-  // 永远禁止外层 RootStack 对 Applet 的手势关闭——页栈内部的返回手势若需要则由内层 Stack 独享，
-  // 暂时不区分主页/子页，一律禁掉以排除手势竞争干扰；配套深度计数逻辑保留但暂不恢复外层手势。
+  // 永远禁止外层 RootStack 对 Applet 的手势关闭——页栈内部的返回手势由内层 Stack 独享。
   useEffect(() => {
     navigation.setOptions({ gestureEnabled: false });
   }, [navigation]);
 
-  const stackDepthRef = useRef(1);
-  const onPushToSubPage = useCallback(() => { stackDepthRef.current++; }, []);
-  const onPopFromSubPage = useCallback(() => { stackDepthRef.current = Math.max(1, stackDepthRef.current - 1); }, []);
+  // 三圆点弹出的菜单开合。胶囊固定在 applet 外壳层，故菜单态也提到本层。
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const ctx = useMemo<AppletCtx | null>(
     () =>
       baseId
-        ? { baseId, appId, tables, device, disableBackSwipe, added, canAdd: true, onAdd, closeApplet, onPushToSubPage, onPopFromSubPage }
+        ? { baseId, appId, tables, device, disableBackSwipe, added, canAdd: true, onAdd, closeApplet }
         : null,
-    [baseId, appId, tables, device, disableBackSwipe, added, onAdd, closeApplet, onPushToSubPage, onPopFromSubPage],
+    [baseId, appId, tables, device, disableBackSwipe, added, onAdd, closeApplet],
   );
 
   if (loading) {
@@ -242,37 +239,66 @@ export function AppletScreen() {
   }
 
   // 内建页栈：主页 + 原生子页。detachInactiveScreens=false → push 子页时主页 WebView 保持挂载（状态不丢）。
+  //
+  // 胶囊固定在 applet 外壳层（Navigator 的兄弟节点，绝对定位悬浮层），而非放进页栈每屏 —— 对齐微信小程序：
+  // 压子页时胶囊不动、不重建，恒为「左三圆点(开菜单) | 右圆环(关整个 applet)」。子页返回改由原生 Stack header
+  // 的「‹ 返回」按钮承担（AppletPage 的 headerShown:true），胶囊左半永远是三圆点、行为不变。
   return (
     <AppletContext.Provider value={ctx}>
-      <AppletStack.Navigator
-        detachInactiveScreens={false}
-        screenOptions={{
-          headerShown: false,
-          cardStyle: { backgroundColor: colors.background },
-          cardStyleInterpolator: rightCardStyleInterpolator,
-        }}
-      >
-        <AppletStack.Screen name="AppletMain" component={AppletMainScreen} options={{ gestureEnabled: false }} />
-        <AppletStack.Screen
-          name="AppletPage"
-          component={AppletPageScreen}
-          options={{ gestureEnabled: true }}
+      <View style={styles.container}>
+        <AppletStack.Navigator
+          detachInactiveScreens={false}
+          screenOptions={{
+            headerShown: false,
+            cardStyle: { backgroundColor: colors.background },
+            cardStyleInterpolator: rightCardStyleInterpolator,
+          }}
+        >
+          <AppletStack.Screen name="AppletMain" component={AppletMainScreen} options={{ gestureEnabled: false }} />
+          <AppletStack.Screen
+            name="AppletPage"
+            component={AppletPageScreen}
+            options={({ route }) => ({
+              gestureEnabled: true,
+              // 原生 header 承担子页返回：「‹ 返回」+ 居中页标题（app navigate 传入 title）。
+              headerShown: true,
+              headerBackTitle: '返回',
+              title: route.params?.title ?? '',
+            })}
+          />
+        </AppletStack.Navigator>
+
+        {/* 胶囊固定悬浮层：盖在整个页栈之上；box-none → 除胶囊本体外的点击穿透给下方 WebView。 */}
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <AppletCapsule onPressLeft={() => setMenuOpen(true)} onPressRight={closeApplet} styles={styles} />
+        </View>
+
+        {/* 三圆点弹出的底部菜单（项目通用 @gorhom BottomSheetModal 同款）：添加/已添加 + 关闭 + 预留「其他」 */}
+        <AppletMenuSheet
+          visible={menuOpen}
+          onClose={() => setMenuOpen(false)}
+          onCloseApplet={() => {
+            setMenuOpen(false);
+            closeApplet();
+          }}
+          added={added}
+          canAdd={ctx.canAdd}
+          onAdd={onAdd}
         />
-      </AppletStack.Navigator>
+      </View>
     </AppletContext.Provider>
   );
 }
 
 /**
  * AppletMainScreen —— 页栈首屏。跑主 WebView（无 initialPage）；App 内 `navigate` → push 一层子页。
- * 胶囊左半三圆点弹菜单、右半圆环关整个 applet（同旧单页行为）。
+ * 胶囊 / 菜单不在本屏 —— 已提到 applet 外壳层（AppletScreen）固定悬浮，压子页时不动、不重建。
  */
 function AppletMainScreen() {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const nav = useNavigation<PageNav>();
-  const { baseId, appId, tables, device, added, canAdd, onAdd, closeApplet } = useApplet();
-  const [menuOpen, setMenuOpen] = useState(false);
+  const { baseId, appId, tables, device } = useApplet();
 
   // App 内 FlowBaseSDK.navigate('page',{title}) → push 一层原生子页（右滑入 + 原生返回）。
   const onNavigate = useCallback(
@@ -283,26 +309,14 @@ function AppletMainScreen() {
   return (
     <View style={styles.container}>
       <CustomAppWebView baseId={baseId} appId={appId} tables={tables} fillHeight device={device} onNavigate={onNavigate} />
-      <AppletCapsule variant="main" onPressLeft={() => setMenuOpen(true)} onPressRight={closeApplet} styles={styles} />
-      {/* 三圆点弹出的底部菜单（项目通用 @gorhom BottomSheetModal 同款）：关闭 + 预留「其他」 */}
-      <AppletMenuSheet
-        visible={menuOpen}
-        onClose={() => setMenuOpen(false)}
-        onCloseApplet={() => {
-          setMenuOpen(false);
-          closeApplet();
-        }}
-        added={added}
-        canAdd={canAdd}
-        onAdd={onAdd}
-      />
     </View>
   );
 }
 
 /**
  * AppletPageScreen —— 原生子页。另起一个 WebView 实例载入同一份 HTML，但以 route.params.page 作 initialPage
- * 决定首屏 div。胶囊左半改返回箭头（‹，pop 一层）、右半圆环（关整个 applet）；也支持继续 navigate 往更深压栈。
+ * 决定首屏 div。返回由原生 Stack header 的「‹ 返回」按钮承担（见 AppletScreen 里 headerShown:true）；胶囊固定
+ * 在外壳层不随子页变化。也支持继续 navigate 往更深压栈。
  */
 function AppletPageScreen() {
   const { colors } = useAppTheme();
@@ -310,13 +324,7 @@ function AppletPageScreen() {
   const nav = useNavigation<PageNav>();
   const route = useRoute<PageRt>();
   const { page } = route.params || {};
-  const { baseId, appId, tables, device, closeApplet, onPushToSubPage, onPopFromSubPage } = useApplet();
-
-  // 每个子页 mount → 外层手势禁、unmount → 减深度；栈退回主页时恢复外层手势。
-  useEffect(() => {
-    onPushToSubPage();
-    return () => onPopFromSubPage();
-  }, [onPushToSubPage, onPopFromSubPage]);
+  const { baseId, appId, tables, device } = useApplet();
 
   // 子页也能继续 navigate → 再 push 一层（类微信小程序层层深入）。
   const onNavigate = useCallback(
@@ -335,23 +343,20 @@ function AppletPageScreen() {
         initialPage={page}
         onNavigate={onNavigate}
       />
-      {/* 子页胶囊：左半返回箭头 → pop 一层；右半圆环 → 关整个 applet。 */}
-      <AppletCapsule variant="sub" onPressLeft={() => nav.goBack()} onPressRight={closeApplet} styles={styles} />
     </View>
   );
 }
 
 /**
- * AppletCapsule —— 右上角悬浮胶囊。主页(variant='main')左半三圆点、子页(variant='sub')左半返回箭头；
- * 右半恒为圆环。主页 iOS 走原生 CALayer 组件（无锯齿）；子页因需返回箭头（原生组件仅画圆点）统一走 RN 兜底。
+ * AppletCapsule —— 右上角悬浮胶囊。固定在 applet 外壳层（不随页栈变化）：左半恒为三圆点（开菜单：关闭 /
+ * 加入我的小应用 / 其他）、右半恒为圆环（直接关整个 applet）。子页返回由原生 Stack header 负责，与胶囊无关。
+ * iOS 走原生 CALayer 组件（无锯齿）；Android 走 RN 兜底。
  */
 function AppletCapsule({
-  variant,
   onPressLeft,
   onPressRight,
   styles,
 }: {
-  variant: 'main' | 'sub';
   onPressLeft: () => void;
   onPressRight: () => void;
   styles: ReturnType<typeof createStyles>;
@@ -359,8 +364,8 @@ function AppletCapsule({
   const insets = useSafeAreaInsets();
   const capsuleTop = insets.top + CAPSULE_GAP_TOP;
 
-  // 主页 + iOS：原生胶囊（左三圆点 / 右圆环，视觉全在 native 画）。
-  if (variant === 'main' && Platform.OS === 'ios') {
+  // iOS：原生胶囊（左三圆点 / 右圆环，视觉全在 native 画）。
+  if (Platform.OS === 'ios') {
     return (
       <AppletCapsuleView
         style={[styles.capsuleNative, { top: capsuleTop }]}
@@ -370,22 +375,18 @@ function AppletCapsule({
     );
   }
 
-  // RN 兜底（Android 主页 + 所有子页）：左半按 variant 画三圆点或返回箭头，右半圆环。
+  // RN 兜底（Android）：左半三圆点，右半圆环。
   return (
     <View style={[styles.capsule, { top: capsuleTop }]} pointerEvents="auto">
       <Pressable
         style={({ pressed }) => [styles.capsuleCell, { backgroundColor: pressed ? CAPSULE_BG_PRESSED : CAPSULE_BG }]}
         onPress={onPressLeft}
       >
-        {variant === 'sub' ? (
-          <Ionicons name="chevron-back" size={18} color="rgba(255,255,255,0.9)" />
-        ) : (
-          <View style={styles.capsuleDots}>
-            <View style={styles.capsuleDot} />
-            <View style={styles.capsuleDot} />
-            <View style={styles.capsuleDot} />
-          </View>
-        )}
+        <View style={styles.capsuleDots}>
+          <View style={styles.capsuleDot} />
+          <View style={styles.capsuleDot} />
+          <View style={styles.capsuleDot} />
+        </View>
       </Pressable>
       <Pressable
         style={({ pressed }) => [styles.capsuleCell, { backgroundColor: pressed ? CAPSULE_BG_PRESSED : CAPSULE_BG }]}
