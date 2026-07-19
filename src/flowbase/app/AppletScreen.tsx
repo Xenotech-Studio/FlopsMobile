@@ -108,6 +108,10 @@ type AppletCtx = {
   onAdd: () => void;
   /** 关闭整个 applet（把 Applet 路由弹出 RootStack）——胶囊圆环 / 菜单「关闭」用。 */
   closeApplet: () => void;
+  /** 子页压栈时调（每个 AppletPage mount 时 +1），禁外层底部滑入手势，避免与内层返回手势竞争。 */
+  onPushToSubPage: () => void;
+  /** 子页卸载时调（每个 AppletPage unmount 时 -1），栈回主页时恢复外层手势。 */
+  onPopFromSubPage: () => void;
 };
 const AppletContext = createContext<AppletCtx | null>(null);
 function useApplet(): AppletCtx {
@@ -200,12 +204,26 @@ export function AppletScreen() {
   // 关闭整个 applet = 把 Applet 路由弹出 RootStack（无论当前在页栈第几层）。
   const closeApplet = useCallback(() => navigation.goBack(), [navigation]);
 
+  // 内层页栈深度计数器：子页压栈时 +1、卸载时 -1；有子页时禁外层 RootStack 的底部滑入手势，
+  // 避免外层退出手势与内层右滑返回手势竞争（否则左缘滑动会直接把整个 applet 甩下关闭）。
+  const stackDepthRef = useRef(1); // 主页 = 1
+  const onPushToSubPage = useCallback(() => {
+    stackDepthRef.current++;
+    navigation.setOptions({ gestureEnabled: false });
+  }, [navigation]);
+  const onPopFromSubPage = useCallback(() => {
+    stackDepthRef.current = Math.max(1, stackDepthRef.current - 1);
+    if (stackDepthRef.current <= 1) {
+      navigation.setOptions({ gestureEnabled: true });
+    }
+  }, [navigation]);
+
   const ctx = useMemo<AppletCtx | null>(
     () =>
       baseId
-        ? { baseId, appId, tables, device, disableBackSwipe, added, canAdd: true, onAdd, closeApplet }
+        ? { baseId, appId, tables, device, disableBackSwipe, added, canAdd: true, onAdd, closeApplet, onPushToSubPage, onPopFromSubPage }
         : null,
-    [baseId, appId, tables, device, disableBackSwipe, added, onAdd, closeApplet],
+    [baseId, appId, tables, device, disableBackSwipe, added, onAdd, closeApplet, onPushToSubPage, onPopFromSubPage],
   );
 
   if (loading) {
@@ -296,7 +314,13 @@ function AppletPageScreen() {
   const nav = useNavigation<PageNav>();
   const route = useRoute<PageRt>();
   const { page } = route.params || {};
-  const { baseId, appId, tables, device, closeApplet } = useApplet();
+  const { baseId, appId, tables, device, closeApplet, onPushToSubPage, onPopFromSubPage } = useApplet();
+
+  // 每个子页 mount → 外层手势禁、unmount → 减深度；栈退回主页时恢复外层手势。
+  useEffect(() => {
+    onPushToSubPage();
+    return () => onPopFromSubPage();
+  }, [onPushToSubPage, onPopFromSubPage]);
 
   // 子页也能继续 navigate → 再 push 一层（类微信小程序层层深入）。
   const onNavigate = useCallback(
