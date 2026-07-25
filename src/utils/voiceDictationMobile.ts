@@ -25,6 +25,8 @@ interface VoiceDictationOptions {
   onError?: (message: string) => void;
   /** 每帧音频（~100ms）的归一化 RMS 振幅（0~1），供 UI 驱动录音动画。 */
   onAmplitude?: (rms: number) => void;
+  /** iOS：用户选中的音频输入设备 UID（长按 mic 弹出 ActionSheet 选择）。 */
+  preferredInputDeviceId?: string;
 }
 
 /** 人声正常说话的满格定标点：rms 到这里就算 1.0（喊会超过、被 clamp）。 */
@@ -282,6 +284,7 @@ export class VoiceDictationSession {
   private readonly onDone: (text: string) => void;
   private readonly onError: (message: string) => void;
   private readonly onAmplitude: ((rms: number) => void) | null;
+  private readonly preferredInputDeviceId: string | undefined;
 
   private _ws: WebSocket | null = null;
   private _wsReady = false;
@@ -301,6 +304,7 @@ export class VoiceDictationSession {
     this.onDone = opts.onDone || (() => {});
     this.onError = opts.onError || (() => {});
     this.onAmplitude = opts.onAmplitude || null;
+    this.preferredInputDeviceId = opts.preferredInputDeviceId;
   }
 
   async start(): Promise<void> {
@@ -325,6 +329,10 @@ export class VoiceDictationSession {
         return;
       }
       await AudioManager.setAudioSessionActivity(true);
+      // 用户长按 mic 选中的输入设备（iOS）
+      if (this.preferredInputDeviceId) {
+        try { await AudioManager.setInputDevice(this.preferredInputDeviceId); } catch { /* 设备已断开则忽略 */ }
+      }
     } catch (e: any) {
       this._teardown();
       this.state = 'closed';

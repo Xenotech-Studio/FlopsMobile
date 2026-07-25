@@ -35,6 +35,9 @@ type FlopsAudioNative = {
   stop(): Promise<null>;
   playIndex(index: number): Promise<null>;
   getState(): Promise<{ state: string; key: string; index: number; count: number }>;
+  showInputRoutePicker(): Promise<{
+    currentInputs: Array<{ id: string; name: string; category: string }>;
+  }>;
 };
 
 export type PlaybackMeta = {
@@ -256,6 +259,18 @@ export async function togglePlayback(segments: string[], meta: PlaybackMeta): Pr
     return resumePlayback();
   }
   return playSegments(segments, meta);
+}
+
+/** 长按 mic：弹系统音频路由选择浮层（AVRoutePickerView，设备列表含蓝牙耳机）。
+ *  调用前需把 session 配成录音态（playAndRecord + 蓝牙 HFP）并激活，否则浮层里
+ *  蓝牙不可选；resolve 于浮层关闭、路由切换稳定后，返回当时 currentRoute 的输入
+ *  设备。非 iOS 返回空数组。 */
+export async function showInputRoutePicker(): Promise<
+  Array<{ id: string; name: string; category: string }>
+> {
+  if (!Native) return [];
+  const res = await Native.showInputRoutePicker();
+  return res?.currentInputs ?? [];
 }
 
 // MARK: - React 订阅

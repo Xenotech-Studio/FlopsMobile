@@ -18,7 +18,9 @@
 import Foundation
 import React
 import AVFoundation
+import AVKit
 import MediaPlayer
+import UIKit
 
 @objc(FlopsAudio)
 class FlopsAudioModule: RCTEventEmitter {
@@ -43,7 +45,8 @@ class FlopsAudioModule: RCTEventEmitter {
 
   /// 与其它 App 的混音方式（由 JS 从 layout-preferences 的 tts_mixing_mode 下发）：
   /// "duck" → .duckOthers（降低他人音量，默认）；"mix" → .mixWithOthers（直接叠加）。
-  /// configureSession(active:) 每次据此拼 AVAudioSession.CategoryOptions。
+  /// duck 只在「真正出声」时生效（configureSession(active:audible:)）：回放在播、或实时流的
+  /// speak_start→尾音播完窗口内；其余时间（如 WS 空闲保活）一律 mix，不压他人。
   private var audioMixingMode: String = "duck"
 
   // MARK: - 实时流式 TTS 状态（/api/ws/audio → PCM）
@@ -130,7 +133,7 @@ class FlopsAudioModule: RCTEventEmitter {
   func stop(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     teardown()
     emitState("idle")
-    configureSession(active: false)
+    releaseAfterReplay()
     clearNowPlaying()
     resolve(nil)
   }
@@ -165,8 +168,47 @@ class FlopsAudioModule: RCTEventEmitter {
   func setAudioMixingMode(_ mode: String) {
     audioMixingMode = (mode == "mix") ? "mix" : "duck"
     if player?.timeControlStatus == .playing || engineStarted {
-      configureSession(active: true)
+      configureSession(active: true,
+                       audible: player?.timeControlStatus == .playing || realtimeSpeaking)
     }
+  }
+
+  // MARK: - 音频输入路由选择（长按 mic，JS 调用）
+
+  private var routePicker: AVRoutePickerView?
+  private var routePickerResolve: RCTPromiseResolveBlock?
+
+  /// 弹系统路由选择浮层（AVRoutePickerView）。自查 availableInputs 拿不到未建立
+  /// SCO 链路的蓝牙耳机（AirPods 等），系统浮层的设备列表才完整。调用前 JS 需把
+  /// session 配成 playAndRecord + allowBluetoothHFP 并激活，否则浮层里蓝牙不可选。
+  /// resolve 于浮层关闭、路由切换稳定后，返回当时 currentRoute 的输入设备。
+  @objc(showInputRoutePicker:rejecter:)
+  func showInputRoutePicker(_ resolve: @escaping RCTPromiseResolveBlock,
+                            rejecter reject: @escaping RCTPromiseRejectBlock) {
+    guard routePickerResolve == nil else {
+      reject("picker_busy", "route picker already presenting", nil)
+      return
+    }
+    guard let rootView = UIApplication.shared.connectedScenes
+      .compactMap({ $0 as? UIWindowScene })
+      .flatMap({ $0.windows })
+      .first(where: { $0.isKeyWindow })?.rootViewController?.view else {
+      reject("no_window", "no key window", nil)
+      return
+    }
+    let picker = AVRoutePickerView(
+      frame: CGRect(x: rootView.bounds.midX, y: rootView.bounds.midY, width: 1, height: 1))
+    picker.alpha = 0.02  // 触发内部按钮要求 view 在层级内且可交互；视觉上不可见
+    picker.delegate = self
+    rootView.addSubview(picker)
+    guard let button = picker.subviews.compactMap({ $0 as? UIButton }).first else {
+      picker.removeFromSuperview()
+      reject("no_button", "AVRoutePickerView internal button not found", nil)
+      return
+    }
+    routePicker = picker
+    routePickerResolve = resolve
+    button.sendActions(for: .touchUpInside)
   }
 
   // MARK: - 队列构建 / 拆除
@@ -246,7 +288,7 @@ class FlopsAudioModule: RCTEventEmitter {
       // 最后一段自然播完
       emitState("ended")
       clearNowPlaying()
-      configureSession(active: false)
+      releaseAfterReplay()
     } else {
       currentIndex = baseIndex + local + 1
       refreshNowPlaying()
@@ -294,19 +336,26 @@ class FlopsAudioModule: RCTEventEmitter {
   // MARK: - AVAudioSession（Phase 1）
 
   private var interruptionsWired = false
+  /// 本模块是否激活过 session（未激活时跳过 setActive(false)，别去动 ASR 等别人激活的 session）。
+  private var sessionActive = false
 
-  private func configureSession(active: Bool) {
+  /// audible=true：真要出声（回放播放 / 实时朗读窗口），按用户偏好 duck 或 mix；
+  /// audible=false：仅保活（WS 连着但没在朗读），一律 mix，不压低其它 App。
+  private func configureSession(active: Bool, audible: Bool = true) {
     let session = AVAudioSession.sharedInstance()
     do {
       if active {
         // 与其它 App 共存：duck（降他人音量）| mix（直接叠加）。绝不裸 .playback 独占暂停。
         let options: AVAudioSession.CategoryOptions =
-          (audioMixingMode == "mix") ? [.mixWithOthers] : [.duckOthers]
+          (audioMixingMode == "mix" || !audible) ? [.mixWithOthers] : [.duckOthers]
         try session.setCategory(.playback, mode: .spokenAudio, options: options)
         try session.setActive(true)
+        sessionActive = true
         wireInterruptionsIfNeeded()
       } else {
+        guard sessionActive else { return }
         try session.setActive(false, options: [.notifyOthersOnDeactivation])
+        sessionActive = false
       }
     } catch {
       NSLog("[FlopsAudio] session error: %@", error.localizedDescription)
@@ -336,7 +385,7 @@ class FlopsAudioModule: RCTEventEmitter {
       if let optRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt {
         let opts = AVAudioSession.InterruptionOptions(rawValue: optRaw)
         if opts.contains(.shouldResume) {
-          configureSession(active: true)
+          configureSession(active: true, audible: realtimeSpeaking || player != nil)
           player?.play()
           if engineStarted { try? engine.start(); playerNode.play() }
         }
@@ -424,6 +473,8 @@ class FlopsAudioModule: RCTEventEmitter {
   //   见 docs/tts-realtime-streaming-design.md。WS 与 PCM 播放全在原生，
   //   JS 只传已拼好鉴权的 wsUrl + 开关。与回放 AVQueuePlayer 共用同一
   //   AVAudioSession（.playback + audio 后台模式）→ 后台/锁屏也朗读。
+  //   session 分两态：空闲保活（mix，引擎渲染静音维持后台存活、不压他人音量）
+  //   与朗读窗口（speak_start→尾音播完，按偏好 duck）；切换见「朗读窗口」一节。
   // ==================================================================
 
   /// 连接（或按新 URL 重连）实时音频 WS。wsUrl 已含鉴权（JS 侧拼好）。
@@ -446,7 +497,10 @@ class FlopsAudioModule: RCTEventEmitter {
     realtimeMode = mode
     shouldStreamConnect = true
     reconnectAttempt = 0
-    configureSession(active: true)
+    // 连上 WS ≠ 在朗读：以 mixWithOthers 的「保活态」激活（引擎渲染静音维持后台存活、WS 不断），
+    // 不压低其它 App。duckOthers 从 setActive(true) 那一刻就开始压音、与是否真出声无关，
+    // 所以绝不能在这里就用 duck——它推迟到 speak_start / 首帧 PCM 的出声窗口（enterSpeakingSessionIfNeeded）。
+    configureSession(active: true, audible: false)
     startEngineIfNeeded()
     openWebSocket(url)
     resolve(nil)
@@ -459,7 +513,7 @@ class FlopsAudioModule: RCTEventEmitter {
     closeWebSocket()
     stopEngine()
     emitRealtime("closed")
-    if player == nil { configureSession(active: false) } // 回放也没在才释放 session
+    releaseSessionIfIdle() // 回放也没在才释放 session
     resolve(nil)
   }
 
@@ -515,7 +569,13 @@ class FlopsAudioModule: RCTEventEmitter {
     wsTask = nil
     guard shouldStreamConnect else { emitRealtime("closed"); return }
     reconnectAttempt += 1
-    if reconnectAttempt > 5 { emitRealtime("error", error: "ws_reconnect_failed"); return }
+    if reconnectAttempt > 5 {
+      // 重连放弃：别让引擎挂着 ducked session 不放
+      stopEngine()
+      releaseSessionIfIdle()
+      emitRealtime("error", error: "ws_reconnect_failed")
+      return
+    }
     let delays = [1.0, 2.0, 5.0, 5.0, 5.0]
     let delay = delays[min(reconnectAttempt - 1, delays.count - 1)]
     emitRealtime("connecting")
@@ -534,6 +594,7 @@ class FlopsAudioModule: RCTEventEmitter {
           let type = obj["type"] as? String else { return }
     switch type {
     case "ready":
+      configureSession(active: true, audible: false) // 保活态（mix），不压他人
       startEngineIfNeeded()
       emitRealtime("ready")
     case "speak_start":
@@ -543,11 +604,13 @@ class FlopsAudioModule: RCTEventEmitter {
         flushRealtimePlayback() // 改口：冲掉上一 run 未播的 PCM
       }
       streamRunId = rid
+      tailGeneration += 1 // 新 run 开始：作废挂起的「尾音播完→降回保活态」
       player?.pause() // 与回放互斥
-      startEngineIfNeeded()
+      enterSpeakingSessionIfNeeded()
       emitRealtime("speaking", runId: rid, convId: cid)
     case "speak_end":
-      // 不清队列：已排队的尾音自然播完
+      // 不清队列：已排队的尾音自然播完；播完后退出朗读窗口（解除 duck、降回 mix 保活）
+      scheduleSessionReleaseAfterTail()
       emitRealtime("ended", runId: obj["run_id"] as? String,
                    convId: obj["conversation_id"] as? String)
     case "audio_saved":
@@ -562,7 +625,8 @@ class FlopsAudioModule: RCTEventEmitter {
   }
 
   private func handlePcm(_ incoming: Data) {
-    startEngineIfNeeded()
+    tailGeneration += 1 // 还有 PCM 进来 = 还在朗读，作废挂起的「尾音播完→降回保活态」
+    enterSpeakingSessionIfNeeded()
     var bytes = incoming
     if let carry = byteCarry { bytes = Data([carry]) + bytes; byteCarry = nil }
     if bytes.count % 2 == 1 { byteCarry = bytes.last; bytes = bytes.dropLast() }
@@ -594,6 +658,7 @@ class FlopsAudioModule: RCTEventEmitter {
       engineWired = true
     }
     if !engineStarted {
+      // 注意：不在此激活 session——duck/mix 取决于调用方意图，调用方须先 configureSession
       engine.prepare()
       do { try engine.start(); engineStarted = true }
       catch { NSLog("[FlopsAudio] engine start error: %@", error.localizedDescription); return }
@@ -602,17 +667,116 @@ class FlopsAudioModule: RCTEventEmitter {
   }
 
   private func stopEngine() {
+    stopEngineForCycle()
+    streamRunId = ""
+    realtimeSpeaking = false
+  }
+
+  /// 只停引擎、不清 run 状态：session 升降级循环（mix↔duck 切换要跨一次 setActive 假期）中途用。
+  private func stopEngineForCycle() {
+    tailGeneration += 1 // 作废挂起的尾音哨兵（node.stop 会触发其 completionHandler）
     if playerNode.isPlaying { playerNode.stop() }
     if engineStarted { engine.stop(); engineStarted = false }
-    streamRunId = ""
     byteCarry = nil
   }
 
   /// 冲掉已排队未播的 PCM（改口 / 开始回放时用），保持 node 可继续接收新 buffer。
   private func flushRealtimePlayback() {
+    tailGeneration += 1 // node.stop 会触发挂起哨兵的 completionHandler，先作废
     playerNode.stop() // 清空 scheduleBuffer 队列
     byteCarry = nil
     if engineStarted { playerNode.play() }
+  }
+
+  // MARK: 朗读窗口（speak_start → 尾音播完）——只在窗口内 duck
+  //
+  // duck 的生效与解除都绑定在 setActive 的那一刻：已激活的 session 上仅换 category 选项，
+  // 既压不下去也恢复不了他人音量。所以 mix(保活)↔duck(出声) 的切换要做一次
+  // 「停引擎 → setActive(false) → 换选项 → setActive(true) → 重启引擎」的循环（毫秒级）。
+
+  /// 实时流处于「正在朗读」窗口内。窗口外 session 一律 mix 保活，不压他人。
+  private var realtimeSpeaking = false
+
+  /// 挂起的「尾音哨兵」回调的代数：speak_start / 新 PCM / 停引擎 / flush 都会推进，
+  /// 使旧哨兵的 completionHandler 变成 no-op（node.stop 也会触发 handler，必须靠代数甄别）。
+  private var tailGeneration = 0
+
+  /// speak_start / 首帧 PCM：进入朗读窗口。偏好 duck 且 session 已按 mix 保活激活时，
+  /// 需经一次降/升级循环换成 duck 选项——发生在首帧 PCM 排队之前，无可闻断裂。
+  private func enterSpeakingSessionIfNeeded() {
+    if !realtimeSpeaking {
+      realtimeSpeaking = true
+      if audioMixingMode == "duck", sessionActive {
+        stopEngineForCycle()
+        configureSession(active: false)
+      }
+      configureSession(active: true)
+    }
+    startEngineIfNeeded()
+  }
+
+  /// speak_end 后不能立刻退出窗口——已排队的尾音还没出声。排一个 10ms 静音哨兵 buffer，
+  /// 用 .dataPlayedBack 等它前面的 PCM 全部播完再退出。期间来了新 run / 新 PCM，
+  /// tailGeneration 已被推进，回调作废。
+  private func scheduleSessionReleaseAfterTail() {
+    guard engineStarted else { exitSpeakingSession(); return }
+    let gen = tailGeneration
+    let frames = AVAudioFrameCount(240) // 24kHz × 10ms
+    guard let sentinel = AVAudioPCMBuffer(pcmFormat: streamFormat, frameCapacity: frames) else { return }
+    sentinel.frameLength = frames
+    if let ch = sentinel.floatChannelData {
+      memset(ch[0], 0, Int(frames) * MemoryLayout<Float>.size)
+    }
+    if !playerNode.isPlaying { playerNode.play() }
+    playerNode.scheduleBuffer(sentinel, at: nil, options: [],
+                              completionCallbackType: .dataPlayedBack) { [weak self] _ in
+      DispatchQueue.main.async {
+        guard let self = self, gen == self.tailGeneration else { return }
+        self.exitSpeakingSession()
+      }
+    }
+  }
+
+  /// 尾音播完，退出朗读窗口。偏好 mix 本来没压别人，引擎继续跑即可；
+  /// 偏好 duck 需降级循环把他人音量放回来。回放正在出声则 session 归回放管，不动。
+  private func exitSpeakingSession() {
+    guard realtimeSpeaking else { return }
+    realtimeSpeaking = false
+    guard audioMixingMode == "duck" else { return }
+    if let p = player, p.timeControlStatus != .paused { return }
+    downgradeSessionToIdle()
+  }
+
+  /// 降级循环：停引擎 → setActive(false)（恢复他人音量）→ 立刻以 mix 保活态重新激活并
+  /// 重启引擎（渲染静音维持后台存活，WS 不断）。WS 已不需要时则彻底停干净。
+  private func downgradeSessionToIdle() {
+    guard shouldStreamConnect else {
+      stopEngine()
+      releaseSessionIfIdle()
+      return
+    }
+    stopEngineForCycle()
+    configureSession(active: false)
+    configureSession(active: true, audible: false)
+    startEngineIfNeeded()
+  }
+
+  /// 实时引擎与回放都没在出声时才真正 setActive(false)；有一方在用则保持激活。
+  /// player 存在但已暂停/播完（timeControlStatus == .paused）不算占用——play() 会重新激活。
+  private func releaseSessionIfIdle() {
+    guard !engineStarted else { return }
+    if let p = player, p.timeControlStatus != .paused { return }
+    configureSession(active: false)
+  }
+
+  /// 回放结束/停止后的 session 收尾：WS 还该保持连接且没在朗读 → 降回 mix 保活
+  /// （顺带解除回放留下的 duck）；正在实时朗读 → session 归实时流管；否则彻底释放。
+  private func releaseAfterReplay() {
+    if shouldStreamConnect {
+      if !realtimeSpeaking { downgradeSessionToIdle() }
+      return
+    }
+    releaseSessionIfIdle()
   }
 
   private func emitRealtime(_ state: String, runId: String? = nil,
@@ -623,5 +787,23 @@ class FlopsAudioModule: RCTEventEmitter {
     if let convId = convId { body["conversationId"] = convId }
     if let error = error { body["error"] = error }
     sendEvent(withName: "onRealtimeState", body: body)
+  }
+}
+
+// MARK: - AVRoutePickerViewDelegate（输入路由浮层）
+
+extension FlopsAudioModule: AVRoutePickerViewDelegate {
+  func routePickerViewDidEndPresentingRoutes(_ routePickerView: AVRoutePickerView) {
+    // 浮层关闭 ≠ 路由切换完成：选蓝牙后 HFP（SCO）链路建立需约 1s，延时后再读
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+      guard let self = self, let resolve = self.routePickerResolve else { return }
+      self.routePickerResolve = nil
+      self.routePicker?.removeFromSuperview()
+      self.routePicker = nil
+      let inputs = AVAudioSession.sharedInstance().currentRoute.inputs.map {
+        ["id": $0.uid, "name": $0.portName, "category": $0.portType.rawValue]
+      }
+      resolve(["currentInputs": inputs])
+    }
   }
 }

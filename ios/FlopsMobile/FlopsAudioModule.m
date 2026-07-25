@@ -42,4 +42,7 @@ RCT_EXTERN_METHOD(stopRealtime:(RCTPromiseResolveBlock)resolve
 
 RCT_EXTERN_METHOD(setAudioMixingMode:(NSString *)mode)
 
+RCT_EXTERN_METHOD(showInputRoutePicker:(RCTPromiseResolveBlock)resolve
+                              rejecter:(RCTPromiseRejectBlock)reject)
+
 @end

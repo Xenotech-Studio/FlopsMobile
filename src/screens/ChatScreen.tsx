@@ -20,6 +20,7 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+import { AudioManager } from 'react-native-audio-api';
 import {
   KeyboardAvoidingView,
   useReanimatedKeyboardAnimation,
@@ -38,7 +39,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { convProfileLog } from '../debug/conversationLoadProfile';
 import { useSession } from '../context/SessionContext';
 import { useSetActiveConversation, useUnreadConvMap } from '../context/ConversationContext';
-import { useTtsPlayback, togglePlayback } from '../audio/ttsPlayer';
+import { useTtsPlayback, togglePlayback, showInputRoutePicker } from '../audio/ttsPlayer';
 import {
   setActiveConversation as setRealtimeActiveConversation,
   clearActiveConversation as clearRealtimeActiveConversation,
@@ -1678,6 +1679,8 @@ export function ChatScreen({
   const dictationErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 实时麦克风振幅（0~1 归一化 RMS）：onAmplitude 每 ~100ms 一拍，withTiming 插值后驱动 micPulseStyle。 */
   const micAmplitude = useSharedValue(0);
+  /** 用户长按 mic 选中的输入设备 UID（iOS）；下次 start 时 apply。 */
+  const preferredMicDeviceId = useRef<string | null>(null);
 
   const flashDictationError = useCallback((message: string) => {
     setDictationError(message);
@@ -1699,6 +1702,27 @@ export function ChatScreen({
     return pending;
   }, []);
 
+  /** 长按 mic（仅 idle 时）：弹系统路由选择浮层（AVRoutePickerView，含蓝牙耳机）。
+   *  自查 availableInputs 拿不到未建立 SCO 链路的蓝牙设备，系统浮层列表才完整。
+   *  浮层需在录音态 session 下弹（playAndRecord + 蓝牙 HFP、已激活）；选完读当前
+   *  路由输入存 uid（下次 start 时 setInputDevice 应用），再释放 session。 */
+  const onMicLongPress = useCallback(async () => {
+    if (dictationState !== 'idle' || Platform.OS !== 'ios') return;
+    try {
+      AudioManager.setAudioSessionOptions({
+        iosCategory: 'playAndRecord',
+        iosMode: 'default',
+        iosOptions: ['allowBluetoothHFP', 'defaultToSpeaker'],
+      });
+      await AudioManager.setAudioSessionActivity(true);
+      const inputs = await showInputRoutePicker();
+      if (inputs[0]?.id) preferredMicDeviceId.current = inputs[0].id;
+    } catch { /* 静默 */ } finally {
+      // 无论选没选都释放 session，别占着 playAndRecord 影响 TTS / 其它 App 音频
+      AudioManager.setAudioSessionActivity(false).catch(() => {});
+    }
+  }, [dictationState]);
+
   /** mic 点击：idle→开始录音；recording→立刻停（回 idle，后台等 onDone 定稿）。 */
   const onMicPress = useCallback(async () => {
     if (dictationState === 'recording') {
@@ -1715,6 +1739,7 @@ export function ChatScreen({
     const s = new VoiceDictationSession({
       serverBaseUrl: session.server_base_url,
       token: session.access_token,
+      preferredInputDeviceId: preferredMicDeviceId.current ?? undefined,
       onAmplitude: (rms) => {
         // ~100ms 一拍的硬台阶 → 80ms 线性插值成平滑斜坡
         micAmplitude.value = withTiming(rms, { duration: 80, easing: Easing.linear });
@@ -4556,6 +4581,7 @@ export function ChatScreen({
                     <TouchableOpacity
                       style={styles.composerMicBtnInner}
                       onPress={onMicPress}
+                      onLongPress={onMicLongPress}
                       disabled={!session}
                       accessibilityLabel={dictationActive ? '结束语音输入' : '语音输入'}
                       activeOpacity={0.7}
