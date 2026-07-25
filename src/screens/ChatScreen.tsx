@@ -16,6 +16,7 @@ import {
   Alert,
   ActionSheetIOS,
   InteractionManager,
+  Keyboard,
   Dimensions,
   type StyleProp,
   type ViewStyle,
@@ -39,7 +40,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { convProfileLog } from '../debug/conversationLoadProfile';
 import { useSession } from '../context/SessionContext';
 import { useSetActiveConversation, useUnreadConvMap } from '../context/ConversationContext';
-import { useTtsPlayback, togglePlayback, showInputRoutePicker } from '../audio/ttsPlayer';
+import { useTtsPlayback, togglePlayback } from '../audio/ttsPlayer';
 import {
   setActiveConversation as setRealtimeActiveConversation,
   clearActiveConversation as clearRealtimeActiveConversation,
@@ -151,6 +152,8 @@ import {
 } from '../utils/toolCardParsers';
 import { ReadPagesDetailSheet } from '../components/ReadPagesDetailSheet';
 import { ModelSelectSheet } from '../components/ModelSelectSheet';
+import type { ModelSelectOption } from '../components/ModelSelectSheet';
+import { BlurSelectSheet } from '../components/BlurSelectSheet';
 import { IOSStyleSwitch } from '../components/IOSStyleSwitch';
 import { resolveAgentDisplayLabel } from '../utils/agentDisplay';
 import { VoiceDictationSession } from '../utils/voiceDictationMobile';
@@ -1679,8 +1682,9 @@ export function ChatScreen({
   const dictationErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 实时麦克风振幅（0~1 归一化 RMS）：onAmplitude 每 ~100ms 一拍，withTiming 插值后驱动 micPulseStyle。 */
   const micAmplitude = useSharedValue(0);
-  /** 用户长按 mic 选中的输入设备 UID（iOS）；下次 start 时 apply。 */
-  const preferredMicDeviceId = useRef<string | null>(null);
+  /** 用户长按 mic 选中的麦克风源：'auto'（按连接情况自动）、'builtin'（iPhone 内置）、'headset'（耳机）。 */
+  const preferredMicSource = useRef<'auto' | 'builtin' | 'headset'>('auto');
+  const [currentMicSource, setCurrentMicSource] = useState<'auto' | 'builtin' | 'headset'>('auto');
 
   const flashDictationError = useCallback((message: string) => {
     setDictationError(message);
@@ -1702,26 +1706,71 @@ export function ChatScreen({
     return pending;
   }, []);
 
-  /** 长按 mic（仅 idle 时）：弹系统路由选择浮层（AVRoutePickerView，含蓝牙耳机）。
-   *  自查 availableInputs 拿不到未建立 SCO 链路的蓝牙设备，系统浮层列表才完整。
-   *  浮层需在录音态 session 下弹（playAndRecord + 蓝牙 HFP、已激活）；选完读当前
-   *  路由输入存 uid（下次 start 时 setInputDevice 应用），再释放 session。 */
-  const onMicLongPress = useCallback(async () => {
+  /** 长按 mic（仅 idle 时）：Bottom Sheet 弹出音频输入源选择器。
+   *  无耳机时也弹（仅「iPhone 麦克风」一项），确保长按始终有反馈。 */
+  const [micSourceSheetOpen, setMicSourceSheetOpen] = useState(false);
+  const [micSourceSheetOptions, setMicSourceSheetOptions] = useState<ModelSelectOption[]>([]);
+  const micSourceOptions = useRef<ModelSelectOption[]>([
+    { label: 'iPhone 麦克风', value: 'builtin', subtitle: '', icon: 'phone-portrait-outline' },
+    { label: '耳机麦克风', value: 'headset', subtitle: '', icon: 'headset-outline' },
+  ]);
+  const onMicLongPress = useCallback(() => {
     if (dictationState !== 'idle' || Platform.OS !== 'ios') return;
-    try {
-      AudioManager.setAudioSessionOptions({
-        iosCategory: 'playAndRecord',
-        iosMode: 'default',
-        iosOptions: ['allowBluetoothHFP', 'defaultToSpeaker'],
-      });
-      await AudioManager.setAudioSessionActivity(true);
-      const inputs = await showInputRoutePicker();
-      if (inputs[0]?.id) preferredMicDeviceId.current = inputs[0].id;
-    } catch { /* 静默 */ } finally {
-      // 无论选没选都释放 session，别占着 playAndRecord 影响 TTS / 其它 App 音频
-      AudioManager.setAudioSessionActivity(false).catch(() => {});
+    const openSheet = () => {
+      AudioManager.getDevicesInfo().then((info: any) => {
+        const outs: any[] = info?.currentOutputs || [];
+        const bt = outs.find((o: any) =>
+          o.category === 'BluetoothA2DPOutput' || o.category === 'BluetoothA2DP' || o.category === 'BluetoothHFP');
+        const wired = outs.find((o: any) =>
+          o.category === 'Headphones' || o.category === 'Headset' || o.category === 'USBAudio');
+        // 每次按连接情况新建选项数组（不 mutate 模板）；文案只说麦克风输入，别让用户误以为在选输出
+        const [builtin, headset] = micSourceOptions.current;
+        let sheetOpts: ModelSelectOption[];
+        if (bt) {
+          sheetOpts = [
+            { ...builtin, subtitle: '保持耳机播放的同时用手机麦克风讲话' },
+            { ...headset, label: `${bt.name} 麦克风`, subtitle: '用耳机同时播放和讲话' },
+          ];
+        } else if (wired) {
+          sheetOpts = [
+            { ...builtin, subtitle: '保持耳机播放的同时用手机麦克风讲话' },
+            { ...headset, label: '有线耳机麦克风', subtitle: '用耳机同时播放和讲话' },
+          ];
+        } else {
+          // 无耳机也弹：仅「iPhone 麦克风」单项，长按始终有反馈
+          sheetOpts = [{ ...builtin }];
+        }
+        // 开 sheet 前同步当前选中值：'auto' 的实际行为就是 builtin（A2DP 分离），✓ 落在 iPhone 麦克风上
+        const cur = preferredMicSource.current;
+        setCurrentMicSource(cur === 'auto' ? 'builtin' : cur);
+        setMicSourceSheetOptions(sheetOpts);
+        setMicSourceSheetOpen(true);
+      }).catch(() => {});
+    };
+    if (!Keyboard.isVisible()) {
+      openSheet();
+      return;
     }
-  }, [dictationState]);
+    // composer 是原生 FlowDocInputView，Keyboard.dismiss() 找不到 first responder（见
+    // dismissComposer 注释），必须 native blur 收键盘；收起是硬件动画（~250ms），
+    // 用 keyboardDidHide 精确等它结束再弹 sheet（600ms 兜底），否则 sheet 被键盘压住。
+    let opened = false;
+    const openOnce = () => {
+      if (opened) return;
+      opened = true;
+      sub.remove();
+      clearTimeout(fallback);
+      openSheet();
+    };
+    const sub = Keyboard.addListener('keyboardDidHide', openOnce);
+    const fallback = setTimeout(openOnce, 600);
+    dismissComposer();
+  }, [dictationState, dismissComposer]);
+  const handleSelectMicSource = useCallback((value: string) => {
+    preferredMicSource.current = value as 'builtin' | 'headset';
+    setCurrentMicSource(value as 'builtin' | 'headset');
+    // 不在这里关 sheet：BlurSelectSheet 选中后播 1s 动效反馈再自行调 onClose
+  }, []);
 
   /** mic 点击：idle→开始录音；recording→立刻停（回 idle，后台等 onDone 定稿）。 */
   const onMicPress = useCallback(async () => {
@@ -1739,7 +1788,7 @@ export function ChatScreen({
     const s = new VoiceDictationSession({
       serverBaseUrl: session.server_base_url,
       token: session.access_token,
-      preferredInputDeviceId: preferredMicDeviceId.current ?? undefined,
+      preferredMicSource: preferredMicSource.current ?? undefined,
       onAmplitude: (rms) => {
         // ~100ms 一拍的硬台阶 → 80ms 线性插值成平滑斜坡
         micAmplitude.value = withTiming(rms, { duration: 80, easing: Easing.linear });
@@ -1764,6 +1813,7 @@ export function ChatScreen({
         setDictationState('idle');
         flashDictationError(message);
       },
+      onNotice: flashDictationError, // 非致命（如耳机麦不可用回落内置麦）：只闪提示，录音继续
     });
     dictationSessionRef.current = s;
     setDictationState('recording'); // 乐观：权限被拒时 onError 会回 idle
@@ -4876,6 +4926,14 @@ export function ChatScreen({
       options={agentSheetOptions}
       sheetTitle="选择助手"
       onSelectModel={(id) => void handleSelectAgent(id)}
+    />
+    <BlurSelectSheet
+      visible={micSourceSheetOpen}
+      onClose={() => setMicSourceSheetOpen(false)}
+      options={micSourceSheetOptions}
+      title="选择麦克风"
+      selectedValue={currentMicSource}
+      onSelect={handleSelectMicSource}
     />
     <UsageDetailModal
       visible={usageDetailModalState != null}

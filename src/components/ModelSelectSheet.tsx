@@ -70,6 +70,8 @@ export type ModelSelectOption = {
   value: string;
   /** 第二行小字，如目录价（可选） */
   subtitle?: string | null;
+  /** Ionicons 图标名（可选），如 'headset-outline'；缺省用 hardware-chip-outline */
+  icon?: string;
 };
 
 type Props = {
@@ -152,7 +154,7 @@ export function ModelSelectSheet({
               onPress={() => onSelectModel(item.value)}
               activeOpacity={0.7}
             >
-              <Ionicons name="hardware-chip-outline" size={24} color={colors.textPrimary} />
+              <Ionicons name={item.icon ?? 'hardware-chip-outline'} size={24} color={colors.textPrimary} />
               <View style={styles.textCol}>
                 <Text style={styles.primaryLabel} numberOfLines={2}>
                   {item.label}

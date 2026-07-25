@@ -23,10 +23,12 @@ interface VoiceDictationOptions {
   onResult?: (text: string, last: boolean) => void;
   onDone?: (text: string) => void;
   onError?: (message: string) => void;
+  /** 非致命提示（如耳机麦不可用回落内置麦）：录音继续，仅 UI 上闪一句话。 */
+  onNotice?: (message: string) => void;
   /** 每帧音频（~100ms）的归一化 RMS 振幅（0~1），供 UI 驱动录音动画。 */
   onAmplitude?: (rms: number) => void;
-  /** iOS：用户选中的音频输入设备 UID（长按 mic 弹出 ActionSheet 选择）。 */
-  preferredInputDeviceId?: string;
+  /** iOS：用户长按 mic 选的麦克风源。auto=按连接自动、builtin=iPhone 内置麦、headset=耳机麦。 */
+  preferredMicSource?: 'auto' | 'builtin' | 'headset';
 }
 
 /** 人声正常说话的满格定标点：rms 到这里就算 1.0（喊会超过、被 clamp）。 */
@@ -283,8 +285,9 @@ export class VoiceDictationSession {
   private readonly onResult: (text: string, last: boolean) => void;
   private readonly onDone: (text: string) => void;
   private readonly onError: (message: string) => void;
+  private readonly onNotice: (message: string) => void;
   private readonly onAmplitude: ((rms: number) => void) | null;
-  private readonly preferredInputDeviceId: string | undefined;
+  private readonly preferredMicSource: 'auto' | 'builtin' | 'headset';
 
   private _ws: WebSocket | null = null;
   private _wsReady = false;
@@ -303,23 +306,37 @@ export class VoiceDictationSession {
     this.onResult = opts.onResult || (() => {});
     this.onDone = opts.onDone || (() => {});
     this.onError = opts.onError || (() => {});
+    this.onNotice = opts.onNotice || (() => {});
     this.onAmplitude = opts.onAmplitude || null;
-    this.preferredInputDeviceId = opts.preferredInputDeviceId;
+    this.preferredMicSource = opts.preferredMicSource || 'auto';
   }
 
   async start(): Promise<void> {
     if (this.state !== 'idle') return;
     this.state = 'starting';
+    console.log('[dictation] start() preferredMicSource=', this.preferredMicSource);
     // 每次会话独立攒一份 PCM 用于回放/落库
     this._pcmChunks = [];
     this._pcmTotalBytes = 0;
 
     // 麦克风权限 + 音频会话
     try {
+      // 按用户长按 mic 选的源动态配 options：headset → HFP（耳机麦）、builtin/auto → A2DP 分离（iPhone 内置麦+蓝牙高音质）
+      const wantHeadsetMic = this.preferredMicSource === 'headset';
+      console.log('[dictation] wantHeadsetMic=', wantHeadsetMic);
+      const iosOpts = (wantHeadsetMic
+        ? ['allowBluetoothHFP']
+        : ['allowBluetoothA2DP', 'defaultToSpeaker']) as any;
+      // 先强制 deactivate 一次：react-native-audio-api 内部有 isActive 缓存，为 true 时
+      // setAudioSessionActivity(true) 直接 early-return、跳过 configureAudioSession；而 TTS
+      // （FlopsAudio）是绕过该库直接把共享 session 改成 .playback 的——缓存变脏（上次
+      // deactivate 失败即残留 true）时 category 配不回 playAndRecord，录音全程静音。
+      // deactivate 把缓存归位，保证下面 activate 必然重配 category/options。
+      await AudioManager.setAudioSessionActivity(false).catch(() => {});
       AudioManager.setAudioSessionOptions({
         iosCategory: 'playAndRecord',
         iosMode: 'default',
-        iosOptions: ['allowBluetoothHFP', 'defaultToSpeaker'],
+        iosOptions: iosOpts,
       });
       const status = await AudioManager.requestRecordingPermissions();
       if (status !== 'Granted') {
@@ -329,9 +346,16 @@ export class VoiceDictationSession {
         return;
       }
       await AudioManager.setAudioSessionActivity(true);
-      // 用户长按 mic 选中的输入设备（iOS）
-      if (this.preferredInputDeviceId) {
-        try { await AudioManager.setInputDevice(this.preferredInputDeviceId); } catch { /* 设备已断开则忽略 */ }
+      if (wantHeadsetMic) {
+        await this._pinHeadsetInput();
+      } else {
+        // 调试：看激活后 iOS 实际选了什么路由（不阻塞录音启动）
+        AudioManager.getDevicesInfo().then((info: any) => {
+          console.log('[dictation] route after activate:', JSON.stringify({
+            current: (info?.currentInputs || []).map((d: any) => ({ name: d.name, category: d.category })),
+            outputs: (info?.currentOutputs || []).map((d: any) => ({ name: d.name, category: d.category })),
+          }));
+        }).catch(() => {});
       }
     } catch (e: any) {
       this._teardown();
@@ -349,6 +373,37 @@ export class VoiceDictationSession {
       return;
     }
     if (this.state === 'starting') this.state = 'recording';
+  }
+
+  /** headset 模式：等蓝牙 HFP 输入 port 出现并显式钉住。SCO 链路建立需时（几百 ms~2s），
+   *  且 iOS 17+ 配了 allowBluetoothHFP 也不再自动把输入切到蓝牙，必须 setPreferredInput。
+   *  轮询 5 次×500ms：当前路由已在耳机麦 → 直接返回；availableInputs 出现耳机 port →
+   *  setInputDevice 钉住；超时 → 回落系统默认（内置麦）并 onNotice 提示，录音照常。 */
+  private async _pinHeadsetInput(): Promise<void> {
+    const isHeadsetPort = (c: string) =>
+      c === 'BluetoothHFP' || c === 'MicrophoneWired' || c === 'HeadsetMic' || c === 'USBAudio';
+    for (let i = 0; i < 5; i++) {
+      const info: any = await AudioManager.getDevicesInfo().catch(() => null);
+      const available: any[] = info?.availableInputs || [];
+      const current: any[] = info?.currentInputs || [];
+      console.log(`[dictation] pin headset try ${i}:`, JSON.stringify({
+        available: available.map((d) => ({ name: d.name, category: d.category })),
+        current: current.map((d) => ({ name: d.name, category: d.category })),
+      }));
+      if (current.some((d) => isHeadsetPort(d.category))) return;
+      const target = available.find((d) => isHeadsetPort(d.category));
+      if (target) {
+        try {
+          await AudioManager.setInputDevice(target.id);
+          console.log('[dictation] pinned headset input:', target.name);
+          return;
+        } catch (e: any) {
+          console.log('[dictation] setInputDevice failed:', e?.message || e);
+        }
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    this.onNotice('耳机麦克风不可用，已使用 iPhone 麦克风');
   }
 
   /** 说完了：停采集，把尾巴和 finish 发出去，等服务端回最终结果 */

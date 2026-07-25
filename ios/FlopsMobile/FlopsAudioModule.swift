@@ -173,44 +173,6 @@ class FlopsAudioModule: RCTEventEmitter {
     }
   }
 
-  // MARK: - 音频输入路由选择（长按 mic，JS 调用）
-
-  private var routePicker: AVRoutePickerView?
-  private var routePickerResolve: RCTPromiseResolveBlock?
-
-  /// 弹系统路由选择浮层（AVRoutePickerView）。自查 availableInputs 拿不到未建立
-  /// SCO 链路的蓝牙耳机（AirPods 等），系统浮层的设备列表才完整。调用前 JS 需把
-  /// session 配成 playAndRecord + allowBluetoothHFP 并激活，否则浮层里蓝牙不可选。
-  /// resolve 于浮层关闭、路由切换稳定后，返回当时 currentRoute 的输入设备。
-  @objc(showInputRoutePicker:rejecter:)
-  func showInputRoutePicker(_ resolve: @escaping RCTPromiseResolveBlock,
-                            rejecter reject: @escaping RCTPromiseRejectBlock) {
-    guard routePickerResolve == nil else {
-      reject("picker_busy", "route picker already presenting", nil)
-      return
-    }
-    guard let rootView = UIApplication.shared.connectedScenes
-      .compactMap({ $0 as? UIWindowScene })
-      .flatMap({ $0.windows })
-      .first(where: { $0.isKeyWindow })?.rootViewController?.view else {
-      reject("no_window", "no key window", nil)
-      return
-    }
-    let picker = AVRoutePickerView(
-      frame: CGRect(x: rootView.bounds.midX, y: rootView.bounds.midY, width: 1, height: 1))
-    picker.alpha = 0.02  // 触发内部按钮要求 view 在层级内且可交互；视觉上不可见
-    picker.delegate = self
-    rootView.addSubview(picker)
-    guard let button = picker.subviews.compactMap({ $0 as? UIButton }).first else {
-      picker.removeFromSuperview()
-      reject("no_button", "AVRoutePickerView internal button not found", nil)
-      return
-    }
-    routePicker = picker
-    routePickerResolve = resolve
-    button.sendActions(for: .touchUpInside)
-  }
-
   // MARK: - 队列构建 / 拆除
 
   private func buildQueue(from startIndex: Int) {
@@ -787,23 +749,5 @@ class FlopsAudioModule: RCTEventEmitter {
     if let convId = convId { body["conversationId"] = convId }
     if let error = error { body["error"] = error }
     sendEvent(withName: "onRealtimeState", body: body)
-  }
-}
-
-// MARK: - AVRoutePickerViewDelegate（输入路由浮层）
-
-extension FlopsAudioModule: AVRoutePickerViewDelegate {
-  func routePickerViewDidEndPresentingRoutes(_ routePickerView: AVRoutePickerView) {
-    // 浮层关闭 ≠ 路由切换完成：选蓝牙后 HFP（SCO）链路建立需约 1s，延时后再读
-    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-      guard let self = self, let resolve = self.routePickerResolve else { return }
-      self.routePickerResolve = nil
-      self.routePicker?.removeFromSuperview()
-      self.routePicker = nil
-      let inputs = AVAudioSession.sharedInstance().currentRoute.inputs.map {
-        ["id": $0.uid, "name": $0.portName, "category": $0.portType.rawValue]
-      }
-      resolve(["currentInputs": inputs])
-    }
   }
 }
