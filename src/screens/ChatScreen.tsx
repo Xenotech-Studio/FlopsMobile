@@ -26,6 +26,7 @@ import {
 } from 'react-native-keyboard-controller';
 import LinearGradient from 'react-native-linear-gradient';
 import Reanimated, {
+  Easing,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -1675,7 +1676,7 @@ export function ChatScreen({
   const dictationSessionRef = useRef<VoiceDictationSession | null>(null);
   const [dictationError, setDictationError] = useState('');
   const dictationErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** 实时麦克风振幅（0~1 归一化 RMS）：由 onAmplitude 回调驱动 scale/opacity（见 micPulseStyle）。 */
+  /** 实时麦克风振幅（0~1 归一化 RMS）：onAmplitude 每 ~100ms 一拍，withTiming 插值后驱动 micPulseStyle。 */
   const micAmplitude = useSharedValue(0);
 
   const flashDictationError = useCallback((message: string) => {
@@ -1715,7 +1716,8 @@ export function ChatScreen({
       serverBaseUrl: session.server_base_url,
       token: session.access_token,
       onAmplitude: (rms) => {
-        micAmplitude.value = rms; // 实时振幅 → 红圈涨落（高频，直接戳 SharedValue）
+        // ~100ms 一拍的硬台阶 → 80ms 线性插值成平滑斜坡
+        micAmplitude.value = withTiming(rms, { duration: 80, easing: Easing.linear });
       },
       onResult: (text) => {
         // ASR 每次回全量累计文本 → 整体替换 native pending 灰字（流式增删）

@@ -23,18 +23,19 @@ interface VoiceDictationOptions {
   onResult?: (text: string, last: boolean) => void;
   onDone?: (text: string) => void;
   onError?: (message: string) => void;
-  /** 实时麦克风振幅（0~1 归一化 RMS），每 ~100ms 一拍。回调需轻量。 */
+  /** 每帧音频（~100ms）的归一化 RMS 振幅（0~1），供 UI 驱动录音动画。 */
   onAmplitude?: (rms: number) => void;
 }
 
 /** 人声正常说话的满格定标点：rms 到这里就算 1.0（喊会超过、被 clamp）。 */
 const AMPLITUDE_FULL_SCALE = 0.15;
 
-/** Float32 PCM 一帧的归一化 RMS 振幅（0~1）。 */
+/** 一帧 Float32 PCM → 归一化 RMS 振幅（0~1）。 */
 function frameAmplitude(float32: Float32Array): number {
+  if (float32.length === 0) return 0;
   let sum = 0;
   for (let i = 0; i < float32.length; i++) sum += float32[i] * float32[i];
-  const rms = float32.length > 0 ? Math.sqrt(sum / float32.length) : 0;
+  const rms = Math.sqrt(sum / float32.length);
   return Math.min(1, rms / AMPLITUDE_FULL_SCALE);
 }
 
@@ -280,7 +281,7 @@ export class VoiceDictationSession {
   private readonly onResult: (text: string, last: boolean) => void;
   private readonly onDone: (text: string) => void;
   private readonly onError: (message: string) => void;
-  private readonly onAmplitude: (rms: number) => void;
+  private readonly onAmplitude: ((rms: number) => void) | null;
 
   private _ws: WebSocket | null = null;
   private _wsReady = false;
@@ -299,7 +300,7 @@ export class VoiceDictationSession {
     this.onResult = opts.onResult || (() => {});
     this.onDone = opts.onDone || (() => {});
     this.onError = opts.onError || (() => {});
-    this.onAmplitude = opts.onAmplitude || (() => {});
+    this.onAmplitude = opts.onAmplitude || null;
   }
 
   async start(): Promise<void> {
@@ -448,7 +449,7 @@ export class VoiceDictationSession {
       (event) => {
         if (this.state !== 'recording' && this.state !== 'starting') return;
         const float32 = event.buffer.getChannelData(0);
-        this.onAmplitude(frameAmplitude(float32)); // 实时振幅驱动 UI 涟漪
+        if (this.onAmplitude) this.onAmplitude(frameAmplitude(float32));
         this._pushPcm(floatTo16kInt16(float32, event.buffer.sampleRate));
       },
     );
