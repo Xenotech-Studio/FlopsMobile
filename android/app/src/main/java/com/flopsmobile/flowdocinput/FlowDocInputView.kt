@@ -489,6 +489,10 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
     }
     suppressTextWatcher = false
     requestLayout()
+    /* suppressTextWatcher 把 afterTextChanged 里的 contentSize 上报也屏蔽了，而 RN 下子 view
+       的 requestLayout() 不会让 parent 重新 measure（frame 由 Yoga 决定）——pending 折行后
+       JS autoHeight 停在旧高度、第二行被截断。跟 typed 路径一样 post 一次直读 layout.height。 */
+    post { maybeEmitContentSize() }
   }
 
   /** 提交 pending：抹掉灰色标记 span，文字转正常色成为正式内容，触发一次内容变化。 */
@@ -525,6 +529,8 @@ class FlowDocInputView(context: Context) : AppCompatEditText(context) {
     setSelection(from.coerceAtMost(t.length))
     suppressTextWatcher = false
     requestLayout()
+    // 同 setDictationPending：多行 pending 被丢弃后高度要缩回，主动上报一次
+    post { maybeEmitContentSize() }
   }
 
   /** 给 [start,end) 加一个 BOLD / ITALIC StyleSpan；先合并区间内已有 StyleSpan 防止叠加 */
