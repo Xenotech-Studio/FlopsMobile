@@ -15,7 +15,13 @@
  * 可靠（比之前 BouncyButton.glassButton 那种 mount-into-button 鲁棒）。
  */
 import React, { useCallback } from 'react';
-import { type StyleProp, type ViewStyle, type NativeSyntheticEvent } from 'react-native';
+import {
+  type StyleProp,
+  type ViewStyle,
+  type NativeSyntheticEvent,
+  type GestureResponderEvent,
+} from 'react-native';
+import Reanimated from 'react-native-reanimated';
 import BouncyGlassCardNative from '../flowdoc-native-input/spec/BouncyGlassCardNativeComponent';
 
 type Props = {
@@ -23,12 +29,18 @@ type Props = {
   style?: StyleProp<ViewStyle>;
   /** 卡片圆角（pt），capsule 形态传 height/2 */
   cornerRadius?: number;
-  /** 是否启用 interactive 按下反馈 + onPress emit（默认 true） */
+  /** 是否启用 interactive 按下反馈 + onPress emit（默认 true）。
+   *  若用 Reanimated 自驱动整卡 scale（AnimatedBouncyGlassCard），应传 false——
+   *  否则系统 contentView scale 会和外层 scale 叠加，内容比卡片边缘放得更大。 */
   interactive?: boolean;
   /** 玻璃 tint 色（hex），缺省 = 系统无 tint */
   tintColor?: string;
   /** tap 触发；仅 interactive=true 生效 */
   onPress?: () => void;
+  /** raw touch 回调（RN 层，所有 host view 通用）；配合 interactive=false 自驱动按压动画 */
+  onTouchStart?: (e: GestureResponderEvent) => void;
+  onTouchEnd?: (e: GestureResponderEvent) => void;
+  onTouchCancel?: (e: GestureResponderEvent) => void;
 };
 
 export function BouncyGlassCard({
@@ -38,6 +50,9 @@ export function BouncyGlassCard({
   interactive = true,
   tintColor,
   onPress,
+  onTouchStart,
+  onTouchEnd,
+  onTouchCancel,
 }: Props) {
   const handleNativePress = useCallback(
     (_e: NativeSyntheticEvent<Readonly<{}>>) => {
@@ -52,8 +67,16 @@ export function BouncyGlassCard({
       cornerRadius={cornerRadius}
       tintColorHex={tintColor ?? ''}
       onGlassPress={handleNativePress}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
+      onTouchCancel={onTouchCancel}
     >
       {children}
     </BouncyGlassCardNative>
   );
 }
+
+/** Reanimated 动画版：animated style 直接打到原生卡片本体（不包额外 View，
+ *  不影响内部 FlowDocSlateAdapter autoHeight 测量）。配合 interactive=false +
+ *  onTouch* 回调可在 JS 侧统一驱动整卡 scale。 */
+export const AnimatedBouncyGlassCard = Reanimated.createAnimatedComponent(BouncyGlassCard);

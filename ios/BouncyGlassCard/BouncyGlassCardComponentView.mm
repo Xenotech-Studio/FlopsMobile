@@ -24,7 +24,8 @@ using namespace facebook::react;
  * - interactive=YES 时 system 处理按下 scale + 折光；onPress 通过 UITapGestureRecognizer
  *   单独 emit（cancelsTouchesInView=NO，touch 还能穿到 children 比如 TextInput 让 keyboard
  *   弹出）。
- * - cornerRadius 用 layer.cornerRadius + maskedCorners 控制；effectView 也跟着 mask。
+ * - cornerRadius：iOS 26 走 UIView.cornerConfiguration 给玻璃本体塑形；children 裁剪
+ *   单独放 contentView mask；self / effectView 都不 masksToBounds（见 applyCornerShape）。
  * - iOS < 26 没有 UIGlassEffect，effectView.effect 留 nil 时是透明 container；callsite
  *   可以走 JS fallback 不用这个组件。 */
 
@@ -80,9 +81,9 @@ static UIColor *_bgc_uiColorFromHex(NSString *hex) {
     _effectView.frame = self.bounds;
     _effectView.autoresizingMask =
         UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    _effectView.clipsToBounds = YES;
     [self addSubview:_effectView];
 
+    [self applyCornerShape];
     [self refreshEffect];
     [self refreshTap];
   }
@@ -93,9 +94,8 @@ static UIColor *_bgc_uiColorFromHex(NSString *hex) {
   [super prepareForRecycle];
   _interactive = YES;
   _cornerRadius = 0;
-  self.layer.cornerRadius = 0;
-  _effectView.layer.cornerRadius = 0;
   _tintColorHex = nil;
+  [self applyCornerShape];
   [self refreshEffect];
   [self refreshTap];
   static const auto defaultProps = std::make_shared<const BouncyGlassCardProps>();
@@ -119,8 +119,7 @@ static UIColor *_bgc_uiColorFromHex(NSString *hex) {
   }
   if (oldP.cornerRadius != newP.cornerRadius) {
     _cornerRadius = newP.cornerRadius;
-    self.layer.cornerRadius = _cornerRadius;
-    _effectView.layer.cornerRadius = _cornerRadius;
+    [self applyCornerShape];
   }
   if (effectDirty) {
     [self refreshEffect];
@@ -130,24 +129,43 @@ static UIColor *_bgc_uiColorFromHex(NSString *hex) {
   [super updateProps:props oldProps:oldProps];
 }
 
-// MARK: - Layout
+// MARK: - Layout / corner shape
 
-/* 每次 layout 无条件重申圆角 + clip + effectView frame。
-   动机：+ 按钮的 UIMenu（iOS 26 context menu）弹出后，系统对 composer 所在层做 dim/morph 快照，
-   dismiss 回来时圆角会被丢一帧（"圆角没了、等一下才恢复"）。圆角是静态 prop，updateProps 只在值
-   变化时才写 layer，menu 关闭不会重设。
-   关键：不能用 `if (self.layer.cornerRadius != _cornerRadius)` 跳过——UIMenu 的 morph 动画作用在
-   presentation layer 上，model layer 的 cornerRadius 保持不变，`!=` 检查永远为假 → 重申被跳过、
-   直角残留。改成无条件写：morph-back 每一帧 layout 都把 cornerRadius 重新提交到模型层（并触发
-   presentation 层重算），回来的每一帧就是圆角，消除闪烁。self / effectView 两层都写，masksToBounds
-   兜住 glass 材质填充，顺带把 effectView.frame 对齐 bounds 防错位。 */
+/* 圆角 / 玻璃塑形。
+ *
+ * iOS 26 玻璃的形状必须走 UIView.cornerConfiguration（UIKit 级 API），不能靠
+ * layer.cornerRadius + masksToBounds 裁出来：玻璃材质由系统 out-of-process 渲染，
+ * in-process 的 layer mask 只能"裁"它的成像，系统接管的动画里两者会脱同步。典型：
+ * 「+」的 UIMenu 弹出时系统对 composer 层做 dim/morph（纯 presentation 层操作，不触发
+ * layout，layout 时重申 layer 值也救不了），morph 帧里玻璃实时渲染丢圆角变方形、mask
+ * 还是胶囊 → 逐帧回放可见「胶囊框里套一块方形玻璃」。cornerConfiguration 把形状写进
+ * 玻璃效果本体——rim 高光 / 折光 / 材质原生按它塑形，morph / 快照怎么动形状都跟着，
+ * mask 整个不再需要。
+ *
+ * children 的圆角裁剪单独放 effectView.contentView（普通 in-process view，mask 随
+ * transform 正常缩放；玻璃材质层是 contentView 的 sibling、不受它裁剪）。self 不再
+ * masksToBounds——顺带让 callsite 挂在宿主层的 shadow（DrawerContent avatarGlass）
+ * 不再被外层 mask 吞掉。
+ *
+ * iOS < 26 没有 cornerConfiguration，effect 也是 nil（透明容器），children 裁剪走
+ * contentView mask 就够了。 */
+- (void)applyCornerShape {
+  _effectView.contentView.layer.cornerRadius = _cornerRadius;
+  _effectView.contentView.layer.masksToBounds = YES;
+  if (@available(iOS 26.0, *)) {
+    _effectView.cornerConfiguration = [UICornerConfiguration
+        configurationWithUniformRadius:[UICornerRadius fixedRadius:_cornerRadius]];
+  }
+}
+
+/* 每次 layout 无条件重申形状 + effectView frame。
+   历史动机（layer 时代）：UIMenu dim/morph 快照 dismiss 回来时圆角被丢一帧，而圆角是
+   静态 prop、updateProps 不会重设——改走 cornerConfiguration 后形状进了玻璃本体，理论上
+   morph-back 不再丢；layout 时重申是零成本兜底，保留。 */
 - (void)layoutSubviews {
   [super layoutSubviews];
-  self.layer.cornerRadius = _cornerRadius;
-  self.layer.masksToBounds = YES;
-  _effectView.layer.cornerRadius = _cornerRadius;
-  _effectView.layer.masksToBounds = YES;
   _effectView.frame = self.bounds;
+  [self applyCornerShape];
 }
 
 // MARK: - Glass effect + tap setup

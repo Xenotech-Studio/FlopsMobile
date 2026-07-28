@@ -117,7 +117,7 @@ import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { ConversationAttachmentsContext } from '../chat/ConversationAttachmentsContext';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
-import { BouncyGlassCard } from '../components/BouncyGlassCard';
+import { AnimatedBouncyGlassCard } from '../components/BouncyGlassCard';
 import { HEADER_CIRCLE_BTN_SIZE, bottomInsetTotal } from '../theme/layout';
 import { getBottomInsetSync } from '../utils/screenInfo';
 import { chatInputOverlayGradient, toolPreviewFadeGradient } from '../theme/appColors';
@@ -559,6 +559,15 @@ export function ChatScreen({
    *  纯 SharedValue 驱动可见性 / 整卡淡出 / pointerEvents，不需要额外 boolean state。
    *  （声明提前到这里：下面 composerPressAnimStyle 的 worklet 要读它做整卡淡出。） */
   const composerAttachMenuShow = useSharedValue(0);
+  /** backdrop pointerEvents 不走 Reanimated（Android 上 shared-value 驱动字符串
+   *  prop 不可靠，会导致触摸穿透），改用 React state 直控。两平台共用：Android 是自绘
+   *  popover 的关闭层；iOS 借同一层吞掉原生 UIMenu 收起时的穿透 touch——UIKit pull-down
+   *  菜单对 platter 外的点按不拦 hit-test，outside tap 在触发 dismiss 的同时会照常命中
+   *  底下的 app 视图（mic / 发送键被误触）。 */
+  const [attachBackdropActive, setAttachBackdropActive] = useState(false);
+  /** iOS：onCloseMenu 后 backdrop 延迟放开的 timer（防 UIKit 把穿透 touch 投递在
+   *  onCloseMenu 之后；reopen 时要清掉，否则旧 timer 会把开着的菜单的 backdrop 关掉）。 */
+  const attachBackdropOffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /* Android 附件菜单打开时整张 composer 卡片淡出 + 微缩（对齐 iOS「菜单出现时 composer
    * 让位」观感），菜单卡片在 composer 原位左下对齐长出来 = 「composer 变菜单」。
    * 跟按下 spring scale 乘进同一个 transform：同一 view 不能拆两条 useAnimatedStyle
@@ -2741,13 +2750,28 @@ export function ChatScreen({
     };
   });
   const composerAttachBackdropAnimStyle = useAnimatedStyle(() => ({
-    pointerEvents: composerAttachMenuShow.value > 0.5 ? 'auto' : 'none',
+    opacity: composerAttachMenuShow.value,
   }));
   /* open 80ms / close 100ms：跟 ⋯ 菜单 / TodayScreen FAB 菜单同一节奏。 */
   const openComposerAttachMenu = useCallback(() => {
+    if (attachBackdropOffTimerRef.current) {
+      clearTimeout(attachBackdropOffTimerRef.current);
+      attachBackdropOffTimerRef.current = null;
+    }
+    setAttachBackdropActive(true);
     composerAttachMenuShow.value = withTiming(1, { duration: 80 });
   }, [composerAttachMenuShow]);
   const closeComposerAttachMenu = useCallback(() => {
+    if (IS_ANDROID) {
+      setAttachBackdropActive(false);
+    } else {
+      /* iOS：UIMenu 收起的 outside tap 会穿透到 app 层，且可能晚于 onCloseMenu 抵达，
+       * backdrop 多活一拍把它吞掉（250ms ≈ 菜单收起动画时长，用户无感）。 */
+      attachBackdropOffTimerRef.current = setTimeout(() => {
+        attachBackdropOffTimerRef.current = null;
+        setAttachBackdropActive(false);
+      }, 250);
+    }
     composerAttachMenuShow.value = withTiming(0, { duration: 100 });
   }, [composerAttachMenuShow]);
   /** Android：按下时 measure composer 卡片屏幕坐标，菜单卡片跟 composer 左下角对齐（左边线
@@ -4982,17 +5006,25 @@ export function ChatScreen({
                      * 渲染）。card 上移到键盘上方的过渡靠 kbBottomStyle 在 bottomOverlay 整体
                      * 下移 6pt 实现，card 的 marginBottom: 18 保持静态。 */}
                     {IS_IOS_LIQUID_GLASS ? (
-                      <BouncyGlassCard
-                        style={
+                      /* iOS26 玻璃卡：interactive=false 关掉系统 contentView 单独放大
+                       * （否则内容放大、卡片边缘不动，视觉割裂），改由 JS 统一驱动整卡
+                       * scale——composerPressAnimStyle 通过 createAnimatedComponent 直接
+                       * 打到原生卡片本体（不包 Reanimated.View，不干扰 autoHeight 测量）。 */
+                      <AnimatedBouncyGlassCard
+                        style={[
                           composerTall
                             ? styles.composerCardTallGlass
-                            : styles.composerCardShortGlass
-                        }
+                            : styles.composerCardShortGlass,
+                          composerPressAnimStyle,
+                        ]}
                         cornerRadius={COMPOSER_CARD_RADIUS}
-                        interactive
+                        interactive={false}
+                        onTouchStart={onComposerTouchStart}
+                        onTouchEnd={onComposerTouchEnd}
+                        onTouchCancel={onComposerTouchCancel}
                       >
                         {innerCardContent}
-                      </BouncyGlassCard>
+                      </AnimatedBouncyGlassCard>
                     ) : (
                       /* Reanimated.View 只做 transform wrapper（不持有 card 视觉 styles）,
                        * inner View 保留 card 身份（bg / radius / shadow / margins）。
@@ -5244,17 +5276,36 @@ export function ChatScreen({
       }}
     />
 
+    {/* composer「+」附件菜单的全屏透明 backdrop（两平台共用）：
+     *  - Android：自绘 popover 的关闭层，点空白关菜单。
+     *  - iOS：原生 UIMenu 收起时 outside tap 会穿透到 app 视图层（UIKit pull-down 菜单
+     *    对 platter 外的点按不拦 hit-test），这层在菜单打开期间吞掉穿透 touch，防止
+     *    mic / 发送键被误触。菜单 platter 在 UIKit 自己的容器层（更高），菜单项点击与
+     *    dismiss 手势都不受这层影响（dismiss 由 window 级手势触发，与命中目标无关——
+     *    修复前 mic 被误触时菜单照样关掉即为证）。iOS 不在 release 里 close：原生菜单
+     *    自己关，onCloseMenu 会同步 JS 状态（含延迟放开 backdrop）。 */}
+    <Reanimated.View
+      style={[StyleSheet.absoluteFill, styles.convMenuBackdrop, composerAttachBackdropAnimStyle]}
+      pointerEvents={attachBackdropActive ? 'auto' : 'none'}
+    >
+      {/* 可靠吞掉 outside tap：pointerEvents 走 React state 而非 Reanimated
+       * （shared-value 驱动的 pointerEvents 在 Android 上不稳定，会穿透到底层按钮）。
+       * 内层 View 用显式 responder + backgroundColor 确保触摸被捕获（完全透明的 View
+       * 在 Android 上不接收 touches）。 */}
+      <View
+        style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.001)' }]}
+        onStartShouldSetResponder={() => true}
+        onMoveShouldSetResponder={() => true}
+        onResponderTerminationRequest={() => false}
+        onResponderRelease={IS_ANDROID ? closeComposerAttachMenu : undefined}
+      />
+    </Reanimated.View>
     {/* Android：composer「+」附件菜单 popover（iOS 走 MenuView native）。设计跟 ⋯ 菜单 /
      *  TodayScreen FAB 菜单同款：常驻 mount + SharedValue 驱动 opacity/scale/pointerEvents，
      *  卡片 transformOrigin: left bottom 在 composer 卡片原位左下对齐长出来，composer 整卡
-     *  同步淡出微缩"变成菜单"（composerPressAnimStyle）；backdrop 透明点空白关。 */}
+     *  同步淡出微缩"变成菜单"（composerPressAnimStyle）。 */}
     {Platform.OS === 'android' ? (
       <>
-        <Reanimated.View
-          style={[StyleSheet.absoluteFill, styles.convMenuBackdrop, composerAttachBackdropAnimStyle]}
-        >
-          <Pressable style={StyleSheet.absoluteFill} onPress={closeComposerAttachMenu} />
-        </Reanimated.View>
         <Reanimated.View
           onLayout={(e) => {
             composerAttachMenuHeightRef.current = e.nativeEvent.layout.height;
@@ -5322,7 +5373,14 @@ export function ChatScreen({
         <Reanimated.View
           style={[StyleSheet.absoluteFill, styles.convMenuBackdrop, convMenuBackdropAnimStyle]}
         >
-          <Pressable style={StyleSheet.absoluteFill} onPress={closeConvMenu} />
+          {/* 同上/同 TodayScreen：显式 responder 吞掉 outside tap，防穿透误触底层按钮。 */}
+          <View
+            style={StyleSheet.absoluteFill}
+            onStartShouldSetResponder={() => true}
+            onMoveShouldSetResponder={() => true}
+            onResponderTerminationRequest={() => false}
+            onResponderRelease={closeConvMenu}
+          />
         </Reanimated.View>
         <Reanimated.View
           style={[
