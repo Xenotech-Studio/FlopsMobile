@@ -47,11 +47,11 @@ import { IS_IOS_LIQUID_GLASS } from '../../components/AnimatedCircleButton';
 import { BouncyGlassCard } from '../../components/BouncyGlassCard';
 import { HEADER_CIRCLE_BTN_SIZE } from '../../theme/layout';
 import { androidCircleFabOutline } from '../../theme/shadows';
+import { PRESS_SPRING_CONFIG } from '../../constants/animation';
 
 /** Project 列表行 */
 type DrawerProjectRow = { id: string; name: string };
 
-const PB_PRESS_SPRING = { mass: 1, stiffness: 400, damping: 40 };
 const PB_RELEASE_SPRING = { mass: 1, stiffness: 220, damping: 14 };
 
 /** 底栏专用 bouncy（Android / iOS<26 fallback 用；iOS26 走 BouncyGlassCard）。
@@ -80,7 +80,7 @@ function PanBouncy({
         .onTouchesDown((_e, manager) => {
           'worklet';
           manager.activate();
-          scale.value = withSpring(pressScale, PB_PRESS_SPRING);
+          scale.value = withSpring(pressScale, PRESS_SPRING_CONFIG);
         })
         .onFinalize((e) => {
           'worklet';

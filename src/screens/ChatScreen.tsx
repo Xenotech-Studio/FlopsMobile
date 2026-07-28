@@ -38,6 +38,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { convProfileLog } from '../debug/conversationLoadProfile';
+import { PRESS_SPRING_CONFIG } from '../constants/animation';
 import { useSession } from '../context/SessionContext';
 import { useSetActiveConversation, useUnreadConvMap } from '../context/ConversationContext';
 import { useTtsPlayback, togglePlayback, isTtsPlaybackSupported } from '../audio/ttsPlayer';
@@ -590,7 +591,7 @@ export function ChatScreen({
      * 8-15dp，菜单跟静止卡片左下角对不齐。压掉放大也顺带消除「卡片先放大又立刻
      * 淡出让位」的动画打架。 */
     if (composerAttachPressGuardRef.current) return;
-    composerPressScale.value = withSpring(1.1, { mass: 1, stiffness: 400, damping: 40 });
+    composerPressScale.value = withSpring(1.01, PRESS_SPRING_CONFIG);
   }, [composerPressScale]);
   /** + 按钮 pressIn：挂 guard + 立刻 snap 按压 scale 回 1（raw onTouchStart 与 onPressIn
    *  同一 touch batch 内先后顺序无保证，两个方向都要拦：先 touchStart 后 pressIn → snap

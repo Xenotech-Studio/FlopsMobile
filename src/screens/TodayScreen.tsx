@@ -60,6 +60,7 @@ import Animated, {
   FadeOut,
 } from 'react-native-reanimated';
 import { useTask } from '../context/TaskContext';
+import { PRESS_SPRING_CONFIG } from '../constants/animation';
 import { useSession } from '../context/SessionContext';
 import {
   createConversation,
@@ -576,7 +577,7 @@ export function TodayScreen() {
    * ownership，child EditText cursor placement / 选词 不被影响，外层 view 仍能 raw
    * 接到 touch event 驱动 spring。 */
   const onSearchBoxTouchStart = useCallback(() => {
-    searchBoxPressScale.value = withSpring(1.1, { mass: 1, stiffness: 400, damping: 40 });
+    searchBoxPressScale.value = withSpring(1.1, PRESS_SPRING_CONFIG);
   }, [searchBoxPressScale]);
   const onSearchBoxTouchEnd = useCallback(() => {
     searchBoxPressScale.value = withSpring(1, { mass: 1, stiffness: 220, damping: 14 });

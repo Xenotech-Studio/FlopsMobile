@@ -31,6 +31,7 @@ import Animated, {
   runOnJS,
 } from 'react-native-reanimated';
 import BouncyButtonNative from '../flowdoc-native-input/spec/BouncyButtonViewNativeComponent';
+import { PRESS_SPRING_CONFIG } from '../constants/animation';
 
 export type AnimatedCircleButtonMenuAction = {
   /** 选中时回调里收到的 id；JS 侧自己保证唯一 */
@@ -119,7 +120,6 @@ type Props = {
   childrenRendering?: 'auto' | 'always' | 'never';
 };
 
-const PRESS_SPRING = { mass: 1, stiffness: 400, damping: 40 };
 const RELEASE_SPRING = { mass: 1, stiffness: 220, damping: 14 };
 
 /* iOS 26+ 判定：让 BouncyButton 走 Liquid Glass 路径。Platform.Version 在 iOS 上是
@@ -319,7 +319,7 @@ function AndroidWorkletBouncy({
       .maxDistance(10000)
       .onBegin(() => {
         'worklet';
-        scale.value = withSpring(pressScale, PRESS_SPRING);
+        scale.value = withSpring(pressScale, PRESS_SPRING_CONFIG);
       })
       .onFinalize(() => {
         'worklet';
