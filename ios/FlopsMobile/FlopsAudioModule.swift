@@ -173,6 +173,17 @@ class FlopsAudioModule: RCTEventEmitter {
     }
   }
 
+  /// 录音期间保持屏幕常亮（听写可能一说几分钟，别让自动锁屏打断）。isIdleTimerDisabled
+  /// 仅前台生效，app 切后台系统自动恢复正常锁屏，不会后台烧屏；幂等。
+  /// voiceDictationMobile 在录音 start 开、stop/cancel/teardown 关。methodQueue 已是主线程。
+  @objc(setKeepScreenOn:resolver:rejecter:)
+  func setKeepScreenOn(_ on: Bool,
+                       resolver resolve: @escaping RCTPromiseResolveBlock,
+                       rejecter reject: @escaping RCTPromiseRejectBlock) {
+    UIApplication.shared.isIdleTimerDisabled = on
+    resolve(nil)
+  }
+
   // MARK: - 队列构建 / 拆除
 
   private func buildQueue(from startIndex: Int) {

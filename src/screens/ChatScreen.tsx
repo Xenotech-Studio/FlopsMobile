@@ -40,7 +40,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { convProfileLog } from '../debug/conversationLoadProfile';
 import { useSession } from '../context/SessionContext';
 import { useSetActiveConversation, useUnreadConvMap } from '../context/ConversationContext';
-import { useTtsPlayback, togglePlayback } from '../audio/ttsPlayer';
+import { useTtsPlayback, togglePlayback, isTtsPlaybackSupported } from '../audio/ttsPlayer';
 import {
   setActiveConversation as setRealtimeActiveConversation,
   clearActiveConversation as clearRealtimeActiveConversation,
@@ -223,6 +223,9 @@ function mergeToolBlockResultForSafetyEvent(
 }
 
 const STREAM_TIMEOUT_MS = 300000;
+
+/** worklet 里要用的平台判断：hoist 成模块常量，避免在 worklet 闭包里捕获整个 Platform 对象。 */
+const IS_ANDROID = Platform.OS === 'android';
 
 /** High-resolution time when available (e.g. Hermes), else `Date.now()`. Avoids bare `performance` (not in RN TS libs). */
 function perfNowMs(): number {
@@ -546,29 +549,63 @@ export function ChatScreen({
   const dismissComposer = useCallback(() => {
     composerAdapterRef.current?.blur();
   }, []);
-  const focusComposer = useCallback(() => {
-    composerAdapterRef.current?.focus();
-  }, []);
   /* Android composer 卡片按下放大 —— 跟 TodayScreen 搜索框胶囊同款 RNGH LongPress + worklet
    * spring scale。Tap 在 EditText 区域容易被 native gesture 抢 ownership 提前打断，所以
    * 用 LongPress；minDuration(0) 立即 active，maxDistance / shouldCancelWhenOutside
    * 放宽避免微移动触发 cancel。iOS 26 走 BouncyGlassCard 系统接管，不在这里管。 */
   const composerPressScale = useSharedValue(1);
+  /** 「+」附件菜单开合：iOS 走 MenuView（打开时图标淡），Android 走自绘 popover。
+   *  纯 SharedValue 驱动可见性 / 整卡淡出 / pointerEvents，不需要额外 boolean state。
+   *  （声明提前到这里：下面 composerPressAnimStyle 的 worklet 要读它做整卡淡出。） */
+  const composerAttachMenuShow = useSharedValue(0);
+  /* Android 附件菜单打开时整张 composer 卡片淡出 + 微缩（对齐 iOS「菜单出现时 composer
+   * 让位」观感），菜单卡片在 composer 原位左下对齐长出来 = 「composer 变菜单」。
+   * 跟按下 spring scale 乘进同一个 transform：同一 view 不能拆两条 useAnimatedStyle
+   * （style 数组合并时 transform 数组整体后者覆盖前者）。旧 iOS 15-25 也走这个 wrapper,
+   * 但那边 UIMenu 是系统渲染，不做整卡淡出。 */
   const composerPressAnimStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: composerPressScale.value }],
+    transform: [
+      {
+        scale:
+          composerPressScale.value * (IS_ANDROID ? 1 - composerAttachMenuShow.value * 0.04 : 1),
+      },
+    ],
+    opacity: IS_ANDROID ? 1 - composerAttachMenuShow.value : 1,
   }));
   /* composer 卡片按下放大用 RN raw onTouch* 而不是 RNGH（跟 TodayScreen 搜索框同样
    * 理由：Gesture.Manual 不 activate 在 EditText activate native gesture 后会被
    * cancel → spring 提前 down，按住保持不住放大）。raw onTouch* 独立于 responder
    * system / native gesture ownership，FlowDocInputView 内部 cursor placement /
-   * 双击选词 / set selection 不被影响。 */
+   * 双击选词 / set selection 不被影响。
+   * 这里只做 scale 动画，不 focus：raw onTouchEnd 对卡片子树内**任何** touch 都触发,
+   * 包括 + / mic / 发送键——在这里 focus 会让点 + 弹键盘。输入框本体撑满整张 card
+   * （composerAdapterFill），用户 tap 到它时 native EditText / UITextView 自己会
+   * focus + 弹 IME，不需要 JS 补 focus。 */
+  /** Android + 按钮按下期间压掉整卡放大的 guard（onPressIn/Out 开合，见下）。 */
+  const composerAttachPressGuardRef = useRef(false);
   const onComposerTouchStart = useCallback(() => {
+    /* Android + 按钮按下期间不做整卡放大（guard 由 + 的 onPressIn/Out 开合）：
+     * 菜单定位靠 onPress 时 measureInWindow 卡片，而 Android 的 getLocationInWindow
+     * 会把祖先 scale 矩阵算进坐标——按压 spring 到 ~1.06-1.1 时卡片左边线测偏左
+     * 8-15dp，菜单跟静止卡片左下角对不齐。压掉放大也顺带消除「卡片先放大又立刻
+     * 淡出让位」的动画打架。 */
+    if (composerAttachPressGuardRef.current) return;
     composerPressScale.value = withSpring(1.1, { mass: 1, stiffness: 400, damping: 40 });
   }, [composerPressScale]);
+  /** + 按钮 pressIn：挂 guard + 立刻 snap 按压 scale 回 1（raw onTouchStart 与 onPressIn
+   *  同一 touch batch 内先后顺序无保证，两个方向都要拦：先 touchStart 后 pressIn → snap
+   *  取消已启动的 spring；先 pressIn 后 touchStart → guard 拦住不启动）。pressIn 比
+   *  onPress（measure 时机）早一整个 tap 时长，scale=1 有充足帧数落到 native 矩阵。 */
+  const onComposerAttachPressIn = useCallback(() => {
+    composerAttachPressGuardRef.current = true;
+    composerPressScale.value = 1;
+  }, [composerPressScale]);
+  const onComposerAttachPressOut = useCallback(() => {
+    composerAttachPressGuardRef.current = false;
+  }, []);
   const onComposerTouchEnd = useCallback(() => {
     composerPressScale.value = withSpring(1, { mass: 1, stiffness: 220, damping: 14 });
-    focusComposer();
-  }, [composerPressScale, focusComposer]);
+  }, [composerPressScale]);
   const onComposerTouchCancel = useCallback(() => {
     composerPressScale.value = withSpring(1, { mass: 1, stiffness: 220, damping: 14 });
   }, [composerPressScale]);
@@ -579,14 +616,26 @@ export function ChatScreen({
   useEffect(() => {
     pendingAttachmentsRef.current = pendingAttachments;
   }, [pendingAttachments]);
-  /** 「+」附件菜单开合：iOS 走 MenuView（打开时图标淡），Android 走自绘 popover。
-   *  纯 SharedValue 驱动可见性 / 图标淡出 / pointerEvents，不需要额外 boolean state。 */
-  const composerAttachMenuShow = useSharedValue(0);
-  const composerAttachBtnRef = useRef<View>(null);
-  /** popover 落点：top（window 坐标，向上弹）+ left（对齐按钮）。用 top 而非 bottom —— composer
-   *  聚焦时键盘顶起会改变父容器底边，bottom 基准会漂；top 用 measureInWindow 的稳定屏幕坐标。 */
-  const [composerAttachMenuPos, setComposerAttachMenuPos] = useState({ left: 16, top: 0 });
-  /** popover 卡片实测高度（常驻 mount 后 onLayout 写入）：用于算 top = 按钮顶 - 卡片高 - 间距。 */
+  /** Android popover 锚点：composer 卡片本体（菜单在卡片原位左下对齐长出，见
+   *  openAndroidComposerAttachMenu）。composerAttachMenuShow 声明提前到 composerPressAnimStyle
+   *  上方（worklet 依赖顺序）。 */
+  const composerCardRef = useRef<View>(null);
+  /** popover 落点：left（对齐卡片左边线）+ bottom（距屏底偏移，菜单底边贴卡片底边）。
+   *  垂直用 bottom 而非 top —— composer 是被 lib KAV 的键盘 padding 托着的：菜单开着时键盘
+   *  一收（BACK / blur），composer 会落回屏底 ~360dp，top 钉死在 measure 瞬间的高位就悬空
+   *  「严重偏上」。bottom 基准配合 composerAttachCardAnimStyle 里的键盘跟随项（kbAnimHeight
+   *  worklet 逐帧补偿 max(键盘高, restingNavInset) 相对 open 时刻的变化量），菜单跟 composer
+   *  一起骑键盘升降，底边任何时刻都贴卡片底边。
+   *  用 SharedValue 而非 state：open 时坐标跟 show 动画同批落到 UI 线程，没有
+   *  setState → re-render 慢半拍导致的首帧跳位（旧实现动画卡顿的来源）。 */
+  const composerAttachMenuLeft = useSharedValue(16);
+  /** open 时刻的基准 bottom = winH − (卡片底 Y)，见 openAndroidComposerAttachMenu。 */
+  const composerAttachMenuBottom = useSharedValue(0);
+  /** open 时刻的键盘基准 max(键盘高, restingNavInset)：worklet 里对着它算键盘位移增量。 */
+  const composerAttachMenuKbBase = useSharedValue(0);
+  /** bottom 上限（= 菜单顶不越过 insets.top+8），open 时按当时 menuH 算好快照。 */
+  const composerAttachMenuBottomMax = useSharedValue(9999);
+  /** popover 卡片实测高度（常驻 mount 后 onLayout 写入）：用于算 bottom 上限快照。 */
   const composerAttachMenuHeightRef = useRef(0);
   /** 编辑 Modal 内是否打开 picker（与主 composer 用同一个 modal 不同 ref 表） */
   const [editPickerOpen, setEditPickerOpen] = useState(false);
@@ -1154,6 +1203,11 @@ export function ChatScreen({
    *  用于让 composer 布局实时感知 pending 的存在并切到展开模式（见 composerTall）。
    *  刻意不并进 composerStats.hasContent —— 那会误开 Send，而发送会先取消听写、丢掉 pending。 */
   const [dictationPendingText, setDictationPendingText] = useState('');
+  /** commit 已发给 native、但 committed 内容还没随 onChange 回进 composerDoc 的窗口标记。
+   *  Android 上 UIManager 命令→事件要跨帧：这窗口里若清 pending 镜像，composerTall 的两个
+   *  支撑（pending 镜像 / doc 内容）会同时为空一两帧，布局闪回 short 再弹回 tall。
+   *  镜像改由 handleComposerDocChange 在新 doc 到达的同一渲染批里清。 */
+  const dictationCommitInFlightRef = useRef(false);
 
   const composerStats = useMemo(() => {
     let hasContent = false;
@@ -1706,43 +1760,94 @@ export function ChatScreen({
     return pending;
   }, []);
 
+  /** commit native pending 灰字，RN 镜像的清空推迟到 committed 内容随 onChange 回进
+   *  composerDoc 的那一渲染批（见 handleComposerDocChange）。立即清会闪帧：commit 是
+   *  异步 native 命令，中间帧镜像和 doc 双双为空 → tall 闪回 short 再弹回。
+   *  300ms 兜底防 native 不回 onChange（无 pending 灰字时 commitDictation 不 emit）。 */
+  const commitDictationAndClearMirror = useCallback(() => {
+    dictationCommitInFlightRef.current = true;
+    composerAdapterRef.current?.commitDictation();
+    setTimeout(() => {
+      if (!dictationCommitInFlightRef.current) return;
+      dictationCommitInFlightRef.current = false;
+      setDictationPendingText('');
+    }, 300);
+  }, []);
+
+  /** adapter onChange：native 内容为 truth 反向同步进 composerDoc。若有听写 commit 在途，
+   *  同一渲染批里清 pending 镜像——doc 已含 committed 文本，composerTall 无缝接力不闪帧。 */
+  const handleComposerDocChange = useCallback((doc: SlateDocument) => {
+    setComposerDoc(doc);
+    if (dictationCommitInFlightRef.current) {
+      dictationCommitInFlightRef.current = false;
+      setDictationPendingText('');
+    }
+  }, []);
+
   /** 长按 mic（仅 idle 时）：Bottom Sheet 弹出音频输入源选择器。
-   *  无耳机时也弹（仅「iPhone 麦克风」一项），确保长按始终有反馈。 */
+   *  无耳机时也弹（仅「手机/iPhone 麦克风」一项），确保长按始终有反馈。 */
   const [micSourceSheetOpen, setMicSourceSheetOpen] = useState(false);
   const [micSourceSheetOptions, setMicSourceSheetOptions] = useState<ModelSelectOption[]>([]);
   const micSourceOptions = useRef<ModelSelectOption[]>([
-    { label: 'iPhone 麦克风', value: 'builtin', subtitle: '', icon: 'phone-portrait-outline' },
+    {
+      label: Platform.OS === 'ios' ? 'iPhone 麦克风' : '手机麦克风',
+      value: 'builtin', subtitle: '', icon: 'phone-portrait-outline',
+    },
     { label: '耳机麦克风', value: 'headset', subtitle: '', icon: 'headset-outline' },
   ]);
   const onMicLongPress = useCallback(() => {
-    if (dictationState !== 'idle' || Platform.OS !== 'ios') return;
+    if (dictationState !== 'idle') return;
     const openSheet = () => {
       AudioManager.getDevicesInfo().then((info: any) => {
-        const outs: any[] = info?.currentOutputs || [];
-        const bt = outs.find((o: any) =>
-          o.category === 'BluetoothA2DPOutput' || o.category === 'BluetoothA2DP' || o.category === 'BluetoothHFP');
-        const wired = outs.find((o: any) =>
-          o.category === 'Headphones' || o.category === 'Headset' || o.category === 'USBAudio');
         // 每次按连接情况新建选项数组（不 mutate 模板）；文案只说麦克风输入，别让用户误以为在选输出
         const [builtin, headset] = micSourceOptions.current;
         let sheetOpts: ModelSelectOption[];
-        if (bt) {
-          sheetOpts = [
-            { ...builtin, subtitle: '保持耳机播放的同时用手机麦克风讲话' },
-            { ...headset, label: `${bt.name} 麦克风`, subtitle: '用耳机同时播放和讲话' },
-          ];
-        } else if (wired) {
-          sheetOpts = [
-            { ...builtin, subtitle: '保持耳机播放的同时用手机麦克风讲话' },
-            { ...headset, label: '有线耳机麦克风', subtitle: '用耳机同时播放和讲话' },
-          ];
+        // 开 sheet 前同步当前选中值：'auto' 的实际行为就是 builtin（A2DP 分离），✓ 落在内置麦上
+        const pref = preferredMicSource.current;
+        let cur: 'builtin' | 'headset' = pref === 'auto' ? 'builtin' : pref;
+        if (Platform.OS === 'android') {
+          // Android 端 getDevicesInfo 的 currentInputs/currentOutputs 恒为空数组，只能看
+          // availableInputs；字段是 type（人话字符串），USB / LE Audio 耳机映射不全落在
+          // "Other (n)"（22=USB_HEADSET、11=USB_DEVICE、26=BLE_HEADSET）
+          const ins: any[] = info?.availableInputs || [];
+          const bt = ins.find((d: any) => d.type === 'Bluetooth SCO' || d.type === 'Other (26)');
+          const wired = ins.find((d: any) =>
+            d.type === 'Wired Headset' || d.type === 'Other (22)' || d.type === 'Other (11)');
+          if (bt) {
+            sheetOpts = [
+              { ...builtin, subtitle: '保持耳机播放的同时用手机麦克风讲话' },
+              { ...headset, label: `${bt.name} 麦克风`, subtitle: '用耳机同时播放和讲话' },
+            ];
+          } else if (wired) {
+            // 有线插上系统强制走耳机麦、钉不回内置麦（Oboe 跟随默认路由），降级只出单项
+            sheetOpts = [{ ...headset, label: '有线耳机麦克风', subtitle: '已插入有线耳机，播放和讲话都走耳机' }];
+            cur = 'headset';
+          } else {
+            sheetOpts = [{ ...builtin }];
+            cur = 'builtin';
+          }
         } else {
-          // 无耳机也弹：仅「iPhone 麦克风」单项，长按始终有反馈
-          sheetOpts = [{ ...builtin }];
+          const outs: any[] = info?.currentOutputs || [];
+          const bt = outs.find((o: any) =>
+            o.category === 'BluetoothA2DPOutput' || o.category === 'BluetoothA2DP' || o.category === 'BluetoothHFP');
+          const wired = outs.find((o: any) =>
+            o.category === 'Headphones' || o.category === 'Headset' || o.category === 'USBAudio');
+          if (bt) {
+            sheetOpts = [
+              { ...builtin, subtitle: '保持耳机播放的同时用手机麦克风讲话' },
+              { ...headset, label: `${bt.name} 麦克风`, subtitle: '用耳机同时播放和讲话' },
+            ];
+          } else if (wired) {
+            sheetOpts = [
+              { ...builtin, subtitle: '保持耳机播放的同时用手机麦克风讲话' },
+              { ...headset, label: '有线耳机麦克风', subtitle: '用耳机同时播放和讲话' },
+            ];
+          } else {
+            // 无耳机也弹：仅「iPhone 麦克风」单项，长按始终有反馈
+            sheetOpts = [{ ...builtin }];
+          }
         }
-        // 开 sheet 前同步当前选中值：'auto' 的实际行为就是 builtin（A2DP 分离），✓ 落在 iPhone 麦克风上
-        const cur = preferredMicSource.current;
-        setCurrentMicSource(cur === 'auto' ? 'builtin' : cur);
+        setCurrentMicSource(cur);
         setMicSourceSheetOptions(sheetOpts);
         setMicSourceSheetOpen(true);
       }).catch(() => {});
@@ -1801,15 +1906,13 @@ export function ChatScreen({
       onDone: (finalText) => {
         if (dictationSessionRef.current === s) dictationSessionRef.current = null;
         if (finalText) composerAdapterRef.current?.setDictationPending(finalText);
-        composerAdapterRef.current?.commitDictation();
-        setDictationPendingText(''); // 已 commit 进 composerDoc，pending 镜像清空
+        commitDictationAndClearMirror();
         setDictationState('idle');
         composerAdapterRef.current?.focus();
       },
       onError: (message) => {
         if (dictationSessionRef.current === s) dictationSessionRef.current = null;
-        composerAdapterRef.current?.commitDictation(); // 已识别的部分照样落地
-        setDictationPendingText('');
+        commitDictationAndClearMirror(); // 已识别的部分照样落地
         setDictationState('idle');
         flashDictationError(message);
       },
@@ -1818,7 +1921,7 @@ export function ChatScreen({
     dictationSessionRef.current = s;
     setDictationState('recording'); // 乐观：权限被拒时 onError 会回 idle
     await s.start();
-  }, [dictationState, session, flashDictationError]);
+  }, [dictationState, session, flashDictationError, commitDictationAndClearMirror]);
 
   // 非录音态：振幅归零（缩回底圆）。录音态由 onAmplitude 回调实时驱动 micAmplitude。
   useEffect(() => {
@@ -2610,41 +2713,83 @@ export function ChatScreen({
   }, [convMenuShow]);
 
   /* ---------- composer「+」附件菜单（引用 FlowDoc 文档 / 发送文件）---------- */
-  /** 菜单打开时把「+」图标淡到 0.4（iOS 让位给 UIMenu / Android 让位给 popover）。 */
-  const composerAttachIconAnimStyle = useAnimatedStyle(() => ({
-    opacity: 1 - composerAttachMenuShow.value * 0.6,
-  }));
-  /** Android popover 卡片：从「+」按钮（左下）向上长出来。 */
-  const composerAttachCardAnimStyle = useAnimatedStyle(() => ({
-    opacity: composerAttachMenuShow.value,
-    transform: [{ scale: 0.6 + composerAttachMenuShow.value * 0.4 }],
-    transformOrigin: 'left bottom',
-    pointerEvents: composerAttachMenuShow.value > 0.5 ? 'auto' : 'none',
-  }));
+  /** iOS：菜单打开时把「+」图标淡到 0.4（让位给原生 UIMenu）。Android：整张 composer 卡片
+   *  由 composerPressAnimStyle 淡出让位，「+」跟着卡片一起消失，不再单独动画（分支恒定
+   *  不切换，返回 {} 安全）。 */
+  const composerAttachIconAnimStyle = useAnimatedStyle(() =>
+    IS_ANDROID ? {} : { opacity: 1 - composerAttachMenuShow.value * 0.6 },
+  );
+  /** Android popover 卡片：scale 0.1→1，transformOrigin 锚在 composer 卡片的左下角，菜单从
+   *  composer 原位"长出来"（composer 同步整卡淡出让位）。left/bottom 从 SharedValue 读（见声明注释）。
+   *  bottom 上叠键盘跟随项：composer 距屏底 = max(键盘高, restingNavInset) + 常量（meta row /
+   *  margin），菜单开着时键盘收起/弹出，按同一增量平移即可始终贴住卡片底边（含 open 发生在键盘
+   *  动画中途的竞态——基准与增量都是同一时刻快照，残差只有几帧）。 */
+  const composerAttachCardAnimStyle = useAnimatedStyle(() => {
+    const kbNow = Math.max(-kbAnimHeight.value, 0);
+    const kbFollow = Math.max(kbNow, restingNavInset) - composerAttachMenuKbBase.value;
+    return {
+      opacity: composerAttachMenuShow.value,
+      transform: [{ scale: 0.1 + composerAttachMenuShow.value * 0.9 }],
+      transformOrigin: 'left bottom',
+      left: composerAttachMenuLeft.value,
+      bottom: Math.max(0, Math.min(
+        composerAttachMenuBottom.value + kbFollow,
+        composerAttachMenuBottomMax.value,
+      ) - 45),
+      pointerEvents: composerAttachMenuShow.value > 0.5 ? 'auto' : 'none',
+    };
+  });
   const composerAttachBackdropAnimStyle = useAnimatedStyle(() => ({
     pointerEvents: composerAttachMenuShow.value > 0.5 ? 'auto' : 'none',
   }));
+  /* open 80ms / close 100ms：跟 ⋯ 菜单 / TodayScreen FAB 菜单同一节奏。 */
   const openComposerAttachMenu = useCallback(() => {
-    composerAttachMenuShow.value = withTiming(1, { duration: 120 });
+    composerAttachMenuShow.value = withTiming(1, { duration: 80 });
   }, [composerAttachMenuShow]);
   const closeComposerAttachMenu = useCallback(() => {
-    composerAttachMenuShow.value = withTiming(0, { duration: 120 });
+    composerAttachMenuShow.value = withTiming(0, { duration: 100 });
   }, [composerAttachMenuShow]);
-  /** Android：按下时 measure「+」按钮屏幕坐标，把 popover 贴在按钮**上方**（向上弹，不盖 composer）。
-   *  top = 按钮顶 Y − 卡片高 − 8；卡片高取常驻 onLayout 实测值（未测到时用 2 项估算兜底）。 */
+  /** Android：按下时 measure composer 卡片屏幕坐标，菜单卡片跟 composer 左下角对齐（左边线
+   *  贴卡片左边线、底边贴卡片底边），配合整卡淡出 = 「composer 变菜单」：
+   *  bottom = winH − 卡片底 Y，同时快照当时的键盘基准 max(键盘高, restingNavInset) 与
+   *  bottom 上限（菜单顶 ≤ insets.top+8，按当时 menuH 折算）；此后键盘任何升降由
+   *  composerAttachCardAnimStyle 的跟随项逐帧补偿，菜单跟 composer 一起走。
+   *  菜单高取常驻 onLayout 实测值（未测到时用 4 项估算兜底）。
+   *  坐标直写 SharedValue，跟 show 动画同帧生效。
+   *  精确性前提：measure 时卡片祖先矩阵必须是 identity——+ 的 onPressIn 已把按压放大
+   *  guard 掉（见 onComposerAttachPressIn），否则测出的坐标带 scale 偏移。
+   *  ⚠️ 不要改成「同批 measure 一个 overlay 参照相减」的差分方案：overlay 子树的
+   *  measureInWindow 回读比视觉位置少 insets.top（Fabric + stack card 实测），跟 composer
+   *  子树不同系，跨系相减会把菜单压低一个状态栏高；height 两系一致，origin 差异在
+   *  bottom 锚定下天然抵消，winH 公式已 screencap 验证（见 memory chatscreen-overlay-positioning）。 */
   const openAndroidComposerAttachMenu = useCallback(() => {
-    const node = composerAttachBtnRef.current;
+    const node = composerCardRef.current;
     if (node?.measureInWindow) {
-      node.measureInWindow((x, y) => {
-        const menuH = composerAttachMenuHeightRef.current || 112;
-        const top = Math.max(insets.top + 8, y - menuH - 8);
-        setComposerAttachMenuPos({ left: Math.max(8, x), top });
+      node.measureInWindow((x, y, _w, h) => {
+        const menuH = composerAttachMenuHeightRef.current || 200;
+        const winH = Dimensions.get('window').height;
+        composerAttachMenuLeft.value = Math.max(8, x);
+        composerAttachMenuBottom.value = winH - (y + h);
+        composerAttachMenuKbBase.value = Math.max(
+          Math.max(-kbAnimHeight.value, 0),
+          restingNavInset,
+        );
+        composerAttachMenuBottomMax.value = winH - (insets.top + 8) - menuH;
         openComposerAttachMenu();
       });
     } else {
       openComposerAttachMenu();
     }
-  }, [openComposerAttachMenu, insets.top]);
+  }, [
+    composerAttachMenuLeft,
+    composerAttachMenuBottom,
+    composerAttachMenuKbBase,
+    composerAttachMenuBottomMax,
+    kbAnimHeight,
+    restingNavInset,
+    openComposerAttachMenu,
+    insets.top,
+  ]);
 
   /** iOS MenuView 的两项（SF Symbol image）：对齐 Desktop lucide 图标 —— FlowDoc 用 FileText
    *  (=doc.text)，发送文件用 Upload (=square.and.arrow.up 托盘+上箭头)。
@@ -3741,7 +3886,9 @@ export function ChatScreen({
     // TTS 语音播放（本条 assistant 消息服务端已合成的 metadata.audio）。
     const msgAudio = msg.role === 'assistant' ? msg.audio : undefined;
     const audioSegments = msgAudio?.segments;
-    const hasAudio = Array.isArray(audioSegments) && audioSegments.length > 0;
+    // isTtsPlaybackSupported 门控：原生回放模块缺失的平台（如未 rebuild 的旧包）不渲染死按钮
+    const hasAudio =
+      isTtsPlaybackSupported() && Array.isArray(audioSegments) && audioSegments.length > 0;
     const audioIsThis = ttsPlayback.key === stableKey;
     const audioIsPlaying = audioIsThis && ttsPlayback.state === 'playing';
     const audioIsLoading = audioIsThis && ttsPlayback.state === 'loading';
@@ -4574,16 +4721,17 @@ export function ChatScreen({
                     <View style={styles.composerPlusBtnInner}>{plusIcon}</View>
                   </MenuView>
                 ) : (
+                  /* 不用 hitSlop：Android hitSlop 只扩 JS 命中区、native 分发不认，环带 touch 会
+                     穿给底下的 EditText 弹键盘。touch 区直接做进 view 尺寸（TOUCH_SIZE，同心）。 */
                   <TouchableOpacity
                     style={styles.composerPlusBtnAbsolute}
+                    onPressIn={onComposerAttachPressIn}
+                    onPressOut={onComposerAttachPressOut}
                     onPress={openAndroidComposerAttachMenu}
                     accessibilityLabel="添加附件"
                     activeOpacity={0.7}
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                   >
-                    <View ref={composerAttachBtnRef} style={styles.composerPlusBtnInner}>
-                      {plusIcon}
-                    </View>
+                    <View style={styles.composerPlusBtnInner}>{plusIcon}</View>
                   </TouchableOpacity>
                 );
                 /* 右下角发送键（仅 iOS，跟右侧半圆同心）：
@@ -4796,7 +4944,7 @@ export function ChatScreen({
                   <FlowDocSlateAdapter
                     ref={composerAdapterRef}
                     initialDocument={composerDoc}
-                    onChange={setComposerDoc}
+                    onChange={handleComposerDocChange}
                     onSubmitOnEnter={handleSendMessage}
                     placeholder={showEmpty ? '输入你的第一句话...' : '输入消息'}
                     placeholderColor={colors.placeholder}
@@ -4859,8 +5007,10 @@ export function ChatScreen({
                         onTouchCancel={onComposerTouchCancel}
                       >
                         {/* Android：现代兜底卡（半透明 + 细边框、无重阴影，圆角/布局对齐 iOS 玻璃版）。
-                            旧 iOS 15-25：保持原款（inputBg 实底 + shadowMenu）。 */}
+                            旧 iOS 15-25：保持原款（inputBg 实底 + shadowMenu）。
+                            ref 给 Android 附件菜单当锚点（measure 卡片框架，菜单左下对齐）。 */}
                         <View
+                          ref={composerCardRef}
                           style={
                             Platform.OS === 'android'
                               ? composerTall
@@ -5093,8 +5243,10 @@ export function ChatScreen({
       }}
     />
 
-    {/* Android：composer「+」附件菜单 popover（iOS 走 MenuView native）。常驻 mount + SharedValue 驱动，
-     *  卡片从「+」按钮（左下）向上长出来；backdrop 透明点空白关。 */}
+    {/* Android：composer「+」附件菜单 popover（iOS 走 MenuView native）。设计跟 ⋯ 菜单 /
+     *  TodayScreen FAB 菜单同款：常驻 mount + SharedValue 驱动 opacity/scale/pointerEvents，
+     *  卡片 transformOrigin: left bottom 在 composer 卡片原位左下对齐长出来，composer 整卡
+     *  同步淡出微缩"变成菜单"（composerPressAnimStyle）；backdrop 透明点空白关。 */}
     {Platform.OS === 'android' ? (
       <>
         <Reanimated.View
@@ -5106,11 +5258,7 @@ export function ChatScreen({
           onLayout={(e) => {
             composerAttachMenuHeightRef.current = e.nativeEvent.layout.height;
           }}
-          style={[
-            styles.composerAttachMenuCard,
-            { left: composerAttachMenuPos.left, top: composerAttachMenuPos.top },
-            composerAttachCardAnimStyle,
-          ]}
+          style={[styles.composerAttachMenuCard, composerAttachCardAnimStyle]}
         >
           <TouchableOpacity
             style={styles.convMenuItem}
@@ -5123,7 +5271,7 @@ export function ChatScreen({
             <Ionicons name="document-text-outline" size={20} color={colors.textPrimary} />
             <Text style={styles.convMenuItemText}>引用 FlowDoc 文档</Text>
           </TouchableOpacity>
-          <View style={styles.composerAttachMenuDivider} />
+          <View style={styles.convMenuDivider} />
           {/* 发送文件三子项（组内无分隔线）。Android 自绘 popover 按渲染顺序自上而下，无 UIMenu 翻转。 */}
           <TouchableOpacity
             style={styles.convMenuItem}

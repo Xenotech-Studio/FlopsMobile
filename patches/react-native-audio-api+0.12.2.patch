@@ -1,8 +1,25 @@
+diff --git a/node_modules/react-native-audio-api/android/src/main/cpp/audioapi/android/core/AndroidAudioRecorder.cpp b/node_modules/react-native-audio-api/android/src/main/cpp/audioapi/android/core/AndroidAudioRecorder.cpp
+index 0d33e84..49758fa 100644
+--- a/node_modules/react-native-audio-api/android/src/main/cpp/audioapi/android/core/AndroidAudioRecorder.cpp
++++ b/node_modules/react-native-audio-api/android/src/main/cpp/audioapi/android/core/AndroidAudioRecorder.cpp
+@@ -94,8 +94,12 @@ Result<NoneType, std::string> AndroidAudioRecorder::openAudioStream() {
+   }
+ 
+   oboe::AudioStreamBuilder builder;
++  // Patched: Oboe defaults to InputPreset::VoiceRecognition (AUDIO_SOURCE_VOICE_RECOGNITION).
++  // Many OEM audio HALs attenuate media playback at the DSP level while a voice-recognition
++  // capture is active, independent of AudioFocus. Generic (plain MIC source) avoids that path.
+   builder.setSharingMode(oboe::SharingMode::Exclusive)
+       ->setDirection(oboe::Direction::Input)
++      ->setInputPreset(oboe::InputPreset::Generic)
+       ->setFormat(oboe::AudioFormat::Float)
+       ->setFormatConversionAllowed(true)
+       ->setPerformanceMode(oboe::PerformanceMode::None)
 diff --git a/node_modules/react-native-audio-api/lib/module/system/notification/RecordingNotificationManager.ios.js b/node_modules/react-native-audio-api/lib/module/system/notification/RecordingNotificationManager.ios.js
-index 6f8a2c3..a1b4d5e 100644
+index 6105d26..3c726a6 100644
 --- a/node_modules/react-native-audio-api/lib/module/system/notification/RecordingNotificationManager.ios.js
 +++ b/node_modules/react-native-audio-api/lib/module/system/notification/RecordingNotificationManager.ios.js
-@@ -4,7 +4,6 @@
+@@ -4,7 +4,6 @@ import { AudioEventEmitter } from "../../events/index.js";
  class RecordingNotificationManager {
    constructor() {
      this.audioEventEmitter = new AudioEventEmitter(global.AudioEventEmitter);

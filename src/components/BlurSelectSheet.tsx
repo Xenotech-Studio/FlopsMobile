@@ -158,6 +158,7 @@ export function BlurSelectSheet({
           const isSelected = (selectedKey ?? selectedValue) === item.value;
           return (
             <TouchableOpacity
+                key={item.value}
                 style={styles.card}
                 onPress={() => handlePress(item.value)}
                 activeOpacity={0.7}

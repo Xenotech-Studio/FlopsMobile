@@ -6,9 +6,9 @@
  *  - 转发原生事件 onAudioState / onAudioProgress 给订阅者
  *  - 提供 useTtsPlayback() 供 UI 判定"当前在播的是不是这条消息"并渲染播放/暂停按钮
  *
- * 仅 iOS。Android（或原生模块缺失）时全部 no-op、状态恒为 idle。
+ * iOS + Android。原生模块缺失（未 rebuild 的旧包）时全部 no-op、状态恒为 idle。
  *
- * 与 ios/FlopsMobile/FlopsAudioModule.swift 对齐。
+ * 与 ios/FlopsMobile/FlopsAudioModule.swift、android .../FlopsAudioModule.kt（ExoPlayer）对齐。
  */
 
 import { useSyncExternalStore } from 'react';
@@ -55,8 +55,8 @@ export type PlaybackSnapshot = {
   duration: number;
 };
 
-const isIOS = Platform.OS === 'ios';
-const Native: FlopsAudioNative | undefined = isIOS
+const isSupportedPlatform = Platform.OS === 'ios' || Platform.OS === 'android';
+const Native: FlopsAudioNative | undefined = isSupportedPlatform
   ? (NativeModules as any).FlopsAudio
   : undefined;
 const emitter = Native ? new NativeEventEmitter(Native as any) : null;

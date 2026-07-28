@@ -8,9 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
@@ -19,8 +16,10 @@ import android.os.IBinder
 /**
  * TTS 实时播报的前台服务：本身不持有音频（AudioTrack 在 FlopsAudioModule），只负责
  *  - 前台服务（type mediaPlayback）→ 让进程在后台 / 锁屏时保活并允许继续出声；
- *  - MediaSession（active）+ MediaStyle 通知 → 锁屏 / 通知栏显示"语音播报中"并提供停止；
- *  - 音频焦点 → 与其它媒体协调。
+ *  - MediaSession（active）+ MediaStyle 通知 → 锁屏 / 通知栏显示"语音播报中"并提供停止。
+ *
+ * 音频焦点不在这里管：Service 存活 ≠ 在朗读（WS 空闲保活期不该压别人）。焦点由
+ * FlopsAudioModule 按「朗读窗口」（speak_start→尾音播完）级别申请/释放，见其 mixingMode。
  *
  * 停止入口：通知的停止按钮 / MediaSession.onStop → 回调 FlopsAudioModule.stopFromService() 停流，
  * 再 stopSelf。JS 主动 stopRealtime 时由模块直接 stop(context) 拉掉本服务。
@@ -28,7 +27,6 @@ import android.os.IBinder
 class FlopsAudioService : Service() {
 
   private var mediaSession: MediaSession? = null
-  private var audioFocusRequest: AudioFocusRequest? = null
 
   companion object {
     private const val CHANNEL_ID = "flops_tts_broadcast"
@@ -60,7 +58,6 @@ class FlopsAudioService : Service() {
     super.onCreate()
     createChannel()
     setupMediaSession()
-    requestAudioFocus()
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -75,7 +72,6 @@ class FlopsAudioService : Service() {
   }
 
   override fun onDestroy() {
-    abandonAudioFocus()
     mediaSession?.apply {
       isActive = false
       release()
@@ -185,34 +181,4 @@ class FlopsAudioService : Service() {
     mediaSession = session
   }
 
-  // ---- 音频焦点 ----
-
-  private fun requestAudioFocus() {
-    val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    val attrs = AudioAttributes.Builder()
-      .setUsage(AudioAttributes.USAGE_MEDIA)
-      .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-      .build()
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-        .setAudioAttributes(attrs)
-        .setOnAudioFocusChangeListener { /* MVP：不主动暂停/恢复，交给系统混音 */ }
-        .build()
-      audioFocusRequest = req
-      am.requestAudioFocus(req)
-    } else {
-      @Suppress("DEPRECATION")
-      am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
-    }
-  }
-
-  private fun abandonAudioFocus() {
-    val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
-    } else {
-      @Suppress("DEPRECATION")
-      am.abandonAudioFocus(null)
-    }
-  }
 }

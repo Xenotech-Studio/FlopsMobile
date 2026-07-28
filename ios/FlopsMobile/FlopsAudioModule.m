@@ -42,4 +42,8 @@ RCT_EXTERN_METHOD(stopRealtime:(RCTPromiseResolveBlock)resolve
 
 RCT_EXTERN_METHOD(setAudioMixingMode:(NSString *)mode)
 
+RCT_EXTERN_METHOD(setKeepScreenOn:(BOOL)on
+                         resolver:(RCTPromiseResolveBlock)resolve
+                         rejecter:(RCTPromiseRejectBlock)reject)
+
 @end

@@ -33,6 +33,14 @@ const COMPOSER_PLUS_BTN_SIZE = 32;
  *  对应 + 边沿到 card 边沿的 inset。绝对定位的 `bottom` / `left` 都用这个。 */
 const COMPOSER_PLUS_BTN_INSET =
   (COMPOSER_PILL_SIZE - COMPOSER_PLUS_BTN_SIZE) / 2;
+/** + 的真实可点区（native view bounds）：把原来 hitSlop 6 的范围做进 view 尺寸里。
+ *  Android 上 hitSlop 只在 JS 命中层（TouchTargetHelper）生效，native touch 分发按真实
+ *  view bounds 走——落在 hitSlop 环带的 touch 会穿给底下撑满整卡的 EditText，native
+ *  focus + 弹键盘（JS 侧却按 + 命中、菜单照开）。touch target 做成真实尺寸后 native / JS
+ *  命中一致；按钮无背景，视觉仍是居中 32 位的图标，+ 圆心不动（同心放大）。 */
+const COMPOSER_PLUS_BTN_TOUCH_SIZE = COMPOSER_PLUS_BTN_SIZE + 12;
+const COMPOSER_PLUS_BTN_TOUCH_INSET =
+  (COMPOSER_PILL_SIZE - COMPOSER_PLUS_BTN_TOUCH_SIZE) / 2;
 /** 发送/停止键比 + 略大（实色圆钮视觉更重）；icon 不跟着变大。跟右半圆同心 → inset 按自身尺寸算。 */
 const COMPOSER_SEND_BTN_SIZE = 38;
 const COMPOSER_SEND_BTN_INSET =
@@ -1207,24 +1215,27 @@ export function createChatStyles(c: AppColors) {
      *  刚切到 tall 模式时单行内容 ≈ 1 行高度，不要强制 minHeight 撑成两行 */
     paddingHorizontal: 12,
   },
-  /** Card-absolute 的 + / ⏹ 圆钮：bottom = left = COMPOSER_PLUS_BTN_INSET，short / tall 两模式
-   *  screen 位置完全一致；+ center 到 card 顶/底/左三边距离都是 COMPOSER_PILL_SIZE / 2。
-   *  COMPOSER_PILL_SIZE 变小时 inset 自动跟着变小，+ 仍正确居中。 */
+  /** Card-absolute 的 + 圆钮：外层是 TOUCH_SIZE 的真实可点区（native / JS 命中一致，见
+   *  COMPOSER_PLUS_BTN_TOUCH_SIZE 注释），跟旧 32 + hitSlop 6 的 JS 命中区完全等大；
+   *  short / tall 两模式 screen 位置一致，+ center 到 card 顶/底/左三边距离仍是
+   *  COMPOSER_PILL_SIZE / 2（同心，圆心不动）。 */
   composerPlusBtnAbsolute: {
     position: 'absolute',
-    bottom: COMPOSER_PLUS_BTN_INSET,
-    left: COMPOSER_PLUS_BTN_INSET,
-    width: COMPOSER_PLUS_BTN_SIZE,
-    height: COMPOSER_PLUS_BTN_SIZE,
-    borderRadius: COMPOSER_PLUS_BTN_SIZE / 2,
+    bottom: COMPOSER_PLUS_BTN_TOUCH_INSET,
+    left: COMPOSER_PLUS_BTN_TOUCH_INSET,
+    width: COMPOSER_PLUS_BTN_TOUCH_SIZE,
+    height: COMPOSER_PLUS_BTN_TOUCH_SIZE,
+    borderRadius: COMPOSER_PLUS_BTN_TOUCH_SIZE / 2,
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 5,
   },
-  /** MenuView / TouchableOpacity 内层：撑满 + 居中「+」图标（承载图标淡出动画）。 */
+  /** MenuView / TouchableOpacity 内层：32 视觉位（iOS 承载图标淡出动画）。Android popover
+   *  锚点已改为 composer 卡片本体（composerCardRef，菜单左下对齐卡片），不再 measure 这里。 */
   composerPlusBtnInner: {
-    width: '100%',
-    height: '100%',
+    width: COMPOSER_PLUS_BTN_SIZE,
+    height: COMPOSER_PLUS_BTN_SIZE,
+    borderRadius: COMPOSER_PLUS_BTN_SIZE / 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1305,26 +1316,20 @@ export function createChatStyles(c: AppColors) {
     alignItems: 'center',
     justifyContent: 'center',
   },
-  /** Android「+」附件菜单 popover 卡片：位置（left/bottom）由 measure 后 inline 注入。 */
+  /** Android「+」附件菜单 popover 卡片：几何跟 convMenuCard / TodayScreen fabMenuCard 完全同款
+   *  （minWidth 240 / 圆角 26 / shadowMenu），统一「按钮变菜单」设计语言；
+   *  位置（left/top）由 open 时 measure 后经 SharedValue 注入（见 ChatScreen 声明注释）。 */
   composerAttachMenuCard: {
     position: 'absolute',
-    minWidth: 200,
+    minWidth: 240,
     backgroundColor: c.surface,
-    borderRadius: 16,
+    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
     overflow: 'hidden',
     paddingVertical: 6,
-    paddingHorizontal: 6,
+    paddingHorizontal: 18,
     zIndex: 9999,
     elevation: 9999,
     ...shadowMenu,
-  },
-  /** 「+」附件 popover 里 FlowDoc / 发送文件 之间的分隔线：把发送文件分到底部独立组（对齐 Desktop）。
-   *  用中性半透明灰（明暗两主题都清晰），marginVertical 拉开视觉分组。 */
-  composerAttachMenuDivider: {
-    height: 1,
-    backgroundColor: 'rgba(128,128,128,0.2)',
-    marginVertical: 4,
-    marginHorizontal: 8,
   },
   /** 发送/停止键（iOS）：跟 + 镜像，靠右、跟右半圆同心。 */
   composerSendBtnAbsolute: {

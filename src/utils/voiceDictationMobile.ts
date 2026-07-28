@@ -9,6 +9,7 @@
  *   s.stop();         // 说完了：停采集、发 finish，等最终 result(last=true)+done
  *   s.cancel();       // 放弃：发 cancel 并立即拆除
  */
+import { AppState, NativeModules, Platform } from 'react-native';
 import { AudioManager, AudioRecorder } from 'react-native-audio-api';
 
 const TARGET_SAMPLE_RATE = 16000;
@@ -27,7 +28,8 @@ interface VoiceDictationOptions {
   onNotice?: (message: string) => void;
   /** 每帧音频（~100ms）的归一化 RMS 振幅（0~1），供 UI 驱动录音动画。 */
   onAmplitude?: (rms: number) => void;
-  /** iOS：用户长按 mic 选的麦克风源。auto=按连接自动、builtin=iPhone 内置麦、headset=耳机麦。 */
+  /** 用户长按 mic 选的麦克风源。auto=按连接自动、builtin=手机内置麦、headset=耳机麦。
+   *  iOS 靠 audio session options + setPreferredInput；Android 靠 FlopsAudio 开/关蓝牙 SCO。 */
   preferredMicSource?: 'auto' | 'builtin' | 'headset';
 }
 
@@ -276,6 +278,56 @@ export function createPlaybackSession(args: PlaybackSessionOptions): {
   return { start, stop };
 }
 
+/** Android 录音焦点：让自家 FlopsAudio 原生模块持/放焦点——原生侧检测输出设备，外放持
+ *  GAIN_TRANSIENT 暂停其他 app（防回音）、耳机持 MAY_DUCK 只压低音量不暂停。
+ *  注意不能走 react-native-audio-api：它的原生模块注册名是 AudioAPIModule（不是 AudioAPI），
+ *  且并未导出任何直接的焦点方法（只有 observeAudioInterruptions 间接申请、还捆绑中断事件）。 */
+function setRecordingDuck(active: boolean): void {
+  const native = (NativeModules as any).FlopsAudio;
+  if (!native?.setRecordingDuck) {
+    console.log('[dictation] FlopsAudio.setRecordingDuck 不可用（原生未重建到设备？）');
+    return;
+  }
+  native
+    .setRecordingDuck(active)
+    .then(() => console.log(`[dictation] recording duck ${active ? 'on' : 'off'}`))
+    .catch((e: any) => console.log('[dictation] recording duck 调用失败:', e?.message || e));
+}
+
+/** 录音期间保持屏幕常亮（FlopsAudio.setKeepScreenOn：iOS isIdleTimerDisabled、Android
+ *  FLAG_KEEP_SCREEN_ON）。两端都只在 app 前台时生效、切后台系统自动恢复锁屏，不烧屏；
+ *  录音中的前后台切换仍由 AppState 监听显式开关兜底。 */
+function setKeepScreenOn(on: boolean): void {
+  const native = (NativeModules as any).FlopsAudio;
+  if (!native?.setKeepScreenOn) {
+    console.log('[dictation] FlopsAudio.setKeepScreenOn 不可用（原生未重建到设备？）');
+    return;
+  }
+  native
+    .setKeepScreenOn(on)
+    .then(() => console.log(`[dictation] keep screen on ${on ? 'on' : 'off'}`))
+    .catch((e: any) => console.log('[dictation] setKeepScreenOn 调用失败:', e?.message || e));
+}
+
+/** Android 麦克风输入源：headset → FlopsAudio 启动蓝牙 SCO（等 connected，超时 ~3s）、
+ *  builtin → 关 SCO 回默认路由。返回是否切换成功；原生方法缺失（未重建）或异常按失败
+ *  处理，录音继续走系统默认路由不中断。 */
+async function setAndroidMicSource(source: 'builtin' | 'headset'): Promise<boolean> {
+  const native = (NativeModules as any).FlopsAudio;
+  if (!native?.setMicSource) {
+    console.log('[dictation] FlopsAudio.setMicSource 不可用（原生未重建到设备？）');
+    return false;
+  }
+  try {
+    const ok = await native.setMicSource(source);
+    console.log(`[dictation] mic source → ${source}: ${ok}`);
+    return Boolean(ok);
+  } catch (e: any) {
+    console.log('[dictation] setMicSource 调用失败:', e?.message || e);
+    return false;
+  }
+}
+
 export class VoiceDictationSession {
   state: SessionState = 'idle';
   lastText = '';
@@ -288,6 +340,7 @@ export class VoiceDictationSession {
   private readonly onNotice: (message: string) => void;
   private readonly onAmplitude: ((rms: number) => void) | null;
   private readonly preferredMicSource: 'auto' | 'builtin' | 'headset';
+  private readonly _duckDuringRecord: boolean;
 
   private _ws: WebSocket | null = null;
   private _wsReady = false;
@@ -299,6 +352,8 @@ export class VoiceDictationSession {
   /** start → stop 之间所有 16k/16bit/mono PCM 字节，按到达顺序攒着，供 getRecordedAudio 拼 WAV。 */
   private _pcmChunks: Uint8Array[] = [];
   private _pcmTotalBytes = 0;
+  /** 录音窗口内的前后台监听：后台关屏幕常亮、回前台（仍在录）恢复。 */
+  private _appStateSub: { remove: () => void } | null = null;
 
   constructor(opts: VoiceDictationOptions) {
     this.serverBaseUrl = opts.serverBaseUrl;
@@ -309,6 +364,8 @@ export class VoiceDictationSession {
     this.onNotice = opts.onNotice || (() => {});
     this.onAmplitude = opts.onAmplitude || null;
     this.preferredMicSource = opts.preferredMicSource || 'auto';
+    // Android：录音时自动申请 duck 焦点降低其他 app 音量；iOS 靠 setAudioSessionActivity 已覆盖
+    this._duckDuringRecord = Platform.OS === 'android';
   }
 
   async start(): Promise<void> {
@@ -346,7 +403,11 @@ export class VoiceDictationSession {
         return;
       }
       await AudioManager.setAudioSessionActivity(true);
-      if (wantHeadsetMic) {
+      if (Platform.OS === 'android') {
+        // Android：库的 setInputDevice 是 noop、Oboe 流跟随系统默认路由，只能系统级切。
+        // 必须在 _startRecorder() 前切好；SCO 慢半拍时靠 Oboe 断流自动重连迁移到耳机麦。
+        await this._configureAndroidMicSource(wantHeadsetMic);
+      } else if (wantHeadsetMic) {
         await this._pinHeadsetInput();
       } else {
         // 调试：看激活后 iOS 实际选了什么路由（不阻塞录音启动）
@@ -404,6 +465,27 @@ export class VoiceDictationSession {
       await new Promise((r) => setTimeout(r, 500));
     }
     this.onNotice('耳机麦克风不可用，已使用 iPhone 麦克风');
+  }
+
+  /** Android 版输入源配置。headset：仅蓝牙（availableInputs 有 "Bluetooth SCO"）需要开 SCO；
+   *  有线/USB 插上系统本来就默认走耳机麦，无需动作（也别 startBluetoothSco 空等 3s 超时）。
+   *  builtin：关 SCO 即回内置麦（蓝牙输出保持 A2DP 高音质，对齐 iOS A2DP 分离模式）。
+   *  注意 Android 端 getDevicesInfo 的 currentInputs/currentOutputs 恒为空数组，只能看
+   *  availableInputs；字段是 type 不是 iOS 的 category。 */
+  private async _configureAndroidMicSource(wantHeadsetMic: boolean): Promise<void> {
+    if (!wantHeadsetMic) {
+      // 显式关一次：清掉上次会话/异常残留的 SCO（未开时幂等无害）
+      await setAndroidMicSource('builtin');
+      return;
+    }
+    const info: any = await AudioManager.getDevicesInfo().catch(() => null);
+    const inputs: any[] = info?.availableInputs || [];
+    console.log('[dictation] android inputs:', JSON.stringify(
+      inputs.map((d) => ({ name: d.name, type: d.type }))));
+    const hasBtMic = inputs.some((d) => d.type === 'Bluetooth SCO');
+    if (!hasBtMic) return; // 有线/USB/LE Audio：默认路由已是耳机麦（或无 SCO 可开），不动
+    const ok = await setAndroidMicSource('headset');
+    if (!ok) this.onNotice('耳机麦克风不可用，已使用手机麦克风');
   }
 
   /** 说完了：停采集，把尾巴和 finish 发出去，等服务端回最终结果 */
@@ -507,6 +589,14 @@ export class VoiceDictationSession {
   private _startRecorder(): void {
     const recorder = new AudioRecorder();
     this._recorder = recorder;
+    // Android：录音时 duck 其他 app 音量（iOS 已通过 setAudioSessionActivity 覆盖）
+    if (this._duckDuringRecord) setRecordingDuck(true);
+    // 录音中屏幕常亮：长段口述不能被自动锁屏打断。切后台立即关（防烧屏）、回前台恢复
+    setKeepScreenOn(true);
+    this._appStateSub = AppState.addEventListener('change', (next) => {
+      const stillRecording = this.state === 'recording' || this.state === 'starting';
+      setKeepScreenOn(next === 'active' && stillRecording);
+    });
     recorder.onAudioReady(
       { sampleRate: TARGET_SAMPLE_RATE, bufferLength: CALLBACK_BUFFER_LENGTH, channelCount: 1 },
       (event) => {
@@ -591,6 +681,14 @@ export class VoiceDictationSession {
         /* ignore */
       }
     }
+    // Android：录音结束释放 duck 焦点（原生侧幂等，_stopCapture 重入无害）
+    if (this._duckDuringRecord) setRecordingDuck(false);
+    // Android：关 SCO 恢复 A2DP 高音质路由（未开时幂等无害）
+    if (Platform.OS === 'android') setAndroidMicSource('builtin').catch(() => {});
+    // 屏幕常亮解除（两端幂等）
+    this._appStateSub?.remove();
+    this._appStateSub = null;
+    setKeepScreenOn(false);
     AudioManager.setAudioSessionActivity(false).catch(() => {});
   }
 
