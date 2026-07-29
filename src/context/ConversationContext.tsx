@@ -30,6 +30,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { listConversations, runInboxStream, type ConversationListItem } from '../api';
 import { useSession } from './SessionContext';
 import { getOrCreateClientInstanceId } from '../utils/clientInstanceId';
+import { notifyRemoteMicInvite } from '../utils/remoteMicInviteBus';
 
 const CACHED_CONVS_KEY = '@FlopsMobile/cachedConversations';
 const DEDUPE_MS = 2000;
@@ -283,6 +284,16 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
         const origin = msg.origin_client_instance_id;
         if (origin && localInstanceIdRef.current && origin === localInstanceIdRef.current) return;
         loadConvsRef.current({ silent: true });
+        return;
+      }
+      if (type === 'remote_mic_invite' && typeof msg.invite_id === 'string' && msg.invite_id) {
+        // 跨设备语音输入邀请（前台通道）：手机在前台时服务端压掉 APNs、把邀请 tee 到这条 SSE，
+        // 总线按 invite_id 去重后由 RemoteMicInviteOverlay 验证并弹应用内确认卡片
+        notifyRemoteMicInvite({
+          inviteId: msg.invite_id,
+          desktopName: typeof msg.desktop_name === 'string' ? msg.desktop_name : undefined,
+          desktopDeviceId: typeof msg.desktop_device_id === 'string' ? msg.desktop_device_id : undefined,
+        });
         return;
       }
     };

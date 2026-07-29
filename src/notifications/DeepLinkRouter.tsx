@@ -11,7 +11,9 @@
  *                     拉取最新消息列表的逻辑，置顶的 safety_confirmation_required 卡片会自然显示。
  *   - turn_done     → Chat(conversationId)
  *   - turn_failed   → Chat(conversationId)
- *   - remote_mic_invite → RemoteMic(inviteId, ...)：电脑邀请手机做跨设备语音输入的沉浸录音页。
+ *   - remote_mic_invite → 不导航，发 remoteMicInviteBus：与 SSE 前台路径汇合到同一个
+ *                     RemoteMicInviteOverlay（根级 Modal，盖在当前页面之上），
+ *                     用户点「接受」后由 overlay reset 进 RemoteMic 录音页。
  *
  * 必须挂在 NavigationContainer 之内（实际上靠 navigationRef，所以位置不严格要求）。
  */
@@ -24,35 +26,27 @@ import {
   getPendingApnsDeepLink,
   type ApnsDeepLinkPayload,
 } from './apnsClient';
+import { notifyRemoteMicInvite } from '../utils/remoteMicInviteBus';
 
 function navigateForPayload(payload: ApnsDeepLinkPayload | null): void {
   if (!payload || typeof payload !== 'object') return;
-  if (!navigationRef.isReady()) return;
 
-  // 跨设备语音输入邀请：跳沉浸录音页（同样 reset 成 Main + RemoteMic 两层，返回可回主页）
+  // 跨设备语音输入邀请：不导航，发总线让 RemoteMicInviteOverlay 弹确认卡片
+  // （与 SSE 前台路径同一承接方；bus 有 lastDetail 缓存 + invite_id 去重，
+  //  冷启动 overlay 晚挂载也能接住）。放在 isReady 检查之前——发总线不依赖导航就绪。
   if (payload.kind === 'remote_mic_invite') {
     const inviteId = typeof payload.invite_id === 'string' ? payload.invite_id : '';
     if (!inviteId) return;
-    navigationRef.dispatch(
-      CommonActions.reset({
-        index: 1,
-        routes: [
-          { name: 'Main' },
-          {
-            name: 'RemoteMic',
-            params: {
-              inviteId,
-              desktopName:
-                typeof payload.desktop_name === 'string' ? payload.desktop_name : undefined,
-              desktopDeviceId:
-                typeof payload.desktop_device_id === 'string' ? payload.desktop_device_id : undefined,
-            },
-          },
-        ],
-      }),
-    );
+    notifyRemoteMicInvite({
+      inviteId,
+      desktopName: typeof payload.desktop_name === 'string' ? payload.desktop_name : undefined,
+      desktopDeviceId:
+        typeof payload.desktop_device_id === 'string' ? payload.desktop_device_id : undefined,
+    });
     return;
   }
+
+  if (!navigationRef.isReady()) return;
 
   const conversationId = typeof payload.conversation_id === 'string' ? payload.conversation_id : '';
   if (!conversationId) return;

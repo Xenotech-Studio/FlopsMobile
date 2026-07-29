@@ -6,7 +6,7 @@
  *
  * 行为：
  * - 仅 iOS 真机有意义（推送只走 APNs）；其它平台直接 noop。
- * - 仅当本地 `push_enabled=true` 时上报；用户没开推送就不必告诉服务端。
+ * - 仅当有 session 时上报（有账号即上报前台状态，不依赖推送开关——\n *   任一安装在前台都应压制整个账号的推送，避免 dev 版使用中正式版还弹横幅）。
  * - 启动 + 每次回前台：立即 POST {state:"foreground"}，并启动 60s 心跳
  *   （服务端 key TTL 90s，30s 容差）。
  * - 切到后台 / inactive：立即 POST {state:"background"}，停心跳。
@@ -19,7 +19,6 @@ import { useEffect, useRef } from 'react';
 import { AppState, Platform, type AppStateStatus } from 'react-native';
 import { useSession } from '../context/SessionContext';
 import { reportApnsPresence } from '../api/push';
-import { getPushEnabled } from './pushSettings';
 
 const HEARTBEAT_MS = 60 * 1000;
 
@@ -43,8 +42,6 @@ export function PresenceReporter(): null {
 
     const send = async (next: 'foreground' | 'background', force = false) => {
       if (!force && lastStateRef.current === next) return;
-      const enabled = await getPushEnabled();
-      if (!enabled) return;
       if (cancelled) return;
       lastStateRef.current = next;
       void reportApnsPresence(serverBaseUrl, session.access_token, next);
