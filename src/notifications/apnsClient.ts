@@ -27,6 +27,7 @@ type FlopsPushModuleType = {
   registerSilently(): Promise<{ status: string; registered: boolean }>;
   getDeviceToken(): Promise<{ token: string; env: 'sandbox' | 'production' }>;
   getBundleIdentifier(): Promise<{ bundleId: string }>;
+  getDeviceInfo(): Promise<{ deviceName: string; identifierForVendor: string }>;
   getPendingDeepLink(): Promise<{ payload: ApnsDeepLinkPayload | null }>;
 };
 
@@ -131,6 +132,35 @@ export async function getApnsTopic(): Promise<string | undefined> {
     return cachedApnsTopic;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * 本机设备身份（展示名 + identifierForVendor）：注册 token 时随 payload 上报，供电脑端 mic 菜单
+ * 区分/去重多台手机。
+ * - deviceName：iOS 16+ 无授权时是机型名（如「iPhone」），仅作展示名的基底；真正区分 dev/prod
+ *   由 PushTokenLifecycle 折进 env/build 标记。
+ * - identifierForVendor：同机 dev/prod 双 build 共享，后端 /phones 按它把同一台物理机折成一条。
+ * 运行期不变，缓存一次即可。非 iOS / 原生未重编（老二进制无 getDeviceInfo）→ 返回空串，
+ * 后端据「无 identifier_for_vendor」保持旧行为不去重。
+ */
+export type DeviceIdentity = { deviceName: string; identifierForVendor: string };
+
+let cachedDeviceIdentity: DeviceIdentity | undefined;
+export async function getDeviceIdentity(): Promise<DeviceIdentity> {
+  if (cachedDeviceIdentity) return cachedDeviceIdentity;
+  if (!FlopsPushModule || typeof FlopsPushModule.getDeviceInfo !== 'function') {
+    return { deviceName: '', identifierForVendor: '' };
+  }
+  try {
+    const r = await FlopsPushModule.getDeviceInfo();
+    cachedDeviceIdentity = {
+      deviceName: r?.deviceName || '',
+      identifierForVendor: r?.identifierForVendor || '',
+    };
+    return cachedDeviceIdentity;
+  } catch {
+    return { deviceName: '', identifierForVendor: '' };
   }
 }
 

@@ -166,6 +166,23 @@ class FlopsPushModule: RCTEventEmitter {
     resolve(["bundleId": Bundle.main.bundleIdentifier ?? ""])
   }
 
+  // MARK: - JS 拉取设备展示信息（deviceName + identifierForVendor）
+
+  /// 电脑端 mic 菜单列手机时用（remote_mic /phones）：
+  /// - deviceName：作展示名区分多台手机（iOS 16+ 无 user-assigned-device-name 授权时返回机型名如
+  ///   「iPhone」，JS 侧再折进 env/build 标记，避免同机 dev/prod 两条重名）。
+  /// - identifierForVendor：同一 vendor 在本机的稳定 ID，同机 dev/prod 两个 build 共享同一值；
+  ///   后端 /phones 按它去重，同一台物理 iPhone 只显示一条（取最新那条）。
+  @objc(getDeviceInfo:rejecter:)
+  func getDeviceInfo(_ resolve: @escaping RCTPromiseResolveBlock,
+                     rejecter reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.main.async {
+      let name = UIDevice.current.name
+      let idfv = UIDevice.current.identifierForVendor?.uuidString ?? ""
+      resolve(["deviceName": name, "identifierForVendor": idfv])
+    }
+  }
+
   // MARK: - JS 主动拉取（拿不到则 reject "no_token"）
 
   @objc(getDeviceToken:rejecter:)

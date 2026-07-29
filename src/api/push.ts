@@ -28,6 +28,7 @@ export type ApnsTokenRow = {
   env: ApnsEnv;
   ts?: number;
   device_name?: string;
+  identifier_for_vendor?: string;
   ua?: string;
 };
 
@@ -44,7 +45,14 @@ export type ApnsDebugResultRow = {
 export async function registerApnsToken(
   baseUrl: string,
   accessToken: string,
-  payload: { device_token: string; env: ApnsEnv; topic?: string; device_name?: string; ua?: string }
+  payload: {
+    device_token: string;
+    env: ApnsEnv;
+    topic?: string;
+    device_name?: string;
+    identifier_for_vendor?: string;
+    ua?: string;
+  }
 ): Promise<{ ok: boolean; meta?: Record<string, unknown> }> {
   const res = await fetchWithDebugLog(buildUrl(baseUrl, '/api/push/apns/register'), {
     method: 'POST',

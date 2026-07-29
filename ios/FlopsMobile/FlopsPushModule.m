@@ -25,6 +25,9 @@ RCT_EXTERN_METHOD(getDeviceToken:(RCTPromiseResolveBlock)resolve
 RCT_EXTERN_METHOD(getBundleIdentifier:(RCTPromiseResolveBlock)resolve
                              rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(getDeviceInfo:(RCTPromiseResolveBlock)resolve
+                       rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(getPendingDeepLink:(RCTPromiseResolveBlock)resolve
                             rejecter:(RCTPromiseRejectBlock)reject)
 
