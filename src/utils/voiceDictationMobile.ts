@@ -31,6 +31,14 @@ interface VoiceDictationOptions {
   /** 用户长按 mic 选的麦克风源。auto=按连接自动、builtin=手机内置麦、headset=耳机麦。
    *  iOS 靠 audio session options + setPreferredInput；Android 靠 FlopsAudio 开/关蓝牙 SCO。 */
   preferredMicSource?: 'auto' | 'builtin' | 'headset';
+  /** 跨设备语音输入（电脑邀请手机当麦克风）：邀请 id。与 forwardTo 一起拼进 WS URL，
+   *  服务端据此把识别结果实时转发到电脑端。 */
+  inviteId?: string;
+  /** 转发目标（电脑端 device_id），与 inviteId 配套。 */
+  forwardTo?: string;
+  /** 服务端下发 {type:'remote_stop'}（电脑端点了停止）时回调。会话不自动停，
+   *  由调用方决定 stop()（要最终结果）还是 cancel()。 */
+  onRemoteStop?: () => void;
 }
 
 /** 人声正常说话的满格定标点：rms 到这里就算 1.0（喊会超过、被 clamp）。 */
@@ -100,11 +108,19 @@ function writeWavHeader(
   view.setUint32(40, dataSize, true);
 }
 
-/** https://host/ → wss://host/api/ws/asr?access_token=... */
-function buildAsrUrl(serverBaseUrl: string, token: string): string {
+/** https://host/ → wss://host/api/ws/asr?access_token=...（extra 里的空值跳过不拼）。 */
+function buildAsrUrl(
+  serverBaseUrl: string,
+  token: string,
+  extra?: Record<string, string | undefined>,
+): string {
   const trimmed = (serverBaseUrl || '').replace(/\/+$/, '');
   const ws = trimmed.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:');
-  return `${ws}/api/ws/asr?access_token=${encodeURIComponent(token)}`;
+  let url = `${ws}/api/ws/asr?access_token=${encodeURIComponent(token)}`;
+  for (const [k, v] of Object.entries(extra || {})) {
+    if (v) url += `&${encodeURIComponent(k)}=${encodeURIComponent(v)}`;
+  }
+  return url;
 }
 
 /** base64 → 原始字节（Hermes 上 global.atob 可用）。 */
@@ -339,7 +355,10 @@ export class VoiceDictationSession {
   private readonly onError: (message: string) => void;
   private readonly onNotice: (message: string) => void;
   private readonly onAmplitude: ((rms: number) => void) | null;
+  private readonly onRemoteStop: () => void;
   private readonly preferredMicSource: 'auto' | 'builtin' | 'headset';
+  private readonly inviteId: string;
+  private readonly forwardTo: string;
   private readonly _duckDuringRecord: boolean;
 
   private _ws: WebSocket | null = null;
@@ -363,7 +382,10 @@ export class VoiceDictationSession {
     this.onError = opts.onError || (() => {});
     this.onNotice = opts.onNotice || (() => {});
     this.onAmplitude = opts.onAmplitude || null;
+    this.onRemoteStop = opts.onRemoteStop || (() => {});
     this.preferredMicSource = opts.preferredMicSource || 'auto';
+    this.inviteId = opts.inviteId || '';
+    this.forwardTo = opts.forwardTo || '';
     // Android：录音时自动申请 duck 焦点降低其他 app 音量；iOS 靠 setAudioSessionActivity 已覆盖
     this._duckDuringRecord = Platform.OS === 'android';
   }
@@ -536,7 +558,12 @@ export class VoiceDictationSession {
   // -------------------- internal --------------------
 
   private _openWebSocket(): void {
-    const ws = new WebSocket(buildAsrUrl(this.serverBaseUrl, this.token));
+    const ws = new WebSocket(
+      buildAsrUrl(this.serverBaseUrl, this.token, {
+        invite_id: this.inviteId || undefined,
+        forward_to: this.forwardTo || undefined,
+      }),
+    );
     this._ws = ws;
     ws.onmessage = (ev) => this._onWsMessage(ev);
     ws.onerror = () => {
@@ -579,6 +606,10 @@ export class VoiceDictationSession {
     }
     if (msg.type === 'done') {
       this._finish();
+      return;
+    }
+    if (msg.type === 'remote_stop') {
+      this.onRemoteStop();
       return;
     }
     if (msg.type === 'error') {

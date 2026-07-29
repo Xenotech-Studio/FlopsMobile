@@ -27,6 +27,7 @@ import { ModelProviderSettingsScreen } from '../screens/ModelProviderSettingsScr
 import { SlateRNSpikeScreen } from '../screens/SlateRNSpikeScreen';
 import { DevTestScreen } from '../screens/DevTestScreen';
 import { RecordingLibraryScreen } from '../screens/RecordingLibraryScreen';
+import { RemoteMicScreen } from '../screens/RemoteMicScreen';
 import { DocPreviewScreen } from '../screens/docs/DocPreviewScreen';
 import { AppletScreen } from '../flowbase/app/AppletScreen';
 import type { RootStackParamList } from './types';
@@ -215,6 +216,16 @@ export function RootNavigator() {
       <Stack.Screen
         name="Applet"
         component={AppletScreen}
+        options={{
+          headerShown: false,
+          gestureEnabled: true,
+          cardStyleInterpolator: bottomCardStyleInterpolator,
+        }}
+      />
+      {/* 跨设备语音输入沉浸页：电脑端 remote_mic_invite 推送跳入，底部滑入。 */}
+      <Stack.Screen
+        name="RemoteMic"
+        component={RemoteMicScreen}
         options={{
           headerShown: false,
           gestureEnabled: true,

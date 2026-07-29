@@ -11,6 +11,7 @@
  *                     拉取最新消息列表的逻辑，置顶的 safety_confirmation_required 卡片会自然显示。
  *   - turn_done     → Chat(conversationId)
  *   - turn_failed   → Chat(conversationId)
+ *   - remote_mic_invite → RemoteMic(inviteId, ...)：电脑邀请手机做跨设备语音输入的沉浸录音页。
  *
  * 必须挂在 NavigationContainer 之内（实际上靠 navigationRef，所以位置不严格要求）。
  */
@@ -27,6 +28,31 @@ import {
 function navigateForPayload(payload: ApnsDeepLinkPayload | null): void {
   if (!payload || typeof payload !== 'object') return;
   if (!navigationRef.isReady()) return;
+
+  // 跨设备语音输入邀请：跳沉浸录音页（同样 reset 成 Main + RemoteMic 两层，返回可回主页）
+  if (payload.kind === 'remote_mic_invite') {
+    const inviteId = typeof payload.invite_id === 'string' ? payload.invite_id : '';
+    if (!inviteId) return;
+    navigationRef.dispatch(
+      CommonActions.reset({
+        index: 1,
+        routes: [
+          { name: 'Main' },
+          {
+            name: 'RemoteMic',
+            params: {
+              inviteId,
+              desktopName:
+                typeof payload.desktop_name === 'string' ? payload.desktop_name : undefined,
+              desktopDeviceId:
+                typeof payload.desktop_device_id === 'string' ? payload.desktop_device_id : undefined,
+            },
+          },
+        ],
+      }),
+    );
+    return;
+  }
 
   const conversationId = typeof payload.conversation_id === 'string' ? payload.conversation_id : '';
   if (!conversationId) return;

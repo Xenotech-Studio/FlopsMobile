@@ -30,7 +30,7 @@ type FlopsPushModuleType = {
 };
 
 /** push_event 注入到 APNs payload 里的字段（除 aps 之外）。 */
-export type ApnsDeepLinkKind = 'need_confirm' | 'turn_done' | 'turn_failed';
+export type ApnsDeepLinkKind = 'need_confirm' | 'turn_done' | 'turn_failed' | 'remote_mic_invite';
 export type ApnsDeepLinkPayload = {
   kind: ApnsDeepLinkKind | string;
   conversation_id?: string;

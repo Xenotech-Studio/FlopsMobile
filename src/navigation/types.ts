@@ -60,6 +60,8 @@ export type RootStackParamList = {
   TtsSettings: undefined;
   /** 全屏 Applet（类小程序）：deep-link 可只带 appId，baseId 缺省时由反查端点解析；appName 仅用于标题。 */
   Applet: { appId: string; baseId?: string; appName?: string };
+  /** 跨设备语音输入沉浸页：电脑端 remote_mic_invite 推送跳入，录音识别结果实时转发到电脑。 */
+  RemoteMic: { inviteId: string; desktopName?: string; desktopDeviceId?: string };
   /** 开发测试页（Profile 入口）。回放数据走模块级 pendingRevisit，不经路由参数。 */
   DevTest: undefined;
   /** 录音机本地库（DevTest 子页） */
