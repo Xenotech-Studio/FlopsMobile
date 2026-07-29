@@ -10,6 +10,7 @@
  */
 
 import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
+import { sha256Hex } from '../utils/sha256Hex';
 
 export type ApnsAuthStatus =
   | 'notDetermined'
@@ -97,6 +98,22 @@ export async function getCachedDeviceToken(): Promise<DeviceTokenResult> {
     if (code === 'no_token') return { ok: false, kind: 'pending' };
     return { ok: false, kind: 'register_failed', error: `${code}: ${msg}` };
   }
+}
+
+/**
+ * 本机 APNs device token 的 hash（sha256 前 16 位），与服务端 remote_mic.token_hash 同算法
+ * （电脑选设备、下发 remote_mic_invite 时用它指代目标手机）。用于前台 inbox SSE 邀请通道的
+ * device 定向过滤：SSE 是用户级广播，多设备/多手机都会收到同一帧，只有 hash 对得上的那台该弹卡片。
+ * 非 iOS（无 APNs token）/ 尚未注册 → 返回 null（收到带 hash 的邀请即静默丢弃，本机不是目标）。
+ * 每次现算：invite 罕见（用户手动发起）且此路径本机处于前台、token 早已缓存，无需缓存反被 token
+ * rotation 弄脏。
+ */
+export async function getOwnApnsTokenHash(): Promise<string | null> {
+  if (!isIOS || !FlopsPushModule) return null;
+  const r = await getCachedDeviceToken();
+  if (!r.ok) return null;
+  const full = await sha256Hex(r.token);
+  return full ? full.slice(0, 16) : null;
 }
 
 /**

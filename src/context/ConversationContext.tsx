@@ -287,12 +287,15 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
         return;
       }
       if (type === 'remote_mic_invite' && typeof msg.invite_id === 'string' && msg.invite_id) {
-        // 跨设备语音输入邀请（前台通道）：手机在前台时服务端压掉 APNs、把邀请 tee 到这条 SSE，
-        // 总线按 invite_id 去重后由 RemoteMicInviteOverlay 验证并弹应用内确认卡片
+        // 跨设备语音输入邀请（前台通道）：手机在前台时服务端压掉 APNs、把邀请 tee 到这条 SSE。
+        // 这条 SSE 是用户级广播 —— 账户下每台设备都会收到；phone_token_hash 标出电脑选中的目标手机，
+        // 总线按它做 device 定向过滤（非目标机静默丢弃），再按 invite_id 去重、由 RemoteMicInviteOverlay
+        // 验证并弹应用内确认卡片
         notifyRemoteMicInvite({
           inviteId: msg.invite_id,
           desktopName: typeof msg.desktop_name === 'string' ? msg.desktop_name : undefined,
           desktopDeviceId: typeof msg.desktop_device_id === 'string' ? msg.desktop_device_id : undefined,
+          phoneTokenHash: typeof msg.phone_token_hash === 'string' ? msg.phone_token_hash : undefined,
         });
         return;
       }
