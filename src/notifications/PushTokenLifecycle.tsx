@@ -54,7 +54,7 @@ export function PushTokenLifecycle(): null {
     let cancelled = false;
 
     const syncToken = async (token: string, env: 'sandbox' | 'production') => {
-      const sig = `${token}|${env}`;
+      const sig = `v2|${token}|${env}`;
       if (sig === lastSyncedRef.current) return;
       try {
         const topic = await getApnsTopic();
