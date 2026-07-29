@@ -15,7 +15,6 @@ import {
   AppState,
   Alert,
   ActionSheetIOS,
-  InteractionManager,
   Keyboard,
   Dimensions,
   type StyleProp,
@@ -837,7 +836,7 @@ export function ChatScreen({
       );
     };
     requestAnimationFrame(() => {
-      InteractionManager.runAfterInteractions(runMeasure);
+      requestAnimationFrame(runMeasure);
     });
   }, []);
 

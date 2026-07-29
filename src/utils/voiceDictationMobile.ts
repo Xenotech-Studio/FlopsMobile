@@ -310,10 +310,16 @@ function setRecordingDuck(active: boolean): void {
     .catch((e: any) => console.log('[dictation] recording duck 调用失败:', e?.message || e));
 }
 
-/** 录音期间保持屏幕常亮（FlopsAudio.setKeepScreenOn：iOS isIdleTimerDisabled、Android
+/** 保持屏幕常亮（FlopsAudio.setKeepScreenOn：iOS isIdleTimerDisabled、Android
  *  FLAG_KEEP_SCREEN_ON）。两端都只在 app 前台时生效、切后台系统自动恢复锁屏，不烧屏；
- *  录音中的前后台切换仍由 AppState 监听显式开关兜底。 */
-function setKeepScreenOn(on: boolean): void {
+ *  录音中的前后台切换仍由 AppState 监听显式开关兜底。
+ *
+ *  原生标志是全局单例，直接开关会互相覆盖（听写会话结束的 off 会关掉 RemoteMic 整页
+ *  的常亮）——所以用引用计数：各持有方 acquire/release 自己的 tag，任一持有即常亮，
+ *  全部释放才恢复自动锁屏。两个方法都幂等。 */
+const keepScreenOnHolders = new Set<string>();
+
+function nativeSetKeepScreenOn(on: boolean): void {
   const native = (NativeModules as any).FlopsAudio;
   if (!native?.setKeepScreenOn) {
     console.log('[dictation] FlopsAudio.setKeepScreenOn 不可用（原生未重建到设备？）');
@@ -323,6 +329,17 @@ function setKeepScreenOn(on: boolean): void {
     .setKeepScreenOn(on)
     .then(() => console.log(`[dictation] keep screen on ${on ? 'on' : 'off'}`))
     .catch((e: any) => console.log('[dictation] setKeepScreenOn 调用失败:', e?.message || e));
+}
+
+export function acquireKeepScreenOn(tag: string): void {
+  const wasEmpty = keepScreenOnHolders.size === 0;
+  keepScreenOnHolders.add(tag);
+  if (wasEmpty) nativeSetKeepScreenOn(true);
+}
+
+export function releaseKeepScreenOn(tag: string): void {
+  if (!keepScreenOnHolders.delete(tag)) return;
+  if (keepScreenOnHolders.size === 0) nativeSetKeepScreenOn(false);
 }
 
 /** Android 麦克风输入源：headset → FlopsAudio 启动蓝牙 SCO（等 connected，超时 ~3s）、
@@ -343,6 +360,8 @@ async function setAndroidMicSource(source: 'builtin' | 'headset'): Promise<boole
     return false;
   }
 }
+
+let sessionSeq = 0;
 
 export class VoiceDictationSession {
   state: SessionState = 'idle';
@@ -373,6 +392,8 @@ export class VoiceDictationSession {
   private _pcmTotalBytes = 0;
   /** 录音窗口内的前后台监听：后台关屏幕常亮、回前台（仍在录）恢复。 */
   private _appStateSub: { remove: () => void } | null = null;
+  /** 本会话在屏幕常亮引用计数里的持有标识 */
+  private readonly _keepAwakeTag = `dictation-session-${++sessionSeq}`;
 
   constructor(opts: VoiceDictationOptions) {
     this.serverBaseUrl = opts.serverBaseUrl;
@@ -623,10 +644,11 @@ export class VoiceDictationSession {
     // Android：录音时 duck 其他 app 音量（iOS 已通过 setAudioSessionActivity 覆盖）
     if (this._duckDuringRecord) setRecordingDuck(true);
     // 录音中屏幕常亮：长段口述不能被自动锁屏打断。切后台立即关（防烧屏）、回前台恢复
-    setKeepScreenOn(true);
+    acquireKeepScreenOn(this._keepAwakeTag);
     this._appStateSub = AppState.addEventListener('change', (next) => {
       const stillRecording = this.state === 'recording' || this.state === 'starting';
-      setKeepScreenOn(next === 'active' && stillRecording);
+      if (next === 'active' && stillRecording) acquireKeepScreenOn(this._keepAwakeTag);
+      else releaseKeepScreenOn(this._keepAwakeTag);
     });
     recorder.onAudioReady(
       { sampleRate: TARGET_SAMPLE_RATE, bufferLength: CALLBACK_BUFFER_LENGTH, channelCount: 1 },
@@ -716,10 +738,10 @@ export class VoiceDictationSession {
     if (this._duckDuringRecord) setRecordingDuck(false);
     // Android：关 SCO 恢复 A2DP 高音质路由（未开时幂等无害）
     if (Platform.OS === 'android') setAndroidMicSource('builtin').catch(() => {});
-    // 屏幕常亮解除（两端幂等）
+    // 释放本会话的屏幕常亮持有（若 RemoteMic 整页等其他持有方还在，常亮不受影响）
     this._appStateSub?.remove();
     this._appStateSub = null;
-    setKeepScreenOn(false);
+    releaseKeepScreenOn(this._keepAwakeTag);
     AudioManager.setAudioSessionActivity(false).catch(() => {});
   }
 

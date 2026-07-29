@@ -814,31 +814,35 @@ export function TodayScreen() {
             </TouchableOpacity>
           </Animated.View>
         ) : (
-          <Animated.View key="filter-menu" entering={FadeIn.duration(300)} style={filterIconAnimStyle}>
-            {Platform.OS === 'ios' ? (
-              <MenuView
-                title=""
-                actions={convFilterMenuActions as unknown as any[]}
-                onPressAction={onConvFilterMenuView}
-                onOpenMenu={onFilterMenuOpen}
-                onCloseMenu={onFilterMenuClose}
-                shouldOpenOnLongPress={false}
-              >
-                <View style={styles.filterBtn}>
-                  <Ionicons name="filter-outline" size={20} color={colors.textSecondary} />
-                </View>
-              </MenuView>
-            ) : (
-              <TouchableOpacity
-                onPress={openAndroidFilterMenu}
-                activeOpacity={0.7}
-                hitSlop={8}
-              >
-                <View ref={filterBtnRef} style={styles.filterBtn}>
-                  <Ionicons name="filter-outline" size={20} color={colors.textSecondary} />
-                </View>
-              </TouchableOpacity>
-            )}
+          /* entering(layout animation) 与 opacity animated style 分挂两层：同一 Animated.View
+           *  上两者都动 opacity 会触发 Reanimated "may be overwritten by a layout animation" 警告 */
+          <Animated.View key="filter-menu" entering={FadeIn.duration(300)}>
+            <Animated.View style={filterIconAnimStyle}>
+              {Platform.OS === 'ios' ? (
+                <MenuView
+                  title=""
+                  actions={convFilterMenuActions as unknown as any[]}
+                  onPressAction={onConvFilterMenuView}
+                  onOpenMenu={onFilterMenuOpen}
+                  onCloseMenu={onFilterMenuClose}
+                  shouldOpenOnLongPress={false}
+                >
+                  <View style={styles.filterBtn}>
+                    <Ionicons name="filter-outline" size={20} color={colors.textSecondary} />
+                  </View>
+                </MenuView>
+              ) : (
+                <TouchableOpacity
+                  onPress={openAndroidFilterMenu}
+                  activeOpacity={0.7}
+                  hitSlop={8}
+                >
+                  <View ref={filterBtnRef} style={styles.filterBtn}>
+                    <Ionicons name="filter-outline" size={20} color={colors.textSecondary} />
+                  </View>
+                </TouchableOpacity>
+              )}
+            </Animated.View>
           </Animated.View>
         )}
       </View>

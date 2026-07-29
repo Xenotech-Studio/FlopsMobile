@@ -1,17 +1,26 @@
 /**
- * RemoteMicScreen —— 跨设备语音输入的手机端沉浸录音页。
+ * RemoteMicScreen —— 跨设备语音输入的手机端沉浸录音页（per-press PTT）。
  *
  * 电脑端 POST /api/remote_mic/invite 触发 APNs（kind=remote_mic_invite），DeepLinkRouter
- * reset 到 Main + RemoteMic 跳入本页。状态机：
- *   checking  进页先 GET /api/remote_mic/invite/{inviteId} 验证邀请仍有效
- *   live      开 VoiceDictationSession（WS 带 invite_id + forward_to），识别结果由服务端
- *             实时转发到电脑；本页显示振幅脉冲 + 实时文本
- *   ending    停止（本机按钮或电脑端 remote_stop）后等最终结果
- *   done      「已发送到 xx」1.5s 后自动退出
- *   invalid   邀请过期/取消、网络失败或录音错误：显示原因 + 手动关闭
+ * reset 到 Main + RemoteMic 跳入本页。「连接」由控制面 invite 记录承载（remote_mic.py），
+ * 录音本身按次：每次按住 new 一个普通 VoiceDictationSession（只传 forwardTo 不传 inviteId
+ * ——免邀请直转模式），松手 stop()；服务端把这一次的 begin/result/done SSE 流到电脑，
+ * done 后电脑 commit 灰字、chip 回已连接态。
  *
- * 沉浸 UI 固定深色调色板（不跟随主题）；录音期间的屏幕常亮由 VoiceDictationSession
- * 内部的 setKeepScreenOn 处理，本页不重复管。
+ *   checking    进页 POST /api/remote_mic/invite/{id}/accept：标记已连接，电脑 chip 亮起
+ *   idle        就绪：按住大圆钮说话；每次按住时并发 GET /invite/{id} 查电脑是否已断开
+ *   recording   按住中：振幅脉冲 + 实时灰字
+ *   finalizing  松手后等本次识别定稿（onDone），期间按钮禁用；定稿淡化留在屏上到下一次
+ *               按住（只显示当前这句，不累计历史 —— 电脑 composer 才是唯一真实内容源）
+ *   ending      结束中（左上角关闭 / 电脑端 remote_stop）：等在途的一次收尾后 bye
+ *   done        「已发送到 xx」1.5s 后自动退出
+ *   invalid     邀请失效 / 电脑已断开 / 出错：显示原因 + 手动关闭
+ *
+ * 结束方式：本页左上角关闭（POST bye 清电脑 chip）、电脑断开（服务端广播 SSE bye 经
+ * remoteMicInviteBus 即时结束本页；在录时另有 remote_stop 打断在录的一次；按住前的
+ * GET 轮询兜底 SSE 断线）。手势返回/卸载：取消在录的一次 + 补发 bye（幂等，只发一次）。
+ *
+ * 沉浸 UI 固定深色调色板（不跟随主题）；录音中的屏幕常亮由 VoiceDictationSession 按次持有。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -37,11 +46,17 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import { AudioManager } from 'react-native-audio-api';
 import { useSession } from '../context/SessionContext';
-import { VoiceDictationSession } from '../utils/voiceDictationMobile';
+import { subscribeRemoteMicBye } from '../utils/remoteMicInviteBus';
+import {
+  VoiceDictationSession,
+  acquireKeepScreenOn,
+  releaseKeepScreenOn,
+} from '../utils/voiceDictationMobile';
 import type { RootStackParamList } from '../navigation/types';
 
-type Phase = 'checking' | 'live' | 'ending' | 'done' | 'invalid';
+type Phase = 'checking' | 'idle' | 'recording' | 'finalizing' | 'ending' | 'done' | 'invalid';
 
 export function RemoteMicScreen() {
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
@@ -53,11 +68,18 @@ export function RemoteMicScreen() {
 
   const [phase, setPhase] = useState<Phase>('checking');
   const [invalidMsg, setInvalidMsg] = useState('');
-  const [liveText, setLiveText] = useState('');
+  // 只显示当前这句：按住时实时识别，松手后定稿淡化留存，下一次按住即清。
+  // 不累计历史 —— 电脑 composer 才是唯一真实内容源（那边可自由编辑，这边不做镜像）
+  const [lastText, setLastText] = useState(''); // 上一句定稿（淡化显示）
+  const [segmentText, setSegmentText] = useState('');
+  const [notice, setNotice] = useState(''); // 单次按住出错等非致命提示，短暂显示
 
   const dictationRef = useRef<VoiceDictationSession | null>(null);
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leftRef = useRef(false); // goBack 只走一次（自动退出定时器 vs 手势返回竞态）
+  const acceptedRef = useRef(false); // accept 成功过才需要 bye
+  const byeSentRef = useRef(false); // bye 只发一次（关闭按钮与卸载清理竞态）
   const phaseRef = useRef<Phase>('checking');
   phaseRef.current = phase;
   const scrollRef = useRef<ScrollView>(null);
@@ -68,6 +90,7 @@ export function RemoteMicScreen() {
   const doneScale = useSharedValue(0.4);
 
   const deviceLabel = desktopName || '电脑';
+  const displayText = segmentText || lastText;
 
   const leave = useCallback(() => {
     if (leftRef.current) return;
@@ -76,52 +99,156 @@ export function RemoteMicScreen() {
     else navigation.navigate('Main');
   }, [navigation]);
 
-  /** 停止（本机按钮或电脑端 remote_stop）：停采集发 finish，onDone 里进 done。 */
-  const handleStop = useCallback(() => {
-    if (phaseRef.current !== 'live') return;
-    setPhase('ending');
-    dictationRef.current?.stop();
+  /** 通知电脑清 chip（accepted→closed）。幂等：只在 accept 成功过且未发过时发。 */
+  const sendBye = useCallback(() => {
+    if (!acceptedRef.current || byeSentRef.current || !session) return;
+    byeSentRef.current = true;
+    const base = session.server_base_url.replace(/\/+$/, '');
+    void fetch(`${base}/api/remote_mic/invite/${encodeURIComponent(inviteId)}/bye`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    }).catch(() => {});
+  }, [session, inviteId]);
+  const sendByeRef = useRef(sendBye);
+  sendByeRef.current = sendBye;
+
+  const flashNotice = useCallback((msg: string) => {
+    setNotice(msg);
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = setTimeout(() => setNotice(''), 4000);
   }, []);
 
-  /** 取消：放弃本段录音直接退出（电脑端不会收到文本）。 */
-  const handleCancel = useCallback(() => {
+  /** 会话失效收尾（电脑断开/邀请过期）：取消在录的一次，进 invalid。 */
+  const endAsInvalid = useCallback(
+    (msg: string) => {
+      const s = dictationRef.current;
+      dictationRef.current = null;
+      if (s) s.cancel();
+      amp.value = withTiming(0, { duration: 200 });
+      setSegmentText('');
+      setInvalidMsg(msg);
+      setPhase('invalid');
+    },
+    [amp],
+  );
+
+  /** 按住时并发查电脑是否已断开（GET /invite/{id}）。网络抖动放过，这一次照常识别。 */
+  const checkDesktopAlive = useCallback(async () => {
+    if (!session) return;
+    try {
+      const base = session.server_base_url.replace(/\/+$/, '');
+      const res = await fetch(`${base}/api/remote_mic/invite/${encodeURIComponent(inviteId)}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!res.ok) return;
+      const data: any = await res.json();
+      const status = String(data?.status || '');
+      if (status === 'accepted') return;
+      const p = phaseRef.current;
+      if (p !== 'idle' && p !== 'recording' && p !== 'finalizing') return;
+      endAsInvalid(
+        status === 'disconnected' ? '电脑端已断开连接' : '连接已失效，请在电脑上重新发起',
+      );
+    } catch {
+      /* 网络抖动：放过 */
+    }
+  }, [session, inviteId, endAsInvalid]);
+
+  /** 结束整个会话（左上角关闭或电脑端 remote_stop）：等在途的一次收尾后 bye + done。 */
+  const handleStop = useCallback(() => {
+    const p = phaseRef.current;
+    if (p === 'idle') {
+      sendBye();
+      setPhase('done');
+    } else if (p === 'recording') {
+      setPhase('ending');
+      amp.value = withTiming(0, { duration: 200 });
+      dictationRef.current?.stop();
+    } else if (p === 'finalizing') {
+      setPhase('ending'); // stop() 已发，onDone 里接力 bye + done
+    }
+  }, [sendBye, amp]);
+
+  /** 放弃并退出：取消在录的一次 + 补发 bye。 */
+  const abandonAndLeave = useCallback(() => {
     const s = dictationRef.current;
     dictationRef.current = null;
     if (s) s.cancel();
+    sendBye();
     leave();
-  }, [leave]);
+  }, [sendBye, leave]);
 
-  const startLive = useCallback(() => {
-    if (!session || dictationRef.current) return;
+  /** 左上角关闭：直接结束，不显示 done 态。PTT 的语义是「借用麦克风」而非「发送内容」，
+   *  关闭只是断开连接，不需要对勾确认。 */
+  const handleClose = useCallback(() => {
+    abandonAndLeave();
+  }, [abandonAndLeave]);
+
+  /** PTT 按下：new 一个一次性听写会话开录（每次按住 = 一条 WS = 电脑上一段灰字）。 */
+  const handlePressIn = useCallback(() => {
+    if (phaseRef.current !== 'idle' || !session || dictationRef.current) return;
+    setPhase('recording');
+    setLastText(''); // 新一句：清掉上一句的淡化定稿
+    void checkDesktopAlive(); // 并发查电脑是否已断开，不阻塞开录
     const s = new VoiceDictationSession({
       serverBaseUrl: session.server_base_url,
       token: session.access_token,
-      inviteId,
-      forwardTo: desktopDeviceId,
+      forwardTo: desktopDeviceId, // 不带 inviteId：免邀请直转，识别结果实时转发到电脑
       onAmplitude: (rms) => {
         amp.value = withTiming(rms, { duration: 80, easing: Easing.linear });
       },
-      onResult: (text) => setLiveText(text),
+      onResult: (text) => setSegmentText(text),
       onDone: (finalText) => {
         if (dictationRef.current === s) dictationRef.current = null;
-        if (finalText) setLiveText(finalText);
-        setPhase('done');
+        setLastText(finalText);
+        setSegmentText('');
+        const p = phaseRef.current;
+        if (p === 'ending') {
+          sendBye();
+          setPhase('done');
+        } else if (p === 'recording' || p === 'finalizing') {
+          setPhase('idle');
+        }
       },
       onError: (message) => {
         if (dictationRef.current === s) dictationRef.current = null;
-        setInvalidMsg(message);
-        setPhase('invalid');
+        setSegmentText('');
+        amp.value = withTiming(0, { duration: 200 });
+        const p = phaseRef.current;
+        if (p === 'ending') {
+          // 收尾路径不因这一次报错卡死，照样 bye + 退出
+          sendBye();
+          setPhase('done');
+        } else if (p === 'recording' || p === 'finalizing') {
+          setPhase('idle');
+          flashNotice(message);
+        }
       },
-      onRemoteStop: handleStop, // 电脑端点了停止：与本机停止按钮同一路径
+      onNotice: flashNotice,
+      onRemoteStop: handleStop, // 电脑在录中点了断开：与本机关闭按钮同一路径
     });
     dictationRef.current = s;
-    setPhase('live');
     void s.start();
-  }, [session, inviteId, desktopDeviceId, amp, handleStop]);
+  }, [session, desktopDeviceId, amp, checkDesktopAlive, sendBye, flashNotice, handleStop]);
 
-  // 进页验证邀请；cancelled/expired（或任何非 pending/accepted）都算失效
+  /** PTT 松手：结束这一次，等定稿（onDone）期间按钮禁用。 */
+  const handlePressOut = useCallback(() => {
+    if (phaseRef.current !== 'recording') return;
+    setPhase('finalizing');
+    amp.value = withTiming(0, { duration: 200 });
+    dictationRef.current?.stop();
+  }, [amp]);
+
+  // 整个 RemoteMicScreen 生命周期内屏幕不熄灭（空闲等待时也可能暗屏导致看不到按钮）。
+  // 走引用计数：听写会话结束时只释放它自己的持有，不会关掉本页的常亮
   useEffect(() => {
-    let cancelled = false;
+    acquireKeepScreenOn('remote-mic-screen');
+    return () => releaseKeepScreenOn('remote-mic-screen');
+  }, []);
+
+  // 进页 accept：标记已连接（电脑 chip 亮起、清 60s 定时器）；非 accepted 状态进失效页
+  useEffect(() => {
+    let stale = false;
     (async () => {
       if (!session) {
         setInvalidMsg('未登录，无法开始录音');
@@ -130,42 +257,65 @@ export function RemoteMicScreen() {
       }
       try {
         const base = session.server_base_url.replace(/\/+$/, '');
-        const res = await fetch(`${base}/api/remote_mic/invite/${encodeURIComponent(inviteId)}`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const res = await fetch(
+          `${base}/api/remote_mic/invite/${encodeURIComponent(inviteId)}/accept`,
+          { method: 'POST', headers: { Authorization: `Bearer ${session.access_token}` } },
+        );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: any = await res.json();
-        if (cancelled) return;
+        if (stale) return;
         const status = String(data?.status || '');
-        if (status === 'pending' || status === 'accepted') {
-          startLive();
+        if (status === 'accepted') {
+          acceptedRef.current = true;
+          setPhase('idle');
+          // 预热麦克风权限：别让首次按住时才弹系统弹窗
+          AudioManager.requestRecordingPermissions().catch(() => {});
         } else {
           setInvalidMsg(
-            status === 'cancelled' ? '电脑端已取消这次邀请' : '邀请已过期，请在电脑上重新发起',
+            status === 'cancelled'
+              ? '电脑端已取消这次邀请'
+              : status === 'disconnected' || status === 'closed'
+                ? '会话已结束，请在电脑上重新发起'
+                : '邀请已过期，请在电脑上重新发起',
           );
           setPhase('invalid');
         }
       } catch {
-        if (!cancelled) {
-          setInvalidMsg('无法验证邀请，请检查网络后重试');
+        if (!stale) {
+          setInvalidMsg('无法连接服务器，请检查网络后重试');
           setPhase('invalid');
         }
       }
     })();
     return () => {
-      cancelled = true;
+      stale = true;
     };
     // 只在进页跑一次：inviteId 是路由参数，页面生命周期内不变
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 卸载（含手势返回）：放弃进行中的会话，避免麦克风/WS 泄漏
+  // 电脑端主动断开（POST /disconnect → SSE bye 经 remoteMicInviteBus）：就地结束、
+  // 短暂显示原因后自动退出。ending/done/invalid 不动 —— 自己 sendBye 的广播回显也走
+  // 这条 SSE，别把 done 勾号顶成 invalid
+  useEffect(() => {
+    return subscribeRemoteMicBye((byeInviteId) => {
+      if (byeInviteId !== inviteId) return;
+      const p = phaseRef.current;
+      if (p === 'ending' || p === 'done' || p === 'invalid') return;
+      endAsInvalid('电脑端已断开连接');
+      exitTimerRef.current = setTimeout(leave, 1500);
+    });
+  }, [inviteId, endAsInvalid, leave]);
+
+  // 卸载（含手势返回）：取消在录的一次 + 补发 bye，避免麦克风泄漏 / 电脑 chip 挂死
   useEffect(() => {
     return () => {
       const s = dictationRef.current;
       dictationRef.current = null;
       if (s) s.cancel();
+      sendByeRef.current();
       if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
     };
   }, []);
 
@@ -182,9 +332,9 @@ export function RemoteMicScreen() {
     };
   }, [phase, leave, doneScale]);
 
-  // 录音中的慢呼吸底动：安静时圆环也有生命感，说话时振幅叠加在上面
+  // 按住中的慢呼吸底动：安静时圆环也有生命感，说话时振幅叠加在上面
   useEffect(() => {
-    if (phase === 'live') {
+    if (phase === 'recording') {
       breath.value = withRepeat(
         withSequence(
           withTiming(1, { duration: 1600, easing: Easing.inOut(Easing.ease) }),
@@ -195,12 +345,13 @@ export function RemoteMicScreen() {
       );
     } else {
       cancelAnimation(breath);
+      breath.value = withTiming(0, { duration: 300 });
     }
   }, [phase, breath]);
 
   useEffect(() => {
-    if (liveText) scrollRef.current?.scrollToEnd({ animated: true });
-  }, [liveText]);
+    if (displayText) scrollRef.current?.scrollToEnd({ animated: true });
+  }, [displayText]);
 
   const coreStyle = useAnimatedStyle(() => ({
     transform: [{ scale: 1 + amp.value * 0.22 }],
@@ -217,13 +368,19 @@ export function RemoteMicScreen() {
     transform: [{ scale: doneScale.value }],
   }));
 
-  const showPulse = phase === 'live' || phase === 'ending';
+  const showMain =
+    phase === 'idle' || phase === 'recording' || phase === 'finalizing' || phase === 'ending';
+  const showPtt = phase === 'idle' || phase === 'recording' || phase === 'finalizing';
+  const recording = phase === 'recording';
 
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" />
 
       <View style={styles.header}>
+        <Pressable onPress={handleClose} hitSlop={12} style={styles.headerClose}>
+          <Ionicons name="close" size={26} color="rgba(255,255,255,0.7)" />
+        </Pressable>
         <Ionicons name="laptop-outline" size={18} color="rgba(255,255,255,0.55)" />
         <Text style={styles.headerText}>→ {deviceLabel}</Text>
       </View>
@@ -232,17 +389,21 @@ export function RemoteMicScreen() {
         {phase === 'checking' ? (
           <>
             <ActivityIndicator size="large" color="rgba(255,255,255,0.6)" />
-            <Text style={styles.stateCaption}>正在确认邀请…</Text>
+            <Text style={styles.stateCaption}>正在连接…</Text>
           </>
         ) : null}
 
-        {showPulse ? (
+        {showMain ? (
           <>
             <View style={styles.pulseArea}>
               <Animated.View style={[styles.ringOuter, ringOuterStyle]} />
               <Animated.View style={[styles.ringInner, ringInnerStyle]} />
-              <Animated.View style={[styles.core, coreStyle]}>
-                <Ionicons name="mic" size={44} color="#fff" />
+              <Animated.View style={[styles.core, !recording && styles.coreIdle, coreStyle]}>
+                <Ionicons
+                  name="mic"
+                  size={44}
+                  color={recording ? '#fff' : 'rgba(255,255,255,0.5)'}
+                />
               </Animated.View>
             </View>
             <ScrollView
@@ -251,10 +412,19 @@ export function RemoteMicScreen() {
               contentContainerStyle={styles.textAreaContent}
               showsVerticalScrollIndicator={false}
             >
-              <Text style={liveText ? styles.liveText : styles.liveTextPlaceholder}>
-                {liveText || '开始说话，文字会实时出现在电脑上'}
+              <Text
+                style={
+                  segmentText
+                    ? styles.liveText
+                    : displayText
+                      ? styles.liveTextDim
+                      : styles.liveTextPlaceholder
+                }
+              >
+                {displayText || '按住下方按钮说话，文字会实时出现在电脑上'}
               </Text>
             </ScrollView>
+            {notice ? <Text style={styles.noticeText}>{notice}</Text> : null}
             {phase === 'ending' ? <Text style={styles.stateCaption}>正在完成…</Text> : null}
           </>
         ) : null}
@@ -277,27 +447,28 @@ export function RemoteMicScreen() {
       </View>
 
       <View style={styles.footer}>
-        {showPulse ? (
+        {showPtt ? (
           <>
             <Pressable
-              onPress={handleStop}
-              disabled={phase !== 'live'}
-              style={({ pressed }) => [
-                styles.stopButton,
-                (pressed || phase !== 'live') && styles.dimmed,
+              onPressIn={handlePressIn}
+              onPressOut={handlePressOut}
+              disabled={phase === 'finalizing'}
+              style={[
+                styles.pttButton,
+                recording && styles.pttButtonActive,
+                phase === 'finalizing' && styles.dimmed,
               ]}
             >
-              <View style={styles.stopSquare} />
+              <Ionicons
+                name="mic"
+                size={34}
+                color={recording ? '#fff' : 'rgba(255,255,255,0.85)'}
+              />
             </Pressable>
-            <Pressable onPress={handleCancel} hitSlop={12} style={styles.cancelButton}>
-              <Text style={styles.cancelText}>取消</Text>
-            </Pressable>
+            <Text style={styles.pttCaption}>
+              {recording ? '松开结束' : phase === 'finalizing' ? '正在识别…' : '按住说话'}
+            </Text>
           </>
-        ) : null}
-        {phase === 'checking' ? (
-          <Pressable onPress={handleCancel} hitSlop={12} style={styles.cancelButton}>
-            <Text style={styles.cancelText}>取消</Text>
-          </Pressable>
         ) : null}
         {phase === 'invalid' ? (
           <Pressable
@@ -319,11 +490,20 @@ function createStyles(insets: EdgeInsets) {
       backgroundColor: '#1c1c1e',
     },
     header: {
-      marginTop: insets.top + 24,
+      marginTop: insets.top + 16,
+      height: 44,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
       gap: 8,
+    },
+    headerClose: {
+      position: 'absolute',
+      left: 16,
+      height: 44,
+      width: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
     headerText: {
       color: 'rgba(255,255,255,0.55)',
@@ -369,6 +549,9 @@ function createStyles(insets: EdgeInsets) {
       alignItems: 'center',
       justifyContent: 'center',
     },
+    coreIdle: {
+      backgroundColor: 'rgba(255,255,255,0.1)',
+    },
     textArea: {
       maxHeight: 132,
       alignSelf: 'stretch',
@@ -385,9 +568,21 @@ function createStyles(insets: EdgeInsets) {
       lineHeight: 26,
       textAlign: 'center',
     },
+    liveTextDim: {
+      color: 'rgba(255,255,255,0.45)',
+      fontSize: 17,
+      lineHeight: 26,
+      textAlign: 'center',
+    },
     liveTextPlaceholder: {
       color: 'rgba(255,255,255,0.35)',
       fontSize: 15,
+      textAlign: 'center',
+    },
+    noticeText: {
+      marginTop: 10,
+      color: 'rgba(255,159,10,0.85)',
+      fontSize: 13,
       textAlign: 'center',
     },
     doneText: {
@@ -407,31 +602,27 @@ function createStyles(insets: EdgeInsets) {
       alignItems: 'center',
       paddingBottom: insets.bottom + 28,
     },
-    stopButton: {
-      width: 72,
-      height: 72,
-      borderRadius: 36,
-      backgroundColor: '#ff453a',
+    pttButton: {
+      width: 96,
+      height: 96,
+      borderRadius: 48,
+      backgroundColor: 'rgba(255,255,255,0.08)',
+      borderWidth: 2,
+      borderColor: 'rgba(255,255,255,0.25)',
       alignItems: 'center',
       justifyContent: 'center',
     },
-    stopSquare: {
-      width: 24,
-      height: 24,
-      borderRadius: 6,
-      backgroundColor: '#fff',
+    pttButtonActive: {
+      backgroundColor: '#ff453a',
+      borderColor: '#ff453a',
+    },
+    pttCaption: {
+      marginTop: 14,
+      color: 'rgba(255,255,255,0.45)',
+      fontSize: 14,
     },
     dimmed: {
       opacity: 0.55,
-    },
-    cancelButton: {
-      marginTop: 18,
-      paddingVertical: 8,
-      paddingHorizontal: 24,
-    },
-    cancelText: {
-      color: 'rgba(255,255,255,0.45)',
-      fontSize: 15,
     },
     closeButton: {
       paddingVertical: 12,

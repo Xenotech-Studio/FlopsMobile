@@ -7,7 +7,6 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  InteractionManager,
   Modal,
   Platform,
   StyleSheet,
@@ -90,7 +89,7 @@ export function FlowDocPickerModal({
       return;
     }
     if (prevVisibleRef.current && !visible) {
-      InteractionManager.runAfterInteractions(() => {
+      requestAnimationFrame(() => {
         onAfterDismiss?.();
       });
     }

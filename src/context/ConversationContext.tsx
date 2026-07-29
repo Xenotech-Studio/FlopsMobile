@@ -30,7 +30,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { listConversations, runInboxStream, type ConversationListItem } from '../api';
 import { useSession } from './SessionContext';
 import { getOrCreateClientInstanceId } from '../utils/clientInstanceId';
-import { notifyRemoteMicInvite } from '../utils/remoteMicInviteBus';
+import { notifyRemoteMicBye, notifyRemoteMicInvite } from '../utils/remoteMicInviteBus';
 
 const CACHED_CONVS_KEY = '@FlopsMobile/cachedConversations';
 const DEDUPE_MS = 2000;
@@ -294,6 +294,14 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
           desktopName: typeof msg.desktop_name === 'string' ? msg.desktop_name : undefined,
           desktopDeviceId: typeof msg.desktop_device_id === 'string' ? msg.desktop_device_id : undefined,
         });
+        return;
+      }
+      if (type === 'remote_dictation') {
+        // 远程听写通道是用户级广播：识别帧（begin/result/done）给电脑消费，手机吞掉；
+        // 连接级 event=bye（电脑主动断开）发到总线，RemoteMicScreen 按 invite_id 就地结束
+        if (msg.event === 'bye' && typeof msg.invite_id === 'string' && msg.invite_id) {
+          notifyRemoteMicBye(msg.invite_id);
+        }
         return;
       }
     };

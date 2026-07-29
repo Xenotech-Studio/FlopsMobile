@@ -44,3 +44,25 @@ export function subscribeRemoteMicInvite(fn: Listener): () => void {
   }
   return () => { listeners.delete(fn); };
 }
+
+// ── 连接级 bye（电脑主动断开）───────────────────────────────────────────────
+// ConversationContext 收到 SSE type=remote_dictation event=bye 帧时发到这里，
+// RemoteMicScreen 按 invite_id 匹配后就地结束录音页。
+// 不做 lastDetail 缓存：录音页不在（已关/未开）时电脑断开无需处理 ——
+// 下次进页 accept 会发现 status 非 accepted，走既有失效路径。
+
+type ByeListener = (inviteId: string) => void;
+
+const byeListeners = new Set<ByeListener>();
+
+export function notifyRemoteMicBye(inviteId: string): void {
+  if (!inviteId) return;
+  byeListeners.forEach((fn) => {
+    try { fn(inviteId); } catch { /* noop */ }
+  });
+}
+
+export function subscribeRemoteMicBye(fn: ByeListener): () => void {
+  byeListeners.add(fn);
+  return () => { byeListeners.delete(fn); };
+}

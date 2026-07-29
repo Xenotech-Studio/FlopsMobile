@@ -8,7 +8,6 @@ import {
   Text,
   StyleSheet,
   Platform,
-  InteractionManager,
   ActivityIndicator,
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -578,7 +577,8 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
 
     setIsBuilding(true);
     let cancelled = false;
-    const interactionHandle = InteractionManager.runAfterInteractions(() => {
+    let raf = 0;
+    raf = requestAnimationFrame(() => {
       if (cancelled) return;
       try {
         const next = buildFlowChartPayload(tasks);
@@ -600,7 +600,7 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
 
     return () => {
       cancelled = true;
-      interactionHandle.cancel();
+      cancelAnimationFrame(raf);
     };
   }, [tasks]);
 
