@@ -14,17 +14,23 @@
  *               按住（只显示当前这句，不累计历史 —— 电脑 composer 才是唯一真实内容源）
  *   ending      结束中（左上角关闭 / 电脑端 remote_stop）：等在途的一次收尾后 bye
  *   done        「已发送到 xx」1.5s 后自动退出
- *   invalid     邀请失效 / 电脑已断开 / 出错：显示原因 + 手动关闭
+ *   bye         电脑端主动断开（非异常）：显示已断开 + 1.5s 自动退出
+ *   invalid     邀请失效 / 意外出错：显示原因 + 手动关闭
  *
  * 结束方式：本页左上角关闭（POST bye 清电脑 chip）、电脑断开（服务端广播 SSE bye 经
  * remoteMicInviteBus 即时结束本页；在录时另有 remote_stop 打断在录的一次；按住前的
  * GET 轮询兜底 SSE 断线）。手势返回/卸载：取消在录的一次 + 补发 bye（幂等，只发一次）。
+ * app 切后台（AppState→background，进任务中心/按 home）：立即结束 + 补 bye，别让离开后
+ * 电脑 mic 还亮着。进程被从任务中心强杀时卸载 effect 来不及跑，靠录音页每 5s 的 /ping 心跳
+ * ——心跳一停，服务端 death sweeper ~20s 内判掉线、SSE bye 清电脑 chip（兜底 background 的
+ * bye 没送达就被杀 / 直接从前台强杀）。
  *
  * 沉浸 UI 固定深色调色板（不跟随主题）；录音中的屏幕常亮由 VoiceDictationSession 按次持有。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   Pressable,
   ScrollView,
   StatusBar,
@@ -56,7 +62,7 @@ import {
 } from '../utils/voiceDictationMobile';
 import type { RootStackParamList } from '../navigation/types';
 
-type Phase = 'checking' | 'idle' | 'recording' | 'finalizing' | 'ending' | 'done' | 'invalid';
+type Phase = 'checking' | 'idle' | 'recording' | 'finalizing' | 'ending' | 'bye' | 'done' | 'invalid';
 
 export function RemoteMicScreen() {
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
@@ -88,6 +94,8 @@ export function RemoteMicScreen() {
   const amp = useSharedValue(0);
   const breath = useSharedValue(0);
   const doneScale = useSharedValue(0.4);
+  // bye/invalid 终止态的淡入：从录音态瞬切会像 crash，短 fade 让结束看起来是收尾
+  const endFade = useSharedValue(0);
 
   const deviceLabel = desktopName || '电脑';
   const displayText = segmentText || lastText;
@@ -118,7 +126,7 @@ export function RemoteMicScreen() {
     noticeTimerRef.current = setTimeout(() => setNotice(''), 4000);
   }, []);
 
-  /** 会话失效收尾（电脑断开/邀请过期）：取消在录的一次，进 invalid。 */
+  /** 会话失效收尾（邀请过期/网络错误）：取消在录的一次，进 invalid。 */
   const endAsInvalid = useCallback(
     (msg: string) => {
       const s = dictationRef.current;
@@ -130,6 +138,22 @@ export function RemoteMicScreen() {
       setPhase('invalid');
     },
     [amp],
+  );
+
+  /** 电脑端主动断开（非异常）：友好提示 + 1.5s 自动退出。不用 invalid 的警告图标。 */
+  const endDisconnected = useCallback(
+    (reason: string) => {
+      const s = dictationRef.current;
+      dictationRef.current = null;
+      if (s) s.cancel();
+      sendByeRef.current(); // 立刻通知电脑清 mic（幂等），不等 1.5s 后卸载兜底
+      amp.value = withTiming(0, { duration: 200 });
+      setSegmentText('');
+      setInvalidMsg(reason);
+      setPhase('bye');
+      exitTimerRef.current = setTimeout(leave, 1500);
+    },
+    [amp, leave],
   );
 
   /** 按住时并发查电脑是否已断开（GET /invite/{id}）。网络抖动放过，这一次照常识别。 */
@@ -146,13 +170,15 @@ export function RemoteMicScreen() {
       if (status === 'accepted') return;
       const p = phaseRef.current;
       if (p !== 'idle' && p !== 'recording' && p !== 'finalizing') return;
-      endAsInvalid(
-        status === 'disconnected' ? '电脑端已断开连接' : '连接已失效，请在电脑上重新发起',
-      );
+      if (status === 'disconnected') {
+          endDisconnected('电脑端已断开连接');
+        } else {
+          endAsInvalid('连接已失效，请在电脑上重新发起');
+        };
     } catch {
       /* 网络抖动：放过 */
     }
-  }, [session, inviteId, endAsInvalid]);
+  }, [session, inviteId, endAsInvalid, endDisconnected]);
 
   /** 结束整个会话（左上角关闭或电脑端 remote_stop）：等在途的一次收尾后 bye + done。 */
   const handleStop = useCallback(() => {
@@ -178,11 +204,11 @@ export function RemoteMicScreen() {
     leave();
   }, [sendBye, leave]);
 
-  /** 左上角关闭：直接结束，不显示 done 态。PTT 的语义是「借用麦克风」而非「发送内容」，
-   *  关闭只是断开连接，不需要对勾确认。 */
+  /** 左上角关闭：跟电脑断开一样的 bye 态 —— 用户感觉在「发送断开信号」，系统正在可靠
+   *  处理结束流程（实际上确实调了 sendBye，但 1.5s 延迟退出本身已经给了这种心理暗示）。 */
   const handleClose = useCallback(() => {
-    abandonAndLeave();
-  }, [abandonAndLeave]);
+    endDisconnected('已断开连接');
+  }, [endDisconnected]);
 
   /** PTT 按下：new 一个一次性听写会话开录（每次按住 = 一条 WS = 电脑上一段灰字）。 */
   const handlePressIn = useCallback(() => {
@@ -295,17 +321,50 @@ export function RemoteMicScreen() {
   }, []);
 
   // 电脑端主动断开（POST /disconnect → SSE bye 经 remoteMicInviteBus）：就地结束、
-  // 短暂显示原因后自动退出。ending/done/invalid 不动 —— 自己 sendBye 的广播回显也走
-  // 这条 SSE，别把 done 勾号顶成 invalid
+  // 短暂显示原因后自动退出。ending/done/bye/invalid 不动 —— 自己 sendBye 的广播回显也走
+  // 这条 SSE，别把 bye 态顶成 invalid
   useEffect(() => {
     return subscribeRemoteMicBye((byeInviteId) => {
       if (byeInviteId !== inviteId) return;
       const p = phaseRef.current;
-      if (p === 'ending' || p === 'done' || p === 'invalid') return;
-      endAsInvalid('电脑端已断开连接');
-      exitTimerRef.current = setTimeout(leave, 1500);
+      if (p === 'ending' || p === 'done' || p === 'bye' || p === 'invalid') return;
+      endDisconnected('电脑端已断开连接');
     });
-  }, [inviteId, endAsInvalid, leave]);
+  }, [inviteId, endDisconnected]);
+
+  // app 切后台（进任务中心准备划掉 / 按 home 离开）：远程 mic 是前台沉浸交互，离开即结束
+  // —— 立刻取消在录的一次 + sendBye 清电脑 chip。只认 'background'：'inactive' 会被下拉
+  // 通知/控制中心、首次录音的麦克风权限弹窗触发，认它会误杀在用的会话。强杀场景下这次 bye
+  // 可能来不及送达（进程即死），由录音页 /ping 心跳 + 服务端 death sweeper 兜底。
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (status) => {
+      if (status !== 'background' || !acceptedRef.current) return;
+      const p = phaseRef.current;
+      if (p === 'ending' || p === 'done' || p === 'bye' || p === 'invalid') return;
+      endDisconnected('已在后台，远程语音已结束');
+    });
+    return () => sub.remove();
+  }, [endDisconnected]);
+
+  // 存活心跳：accepted 后每 5s POST /ping 刷新服务端 hb_ts。进程被强杀时卸载 effect 来不及
+  // 跑、bye 发不出去 —— 心跳一停，服务端 ~20s 内判掉线并 SSE bye 清电脑 chip（唯一能覆盖
+  // 「从前台直接强杀」的信号）。仅活跃相位跑；'inactive'（权限弹窗/控制中心）不停 JS 定时器，
+  // 会话照常保活，不会误判掉线。fire-and-forget，空闲期电脑断开仍由 SSE bye 即时接管。
+  useEffect(() => {
+    const live =
+      phase === 'idle' || phase === 'recording' || phase === 'finalizing' || phase === 'ending';
+    if (!live || !session) return;
+    const base = session.server_base_url.replace(/\/+$/, '');
+    const ping = () => {
+      void fetch(`${base}/api/remote_mic/invite/${encodeURIComponent(inviteId)}/ping`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      }).catch(() => {});
+    };
+    ping();
+    const timer = setInterval(ping, 5000);
+    return () => clearInterval(timer);
+  }, [phase, session, inviteId]);
 
   // 卸载（含手势返回）：取消在录的一次 + 补发 bye，避免麦克风泄漏 / 电脑 chip 挂死
   useEffect(() => {
@@ -331,6 +390,13 @@ export function RemoteMicScreen() {
       }
     };
   }, [phase, leave, doneScale]);
+
+  // bye/invalid：终止态淡入（0→1, 200ms），配合 bye 的 1.5s 自动退出。keyed on phase
+  // 覆盖所有进入 invalid 的路径（含 checking→invalid 的 accept 失败），从当前 0 自然淡入
+  useEffect(() => {
+    if (phase !== 'bye' && phase !== 'invalid') return;
+    endFade.value = withTiming(1, { duration: 200, easing: Easing.out(Easing.ease) });
+  }, [phase, endFade]);
 
   // 按住中的慢呼吸底动：安静时圆环也有生命感，说话时振幅叠加在上面
   useEffect(() => {
@@ -366,6 +432,9 @@ export function RemoteMicScreen() {
   }));
   const doneStyle = useAnimatedStyle(() => ({
     transform: [{ scale: doneScale.value }],
+  }));
+  const endStyle = useAnimatedStyle(() => ({
+    opacity: endFade.value,
   }));
 
   const showMain =
@@ -438,11 +507,18 @@ export function RemoteMicScreen() {
           </>
         ) : null}
 
+        {phase === 'bye' ? (
+          <Animated.View style={[styles.endBlock, endStyle]}>
+            <Ionicons name="log-out-outline" size={48} color="rgba(255,255,255,0.3)" />
+            <Text style={styles.byeText}>正在结束远程语音输入</Text>
+          </Animated.View>
+        ) : null}
+
         {phase === 'invalid' ? (
-          <>
+          <Animated.View style={[styles.endBlock, endStyle]}>
             <Ionicons name="alert-circle-outline" size={64} color="rgba(255,255,255,0.4)" />
             <Text style={styles.invalidText}>{invalidMsg || '邀请已失效'}</Text>
-          </>
+          </Animated.View>
         ) : null}
       </View>
 
@@ -470,7 +546,7 @@ export function RemoteMicScreen() {
             </Text>
           </>
         ) : null}
-        {phase === 'invalid' ? (
+        {phase === 'invalid' || phase === 'bye' ? (
           <Pressable
             onPress={leave}
             style={({ pressed }) => [styles.closeButton, pressed && styles.dimmed]}
@@ -591,12 +667,22 @@ function createStyles(insets: EdgeInsets) {
       fontSize: 17,
       fontWeight: '500',
     },
+    endBlock: {
+      alignItems: 'center',
+    },
     invalidText: {
       marginTop: 18,
       color: 'rgba(255,255,255,0.6)',
       fontSize: 15,
       textAlign: 'center',
       lineHeight: 22,
+    },
+    byeText: {
+      marginTop: 16,
+      color: 'rgba(255,255,255,0.45)',
+      fontSize: 13,
+      textAlign: 'center',
+      lineHeight: 20,
     },
     footer: {
       alignItems: 'center',
