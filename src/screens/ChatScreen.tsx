@@ -2581,8 +2581,8 @@ export function ChatScreen({
     },
     [session],
   );
-  /** 「开启播报模式」：弹二次确认 Alert，确认后开全局播报（沉浸式 overlay 由 BroadcastModeOverlay 呈现）
-   *  并写回偏好。退出播报走 overlay 底部横条，不在这里管。 */
+  /** 「开启播报模式」：弹二次确认 Alert，确认后开全局播报（沉浸式 overlay 由 BroadcastModeOverlay 呈现）。
+   *  开关本身 per-device 存本机（由 setBroadcastMode 落 AsyncStorage）。退出播报走 overlay 底部横条，不在这里管。 */
   const handleEnableBroadcast = useCallback(() => {
     Alert.alert(
       '开启播报模式',
@@ -2593,14 +2593,11 @@ export function ChatScreen({
           text: '开启',
           onPress: () => {
             setBroadcastMode(true);
-            if (session) {
-              setLayoutPreferences(session, { tts_broadcast_mode: true }).catch(() => {});
-            }
           },
         },
       ],
     );
-  }, [session]);
+  }, []);
 
   /* ⋯ 菜单项。自动播报是带勾选（state on/off）的开关行；开启播报模式是纯选项行（点了弹确认 Alert）。
      语音相关两项放在一个 displayInline 子菜单里 —— iOS UIMenu 对 displayInline 子菜单会自动在跟兄弟项

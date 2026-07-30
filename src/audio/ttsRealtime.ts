@@ -18,8 +18,9 @@
 
 import { useSyncExternalStore } from 'react';
 import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '../api';
-import { getLayoutPreferences, setLayoutPreferences } from '../api';
+import { getLayoutPreferences } from '../api';
 import { beaconPing } from '../api/beacon';
 import { getBeaconDeviceId } from '../utils/clientInstanceId';
 import { refreshTtsMixingModeFromPrefs } from './ttsMixingMode';
@@ -40,8 +41,11 @@ export function isTtsRealtimeSupported(): boolean {
 
 /** 对话内朗读开关（与 Web/Desktop 同一把）：控制"在对话页内是否连单对话流"。 */
 export const TTS_AUTOPLAY_PREF_KEY = 'tts_autoplay';
-/** 播报模式开关（Mobile 专属）：全局监听所有对话，独立于 tts_autoplay。 */
-export const TTS_BROADCAST_PREF_KEY = 'tts_broadcast_mode';
+/**
+ * 播报模式开关（Mobile 专属）——存本机 AsyncStorage，per-device：同账号的 dev / release build 各自独立，
+ * 不再走账号级 layout-preferences（否则两个 build 会互相翻对方的开关）。presence 里的 broadcast_mode 只是运行时镜像。
+ */
+const TTS_BROADCAST_MODE_LOCAL_KEY = 'tts_broadcast_mode_local';
 
 // MARK: - 可订阅状态
 
@@ -88,7 +92,7 @@ if (emitter) {
 // MARK: - 三要素 + reconcile
 
 let enabled = false;          // tts_autoplay（对话内朗读开关）
-let broadcastMode = false;    // tts_broadcast_mode（全局播报）
+let broadcastMode = false;    // 播报模式（全局播报，per-device 本地存储）
 let convId = '';              // 最近打开的对话（单对话模式用）
 let session: Session | null = null;
 /** 当前原生已连的 wsUrl（避免重复 startRealtime）。 */
@@ -110,6 +114,24 @@ function assignBroadcastMode(next: boolean): void {
   if (broadcastMode === next) return;
   broadcastMode = next;
   notifyBroadcast();
+}
+
+/** 播报开关的本机持久化（per-device）：写 AsyncStorage，失败不致命（内存态仍生效）。 */
+async function persistBroadcastModeLocal(mode: boolean): Promise<void> {
+  try {
+    await AsyncStorage.setItem(TTS_BROADCAST_MODE_LOCAL_KEY, mode ? '1' : '0');
+  } catch {
+    /* 持久化失败：内存态已生效，下次冷启动回退默认关 */
+  }
+}
+
+/** 从本机读回播报开关（per-device）；缺省 / 读失败都当关。 */
+async function loadBroadcastModeLocal(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(TTS_BROADCAST_MODE_LOCAL_KEY)) === '1';
+  } catch {
+    return false;
+  }
 }
 
 function wsBase(serverBaseUrl: string): string {
@@ -174,11 +196,12 @@ export function setRealtimeEnabled(next: boolean): void {
   reconcile();
 }
 
-/** 播报模式开关变化（tts_broadcast_mode）。开了即全局监听，独立于 tts_autoplay。 */
+/** 播报模式开关变化。开了即全局监听，独立于 tts_autoplay；开关本身 per-device 存本机。 */
 export function setBroadcastMode(next: boolean): void {
   if (broadcastMode === next) return;
   assignBroadcastMode(next);
   reconcile();
+  void persistBroadcastModeLocal(next); // per-device 本地持久化（dev / release 各自独立）
   void reportBroadcastMode(next); // 顺带把开关状态写进设备级 presence，别等下一拍心跳
 }
 
@@ -229,7 +252,12 @@ export function clearActiveConversation(): void {
   reconcile();
 }
 
-/** app 启动 / session 就绪时从服务端拉 tts_autoplay（与 Web/Desktop 同一份偏好）；登出(null)即断流。 */
+/**
+ * app 启动 / session 就绪时恢复两个开关：
+ *  - tts_autoplay      → 服务端 layout-preferences（与 Web/Desktop 同一份，跨端同步）
+ *  - 播报模式           → 本机 AsyncStorage（per-device，dev / release build 各自独立，不随账号）
+ * 登出(null)即断流并复位内存态（本机开关值保留，重登时再读回）。
+ */
 export async function refreshRealtimeFromPrefs(sess: Session | null): Promise<void> {
   session = sess;
   if (!sess) {
@@ -237,9 +265,10 @@ export async function refreshRealtimeFromPrefs(sess: Session | null): Promise<vo
     setRealtimeEnabled(false); // 登出：断流
     return;
   }
+  // 播报模式是 per-device 本地态，从本机读，跟账号级 layout-preferences 无关。
+  assignBroadcastMode(await loadBroadcastModeLocal());
   try {
     const prefs = await getLayoutPreferences(sess);
-    assignBroadcastMode(prefs[TTS_BROADCAST_PREF_KEY] === true);
     enabled = prefs[TTS_AUTOPLAY_PREF_KEY] === true;
     // 同一份 prefs 里读混音方式并下发原生（duck/mix），避免二次请求。
     void refreshTtsMixingModeFromPrefs(sess, prefs);
@@ -278,15 +307,9 @@ export function useBroadcastMode(): boolean {
 }
 
 /**
- * 关闭播报模式并写回服务端（与 UsageSettingsScreen.persistTtsBroadcast 同一套动作）：
- * 先本地立即断全局流，再合并写 layout-preferences。供全局 overlay 的退出按钮调用。
+ * 关闭播报模式。setBroadcastMode(false) 一把搞定：断全局流 + 写本机 AsyncStorage（per-device）
+ * + 补写设备级 presence。供全局 overlay 的退出按钮调用。
  */
-export async function disableBroadcastMode(sess: Session | null): Promise<void> {
+export function disableBroadcastMode(): void {
   setBroadcastMode(false);
-  if (!sess) return;
-  try {
-    await setLayoutPreferences(sess, { [TTS_BROADCAST_PREF_KEY]: false });
-  } catch {
-    /* 写回失败：本地已断流，下次 refresh 会以服务端为准 */
-  }
 }

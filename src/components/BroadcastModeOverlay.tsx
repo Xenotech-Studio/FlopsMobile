@@ -10,7 +10,7 @@
  *  - 黑边框 pointerEvents='none'：纯装饰，永不拦截；
  *  - 底部横条 pointerEvents='auto'：承接退出按钮点击。
  *
- * 只碰 UI / JS：退出走既有 disableBroadcastMode()（本地断流 + 写回 layout-preferences），
+ * 只碰 UI / JS：退出走既有 disableBroadcastMode()（本地断流 + 写本机 AsyncStorage 开关，per-device），
  * 不触碰原生层。
  */
 
@@ -26,7 +26,6 @@ import {
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { SafeAreaInsetsContext, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useSession } from '../context/SessionContext';
 import { disableBroadcastMode, useBroadcastMode } from '../audio/ttsRealtime';
 import { getScreenCornerRadiusSync, inferScreenCornerRadius } from '../utils/screenInfo';
 
@@ -109,7 +108,6 @@ function useScreenCornerRadius(topInset: number): number {
 
 export function BroadcastModeOverlay(): React.ReactElement | null {
   const active = useBroadcastMode();
-  const { session } = useSession();
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   // 真实屏幕圆角：黑边 / 横条底角都按它取圆，替代硬编码 40。
@@ -146,7 +144,7 @@ export function BroadcastModeOverlay(): React.ReactElement | null {
   const pulseColor = pulse.interpolate({ inputRange: [0, 1], outputRange: ['#444444', '#000000'] });
 
   const handleExit = () => {
-    void disableBroadcastMode(session);
+    disableBroadcastMode();
   };
 
   // 外边框 + 底部横条合成一条路径：左下 / 右下交接处用凹圆角，取代原先的直角。
