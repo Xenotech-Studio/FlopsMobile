@@ -17,9 +17,11 @@
  */
 
 import { useSyncExternalStore } from 'react';
-import { NativeModules, NativeEventEmitter } from 'react-native';
+import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
 import type { Session } from '../api';
 import { getLayoutPreferences, setLayoutPreferences } from '../api';
+import { beaconPing } from '../api/beacon';
+import { getBeaconDeviceId } from '../utils/clientInstanceId';
 import { refreshTtsMixingModeFromPrefs } from './ttsMixingMode';
 
 type FlopsAudioRealtimeNative = {
@@ -177,6 +179,34 @@ export function setBroadcastMode(next: boolean): void {
   if (broadcastMode === next) return;
   assignBroadcastMode(next);
   reconcile();
+  void reportBroadcastMode(next); // 顺带把开关状态写进设备级 presence，别等下一拍心跳
+}
+
+/** 当前播报开关（供 BeaconReporter 心跳把 broadcast_mode 带进 presence）。 */
+export function getBroadcastMode(): boolean {
+  return broadcastMode;
+}
+
+/**
+ * 把播报开关状态顺带写进设备级 presence 的 broadcast_mode 字段（独立于 WS，跟朗读实时态无关）。
+ * 只带 device_id + platform + flag：不带 device_name/idfv，靠后端 merge 保留旧值（空名不覆盖）；
+ * 与 BeaconReporter 的 30s 心跳互不干扰（各自一发独立 ping）。失败不致命——下一拍心跳会以
+ * getBroadcastMode() 现值补写。session 缺失（未登录）则跳过。
+ */
+async function reportBroadcastMode(mode: boolean): Promise<void> {
+  const sess = session;
+  if (!sess) return;
+  try {
+    const deviceId = await getBeaconDeviceId();
+    await beaconPing(sess.server_base_url, sess.access_token, {
+      device_id: deviceId,
+      platform: Platform.OS === 'ios' ? 'ios' : 'android',
+      state: 'foreground', // 切开关必发生在前台
+      broadcast_mode: mode,
+    });
+  } catch {
+    /* 顺带更新，失败不致命 */
+  }
 }
 
 /** ChatScreen 获焦时报告当前活跃对话（单对话模式据此连本对话流）。 */

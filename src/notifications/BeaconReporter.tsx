@@ -19,6 +19,7 @@ import { AppState, Platform, type AppStateStatus } from 'react-native';
 import { useSession } from '../context/SessionContext';
 import { beaconPing, beaconLeave, type BeaconPlatform } from '../api/beacon';
 import { getBeaconDeviceId } from '../utils/clientInstanceId';
+import { getBroadcastMode } from '../audio/ttsRealtime';
 import { getDeviceIdentity, iosDisplayName } from './apnsClient';
 
 const HEARTBEAT_MS = 30 * 1000;
@@ -111,6 +112,7 @@ export function BeaconReporter(): null {
         device_name: ident.deviceName,
         state,
         identifier_for_vendor: ident.idfv || undefined,
+        broadcast_mode: getBroadcastMode(), // 每拍心跳都带上当前播报开关，让 presence 常与本地同步
       });
     };
 

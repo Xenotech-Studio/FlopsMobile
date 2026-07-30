@@ -28,6 +28,7 @@ export type BeaconPingPayload = {
   state?: string; // foreground | background（信息位，不参与在线判定）
   identifier_for_vendor?: string; // iOS：同机 dev/prod 去重
   app_version?: string;
+  broadcast_mode?: boolean; // 播报模式开关是否打开（设备级 flag，仅 Mobile；非「正在播报」实时态）
 };
 
 /** 心跳 + 登记（幂等）。失败不致命：TTL 到期后服务端记录自动过期 == 离线。 */
