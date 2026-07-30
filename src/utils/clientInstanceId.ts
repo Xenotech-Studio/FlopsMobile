@@ -47,8 +47,8 @@ export function getOrCreateClientInstanceId(): Promise<string> {
 /**
  * 设备信标（beacon）身份：`{platform}_{clientInstanceId}`，四端统一格式（见 backend/routers/beacon.py）。
  * 复用已持久化的 clientInstanceId 作 uuid 段 —— 不新铸一份，避免同一 install 出现两个身份。
- * dev / prod 是两个独立 install（各自的 AsyncStorage），会得到不同 device_id —— 同机双 build 在
- * /phones 里靠 identifier_for_vendor 去重，不影响此处。
+ * dev / prod 是两个独立 install（各自的 AsyncStorage），会得到不同 device_id；presence 上报已在
+ * BeaconReporter 里对 __DEV__ 整段跳过（dev 版不进设备目录），故同机双 build 不再重复留记录。
  */
 export async function getBeaconDeviceId(): Promise<string> {
   const cid = await getOrCreateClientInstanceId();

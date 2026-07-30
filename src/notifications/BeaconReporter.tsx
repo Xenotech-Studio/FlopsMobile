@@ -76,7 +76,11 @@ export function BeaconReporter(): null {
   const identityRef = useRef<BeaconIdentity | null>(null);
 
   useEffect(() => {
-    if (!session) return;
+    // dev build（com.flopsmobile.dev）与 release（com.flopsmobile）是两个独立 install，各自的
+    // AsyncStorage → getBeaconDeviceId() 生成两个不同的 android_<uuid>，presence 里会各留一条。
+    // dev 版整个不上报，避免同机双记录。（iOS 的 identifierForVendor 在 dev/release 相同、本不会
+    // 重复，但 dev build 同样不该出现在设备目录里 —— 一并挡掉。）
+    if (__DEV__ || !session) return;
 
     let cancelled = false;
 
