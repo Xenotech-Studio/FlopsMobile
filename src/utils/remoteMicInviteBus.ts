@@ -9,18 +9,23 @@
  * 按 invite_id 去重：SSE 重连补帧 / 服务端重发同一邀请不会重复弹；桌面端连发新邀请
  * （新 invite_id）则最新一条顶掉旧的。
  * device 定向过滤：前台 inbox SSE 是用户级广播，账户下每台设备（iPhone / Android / 别的手机）
- * 都会收到同一 remote_mic_invite 帧。帧里带电脑选中的目标手机 token_hash（phoneTokenHash），
- * 与本机 APNs token hash 比对，不匹配的静默丢弃 —— 只有被选中那台弹卡片。Android 无 APNs
- * token（hash=null）恒不匹配，天然丢弃；它本就不可能是目标（/phones 只列 iOS token）。
- * APNs 通道已按 only_device_token 定向到目标机，其 payload 不带 phoneTokenHash，走此处不过滤。
+ * 都会收到同一 remote_mic_invite 帧。过滤优先级：
+ *   1. targetDeviceId（新，beacon device_id {platform}_{uuid}）—— 与本机 beacon device_id 比对。
+ *      **四端通吃，Android 由此能成为目标**。
+ *   2. phoneTokenHash（旧，sha256(device_token)[:16]）—— 兜底：服务端给旧 App 构建仍附带此字段，
+ *      与本机 APNs token hash 比对（仅 iOS 有）。
+ * 两者都不带 → APNs 定向通道（已按 only_device_token 送到目标机），不过滤。
  */
 import { getOwnApnsTokenHash } from '../notifications/apnsClient';
+import { getBeaconDeviceId } from './clientInstanceId';
 
 export type RemoteMicInviteDetail = {
   inviteId: string;
   desktopName?: string;
   desktopDeviceId?: string;
-  /** 电脑选中的目标手机 token_hash（sha256(device_token)[:16]）。仅前台 SSE 通道带；APNs 通道无。 */
+  /** 电脑选中的目标设备 beacon device_id（{platform}_{uuid}）。新服务端 SSE 帧带；四端通吃。 */
+  targetDeviceId?: string;
+  /** 旧字段：目标手机 token_hash（sha256(device_token)[:16]）。服务端对 iOS 目标兜旧 App 构建仍带。 */
   phoneTokenHash?: string;
 };
 
@@ -40,7 +45,12 @@ export function notifyRemoteMicInvite(detail: RemoteMicInviteDetail): void {
 /** device 定向过滤后再落 lastDetail + 派发。非本机的定向邀请（含 Android）静默丢弃、不缓存，
  *  避免晚挂载的订阅者从 lastDetail 拿到不该弹的邀请。 */
 async function routeInviteToDevice(detail: RemoteMicInviteDetail): Promise<void> {
-  if (detail.phoneTokenHash) {
+  if (detail.targetDeviceId) {
+    // 新：按 beacon device_id 定向（四端通吃，Android 也能匹配）
+    const mine = await getBeaconDeviceId();
+    if (mine !== detail.targetDeviceId) return; // 本机不是电脑选中的目标设备
+  } else if (detail.phoneTokenHash) {
+    // 旧：兜底按 APNs token hash 定向（仅 iOS 有；旧服务端/旧帧路径）
     const mine = await getOwnApnsTokenHash();
     if (mine !== detail.phoneTokenHash) return; // 本机不是电脑选中的目标手机
   }

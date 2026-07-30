@@ -2,6 +2,7 @@
  * 与 FlowTask Web `mutationMeta.js` 的 client_instance_id 对齐：稳定实例 ID，用于 WS 与协作过滤。
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
 const KEY = '@FlopsMobile/flowtask_client_instance_id';
 
@@ -41,4 +42,16 @@ export function getOrCreateClientInstanceId(): Promise<string> {
     }
   })();
   return pending;
+}
+
+/**
+ * 设备信标（beacon）身份：`{platform}_{clientInstanceId}`，四端统一格式（见 backend/routers/beacon.py）。
+ * 复用已持久化的 clientInstanceId 作 uuid 段 —— 不新铸一份，避免同一 install 出现两个身份。
+ * dev / prod 是两个独立 install（各自的 AsyncStorage），会得到不同 device_id —— 同机双 build 在
+ * /phones 里靠 identifier_for_vendor 去重，不影响此处。
+ */
+export async function getBeaconDeviceId(): Promise<string> {
+  const cid = await getOrCreateClientInstanceId();
+  const platform = Platform.OS === 'ios' ? 'ios' : 'android';
+  return `${platform}_${cid}`;
 }

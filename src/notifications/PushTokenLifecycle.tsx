@@ -26,6 +26,7 @@ import {
   addApnsTokenListener,
 } from './apnsClient';
 import { getPushEnabled, setPushEnabled } from './pushSettings';
+import { getBeaconDeviceId } from '../utils/clientInstanceId';
 
 /**
  * 电脑端 mic 菜单展示名：设备名基底 + env/build 标记。
@@ -54,17 +55,21 @@ export function PushTokenLifecycle(): null {
     let cancelled = false;
 
     const syncToken = async (token: string, env: 'sandbox' | 'production') => {
-      const sig = `v2|${token}|${env}`;
+      const sig = `${token}|${env}`;
       if (sig === lastSyncedRef.current) return;
       try {
         const topic = await getApnsTopic();
         const identity = await getDeviceIdentity();
+        // beacon device_id 一并登记进 token meta：让 remote_mic 能用「beacon 里选中的 device_id」
+        // 反查回这条 token，给后台 iOS 发定向唤醒推送（见 backend/routers/remote_mic.py）。
+        const beaconDeviceId = await getBeaconDeviceId();
         await registerApnsToken(serverBaseUrl, session.access_token, {
           device_token: token,
           env,
           topic,
           device_name: buildDeviceLabel(identity.deviceName, env),
           identifier_for_vendor: identity.identifierForVendor || undefined,
+          device_id: beaconDeviceId,
         });
         if (!cancelled) lastSyncedRef.current = sig;
       } catch (e) {

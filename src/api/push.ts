@@ -52,6 +52,8 @@ export async function registerApnsToken(
     device_name?: string;
     identifier_for_vendor?: string;
     ua?: string;
+    /** beacon 设备身份（{platform}_{uuid}）：把 APNs token 关联到设备信标，供后台 iOS 按 device_id 唤醒。 */
+    device_id?: string;
   }
 ): Promise<{ ok: boolean; meta?: Record<string, unknown> }> {
   const res = await fetchWithDebugLog(buildUrl(baseUrl, '/api/push/apns/register'), {
