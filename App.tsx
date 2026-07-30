@@ -24,7 +24,6 @@ import { VersionWelcomeScreen } from './src/screens/VersionWelcomeScreen';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { navigationRef } from './src/navigation/navigationRef';
 import { PushTokenLifecycle } from './src/notifications/PushTokenLifecycle';
-import { PresenceReporter } from './src/notifications/PresenceReporter';
 import { BeaconReporter } from './src/notifications/BeaconReporter';
 import { TtsRealtimeController } from './src/components/TtsRealtimeController';
 import { DeepLinkRouter } from './src/notifications/DeepLinkRouter';
@@ -123,7 +122,6 @@ export default function App() {
           <ThemeProvider>
             <SessionProvider>
               <PushTokenLifecycle />
-              <PresenceReporter />
               <BeaconReporter />
               <TtsRealtimeController />
               {/* 全局对话列表 + inbox SSE 保活单例：常驻在 SessionProvider 下、NavigationContainer 外，

@@ -3,7 +3,7 @@
  *
  * 「有 session 即上报」的设备级在线目录，**独立于推送**：前台/可达时周期性 ping 刷新一条带 TTL
  * 的记录，转后台/退出时 leave。喂养 remote_mic 的 /phones（Android 由此进列表）。
- * 与 APNs presence（api/push.ts 的 reportApnsPresence，压推送用）并列，互不替代。
+ * APNs 推送抑制也读这份设备级 presence（旧的用户级 /api/push/apns/presence 已删）。
  */
 import { fetchWithDebugLog } from '../utils/httpDebugLog';
 

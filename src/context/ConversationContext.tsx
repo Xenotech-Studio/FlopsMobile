@@ -9,7 +9,7 @@
  * - convList 全局唯一，mount 时 load（先吃 AsyncStorage 缓存 → 零加载即用，再拉网络）。
  * - runningMap / unreadMap 由 inbox SSE 增量维护（对齐旧 TodayScreen 语义）。
  * - inbox SSE：断线指数退避重连（照抄 flowbase TableSocket：1s→30s cap，收到数据即复位）；
- *   AppState active=重连 + catchup fetch，background=abort + 清 backoff 定时器（照抄 PresenceReporter）。
+ *   AppState active=重连 + catchup fetch，background=abort + 清 backoff 定时器（照抄 BeaconReporter）。
  * - sidebar_refresh → 静默 loadConvs（自己 echo 的 refresh 按 client_instance_id 跳过）。
  *
  * 消费方通过 hooks 零加载即用：useConversations / useProjectConversations /

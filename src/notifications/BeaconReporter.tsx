@@ -1,10 +1,9 @@
 /**
  * 设备信标（beacon）上报 —— AppState → 服务端设备级在线目录。**四端统一系统的移动端。**
  *
- * 与 PresenceReporter 的区别：
- * - PresenceReporter：**iOS 专用**、**用户级** foreground/background，只为压 APNs 推送。保留不动。
- * - BeaconReporter：**iOS + Android 都跑**、**设备级**（device_id = {platform}_{clientInstanceId}），
- *   独立于推送。喂养 remote_mic 的 /phones —— Android 因此首次进设备列表。
+ * **iOS + Android 都跑**、**设备级**（device_id = {platform}_{clientInstanceId}），独立于推送权限。
+ * 喂养 remote_mic 的 /phones（Android 因此首次进设备列表）；APNs 推送抑制也改读这份设备级 presence
+ * （旧的 iOS 用户级 PresenceReporter / /api/push/apns/presence 已删）。
  *
  * 行为：
  * - 有 session 即上报（不依赖推送权限 / APNs）。
