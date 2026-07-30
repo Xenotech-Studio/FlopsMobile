@@ -65,6 +65,9 @@ class FlopsAudioModule: RCTEventEmitter {
     commonFormat: .pcmFormatFloat32, sampleRate: 24000, channels: 1, interleaved: false)!
   private var streamRunId = ""
   private var byteCarry: UInt8?
+  /// WS 保活心跳定时器：连上后每 20s sendPing 一次（探活 + 制造上行流量，避免 URLSession
+  /// 默认 60s 请求超时把"只收不发"的空闲连接判死）。与 Android 侧 OkHttp pingInterval(20s) 对齐。
+  private var wsKeepAliveTimer: DispatchSourceTimer?
 
   // MARK: - RCTEventEmitter 约定
 
@@ -494,7 +497,13 @@ class FlopsAudioModule: RCTEventEmitter {
 
   private func openWebSocket(_ url: URL) {
     closeWebSocket()
-    let s = URLSession(configuration: .default)
+    // URLSessionConfiguration.default 的 timeoutIntervalForRequest 默认 60s，会把"只收不发"的
+    // 空闲连接（播报模式切后台待命时正是如此）在 60s 上判超时并 RST——表现为电脑端黄色喇叭图标
+    // 约 60s 熄灭。放宽到 24h（与 nginx /api/ws/ 的 proxy_read_timeout 对齐），让空闲接收不被误杀；
+    // 真掉线由下面的 sendPing 心跳与服务端 20s 心跳兜底探活。
+    let config = URLSessionConfiguration.default
+    config.timeoutIntervalForRequest = 86400
+    let s = URLSession(configuration: config)
     wsSession = s
     let task = s.webSocketTask(with: url)
     wsTask = task
@@ -506,13 +515,43 @@ class FlopsAudioModule: RCTEventEmitter {
       task.send(.string(register)) { _ in }
     }
     receiveLoop(task)
+    startKeepAlivePing(task)
   }
 
   private func closeWebSocket() {
+    stopKeepAlivePing()
     wsTask?.cancel(with: .goingAway, reason: nil)
     wsTask = nil
     wsSession?.invalidateAndCancel()
     wsSession = nil
+  }
+
+  /// WS 保活心跳：连上后每 20s 发一个 WS ping。作用有二——
+  ///  1) 制造上行流量、刷新 URLSession 请求超时，避免空闲连接被 60s 判死（与 Android OkHttp
+  ///     pingInterval(20s) 对齐）；
+  ///  2) sendPing 回调带错即证明 socket 已死，立刻 cancel 让 receiveLoop 的失败分支统一收网重连
+  ///     （比干等 receive 报错更快）。定时器跑主队列，随 closeWebSocket 取消。
+  private func startKeepAlivePing(_ task: URLSessionWebSocketTask) {
+    stopKeepAlivePing()
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(deadline: .now() + 20, repeating: 20)
+    timer.setEventHandler { [weak self] in
+      guard let self = self, task === self.wsTask else { return }
+      task.sendPing { [weak self] error in
+        guard let self = self, error != nil else { return }
+        DispatchQueue.main.async {
+          guard task === self.wsTask else { return } // 已被别的路径收网则忽略
+          task.cancel(with: .abnormalClosure, reason: nil) // → receiveLoop 失败 → handleWsClosed 重连
+        }
+      }
+    }
+    timer.resume()
+    wsKeepAliveTimer = timer
+  }
+
+  private func stopKeepAlivePing() {
+    wsKeepAliveTimer?.cancel()
+    wsKeepAliveTimer = nil
   }
 
   /// URLSession 回调在后台线程；把触及引擎/事件的处理统一切回主线程（顺序由 main 串行保证）。
