@@ -23,25 +23,11 @@ import {
   getCachedDeviceToken,
   getApnsTopic,
   getDeviceIdentity,
+  iosDisplayName,
   addApnsTokenListener,
 } from './apnsClient';
 import { getPushEnabled, setPushEnabled } from './pushSettings';
 import { getBeaconDeviceId } from '../utils/clientInstanceId';
-
-/**
- * 电脑端 mic 菜单展示名：设备名基底 + env/build 标记。
- * iOS 16+ 无 user-assigned-device-name 授权时 deviceName 只是机型名（如「iPhone」），同一台机上
- * dev + release 两个 build 会拿到两条 token / 两个展示名相同 —— 折进标记后成「iPhone · dev」/
- * 「iPhone · prod」互相可辨。env（sandbox/production）与 build（__DEV__）常一一对应（debug→sandbox /
- * release→production），一致时只显示 build；不一致（少见）时两个都带上。
- */
-function buildDeviceLabel(baseName: string, env: 'sandbox' | 'production'): string {
-  const base = (baseName || '').trim() || 'iPhone';
-  const build = __DEV__ ? 'dev' : 'prod';
-  const envShort = env === 'sandbox' ? 'dev' : 'prod';
-  const tag = build === envShort ? build : `${build}/${envShort}`;
-  return `${base} · ${tag}`;
-}
 
 export function PushTokenLifecycle(): null {
   const { session, serverBaseUrl } = useSession();
@@ -67,7 +53,7 @@ export function PushTokenLifecycle(): null {
           device_token: token,
           env,
           topic,
-          device_name: buildDeviceLabel(identity.deviceName, env),
+          device_name: iosDisplayName(identity.deviceName),
           identifier_for_vendor: identity.identifierForVendor || undefined,
           device_id: beaconDeviceId,
         });

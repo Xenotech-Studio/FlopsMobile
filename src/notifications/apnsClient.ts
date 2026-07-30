@@ -146,6 +146,16 @@ export async function getApnsTopic(): Promise<string | undefined> {
  */
 export type DeviceIdentity = { deviceName: string; identifierForVendor: string };
 
+/**
+ * 电脑端 mic 菜单展示名（iOS）：机型全名（getDeviceInfo 现返回如「iPhone 16 Pro Max」），空则兜底泛称
+ * 「iPhone」。beacon（在线）与 APNs token（可唤醒）两条上报路径共用它 —— 保证同一台机在两种状态下
+ * 展示名一致（历史上 token 侧曾额外折进 · dev/prod 后缀，导致两态不一致；现统一去掉，靠机型全名 +
+ * 后端 identifierForVendor 去重即可辨识）。
+ */
+export function iosDisplayName(rawDeviceName: string): string {
+  return (rawDeviceName || '').trim() || 'iPhone';
+}
+
 let cachedDeviceIdentity: DeviceIdentity | undefined;
 export async function getDeviceIdentity(): Promise<DeviceIdentity> {
   if (cachedDeviceIdentity) return cachedDeviceIdentity;

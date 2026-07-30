@@ -169,19 +169,73 @@ class FlopsPushModule: RCTEventEmitter {
   // MARK: - JS 拉取设备展示信息（deviceName + identifierForVendor）
 
   /// 电脑端 mic 菜单列手机时用（remote_mic /phones）：
-  /// - deviceName：作展示名区分多台手机（iOS 16+ 无 user-assigned-device-name 授权时返回机型名如
-  ///   「iPhone」，JS 侧再折进 env/build 标记，避免同机 dev/prod 两条重名）。
+  /// - deviceName：**机型全名**（如「iPhone 16 Pro Max」）。iOS 16+ 无 user-assigned-device-name 授权时
+  ///   `UIDevice.current.name` 只返回泛称「iPhone」，拿不到用户在系统设置里起的名字；这里改用
+  ///   `hw.machine`（如「iPhone17,2」）查表映射成营销全名，退而求其次给出可辨识的展示名。表里没收录的
+  ///   （未来新机型 / iPad）回退到 `UIDevice.current.model` 泛称（「iPhone」/「iPad」），不比原来差。
   /// - identifierForVendor：同一 vendor 在本机的稳定 ID，同机 dev/prod 两个 build 共享同一值；
-  ///   后端 /phones 按它去重，同一台物理 iPhone 只显示一条（取最新那条）。
+  ///   后端 /phones 按它去重，同一台物理机只显示一条（取最新那条）。
   @objc(getDeviceInfo:rejecter:)
   func getDeviceInfo(_ resolve: @escaping RCTPromiseResolveBlock,
                      rejecter reject: @escaping RCTPromiseRejectBlock) {
     DispatchQueue.main.async {
-      let name = UIDevice.current.name
+      let id = Self.machineIdentifier()
+      let name = Self.modelNames[id] ?? UIDevice.current.model
       let idfv = UIDevice.current.identifierForVendor?.uuidString ?? ""
       resolve(["deviceName": name, "identifierForVendor": idfv])
     }
   }
+
+  /// `hw.machine` 原始机型标识（如「iPhone17,2」）。模拟器返回被模拟的机型标识。
+  private static func machineIdentifier() -> String {
+    if let sim = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"], !sim.isEmpty {
+      return sim
+    }
+    var size = 0
+    sysctlbyname("hw.machine", nil, &size, nil, 0)
+    guard size > 0 else { return "" }
+    var machine = [CChar](repeating: 0, count: size)
+    sysctlbyname("hw.machine", &machine, &size, nil, 0)
+    return String(cString: machine)
+  }
+
+  /// 机型标识 → 营销全名（iPhone 8 起 + iPod touch 7）。iPad / 未收录新机回退 `UIDevice.model` 泛称。
+  /// 数据源：社区维护表（adamawolf/Apple_mobile_device_types）。出新机型时在此追加一行即可。
+  private static let modelNames: [String: String] = [
+    "iPhone10,1": "iPhone 8", "iPhone10,4": "iPhone 8",
+    "iPhone10,2": "iPhone 8 Plus", "iPhone10,5": "iPhone 8 Plus",
+    "iPhone10,3": "iPhone X", "iPhone10,6": "iPhone X",
+    "iPhone11,2": "iPhone XS",
+    "iPhone11,4": "iPhone XS Max", "iPhone11,6": "iPhone XS Max",
+    "iPhone11,8": "iPhone XR",
+    "iPhone12,1": "iPhone 11",
+    "iPhone12,3": "iPhone 11 Pro",
+    "iPhone12,5": "iPhone 11 Pro Max",
+    "iPhone12,8": "iPhone SE (2nd generation)",
+    "iPhone13,1": "iPhone 12 mini",
+    "iPhone13,2": "iPhone 12",
+    "iPhone13,3": "iPhone 12 Pro",
+    "iPhone13,4": "iPhone 12 Pro Max",
+    "iPhone14,4": "iPhone 13 mini",
+    "iPhone14,5": "iPhone 13",
+    "iPhone14,2": "iPhone 13 Pro",
+    "iPhone14,3": "iPhone 13 Pro Max",
+    "iPhone14,6": "iPhone SE (3rd generation)",
+    "iPhone14,7": "iPhone 14",
+    "iPhone14,8": "iPhone 14 Plus",
+    "iPhone15,2": "iPhone 14 Pro",
+    "iPhone15,3": "iPhone 14 Pro Max",
+    "iPhone15,4": "iPhone 15",
+    "iPhone15,5": "iPhone 15 Plus",
+    "iPhone16,1": "iPhone 15 Pro",
+    "iPhone16,2": "iPhone 15 Pro Max",
+    "iPhone17,3": "iPhone 16",
+    "iPhone17,4": "iPhone 16 Plus",
+    "iPhone17,1": "iPhone 16 Pro",
+    "iPhone17,2": "iPhone 16 Pro Max",
+    "iPhone17,5": "iPhone 16e",
+    "iPod9,1": "iPod touch (7th generation)",
+  ]
 
   // MARK: - JS 主动拉取（拿不到则 reject "no_token"）
 

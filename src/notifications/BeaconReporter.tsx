@@ -9,8 +9,10 @@
  * 行为：
  * - 有 session 即上报（不依赖推送权限 / APNs）。
  * - 前台：立即 ping{state:foreground} + 每 30s 心跳（服务端记录 TTL 75s，2.5 拍容差）。
- * - 转后台 / inactive：**leave**（移动端后台即丢 inbox SSE → 不再 SSE 可达，立刻从在线集合消失；
+ * - 转后台（background）：**leave**（移动端后台即丢 inbox SSE → 不再 SSE 可达，立刻从在线集合消失；
  *   iOS 仍可经 APNs 唤醒，Android 则从 /phones 消失 —— 诚实反映不可达）。
+ * - inactive（键盘弹出 / 下拉控制中心 / 来电 / 应用切换预览等 iOS 瞬时态）：**不 leave**、不停心跳 ——
+ *   并非真离开，否则每弹一次键盘就 ping→leave 抖动误删记录。真进后台会紧跟一个 background 收尾。
  * - 登出 / 卸载：leave。
  */
 import { useEffect, useRef } from 'react';
@@ -18,7 +20,7 @@ import { AppState, Platform, type AppStateStatus } from 'react-native';
 import { useSession } from '../context/SessionContext';
 import { beaconPing, beaconLeave, type BeaconPlatform } from '../api/beacon';
 import { getBeaconDeviceId } from '../utils/clientInstanceId';
-import { getDeviceIdentity } from './apnsClient';
+import { getDeviceIdentity, iosDisplayName } from './apnsClient';
 
 const HEARTBEAT_MS = 30 * 1000;
 
@@ -29,15 +31,30 @@ type BeaconIdentity = {
   idfv: string;
 };
 
-/** Android 设备名：零依赖走 Platform.constants（Brand + Model，如「Google Pixel 7」）。 */
+/** 厂商名常全小写（如「samsung」/「xiaomi」）—— 首字母大写成「Samsung」/「Xiaomi」。 */
+function titleCase(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+/**
+ * Android 设备名：零依赖走 Platform.constants（Manufacturer/Brand + Model）。
+ *
+ * ⚠️ Android 没有 iOS 那种「营销名」系统 API。Build.MODEL 对 Pixel / OnePlus 常已是营销名（如
+ * 「Pixel 8 Pro」），但**三星 / 小米多为内部型号码**（如三星「SM-S928B」、小米「23127PN0CC」）——
+ * 想转成「Galaxy S24 Ultra」这类营销名，只能内置 Google 设备目录（supported_devices.csv，数万条），
+ * 非零依赖，暂不做。这里给出零依赖能拿到的最干净组合：厂商（首字母大写）+ 型号，型号已含厂商则不重复。
+ */
 function androidDeviceName(): string {
-  const c = (Platform.constants || {}) as { Model?: string; Brand?: string };
+  const c = (Platform.constants || {}) as {
+    Model?: string;
+    Brand?: string;
+    Manufacturer?: string;
+  };
   const model = (c.Model || '').trim();
-  const brand = (c.Brand || '').trim();
-  if (model && brand && !model.toLowerCase().startsWith(brand.toLowerCase())) {
-    return `${brand} ${model}`;
-  }
-  return model || brand || 'Android';
+  const brand = titleCase((c.Manufacturer || c.Brand || '').trim());
+  if (!model) return brand || 'Android';
+  if (!brand || model.toLowerCase().startsWith(brand.toLowerCase())) return model;
+  return `${brand} ${model}`;
 }
 
 async function resolveIdentity(): Promise<BeaconIdentity> {
@@ -47,7 +64,7 @@ async function resolveIdentity(): Promise<BeaconIdentity> {
     return {
       deviceId,
       platform: 'ios',
-      deviceName: (id.deviceName || '').trim() || 'iPhone',
+      deviceName: iosDisplayName(id.deviceName),
       idfv: id.identifierForVendor || '',
     };
   }
@@ -105,10 +122,14 @@ export function BeaconReporter(): null {
         heartbeatRef.current = setInterval(() => {
           void ping('foreground');
         }, HEARTBEAT_MS);
-      } else {
+      } else if (status === 'background') {
+        // 真进后台才下线（丢 inbox SSE → 不再可达，诚实从在线集合消失）。
         stopHeartbeat();
         void leave();
       }
+      // 'inactive'：iOS 瞬时态（键盘 / 控制中心 / 来电 / 切换预览），app 仍在前台、JS 定时器照跑。
+      // 不 leave、不停心跳 —— 记录靠继续的心跳保活；真离开时紧跟的 'background' 才收尾。若罕见地
+      // 长期停在 inactive，进程被挂起后心跳自然停，服务端 TTL 75s 兜底过期。
     };
 
     apply(AppState.currentState);
