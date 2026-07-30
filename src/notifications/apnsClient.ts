@@ -151,9 +151,12 @@ export type DeviceIdentity = { deviceName: string; identifierForVendor: string }
  * 「iPhone」。beacon（在线）与 APNs token（可唤醒）两条上报路径共用它 —— 保证同一台机在两种状态下
  * 展示名一致（历史上 token 侧曾额外折进 · dev/prod 后缀，导致两态不一致；现统一去掉，靠机型全名 +
  * 后端 identifierForVendor 去重即可辨识）。
+ * dev build（com.flopsmobile.dev）与 release 是两个独立 install，会各自上报一条 presence；给 dev 的
+ * 展示名统一加「 (DEV)」后缀，一眼区分同机的两条记录（beacon / token 两路都过这里，仍保持一致）。
  */
 export function iosDisplayName(rawDeviceName: string): string {
-  return (rawDeviceName || '').trim() || 'iPhone';
+  const name = (rawDeviceName || '').trim() || 'iPhone';
+  return __DEV__ ? `${name} (DEV)` : name;
 }
 
 let cachedDeviceIdentity: DeviceIdentity | undefined;

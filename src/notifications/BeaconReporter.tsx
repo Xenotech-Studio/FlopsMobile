@@ -42,6 +42,10 @@ function titleCase(s: string): string {
  * 「Pixel 8 Pro」），但**三星 / 小米多为内部型号码**（如三星「SM-S928B」、小米「23127PN0CC」）——
  * 想转成「Galaxy S24 Ultra」这类营销名，只能内置 Google 设备目录（supported_devices.csv，数万条），
  * 非零依赖，暂不做。这里给出零依赖能拿到的最干净组合：厂商（首字母大写）+ 型号，型号已含厂商则不重复。
+ *
+ * dev build（com.flopsmobile.dev）与 release（com.flopsmobile）是两个独立 install，各自的 AsyncStorage →
+ * 不同 android_<uuid>，presence 里各留一条（Android 无 identifierForVendor 去重）。给 dev 的展示名加
+ * 「 (DEV)」后缀，一眼区分同机的两条记录。
  */
 function androidDeviceName(): string {
   const c = (Platform.constants || {}) as {
@@ -51,9 +55,12 @@ function androidDeviceName(): string {
   };
   const model = (c.Model || '').trim();
   const brand = titleCase((c.Manufacturer || c.Brand || '').trim());
-  if (!model) return brand || 'Android';
-  if (!brand || model.toLowerCase().startsWith(brand.toLowerCase())) return model;
-  return `${brand} ${model}`;
+  const base = !model
+    ? brand || 'Android'
+    : !brand || model.toLowerCase().startsWith(brand.toLowerCase())
+      ? model
+      : `${brand} ${model}`;
+  return __DEV__ ? `${base} (DEV)` : base;
 }
 
 async function resolveIdentity(): Promise<BeaconIdentity> {
@@ -76,11 +83,7 @@ export function BeaconReporter(): null {
   const identityRef = useRef<BeaconIdentity | null>(null);
 
   useEffect(() => {
-    // dev build（com.flopsmobile.dev）与 release（com.flopsmobile）是两个独立 install，各自的
-    // AsyncStorage → getBeaconDeviceId() 生成两个不同的 android_<uuid>，presence 里会各留一条。
-    // dev 版整个不上报，避免同机双记录。（iOS 的 identifierForVendor 在 dev/release 相同、本不会
-    // 重复，但 dev build 同样不该出现在设备目录里 —— 一并挡掉。）
-    if (__DEV__ || !session) return;
+    if (!session) return;
 
     let cancelled = false;
 
