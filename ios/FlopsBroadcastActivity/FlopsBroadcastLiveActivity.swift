@@ -37,22 +37,22 @@ private func flopsGlyph(size: CGFloat) -> some View {
     .foregroundColor(flopsAccent)
 }
 
-/// 灵动岛 trailing / compactTrailing 的状态图标：一枚 SF Symbol 反映当前播报状态，优先级从高到低：
+/// 灵动岛 trailing / compactTrailing 的状态图标：返回一枚 SF Symbol 名字反映当前播报状态，优先级从高到低：
 ///   1) 正在播语音（isActive）           → waveform（音波律动）
-///   2) 有对话进行中（activeCount>0）     → dot.radiowaves.left.and.right（工作中）
+///   2) 有对话进行中（activeCount>0）     → hammer.fill（工作中）
 ///   3) 无进行中但有待处理（pendingCount>0）→ hourglass（待处理）
-///   4) 都没有（空闲连上）                → ear.fill（监听中）
+///   4) 都没有（空闲连上）                → beach.umbrella.fill（沙滩伞，Flops 独有：休息中）
 /// 停止按钮不再占 trailing，改放 expanded 的 bottom 区域。
 @available(iOS 16.1, *)
 private func broadcastStatusSymbol(for state: FlopsBroadcastAttributes.ContentState) -> String {
   if state.isActive {
     return "waveform"
   } else if state.activeCount > 0 {
-    return "dot.radiowaves.left.and.right"
+    return "hammer.fill"
   } else if state.pendingCount > 0 {
     return "hourglass"
   } else {
-    return "ear.fill"
+    return "beach.umbrella.fill"
   }
 }
 
@@ -124,7 +124,7 @@ struct FlopsBroadcastLiveActivity: Widget {
       } compactLeading: {
         flopsGlyph(size: 16).padding(.leading, 6)
       } compactTrailing: {
-        // 右侧状态图标：播音时波形、有对话进行中/待处理各自图标、空闲监听显示耳朵，让紧凑态实时反映状态。
+        // 右侧状态图标：播音时波形、有对话进行中/待处理各自图标、空闲时沙滩伞，让紧凑态实时反映状态。
         Image(systemName: broadcastStatusSymbol(for: context.state))
           .foregroundColor(flopsAccent)
           .padding(.trailing, 6)
