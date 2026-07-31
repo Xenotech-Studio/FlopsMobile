@@ -14,8 +14,8 @@ import ActivityKit
 import SwiftUI
 import WidgetKit
 
-/// 与 app 内播报 overlay 一致的暖橙强调色（见 src/components/BroadcastModeOverlay.tsx 的 ACCENT #FF8A34）。
-private let flopsAccent = Color(red: 1.0, green: 0.541, blue: 0.204)
+/// Live Activity 统一用纯白强调色，配更暗的半透明黑底更干净（喇叭图标 / 停止按钮 / 灵动岛 accent 都取这个）。
+private let flopsAccent = Color.white
 
 /// 停止播报的深链。整块横幅/灵动岛默认点击会打开 app；仅"停止"按钮用它触发关播报。
 private let stopURL = URL(string: "flops://broadcast/stop")!
@@ -40,7 +40,7 @@ struct FlopsBroadcastLiveActivity: Widget {
     ActivityConfiguration(for: FlopsBroadcastAttributes.self) { context in
       // 锁屏 / 通知中心横幅
       BroadcastLockScreenView(state: context.state)
-        .activityBackgroundTint(Color.black.opacity(0.6))
+        .activityBackgroundTint(Color.black.opacity(0.82))
         .activitySystemActionForegroundColor(flopsAccent)
     } dynamicIsland: { context in
       DynamicIsland {
