@@ -187,6 +187,33 @@ class FlopsAudioModule: RCTEventEmitter {
     resolve(nil)
   }
 
+  // MARK: - 播报模式 Live Activity（灵动岛 / 锁屏）
+  //
+  // 播报模式全局单例，JS 侧 setBroadcastMode(true/false) 的收敛处调这两个方法（见
+  // src/audio/ttsRealtime.ts）。ActivityKit 需 iOS 16.1+，用 #available 兜底，低版本 no-op。
+  // fire-and-forget（无 resolver），与 setAudioMixingMode 同一风格。UI 见 WidgetExtension 侧
+  // FlopsBroadcastLiveActivity；管理在 FlopsActivityManager。
+
+  /// 开启播报 Live Activity（进入播报模式）。
+  @objc(startLiveActivity)
+  func startLiveActivity() {
+    if #available(iOS 16.1, *) { FlopsActivityManager.start() }
+  }
+
+  /// 结束播报 Live Activity（退出播报模式）。
+  @objc(endLiveActivity)
+  func endLiveActivity() {
+    if #available(iOS 16.1, *) { FlopsActivityManager.end() }
+  }
+
+  /// 把"是否正在朗读"同步给 Live Activity（灵动岛紧凑态波形 / 锁屏副标题）。无活动时 no-op，
+  /// 故非播报模式（未 start 过活动）的实时流也可安全调用。
+  private func updateBroadcastActivity(active: Bool) {
+    if #available(iOS 16.1, *) {
+      FlopsActivityManager.update(isActive: active, conversationTitle: nil)
+    }
+  }
+
   // MARK: - 队列构建 / 拆除
 
   private func buildQueue(from startIndex: Int) {
@@ -619,10 +646,12 @@ class FlopsAudioModule: RCTEventEmitter {
       tailGeneration += 1 // 新 run 开始：作废挂起的「尾音播完→降回保活态」
       player?.pause() // 与回放互斥
       enterSpeakingSessionIfNeeded()
+      updateBroadcastActivity(active: true) // 灵动岛/锁屏反映"正在朗读"（无活动时 no-op）
       emitRealtime("speaking", runId: rid, convId: cid)
     case "speak_end":
       // 不清队列：已排队的尾音自然播完；播完后退出朗读窗口（解除 duck、降回 mix 保活）
       scheduleSessionReleaseAfterTail()
+      updateBroadcastActivity(active: false) // 回落"监听中"
       emitRealtime("ended", runId: obj["run_id"] as? String,
                    convId: obj["conversation_id"] as? String)
     case "audio_saved":

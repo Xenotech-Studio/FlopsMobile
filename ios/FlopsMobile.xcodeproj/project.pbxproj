@@ -8,10 +8,16 @@
 
 /* Begin PBXBuildFile section */
 		0C80B921A6F3F58F76C31292 /* libPods-FlopsMobile.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-FlopsMobile.a */; };
+		11309994F220EE9B1840E4A0 /* FlopsActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A1A786FEFADD3067C0A84C2 /* FlopsActivityManager.swift */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
+		1D47D8677852A956B5EA4535 /* FlopsBroadcastLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55467E0C7364A7015BF458F1 /* FlopsBroadcastLiveActivity.swift */; };
+		2DF89DA2815244B4018B4C21 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C79ABE4085980761F7248DE4 /* Foundation.framework */; };
 		48BD79998975A11E3C532659 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
+		4D4B93D5F92A75211573B62D /* FlopsBroadcastAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = F682D4E7AE626DAEA454F660 /* FlopsBroadcastAttributes.swift */; };
+		5A792235CBA21D6030D0D013 /* FlopsBroadcastAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = F682D4E7AE626DAEA454F660 /* FlopsBroadcastAttributes.swift */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
+		B4D377A4971CB20B0476996B /* FlopsBroadcastActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 19E39FFDE2B8DC759D2A421F /* FlopsBroadcastActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		BD4D1323A34541AE9D36B8F1 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E3B4A7555B64545B90B5BFC /* SceneDelegate.swift */; };
 		F095001000000000000000A2 /* FlopsPushModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = F095001000000000000000A1 /* FlopsPushModule.swift */; };
 		F095001000000000000000A4 /* FlopsPushModule.m in Sources */ = {isa = PBXBuildFile; fileRef = F095001000000000000000A3 /* FlopsPushModule.m */; };
@@ -21,17 +27,46 @@
 		F095001000000000000000B4 /* FlopsAudioModule.m in Sources */ = {isa = PBXBuildFile; fileRef = F095001000000000000000B3 /* FlopsAudioModule.m */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		3974342760C3A85C85A35AB9 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7620B9DC4E450900B90CB3BE;
+			remoteInfo = FlopsBroadcastActivity;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		6100416CC241F7B7FBF81FD6 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				B4D377A4971CB20B0476996B /* FlopsBroadcastActivity.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		13B07F961A680F5B00A75B9A /* FlopsMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FlopsMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = FlopsMobile/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = FlopsMobile/Info.plist; sourceTree = "<group>"; };
 		13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = PrivacyInfo.xcprivacy; path = FlopsMobile/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		19E39FFDE2B8DC759D2A421F /* FlopsBroadcastActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FlopsBroadcastActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		3B4392A12AC88292D35C810B /* Pods-FlopsMobile.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-FlopsMobile.debug.xcconfig"; path = "Target Support Files/Pods-FlopsMobile/Pods-FlopsMobile.debug.xcconfig"; sourceTree = "<group>"; };
+		443941756599FB47B88A220A /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		4A1A786FEFADD3067C0A84C2 /* FlopsActivityManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FlopsActivityManager.swift; path = FlopsMobile/FlopsActivityManager.swift; sourceTree = "<group>"; };
+		55467E0C7364A7015BF458F1 /* FlopsBroadcastLiveActivity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FlopsBroadcastLiveActivity.swift; sourceTree = "<group>"; };
 		5709B34CF0A7D63546082F79 /* Pods-FlopsMobile.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-FlopsMobile.release.xcconfig"; path = "Target Support Files/Pods-FlopsMobile/Pods-FlopsMobile.release.xcconfig"; sourceTree = "<group>"; };
 		5DCACB8F33CDC322A6C60F78 /* libPods-FlopsMobile.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-FlopsMobile.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = FlopsMobile/AppDelegate.swift; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = FlopsMobile/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		8E3B4A7555B64545B90B5BFC /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SceneDelegate.swift; path = FlopsMobile/SceneDelegate.swift; sourceTree = "<group>"; };
+		C79ABE4085980761F7248DE4 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F095001000000000000000A1 /* FlopsPushModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FlopsPushModule.swift; path = FlopsMobile/FlopsPushModule.swift; sourceTree = "<group>"; };
 		F095001000000000000000A3 /* FlopsPushModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = FlopsPushModule.m; path = FlopsMobile/FlopsPushModule.m; sourceTree = "<group>"; };
@@ -40,6 +75,7 @@
 		F095001000000000000000A9 /* FlopsCryptoModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FlopsCryptoModule.swift; path = FlopsMobile/FlopsCryptoModule.swift; sourceTree = "<group>"; };
 		F095001000000000000000B1 /* FlopsAudioModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FlopsAudioModule.swift; path = FlopsMobile/FlopsAudioModule.swift; sourceTree = "<group>"; };
 		F095001000000000000000B3 /* FlopsAudioModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = FlopsAudioModule.m; path = FlopsMobile/FlopsAudioModule.m; sourceTree = "<group>"; };
+		F682D4E7AE626DAEA454F660 /* FlopsBroadcastAttributes.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FlopsBroadcastAttributes.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -48,6 +84,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				0C80B921A6F3F58F76C31292 /* libPods-FlopsMobile.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1A5CB30AA0E2647640324AC1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2DF89DA2815244B4018B4C21 /* Foundation.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -70,6 +114,7 @@
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
+				4A1A786FEFADD3067C0A84C2 /* FlopsActivityManager.swift */,
 			);
 			name = FlopsMobile;
 			sourceTree = "<group>";
@@ -79,8 +124,17 @@
 			children = (
 				ED297162215061F000B7C4FE /* JavaScriptCore.framework */,
 				5DCACB8F33CDC322A6C60F78 /* libPods-FlopsMobile.a */,
+				65D045BD6C5F63E4E11BE7CA /* iOS */,
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		65D045BD6C5F63E4E11BE7CA /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				C79ABE4085980761F7248DE4 /* Foundation.framework */,
+			);
+			name = iOS;
 			sourceTree = "<group>";
 		};
 		832341AE1AAA6A7D00B99B32 /* Libraries */ = {
@@ -98,6 +152,7 @@
 				83CBBA001A601CBA00E9B192 /* Products */,
 				2D16E6871FA4F8E400B85C8A /* Frameworks */,
 				BBD78D7AC51CEA395F1C20DB /* Pods */,
+				CA07B51DD915C3AD96D83D9D /* FlopsBroadcastActivity */,
 			);
 			indentWidth = 2;
 			sourceTree = "<group>";
@@ -108,6 +163,7 @@
 			isa = PBXGroup;
 			children = (
 				13B07F961A680F5B00A75B9A /* FlopsMobile.app */,
+				19E39FFDE2B8DC759D2A421F /* FlopsBroadcastActivity.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -119,6 +175,17 @@
 				5709B34CF0A7D63546082F79 /* Pods-FlopsMobile.release.xcconfig */,
 			);
 			path = Pods;
+			sourceTree = "<group>";
+		};
+		CA07B51DD915C3AD96D83D9D /* FlopsBroadcastActivity */ = {
+			isa = PBXGroup;
+			children = (
+				55467E0C7364A7015BF458F1 /* FlopsBroadcastLiveActivity.swift */,
+				F682D4E7AE626DAEA454F660 /* FlopsBroadcastAttributes.swift */,
+				443941756599FB47B88A220A /* Info.plist */,
+			);
+			name = FlopsBroadcastActivity;
+			path = FlopsBroadcastActivity;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -135,15 +202,34 @@
 				00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */,
 				00EEFC60759A1932668264C0 /* [CP] Embed Pods Frameworks */,
 				E235C05ADACE081382539298 /* [CP] Copy Pods Resources */,
+				6100416CC241F7B7FBF81FD6 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				580495A00DC3A32603C14C5F /* PBXTargetDependency */,
 			);
 			name = FlopsMobile;
 			productName = FlopsMobile;
 			productReference = 13B07F961A680F5B00A75B9A /* FlopsMobile.app */;
 			productType = "com.apple.product-type.application";
+		};
+		7620B9DC4E450900B90CB3BE /* FlopsBroadcastActivity */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4BA01A4415F85000596649DC /* Build configuration list for PBXNativeTarget "FlopsBroadcastActivity" */;
+			buildPhases = (
+				5C17E4171D762C6339EBDBE7 /* Sources */,
+				1A5CB30AA0E2647640324AC1 /* Frameworks */,
+				E58ABE69F882F5E530A2743E /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FlopsBroadcastActivity;
+			productName = FlopsBroadcastActivity;
+			productReference = 19E39FFDE2B8DC759D2A421F /* FlopsBroadcastActivity.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -155,6 +241,10 @@
 				TargetAttributes = {
 					13B07F861A680F5B00A75B9A = {
 						LastSwiftMigration = 1120;
+					};
+					7620B9DC4E450900B90CB3BE = {
+						CreatedOnToolsVersion = 15.0;
+						ProvisioningStyle = Automatic;
 					};
 				};
 			};
@@ -172,6 +262,7 @@
 			projectRoot = "";
 			targets = (
 				13B07F861A680F5B00A75B9A /* FlopsMobile */,
+				7620B9DC4E450900B90CB3BE /* FlopsBroadcastActivity */,
 			);
 		};
 /* End PBXProject section */
@@ -184,6 +275,13 @@
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 				48BD79998975A11E3C532659 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E58ABE69F882F5E530A2743E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -277,10 +375,30 @@
 				F095001000000000000000A8 /* FlopsCryptoModule.m in Sources */,
 				F095001000000000000000B2 /* FlopsAudioModule.swift in Sources */,
 				F095001000000000000000B4 /* FlopsAudioModule.m in Sources */,
+				4D4B93D5F92A75211573B62D /* FlopsBroadcastAttributes.swift in Sources */,
+				11309994F220EE9B1840E4A0 /* FlopsActivityManager.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5C17E4171D762C6339EBDBE7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1D47D8677852A956B5EA4535 /* FlopsBroadcastLiveActivity.swift in Sources */,
+				5A792235CBA21D6030D0D013 /* FlopsBroadcastAttributes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		580495A00DC3A32603C14C5F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = FlopsBroadcastActivity;
+			target = 7620B9DC4E450900B90CB3BE /* FlopsBroadcastActivity */;
+			targetProxy = 3974342760C3A85C85A35AB9 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		13B07F941A680F5B00A75B9A /* Debug */ = {
@@ -515,6 +633,76 @@
 			};
 			name = Release;
 		};
+		84772C15988F3123040E9D13 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 20;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 9WLTK2DC27;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = FlopsBroadcastActivity/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.5;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = org.reactjs.native.example.FlopsMobile.BroadcastActivity;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = com.xenotech.FlopsMobile.BroadcastActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		8F758AD56B89427A1E01009B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 20;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 9WLTK2DC27;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = FlopsBroadcastActivity/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.5;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = org.reactjs.native.example.FlopsMobile.BroadcastActivity;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = com.xenotech.FlopsMobile.dev.BroadcastActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -523,6 +711,15 @@
 			buildConfigurations = (
 				13B07F941A680F5B00A75B9A /* Debug */,
 				13B07F951A680F5B00A75B9A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4BA01A4415F85000596649DC /* Build configuration list for PBXNativeTarget "FlopsBroadcastActivity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				84772C15988F3123040E9D13 /* Release */,
+				8F758AD56B89427A1E01009B /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

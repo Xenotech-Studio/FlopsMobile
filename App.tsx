@@ -26,6 +26,7 @@ import { navigationRef } from './src/navigation/navigationRef';
 import { PushTokenLifecycle } from './src/notifications/PushTokenLifecycle';
 import { BeaconReporter } from './src/notifications/BeaconReporter';
 import { TtsRealtimeController } from './src/components/TtsRealtimeController';
+import { BroadcastLinkRouter } from './src/components/BroadcastLinkRouter';
 import { DeepLinkRouter } from './src/notifications/DeepLinkRouter';
 import { AppletLinkRouter } from './src/navigation/AppletLinkRouter';
 import { UpgradeRequiredOverlay } from './src/components/UpgradeRequiredOverlay';
@@ -124,6 +125,9 @@ export default function App() {
               <PushTokenLifecycle />
               <BeaconReporter />
               <TtsRealtimeController />
+              {/* 播报 Live Activity「停止」按钮深链（flops://broadcast/stop）→ 关播报。UI-less，
+                  与 TtsRealtimeController 同级常驻。 */}
+              <BroadcastLinkRouter />
               {/* 全局对话列表 + inbox SSE 保活单例：常驻在 SessionProvider 下、NavigationContainer 外，
                   让 Today / Project / Drawer 三处零加载即用，SSE 不随页面卸载断开。 */}
               <ConversationProvider>

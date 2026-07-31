@@ -29,6 +29,12 @@ type FlopsAudioRealtimeNative = {
   /** mode: 'broadcast'（全局端点，连上发 register）| 'single'（per-conv 端点，纯下行）。 */
   startRealtime(wsUrl: string, mode: 'broadcast' | 'single'): Promise<null>;
   stopRealtime(): Promise<null>;
+  /**
+   * iOS 专属：播报模式的灵动岛 / 锁屏 Live Activity 开 / 关（fire-and-forget，无返回）。
+   * Android 原生模块与未 rebuild 的旧 iOS 包都没有这两个方法 → 用可选链 + Platform 守卫，缺失即 no-op。
+   */
+  startLiveActivity?(): void;
+  endLiveActivity?(): void;
 };
 
 // iOS / Android 均有原生 FlopsAudio；缺失（未 rebuild 的旧包）时为 undefined → 全链路 no-op。
@@ -114,6 +120,25 @@ function assignBroadcastMode(next: boolean): void {
   if (broadcastMode === next) return;
   broadcastMode = next;
   notifyBroadcast();
+  // 灵动岛 / 锁屏 Live Activity 跟随开关起落。放在这个唯一收敛点（而非仅 setBroadcastMode），
+  // 冷启动从本机恢复播报态（refreshRealtimeFromPrefs → assignBroadcastMode(true)）与登出复位
+  // （assignBroadcastMode(false)）也能一并驱动，无需各处重复调。
+  syncBroadcastLiveActivity(next);
+}
+
+/**
+ * iOS：把播报开 / 关同步给灵动岛 / 锁屏 Live Activity。
+ * 仅 iOS 有原生实现；Android 原生模块与未 rebuild 的旧 iOS 包都没有这两个方法 → 可选链缺失即 no-op。
+ * Activity.request 要求 app 在前台——本函数的触发点（用户切开关 / session 就绪 / 登出）都在前台，天然满足。
+ */
+function syncBroadcastLiveActivity(next: boolean): void {
+  if (Platform.OS !== 'ios' || !Native) return;
+  try {
+    if (next) Native.startLiveActivity?.();
+    else Native.endLiveActivity?.();
+  } catch {
+    /* 原生缺方法 / 抛错都不致命：仅少一个灵动岛指示，播报本身不受影响 */
+  }
 }
 
 /** 播报开关的本机持久化（per-device）：写 AsyncStorage，失败不致命（内存态仍生效）。 */
