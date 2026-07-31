@@ -74,17 +74,33 @@ enum FlopsActivityManager {
   /// - isActive：是否正在朗读（原生 WS 事件驱动）。
   /// - conversationTitle：当前朗读的对话标题（nil = 不改；标题特性尚未启用，现有流程恒传 nil）。
   /// - activeCount / pendingCount：会话统计（JS 侧 inbox SSE 驱动，见 reportBroadcastStats）。
+  @MainActor
   static func update(isActive: Bool? = nil,
                      conversationTitle: String? = nil,
                      activeCount: Int? = nil,
                      pendingCount: Int? = nil) {
-    guard let activity = current else { return }
+    // 系统已结束的活动（用户从锁屏滑动关闭 / 超时自动结束）的句柄仍保留在 current 里，
+    // 但调用 update 时 ActivityKit 静默丢弃；检查 activityState 避免无谓 Task 创建。
+    guard let activity = current,
+          activity.activityState == .active || activity.activityState == .stale else {
+      if current != nil {
+        NSLog("[FlopsActivity] update skipped: activityState=%@ current is not active/stale, discarding handle",
+              current.map { String(describing: $0.activityState) } ?? "nil")
+        current = nil
+      }
+      return
+    }
     if let isActive = isActive { currentState.isActive = isActive }
     if let conversationTitle = conversationTitle { currentState.conversationTitle = conversationTitle }
     if let activeCount = activeCount { currentState.activeCount = activeCount }
     if let pendingCount = pendingCount { currentState.pendingCount = pendingCount }
     let snapshot = currentState
-    Task { await activity.update(using: snapshot) }
+    NSLog("[FlopsActivity] update isActive=%@ title=%@ active=%d pending=%d",
+          snapshot.isActive ? "YES" : "NO",
+          snapshot.conversationTitle ?? "<nil>",
+          snapshot.activeCount,
+          snapshot.pendingCount)
+    Task { @MainActor in await activity.update(using: snapshot) }
   }
 
   /// 结束当前活动（并兜底清掉进程重启后系统里可能残留的同类活动）。

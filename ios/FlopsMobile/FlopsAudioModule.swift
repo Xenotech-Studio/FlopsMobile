@@ -219,9 +219,12 @@ class FlopsAudioModule: RCTEventEmitter {
 
   /// 把"是否正在朗读"同步给 Live Activity（灵动岛紧凑态波形 / 锁屏副标题）。无活动时 no-op，
   /// 故非播报模式（未 start 过活动）的实时流也可安全调用。合并式 update，不动会话统计。
+  /// WS 事件可能来自任意线程——派发到主线程，因为 FlopsActivityManager.update 标了 @MainActor。
   private func updateBroadcastActivity(active: Bool) {
-    if #available(iOS 16.1, *) {
-      FlopsActivityManager.update(isActive: active)
+    DispatchQueue.main.async {
+      if #available(iOS 16.1, *) {
+        FlopsActivityManager.update(isActive: active)
+      }
     }
   }
 
