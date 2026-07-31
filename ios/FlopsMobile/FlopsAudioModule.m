@@ -50,4 +50,7 @@ RCT_EXTERN_METHOD(startLiveActivity)
 
 RCT_EXTERN_METHOD(endLiveActivity)
 
+RCT_EXTERN_METHOD(updateLiveActivityStats:(nonnull NSNumber *)activeCount
+                                   pending:(nonnull NSNumber *)pendingCount)
+
 @end

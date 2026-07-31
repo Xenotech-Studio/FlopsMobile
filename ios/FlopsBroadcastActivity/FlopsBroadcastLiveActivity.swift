@@ -20,6 +20,19 @@ private let flopsAccent = Color.white
 /// 停止播报的深链。整块横幅/灵动岛默认点击会打开 app；仅"停止"按钮用它触发关播报。
 private let stopURL = URL(string: "flops://broadcast/stop")!
 
+/// Flops 品牌图标（原子 / 轨道 glyph），替代系统 speaker.wave.2.fill。素材在本 WidgetExtension
+/// 自带的 Assets.xcassets 里（FlopsGlyph，template-rendering-intent=template，源自桌面端 tray-icon）；
+/// 作模板图渲染并染成 flopsAccent（白），与整体白色主题一致。size 按各处版位显式给定。
+@available(iOS 16.1, *)
+private func flopsGlyph(size: CGFloat) -> some View {
+  Image("FlopsGlyph")
+    .renderingMode(.template)
+    .resizable()
+    .aspectRatio(contentMode: .fit)
+    .frame(width: size, height: size)
+    .foregroundColor(flopsAccent)
+}
+
 // MARK: - WidgetBundle 入口（@main）
 
 @main
@@ -46,9 +59,7 @@ struct FlopsBroadcastLiveActivity: Widget {
       DynamicIsland {
         // 展开态（长按灵动岛）：喇叭图标 + "语音播报中" + 停止按钮
         DynamicIslandExpandedRegion(.leading) {
-          Image(systemName: "speaker.wave.2.fill")
-            .font(.title3)
-            .foregroundColor(flopsAccent)
+          flopsGlyph(size: 22)
             .padding(.leading, 4)
         }
         DynamicIslandExpandedRegion(.center) {
@@ -81,9 +92,15 @@ struct FlopsBroadcastLiveActivity: Widget {
           }
           .padding(.trailing, 4)
         }
+        // 展开态底部：会话统计（正在进行 / 已完成待处理）。两者皆 0 时 BroadcastStatsRow 不渲染，
+        // 区域自然收起。compact / minimal 空间太小不加。
+        DynamicIslandExpandedRegion(.bottom) {
+          BroadcastStatsRow(activeCount: context.state.activeCount,
+                            pendingCount: context.state.pendingCount)
+            .padding(.top, 2)
+        }
       } compactLeading: {
-        Image(systemName: "speaker.wave.2.fill")
-          .foregroundColor(flopsAccent)
+        flopsGlyph(size: 16)
       } compactTrailing: {
         // 出声时显示律动波形，空闲监听时留空，让紧凑态更能反映实时状态。
         if context.state.isActive {
@@ -91,8 +108,7 @@ struct FlopsBroadcastLiveActivity: Widget {
             .foregroundColor(flopsAccent)
         }
       } minimal: {
-        Image(systemName: "speaker.wave.2.fill")
-          .foregroundColor(flopsAccent)
+        flopsGlyph(size: 16)
       }
       // 不设 widgetURL 为 stopURL：点灵动岛整体应打开 app（默认行为），只有"停止"按钮才关播报。
     }
@@ -107,9 +123,7 @@ struct BroadcastLockScreenView: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      Image(systemName: "speaker.wave.2.fill")
-        .font(.title2)
-        .foregroundColor(flopsAccent)
+      flopsGlyph(size: 26)
 
       VStack(alignment: .leading, spacing: 2) {
         Text("Flops 播报中")
@@ -134,6 +148,9 @@ struct BroadcastLockScreenView: View {
         Text(Date(), style: .time)
           .font(.caption2)
           .foregroundColor(.white.opacity(0.6))
+        // 时间下方：会话统计（正在进行 / 已完成待处理），紧凑横向；两者皆 0 时整行不显示。
+        BroadcastStatsRow(activeCount: state.activeCount,
+                          pendingCount: state.pendingCount)
         Link(destination: stopURL) {
           Image(systemName: "stop.fill")
             .font(.subheadline)
@@ -145,5 +162,41 @@ struct BroadcastLockScreenView: View {
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 12)
+  }
+}
+
+// MARK: - 会话统计行（图标 + 数字，紧凑横向）
+//
+// 🎙️正在进行的对话数 + ⏳已完成待处理数。用于锁屏横幅（时间下方）与灵动岛 expanded（.bottom）；
+// compact / minimal 空间太小不显示。两个计数都为 0（空闲）时整行不渲染，保持干净。
+// 图标用 SF Symbols 染白，贴合整体白色主题（radiowaves=进行中 / hourglass=待处理）。
+
+@available(iOS 16.1, *)
+struct BroadcastStatsRow: View {
+  let activeCount: Int
+  let pendingCount: Int
+
+  var body: some View {
+    if activeCount > 0 || pendingCount > 0 {
+      HStack(spacing: 10) {
+        if activeCount > 0 {
+          statChip(systemName: "dot.radiowaves.left.and.right", value: activeCount)
+        }
+        if pendingCount > 0 {
+          statChip(systemName: "hourglass", value: pendingCount)
+        }
+      }
+    }
+  }
+
+  private func statChip(systemName: String, value: Int) -> some View {
+    HStack(spacing: 3) {
+      Image(systemName: systemName)
+        .font(.caption2)
+      Text("\(value)")
+        .font(.caption2)
+        .fontWeight(.semibold)
+    }
+    .foregroundColor(.white.opacity(0.85))
   }
 }

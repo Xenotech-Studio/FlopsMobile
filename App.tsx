@@ -32,6 +32,7 @@ import { AppletLinkRouter } from './src/navigation/AppletLinkRouter';
 import { UpgradeRequiredOverlay } from './src/components/UpgradeRequiredOverlay';
 import { EncryptionReloginOverlay } from './src/components/EncryptionReloginOverlay';
 import { BroadcastModeOverlay, BroadcastInsetProvider } from './src/components/BroadcastModeOverlay';
+import { BroadcastStatsReporter } from './src/components/BroadcastStatsReporter';
 import { RemoteMicInviteOverlay } from './src/components/RemoteMicInviteOverlay';
 import { setPreviewApiImpl } from './src/flowdoc-native-input/previewApi';
 import { getVideoPreviewByUrl, triggerVideoPreview } from './src/api';
@@ -140,6 +141,9 @@ export default function App() {
                 {/* 播报模式沉浸式 overlay：跨所有页面套黑边 + 底部「语音播报中」横条，
                     放在 AppContent（含 NavigationContainer）之上覆盖全部导航栈。 */}
                 <BroadcastModeOverlay />
+                {/* 播报模式下把会话统计（进行中 / 待处理）推给 iOS 播报 Live Activity。UI-less，
+                    需在 ConversationProvider 内（用 runningMap / unreadMap）。 */}
+                <BroadcastStatsReporter />
                 {/* 跨设备语音输入邀请确认卡片（前台经 inbox SSE 到达）：放最后压过播报 overlay。 */}
                 <RemoteMicInviteOverlay />
               </ConversationProvider>

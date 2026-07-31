@@ -10,6 +10,7 @@
 		0C80B921A6F3F58F76C31292 /* libPods-FlopsMobile.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-FlopsMobile.a */; };
 		11309994F220EE9B1840E4A0 /* FlopsActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A1A786FEFADD3067C0A84C2 /* FlopsActivityManager.swift */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
+		166BB766518E94572223F943 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C3E244B1EB6F10483F9AAB12 /* Assets.xcassets */; };
 		1D47D8677852A956B5EA4535 /* FlopsBroadcastLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55467E0C7364A7015BF458F1 /* FlopsBroadcastLiveActivity.swift */; };
 		2DF89DA2815244B4018B4C21 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C79ABE4085980761F7248DE4 /* Foundation.framework */; };
 		48BD79998975A11E3C532659 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
@@ -66,6 +67,7 @@
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = FlopsMobile/AppDelegate.swift; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = FlopsMobile/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		8E3B4A7555B64545B90B5BFC /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SceneDelegate.swift; path = FlopsMobile/SceneDelegate.swift; sourceTree = "<group>"; };
+		C3E244B1EB6F10483F9AAB12 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C79ABE4085980761F7248DE4 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F095001000000000000000A1 /* FlopsPushModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FlopsPushModule.swift; path = FlopsMobile/FlopsPushModule.swift; sourceTree = "<group>"; };
@@ -183,6 +185,7 @@
 				55467E0C7364A7015BF458F1 /* FlopsBroadcastLiveActivity.swift */,
 				F682D4E7AE626DAEA454F660 /* FlopsBroadcastAttributes.swift */,
 				443941756599FB47B88A220A /* Info.plist */,
+				C3E244B1EB6F10483F9AAB12 /* Assets.xcassets */,
 			);
 			name = FlopsBroadcastActivity;
 			path = FlopsBroadcastActivity;
@@ -282,6 +285,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				166BB766518E94572223F943 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

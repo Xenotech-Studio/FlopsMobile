@@ -25,5 +25,9 @@ struct FlopsBroadcastAttributes: ActivityAttributes {
     var isActive: Bool
     /// 当前正在朗读的对话标题（可空：并非每时每刻都有对话在说，空闲监听时为 nil）。
     var conversationTitle: String?
+    /// 正在进行的对话数（会话统计，锁屏/灵动岛 expanded 展示；0 时相应图标不显示）。
+    var activeCount: Int = 0
+    /// 已完成待处理的对话数（会话统计，同上）。
+    var pendingCount: Int = 0
   }
 }

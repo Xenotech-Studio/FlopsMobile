@@ -23,30 +23,68 @@ enum FlopsActivityManager {
   /// 当前活动句柄（ActivityKit 无同步查询接口，自持一份以便 update / end）。
   private static var current: Activity<FlopsBroadcastAttributes>?
 
+  /// 当前活动内容的本地镜像。update 用「只覆盖传入字段」的合并语义：isActive 由原生 WS 事件
+  /// （speak_start/end）驱动，activeCount/pendingCount 由 JS（inbox SSE）驱动，二者各自更新时
+  /// 不会把对方的字段清零。start 时重置为初始值。
+  private static var currentState = FlopsBroadcastAttributes.ContentState(
+    isActive: false, conversationTitle: nil, activeCount: 0, pendingCount: 0)
+
   /// 开启播报 Live Activity。幂等：已有活动先结束再开，保证全局单例。
   /// 必须在前台调用——iOS 要求 Activity.request 时 app 处于 foreground，否则抛错（JS 侧只在
   /// 用户手动切开关 / 前台恢复时触发，天然满足）。系统关闭了实时活动（设置里）则静默跳过。
   static func start(conversationTitle: String? = nil) {
-    guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-    endAll() // 先收干净残留
+    guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+      NSLog("[FlopsActivity] start skipped: 系统/应用设置里关了「实时活动」(areActivitiesEnabled=false)")
+      return
+    }
+    // 先「快照」出此刻的残留（自持句柄 + 系统里同类旧活动），request 之后只结束这批旧的。
+    // 关键：不能在 request 之后再枚举 Activity.activities 去 endAll——那份列表此刻已含刚建的新活动，
+    // 会把新活动一并 .immediate 秒关（表现为灵动岛闪现即灭 / 根本看不到，冷启动首开也中招）。
+    let stale = current
+    let residual = Activity<FlopsBroadcastAttributes>.activities
+    current = nil
+
     let attributes = FlopsBroadcastAttributes()
     let state = FlopsBroadcastAttributes.ContentState(isActive: false,
-                                                      conversationTitle: conversationTitle)
+                                                      conversationTitle: conversationTitle,
+                                                      activeCount: 0,
+                                                      pendingCount: 0)
+    currentState = state // 重置本地镜像，避免上一轮播报残留的计数漏进新活动
     do {
       current = try Activity.request(attributes: attributes,
                                      contentState: state,
                                      pushType: nil)
+      NSLog("[FlopsActivity] started id=%@", current?.id ?? "nil")
     } catch {
       NSLog("[FlopsActivity] request failed: %@", error.localizedDescription)
     }
+
+    // 只结束快照里的旧活动；新建的那个不在 residual/stale 里，安然保留（重复 end 已结束的活动是 no-op）。
+    Task {
+      if let stale = stale {
+        await stale.end(using: nil, dismissalPolicy: .immediate)
+      }
+      for activity in residual {
+        await activity.end(using: nil, dismissalPolicy: .immediate)
+      }
+    }
   }
 
-  /// 更新当前活动内容（是否正在朗读 / 对话标题）。无活动则忽略。
-  static func update(isActive: Bool, conversationTitle: String?) {
+  /// 合并式更新当前活动内容：仅覆盖传入（非 nil）的字段，其余沿用上次值。无活动则忽略。
+  /// - isActive：是否正在朗读（原生 WS 事件驱动）。
+  /// - conversationTitle：当前朗读的对话标题（nil = 不改；标题特性尚未启用，现有流程恒传 nil）。
+  /// - activeCount / pendingCount：会话统计（JS 侧 inbox SSE 驱动，见 reportBroadcastStats）。
+  static func update(isActive: Bool? = nil,
+                     conversationTitle: String? = nil,
+                     activeCount: Int? = nil,
+                     pendingCount: Int? = nil) {
     guard let activity = current else { return }
-    let state = FlopsBroadcastAttributes.ContentState(isActive: isActive,
-                                                      conversationTitle: conversationTitle)
-    Task { await activity.update(using: state) }
+    if let isActive = isActive { currentState.isActive = isActive }
+    if let conversationTitle = conversationTitle { currentState.conversationTitle = conversationTitle }
+    if let activeCount = activeCount { currentState.activeCount = activeCount }
+    if let pendingCount = pendingCount { currentState.pendingCount = pendingCount }
+    let snapshot = currentState
+    Task { await activity.update(using: snapshot) }
   }
 
   /// 结束当前活动（并兜底清掉进程重启后系统里可能残留的同类活动）。

@@ -35,6 +35,11 @@ type FlopsAudioRealtimeNative = {
    */
   startLiveActivity?(): void;
   endLiveActivity?(): void;
+  /**
+   * iOS 专属：更新播报 Live Activity 的会话统计（正在进行 activeCount / 已完成待处理 pendingCount，
+   * 见锁屏横幅时间下方 + 灵动岛 expanded）。fire-and-forget；Android / 未 rebuild 的旧包缺此方法 → no-op。
+   */
+  updateLiveActivityStats?(activeCount: number, pendingCount: number): void;
 };
 
 // iOS / Android 均有原生 FlopsAudio；缺失（未 rebuild 的旧包）时为 undefined → 全链路 no-op。
@@ -119,6 +124,7 @@ function notifyBroadcast() {
 function assignBroadcastMode(next: boolean): void {
   if (broadcastMode === next) return;
   broadcastMode = next;
+  if (!next) lastBroadcastStats = null; // 关播报：清会话统计去重缓存，下次开重新推
   notifyBroadcast();
   // 灵动岛 / 锁屏 Live Activity 跟随开关起落。放在这个唯一收敛点（而非仅 setBroadcastMode），
   // 冷启动从本机恢复播报态（refreshRealtimeFromPrefs → assignBroadcastMode(true)）与登出复位
@@ -138,6 +144,32 @@ function syncBroadcastLiveActivity(next: boolean): void {
     else Native.endLiveActivity?.();
   } catch {
     /* 原生缺方法 / 抛错都不致命：仅少一个灵动岛指示，播报本身不受影响 */
+  }
+}
+
+/** 上次下发的会话统计，用于去重（数值没变不重复 update，省得白刷 Live Activity）。关播报时清空。 */
+let lastBroadcastStats: { active: number; pending: number } | null = null;
+
+/**
+ * 把会话统计（正在进行 activeCount / 已完成待处理 pendingCount）下发给播报 Live Activity
+ * （灵动岛 expanded + 锁屏横幅时间下方）。数据源见 BroadcastStatsReporter：ConversationContext 的
+ * runningMap / unreadMap（inbox SSE 实时维护）。
+ *
+ * 仅 iOS + 播报开 + 原生方法存在时生效；Android / 未 rebuild 的旧包缺方法即 no-op。数值不变则跳过。
+ * 非负化 + 取整，容错 JS 侧传入脏值。
+ */
+export function reportBroadcastStats(activeCount: number, pendingCount: number): void {
+  if (Platform.OS !== 'ios' || !Native || !broadcastMode) return;
+  const active = Math.max(0, Math.trunc(activeCount) || 0);
+  const pending = Math.max(0, Math.trunc(pendingCount) || 0);
+  if (lastBroadcastStats && lastBroadcastStats.active === active && lastBroadcastStats.pending === pending) {
+    return;
+  }
+  lastBroadcastStats = { active, pending };
+  try {
+    Native.updateLiveActivityStats?.(active, pending);
+  } catch {
+    /* 缺方法 / 抛错不致命：仅少一处会话统计展示 */
   }
 }
 
