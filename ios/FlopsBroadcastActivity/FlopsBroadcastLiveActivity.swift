@@ -37,6 +37,25 @@ private func flopsGlyph(size: CGFloat) -> some View {
     .foregroundColor(flopsAccent)
 }
 
+/// 灵动岛 trailing / compactTrailing 的状态图标：一枚 SF Symbol 反映当前播报状态，优先级从高到低：
+///   1) 正在播语音（isActive）           → waveform（音波律动）
+///   2) 有对话进行中（activeCount>0）     → dot.radiowaves.left.and.right（工作中）
+///   3) 无进行中但有待处理（pendingCount>0）→ hourglass（待处理）
+///   4) 都没有（空闲连上）                → ear.fill（监听中）
+/// 停止按钮不再占 trailing，改放 expanded 的 bottom 区域。
+@available(iOS 16.1, *)
+private func broadcastStatusSymbol(for state: FlopsBroadcastAttributes.ContentState) -> String {
+  if state.isActive {
+    return "waveform"
+  } else if state.activeCount > 0 {
+    return "dot.radiowaves.left.and.right"
+  } else if state.pendingCount > 0 {
+    return "hourglass"
+  } else {
+    return "ear.fill"
+  }
+}
+
 // MARK: - WidgetBundle 入口（@main）
 
 @main
@@ -61,7 +80,7 @@ struct FlopsBroadcastLiveActivity: Widget {
         .activitySystemActionForegroundColor(flopsAccent)
     } dynamicIsland: { context in
       DynamicIsland {
-        // 展开态（长按灵动岛）：喇叭图标 + "语音播报中" + 停止按钮
+        // 展开态（长按灵动岛）：品牌图标 + "语音播报中" + 右侧状态图标；停止按钮下移到 bottom 区域。
         DynamicIslandExpandedRegion(.leading) {
           flopsGlyph(size: 22)
             .padding(.leading, 4)
@@ -79,25 +98,36 @@ struct FlopsBroadcastLiveActivity: Widget {
           }
         }
         DynamicIslandExpandedRegion(.trailing) {
+          // 右侧不再是停止按钮，改成反映实时状态的图标（播音/工作中/待处理/监听中）。
+          Image(systemName: broadcastStatusSymbol(for: context.state))
+            .font(.title3)
+            .foregroundColor(flopsAccent)
+            .padding(.trailing, 8)
+        }
+        DynamicIslandExpandedRegion(.bottom) {
+          // 停止按钮从 trailing 移到这里：展开态（长按）下才出现，整条胶囊更好点。
           Link(destination: stopURL) {
-            Text("停止")
-              .font(.caption)
-              .fontWeight(.semibold)
-              .foregroundColor(onAccent)
-              .padding(.horizontal, 12)
-              .padding(.vertical, 6)
-              .background(Capsule().fill(flopsAccent))
+            HStack(spacing: 6) {
+              Image(systemName: "stop.fill")
+              Text("停止播报")
+                .fontWeight(.semibold)
+            }
+            .font(.caption)
+            .foregroundColor(onAccent)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(Capsule().fill(flopsAccent))
           }
-          .padding(.trailing, 4)
+          .padding(.horizontal, 4)
+          .padding(.top, 2)
         }
       } compactLeading: {
         flopsGlyph(size: 16).padding(.leading, 6)
       } compactTrailing: {
-        // 出声时显示律动波形，空闲监听时留空，让紧凑态更能反映实时状态。
-        if context.state.isActive {
-          Image(systemName: "waveform")
-            .foregroundColor(flopsAccent)
-        }
+        // 右侧状态图标：播音时波形、有对话进行中/待处理各自图标、空闲监听显示耳朵，让紧凑态实时反映状态。
+        Image(systemName: broadcastStatusSymbol(for: context.state))
+          .foregroundColor(flopsAccent)
+          .padding(.trailing, 6)
       } minimal: {
         flopsGlyph(size: 16).padding(.leading, 6)
       }
