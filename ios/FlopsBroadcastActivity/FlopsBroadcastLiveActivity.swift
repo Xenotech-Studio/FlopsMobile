@@ -100,7 +100,7 @@ struct FlopsBroadcastLiveActivity: Widget {
             .padding(.top, 2)
         }
       } compactLeading: {
-        flopsGlyph(size: 16)
+        flopsGlyph(size: 16).padding(.leading, 6)
       } compactTrailing: {
         // 出声时显示律动波形，空闲监听时留空，让紧凑态更能反映实时状态。
         if context.state.isActive {
@@ -108,7 +108,7 @@ struct FlopsBroadcastLiveActivity: Widget {
             .foregroundColor(flopsAccent)
         }
       } minimal: {
-        flopsGlyph(size: 16)
+        flopsGlyph(size: 16).padding(.leading, 6)
       }
       // 不设 widgetURL 为 stopURL：点灵动岛整体应打开 app（默认行为），只有"停止"按钮才关播报。
     }
