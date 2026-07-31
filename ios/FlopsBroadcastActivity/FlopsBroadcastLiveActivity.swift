@@ -17,6 +17,10 @@ import WidgetKit
 /// Live Activity 统一用纯白强调色，配更暗的半透明黑底更干净（喇叭图标 / 停止按钮 / 灵动岛 accent 都取这个）。
 private let flopsAccent = Color.white
 
+/// 落在 flopsAccent（白）实心底上的前景色（停止按钮的图标/文字）。白底上必须用深色才看得见，
+/// 否则白图标压白底=不可见（橙→白换主题后停止按钮就踩了这个坑）。取近黑更醒目。
+private let onAccent = Color.black
+
 /// 停止播报的深链。整块横幅/灵动岛默认点击会打开 app；仅"停止"按钮用它触发关播报。
 private let stopURL = URL(string: "flops://broadcast/stop")!
 
@@ -68,16 +72,10 @@ struct FlopsBroadcastLiveActivity: Widget {
               .font(.caption)
               .fontWeight(.semibold)
               .foregroundColor(.white)
-            if let title = context.state.conversationTitle, !title.isEmpty {
-              Text(title)
-                .font(.caption2)
-                .foregroundColor(.white.opacity(0.7))
-                .lineLimit(1)
-            } else {
-              Text(context.state.isActive ? "正在朗读" : "监听中")
-                .font(.caption2)
-                .foregroundColor(.white.opacity(0.7))
-            }
+            // 次行：有对话读标题；否则用会话统计（进行中/待处理）替代旧的"监听中"文案；都没有才"监听中"。
+            BroadcastSecondaryLine(state: context.state,
+                                   font: .caption2,
+                                   color: .white.opacity(0.7))
           }
         }
         DynamicIslandExpandedRegion(.trailing) {
@@ -85,19 +83,12 @@ struct FlopsBroadcastLiveActivity: Widget {
             Text("停止")
               .font(.caption)
               .fontWeight(.semibold)
-              .foregroundColor(.white)
+              .foregroundColor(onAccent)
               .padding(.horizontal, 12)
               .padding(.vertical, 6)
               .background(Capsule().fill(flopsAccent))
           }
           .padding(.trailing, 4)
-        }
-        // 展开态底部：会话统计（正在进行 / 已完成待处理）。两者皆 0 时 BroadcastStatsRow 不渲染，
-        // 区域自然收起。compact / minimal 空间太小不加。
-        DynamicIslandExpandedRegion(.bottom) {
-          BroadcastStatsRow(activeCount: context.state.activeCount,
-                            pendingCount: context.state.pendingCount)
-            .padding(.top, 2)
         }
       } compactLeading: {
         flopsGlyph(size: 16).padding(.leading, 6)
@@ -129,16 +120,10 @@ struct BroadcastLockScreenView: View {
         Text("Flops 播报中")
           .font(.headline)
           .foregroundColor(.white)
-        if let title = state.conversationTitle, !title.isEmpty {
-          Text(title)
-            .font(.subheadline)
-            .foregroundColor(.white.opacity(0.75))
-            .lineLimit(1)
-        } else {
-          Text(state.isActive ? "正在朗读" : "监听中")
-            .font(.subheadline)
-            .foregroundColor(.white.opacity(0.75))
-        }
+        // 次行：有对话读标题；否则用会话统计（进行中/待处理）替代旧的"监听中"文案；都没有才"监听中"。
+        BroadcastSecondaryLine(state: state,
+                               font: .subheadline,
+                               color: .white.opacity(0.75))
       }
 
       Spacer(minLength: 8)
@@ -148,13 +133,10 @@ struct BroadcastLockScreenView: View {
         Text(Date(), style: .time)
           .font(.caption2)
           .foregroundColor(.white.opacity(0.6))
-        // 时间下方：会话统计（正在进行 / 已完成待处理），紧凑横向；两者皆 0 时整行不显示。
-        BroadcastStatsRow(activeCount: state.activeCount,
-                          pendingCount: state.pendingCount)
         Link(destination: stopURL) {
           Image(systemName: "stop.fill")
             .font(.subheadline)
-            .foregroundColor(.white)
+            .foregroundColor(onAccent)
             .padding(9)
             .background(Circle().fill(flopsAccent))
         }
@@ -165,38 +147,72 @@ struct BroadcastLockScreenView: View {
   }
 }
 
-// MARK: - 会话统计行（图标 + 数字，紧凑横向）
+// MARK: - 次行（标题 / 会话统计 / 监听中）
 //
-// 🎙️正在进行的对话数 + ⏳已完成待处理数。用于锁屏横幅（时间下方）与灵动岛 expanded（.bottom）；
-// compact / minimal 空间太小不显示。两个计数都为 0（空闲）时整行不渲染，保持干净。
-// 图标用 SF Symbols 染白，贴合整体白色主题（radiowaves=进行中 / hourglass=待处理）。
+// 锁屏横幅标题下方、灵动岛 expanded 中间区域的第二行，三选一：
+//   1) 正在朗读某条对话 → 显示该对话标题；
+//   2) 否则有会话统计 → 用 activeCount/pendingCount 直接顶上（"N 进行中" / "M 待处理"），
+//      取代旧的"监听中"占位文案，也不再另起一行堆数字；
+//   3) 两个计数都为 0 且无对话 → 回落到"监听中"。
+// 字号/颜色由调用方传入（横幅 subheadline、灵动岛 caption2），跟随各版位的次行样式。
+
+@available(iOS 16.1, *)
+struct BroadcastSecondaryLine: View {
+  let state: FlopsBroadcastAttributes.ContentState
+  let font: Font
+  let color: Color
+
+  var body: some View {
+    if let title = state.conversationTitle, !title.isEmpty {
+      Text(title)
+        .font(font)
+        .foregroundColor(color)
+        .lineLimit(1)
+    } else if state.activeCount > 0 || state.pendingCount > 0 {
+      BroadcastStatsRow(activeCount: state.activeCount,
+                        pendingCount: state.pendingCount,
+                        font: font,
+                        color: color)
+    } else {
+      Text("监听中")
+        .font(font)
+        .foregroundColor(color)
+    }
+  }
+}
+
+// MARK: - 会话统计行（图标 + 数字 + 文案，紧凑横向）
+//
+// 正在进行的对话数（radiowaves=进行中）+ 已完成待处理数（hourglass=待处理）。作为次行内容，
+// 两者皆 >0 时并排显示两枚 chip。图标用 SF Symbols 染成次行同色，贴合整体白色主题。
 
 @available(iOS 16.1, *)
 struct BroadcastStatsRow: View {
   let activeCount: Int
   let pendingCount: Int
+  let font: Font
+  let color: Color
 
   var body: some View {
-    if activeCount > 0 || pendingCount > 0 {
-      HStack(spacing: 10) {
-        if activeCount > 0 {
-          statChip(systemName: "dot.radiowaves.left.and.right", value: activeCount)
-        }
-        if pendingCount > 0 {
-          statChip(systemName: "hourglass", value: pendingCount)
-        }
+    HStack(spacing: 10) {
+      if activeCount > 0 {
+        statChip(systemName: "dot.radiowaves.left.and.right", value: activeCount, label: "进行中")
+      }
+      if pendingCount > 0 {
+        statChip(systemName: "hourglass", value: pendingCount, label: "待处理")
       }
     }
+    .foregroundColor(color)
   }
 
-  private func statChip(systemName: String, value: Int) -> some View {
+  private func statChip(systemName: String, value: Int, label: String) -> some View {
     HStack(spacing: 3) {
       Image(systemName: systemName)
-        .font(.caption2)
-      Text("\(value)")
-        .font(.caption2)
+        .font(font)
+      Text("\(value) \(label)")
+        .font(font)
         .fontWeight(.semibold)
+        .lineLimit(1)
     }
-    .foregroundColor(.white.opacity(0.85))
   }
 }
