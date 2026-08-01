@@ -82,7 +82,7 @@ enum FlopsActivityManager {
     // 系统已结束的活动（用户从锁屏滑动关闭 / 超时自动结束）的句柄仍保留在 current 里，
     // 但调用 update 时 ActivityKit 静默丢弃；检查 activityState 避免无谓 Task 创建。
     guard let activity = current,
-          activity.activityState == .active || activity.activityState == .stale else {
+          activity.activityState == .active else {
       if current != nil {
         NSLog("[FlopsActivity] update skipped: activityState=%@ current is not active/stale, discarding handle",
               current.map { String(describing: $0.activityState) } ?? "nil")
