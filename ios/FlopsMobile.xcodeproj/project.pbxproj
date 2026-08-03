@@ -187,7 +187,6 @@
 				443941756599FB47B88A220A /* Info.plist */,
 				C3E244B1EB6F10483F9AAB12 /* Assets.xcassets */,
 			);
-			name = FlopsBroadcastActivity;
 			path = FlopsBroadcastActivity;
 			sourceTree = "<group>";
 		};
@@ -430,7 +429,6 @@
 					"-ObjC",
 					"-lc++",
 				);
-				OTHER_SWIFT_FLAGS = "-Xcc -I/Users/steven/Projects/FlowSeries/Flops/FlopsMobile/ios/Pods/Headers/Public/RCTDeprecation -Xcc -I/Users/steven/Projects/FlowSeries/Flops/FlopsMobile/ios/Pods/Headers/Public/RCTDeprecation";
 				PRODUCT_BUNDLE_IDENTIFIER = "org.reactjs.native.example.$(PRODUCT_NAME:rfc1034identifier)";
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = com.xenotech.FlopsMobile.dev;
 				PRODUCT_NAME = FlopsMobile;
@@ -438,8 +436,8 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
 				SWIFT_OBJC_BRIDGING_HEADER = "FlopsMobile/FlopsMobile-Bridging-Header.h";
-				SWIFT_OBJC_BRIDGING_HEADER_CLANG_ENABLE_MODULES = NO;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_PRECOMPILE_BRIDGING_HEADER = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VERSIONING_SYSTEM = "apple-generic";
@@ -470,7 +468,6 @@
 					"-ObjC",
 					"-lc++",
 				);
-				OTHER_SWIFT_FLAGS = "-Xcc -I/Users/steven/Projects/FlowSeries/Flops/FlopsMobile/ios/Pods/Headers/Public/RCTDeprecation -Xcc -I/Users/steven/Projects/FlowSeries/Flops/FlopsMobile/ios/Pods/Headers/Public/RCTDeprecation";
 				PRODUCT_BUNDLE_IDENTIFIER = "org.reactjs.native.example.$(PRODUCT_NAME:rfc1034identifier)";
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = com.xenotech.FlopsMobile;
 				PRODUCT_NAME = FlopsMobile;
@@ -478,7 +475,7 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
 				SWIFT_OBJC_BRIDGING_HEADER = "FlopsMobile/FlopsMobile-Bridging-Header.h";
-				SWIFT_OBJC_BRIDGING_HEADER_CLANG_ENABLE_MODULES = NO;
+				SWIFT_PRECOMPILE_BRIDGING_HEADER = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VERSIONING_SYSTEM = "apple-generic";
@@ -661,14 +658,12 @@
 				);
 				MARKETING_VERSION = 0.1.5;
 				MTL_ENABLE_DEBUG_INFO = NO;
-				OTHER_SWIFT_FLAGS = "-Xcc -I/Users/steven/Projects/FlowSeries/Flops/FlopsMobile/ios/Pods/Headers/Public/RCTDeprecation -Xcc -I/Users/steven/Projects/FlowSeries/Flops/FlopsMobile/ios/Pods/Headers/Public/RCTDeprecation";
 				PRODUCT_BUNDLE_IDENTIFIER = org.reactjs.native.example.FlopsMobile.BroadcastActivity;
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = com.xenotech.FlopsMobile.BroadcastActivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
-				SWIFT_OBJC_BRIDGING_HEADER_CLANG_ENABLE_MODULES = NO;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -700,7 +695,6 @@
 				MARKETING_VERSION = 0.1.5;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				ONLY_ACTIVE_ARCH = YES;
-				OTHER_SWIFT_FLAGS = "-Xcc -I/Users/steven/Projects/FlowSeries/Flops/FlopsMobile/ios/Pods/Headers/Public/RCTDeprecation -Xcc -I/Users/steven/Projects/FlowSeries/Flops/FlopsMobile/ios/Pods/Headers/Public/RCTDeprecation";
 				PRODUCT_BUNDLE_IDENTIFIER = org.reactjs.native.example.FlopsMobile.BroadcastActivity;
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = com.xenotech.FlopsMobile.dev.BroadcastActivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -708,7 +702,6 @@
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
-				SWIFT_OBJC_BRIDGING_HEADER_CLANG_ENABLE_MODULES = NO;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";

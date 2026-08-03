@@ -209,11 +209,14 @@ class FlopsAudioModule: RCTEventEmitter {
   /// 把会话统计（正在进行 / 已完成待处理）同步给播报 Live Activity（灵动岛 expanded / 锁屏横幅）。
   /// JS 侧 reportBroadcastStats 调（数据来自 inbox SSE 的 runningMap / unreadMap）。合并式 update，
   /// 不动 isActive；无活动时 no-op。fire-and-forget。
+  /// 同 updateBroadcastActivity：派发到主线程，因为 FlopsActivityManager.update 标了 @MainActor。
   @objc(updateLiveActivityStats:pending:)
   func updateLiveActivityStats(_ activeCount: NSNumber, pending pendingCount: NSNumber) {
-    if #available(iOS 16.1, *) {
-      FlopsActivityManager.update(activeCount: activeCount.intValue,
-                                  pendingCount: pendingCount.intValue)
+    DispatchQueue.main.async {
+      if #available(iOS 16.1, *) {
+        FlopsActivityManager.update(activeCount: activeCount.intValue,
+                                    pendingCount: pendingCount.intValue)
+      }
     }
   }
 
