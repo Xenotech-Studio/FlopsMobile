@@ -64,7 +64,8 @@ export function MiniAppListScreen() {
   const [items, setItems] = useState<AppItem[]>([]);
 
   const loadApps = async () => {
-    if (!session || applets.length === 0) {
+    if (!session) return; // session 未就绪时静默等待，不清空列表
+    if (applets.length === 0) {
       setItems([]);
       return;
     }
