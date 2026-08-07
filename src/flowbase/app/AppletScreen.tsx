@@ -30,6 +30,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   PixelRatio,
   Platform,
   Pressable,
@@ -146,12 +147,18 @@ export function AppletScreen() {
   const [error, setError] = useState<string | null>(null);
 
   // 「我的小应用」：sheet 里的添加/已添加状态与操作。baseId 用解析后的值（非 param），未解析时不可加。
-  const { has, add } = useMyApplets();
+  const { has, add, remove } = useMyApplets();
   const added = has(appId);
   const onAdd = useCallback(() => {
     if (!baseId) return;
     add({ appId, baseId }).catch(() => {});
   }, [add, appId, baseId, appName]);
+  const onRemove = useCallback(() => {
+    Alert.alert('移除小应用', '确定从「我的小应用」中移除吗？', [
+      { text: '取消', style: 'cancel' },
+      { text: '移除', style: 'destructive', onPress: () => remove(appId).catch(() => {}) },
+    ]);
+  }, [remove, appId]);
 
   useEffect(() => {
     let alive = true;
@@ -287,6 +294,10 @@ export function AppletScreen() {
           added={added}
           canAdd={ctx.canAdd}
           onAdd={onAdd}
+          onRemove={() => {
+            setMenuOpen(false);
+            onRemove();
+          }}
           onReload={() => {
             setMenuOpen(false);
             onReload();
@@ -424,6 +435,7 @@ function AppletMenuSheet({
   added,
   canAdd,
   onAdd,
+  onRemove,
   onReload,
 }: {
   visible: boolean;
@@ -434,6 +446,8 @@ function AppletMenuSheet({
   /** baseId 已解析、可添加（未解析且未添加时不显示添加项） */
   canAdd: boolean;
   onAdd: () => void;
+  /** 从「我的小应用」移除（已添加时点击触发） */
+  onRemove: () => void;
   onReload: () => void;
 }) {
   const insets = useSafeAreaInsets();
@@ -466,9 +480,14 @@ function AppletMenuSheet({
   );
 
   const items: Array<{ key: string; label: string; icon: string; run: () => void }> = [];
-  // 「添加到我的小应用」/「已添加到我的小应用」——已添加显示为状态（点击仅收起）；未添加且可加则可点击添加。
+  // 「我的小应用」条目：已添加时点击弹出确认移除；未添加且可加则点击添加。
   if (added) {
-    items.push({ key: 'added', label: '已添加到我的小应用', icon: 'checkmark-circle', run: onClose });
+    items.push({
+      key: 'remove',
+      label: '已添加到我的小应用',
+      icon: 'checkmark-circle',
+      run: () => onRemove(),
+    });
   } else if (canAdd) {
     items.push({
       key: 'add',
