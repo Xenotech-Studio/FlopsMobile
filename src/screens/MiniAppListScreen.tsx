@@ -5,7 +5,7 @@
  * 优先显示 config.icon 对应的 Lucide SVG 图标；未设置则灰色首字符占位。点进 Applet 全屏页。
  * 列表来自 [[useMyApplets]]（AsyncStorage 持久化，只存 appId+baseId+addedAt）。
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   FlatList,
   StyleSheet,
@@ -61,25 +61,50 @@ export function MiniAppListScreen() {
   const cellW = (width - H_PADDING * 2) / NUM_COLUMNS;
   const iconSize = Math.min(60, cellW - 16);
 
-  const [items, setItems] = useState<AppItem[]>([]);
+  // 每个 appId 的服务端拉取结果（成功=app，失败=error）。缺键 = 尚未拉到（loading）。
+  // 关键：列表本身由 applets（AsyncStorage，本地可靠源）渲染，这里只做「富化」。
+  // 这样 session 未就绪 / getApp 失败 / 网络慢 时列表也不会整屏空白 —— 只是图标/名称退化为占位。
+  const [appResults, setAppResults] = useState<Record<string, { app: App | null; error: string | null }>>({});
+
+  // 渲染数据永远与 applets 等长，杜绝「applets 非空但 items 为空 → 空白 grid」。
+  const items = useMemo<AppItem[]>(
+    () =>
+      applets.map((my) => {
+        const r = appResults[my.appId];
+        return {
+          myApplet: my,
+          app: r?.app ?? null,
+          loading: !r, // 还没有该 app 的拉取结果
+          error: r?.error ?? null,
+        };
+      }),
+    [applets, appResults]
+  );
 
   const loadApps = async () => {
-    if (!session) return; // session 未就绪时静默等待，不清空列表
-    if (applets.length === 0) {
-      setItems([]);
+    if (!session) {
+      // session 未就绪：静默等待（deps 里含 session，就绪后本 effect 会重跑）。列表仍由 applets 渲染。
+      console.log('[MiniAppList] loadApps skipped: no session yet', { applets: applets.length });
       return;
     }
-    const fetched = await Promise.all(
+    console.log('[MiniAppList] loadApps start', {
+      applets: applets.length,
+      base: session.server_base_url,
+      user: session.user_id,
+    });
+    await Promise.all(
       applets.map(async (my) => {
         try {
           const app = await getApp(session, my.baseId, my.appId);
-          return { myApplet: my, app, loading: false, error: null };
+          setAppResults((prev) => ({ ...prev, [my.appId]: { app, error: null } }));
         } catch (e) {
-          return { myApplet: my, app: null, loading: false, error: e instanceof Error ? e.message : String(e) };
+          const msg = e instanceof Error ? e.message : String(e);
+          // 之前这里被静默吞掉 —— Android 上 getApp 失败时列表整片空白且无任何日志。
+          console.warn('[MiniAppList] getApp failed', { appId: my.appId, baseId: my.baseId, error: msg });
+          setAppResults((prev) => ({ ...prev, [my.appId]: { app: null, error: msg } }));
         }
       })
     );
-    setItems(fetched);
   };
 
   useFocusEffect(
