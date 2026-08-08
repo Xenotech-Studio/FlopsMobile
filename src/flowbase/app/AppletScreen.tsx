@@ -30,7 +30,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
+  Modal,
   PixelRatio,
   Platform,
   Pressable,
@@ -153,11 +153,11 @@ export function AppletScreen() {
     if (!baseId) return;
     add({ appId, baseId }).catch(() => {});
   }, [add, appId, baseId, appName]);
+  // 自定义确认弹窗（iOS 风格，两平台统一绘制）
+  const [showRemoveDialog, setShowRemoveDialog] = useState(false);
   const onRemove = useCallback(() => {
-    Alert.alert('移除小应用', '确定从「我的小应用」中移除吗？', [
-      { text: '取消', style: 'cancel' },
-      { text: '移除', style: 'destructive', onPress: () => remove(appId).catch(() => {}) },
-    ]);
+    remove(appId).catch(() => {});
+    setShowRemoveDialog(false);
   }, [remove, appId]);
 
   useEffect(() => {
@@ -296,12 +296,21 @@ export function AppletScreen() {
           onAdd={onAdd}
           onRemove={() => {
             setMenuOpen(false);
-            onRemove();
+            setShowRemoveDialog(true);
           }}
           onReload={() => {
             setMenuOpen(false);
             onReload();
           }}
+        />
+        <ConfirmDialog
+          visible={showRemoveDialog}
+          title="移除小应用"
+          message="确定从「我的小应用」中移除吗？"
+          destructiveLabel="移除"
+          cancelLabel="取消"
+          onDestructive={onRemove}
+          onCancel={() => setShowRemoveDialog(false)}
         />
       </View>
     </AppletContext.Provider>
@@ -422,6 +431,61 @@ function AppletCapsule({
     </View>
   );
 }
+
+/**
+ * ConfirmDialog —— iOS 风格确认弹窗，两平台统一自绘（不用系统 Alert）。
+ * 按钮排序：destructive 在左、cancel 在右（与用户习惯一致）。
+ */
+function ConfirmDialog({
+  visible,
+  title,
+  message,
+  destructiveLabel,
+  cancelLabel,
+  onDestructive,
+  onCancel,
+}: {
+  visible: boolean;
+  title: string;
+  message: string;
+  destructiveLabel: string;
+  cancelLabel: string;
+  onDestructive: () => void;
+  onCancel: () => void;
+}) {
+  const { colors } = useAppTheme();
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <Pressable style={dialogStyles.backdrop} onPress={onCancel}>
+        <Pressable style={dialogStyles.card} onPress={(e) => e.stopPropagation()}>
+          <Text style={[dialogStyles.title, { color: colors.textPrimary }]}>{title}</Text>
+          <Text style={[dialogStyles.message, { color: colors.textSecondary }]}>{message}</Text>
+          <View style={dialogStyles.buttons}>
+            <TouchableOpacity style={dialogStyles.btn} onPress={onDestructive} activeOpacity={0.6}>
+              <Text style={dialogStyles.destructiveText}>{destructiveLabel}</Text>
+            </TouchableOpacity>
+            <View style={[dialogStyles.divider, { backgroundColor: colors.border }]} />
+            <TouchableOpacity style={dialogStyles.btn} onPress={onCancel} activeOpacity={0.6}>
+              <Text style={dialogStyles.cancelText}>{cancelLabel}</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+const dialogStyles = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', alignItems: 'center', justifyContent: 'center', padding: 40 },
+  card: { width: 270, backgroundColor: 'rgba(249,249,249,0.98)', borderRadius: 14, overflow: 'hidden' },
+  title: { fontSize: 17, fontWeight: '600', textAlign: 'center', marginTop: 20, marginHorizontal: 16 },
+  message: { fontSize: 13, textAlign: 'center', marginTop: 6, marginBottom: 20, marginHorizontal: 16, lineHeight: 18 },
+  buttons: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(60,60,67,0.25)' },
+  btn: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 12 },
+  cancelText: { fontSize: 17, fontWeight: '400', color: '#007AFF' },
+  destructiveText: { fontSize: 17, fontWeight: '600', color: '#FF3B30' },
+  divider: { width: StyleSheet.hairlineWidth },
+});
 
 /**
  * AppletMenuSheet —— 三圆点弹出的底部菜单，走项目通用的 @gorhom/bottom-sheet BottomSheetModal
