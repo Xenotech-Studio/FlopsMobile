@@ -15,7 +15,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useAppTheme } from '../context/ThemeContext';
@@ -63,30 +63,30 @@ export function MiniAppListScreen() {
 
   const [items, setItems] = useState<AppItem[]>([]);
 
-  const loadApps = async () => {
-    if (!session) return; // session 未就绪时静默等待，不清空列表
+  useEffect(() => {
+    if (!session || loading) return;
     if (applets.length === 0) {
       setItems([]);
       return;
     }
-    const fetched = await Promise.all(
-      applets.map(async (my) => {
-        try {
-          const app = await getApp(session, my.baseId, my.appId);
-          return { myApplet: my, app, loading: false, error: null };
-        } catch (e) {
-          return { myApplet: my, app: null, loading: false, error: e instanceof Error ? e.message : String(e) };
-        }
-      })
-    );
-    setItems(fetched);
-  };
-
-  useFocusEffect(
-    React.useCallback(() => {
-      if (!loading) loadApps();
-    }, [applets, loading, session])
-  );
+    let cancelled = false;
+    (async () => {
+      const fetched = await Promise.all(
+        applets.map(async (my) => {
+          try {
+            const app = await getApp(session, my.baseId, my.appId);
+            if (cancelled) return null;
+            return { myApplet: my, app, loading: false, error: null };
+          } catch (e) {
+            if (cancelled) return null;
+            return { myApplet: my, app: null, loading: false, error: e instanceof Error ? e.message : String(e) };
+          }
+        })
+      );
+      if (!cancelled) setItems(fetched.filter(Boolean) as AppItem[]);
+    })();
+    return () => { cancelled = true; };
+  }, [applets, loading, session]);
 
   const renderItem = ({ item }: { item: AppItem }) => {
     const app = item.app;
