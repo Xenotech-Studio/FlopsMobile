@@ -776,3 +776,72 @@ export function tryParsePartialReadingStream(rawStr: string): {
   return { summary, takeaway };
 }
 
+
+/* ══════════════════════════════════════════════════════════════════════════
+   show_visual 图卡（可视化卡片）
+   与 Web/Desktop 共享同一后端契约：handler 返回
+   {success, widget_mode, widget_title, widget_code}；流式期 result 还没到，
+   退回读 arguments 的 {title, mode, code}。
+   参考：FlopsDesktop/src/flops-chat-ui/ToolBlock/cards/VisualWidgetCard.jsx
+   ══════════════════════════════════════════════════════════════════════════ */
+
+export type VisualWidgetData = {
+  /** 非空表示后端把这次渲染判失败（success:false），此时其余字段无意义 */
+  error: string;
+  title: string;
+  /** 'svg' | 'html'；其它值一律按 html 处理 */
+  mode: string;
+  code: string;
+};
+
+/** 标题在回注前缀里的显示上限，与后端 _TITLE_MAX / Web widgetEchoFormat.js 同口径 */
+const WIDGET_TITLE_MAX = 60;
+
+/**
+ * 回注溯源前缀：图卡内 sendPrompt 的文字经宿主拼上它再作为新用户消息发出，
+ * agent 靠它认出这是自己画的哪张卡。**格式必须与 Web/Desktop 逐字一致**
+ * （见 flops-chat-ui/ToolBlock/widgetEchoFormat.js 的 formatWidgetEcho）。
+ */
+export function formatWidgetEcho(title: unknown, text: unknown): string {
+  const t = String(title == null ? '' : title).trim().slice(0, WIDGET_TITLE_MAX) || '可视化';
+  return `【图卡·${t}】${String(text == null ? '' : text)}`;
+}
+
+/** result（后端返回体）优先，退回 arguments（流式期只有参数）；与桌面版 readWidget 同逻辑。 */
+export function parseVisualWidget(block: { arguments?: unknown; result?: unknown }): VisualWidgetData {
+  const empty: VisualWidgetData = { error: '', title: '', mode: '', code: '' };
+  if (!block) return empty;
+
+  const r = block.result;
+  if (r && typeof r === 'object' && !Array.isArray(r)) {
+    const ro = r as Record<string, unknown>;
+    if (ro.success === false) {
+      return { error: String(ro.error || '渲染失败'), title: '', mode: '', code: '' };
+    }
+    const code = typeof ro.widget_code === 'string' ? ro.widget_code : '';
+    if (code) {
+      return {
+        error: '',
+        title: String(ro.widget_title || '').trim(),
+        mode: String(ro.widget_mode || '').trim().toLowerCase(),
+        code,
+      };
+    }
+  }
+
+  let obj: Record<string, unknown> | null = null;
+  try {
+    const raw = block.arguments;
+    if (typeof raw === 'string') obj = JSON.parse(raw || '{}') as Record<string, unknown>;
+    else if (raw && typeof raw === 'object' && !Array.isArray(raw)) obj = raw as Record<string, unknown>;
+  } catch {
+    obj = null;
+  }
+  if (!obj) return empty;
+  return {
+    error: '',
+    title: String(obj.title || '').trim(),
+    mode: String(obj.mode || '').trim().toLowerCase(),
+    code: typeof obj.code === 'string' ? obj.code : '',
+  };
+}

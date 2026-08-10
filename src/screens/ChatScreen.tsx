@@ -149,6 +149,8 @@ import {
   decodeUrlPctForDisplay,
   getReadPagesListSortBucket,
   tryParsePartialReadingStream,
+  parseVisualWidget,
+  formatWidgetEcho,
 } from '../utils/toolCardParsers';
 import { ReadPagesDetailSheet } from '../components/ReadPagesDetailSheet';
 import { ModelSelectSheet } from '../components/ModelSelectSheet';
@@ -168,6 +170,7 @@ import { SubagentCard } from './chat-cards/SubagentCard';
 import { SubagentMetaCard } from './chat-cards/SubagentMetaCard';
 import { AskUserQuestionCard } from './chat-cards/AskUserQuestionCard';
 import { ReadPagesCard } from './chat-cards/ReadPagesCard';
+import { VisualWidgetCard } from './chat-cards/VisualWidgetCard';
 import { FlowDocItemMetaProvider } from '../context/FlowDocItemMetaContext';
 import {
   FlowDocSlateAdapter,
@@ -223,6 +226,9 @@ function mergeToolBlockResultForSafetyEvent(
 }
 
 const STREAM_TIMEOUT_MS = 300000;
+
+/** 忙态时允许排队的图卡回注条数软上限（与 Web WIDGET_ECHO_QUEUE_SOFT_MAX 一致），超出直接丢弃 */
+const WIDGET_ECHO_QUEUE_SOFT_MAX = 3;
 
 /** worklet 里要用的平台判断：hoist 成模块常量，避免在 worklet 闭包里捕获整个 Platform 对象。 */
 const IS_ANDROID = Platform.OS === 'android';
@@ -1962,24 +1968,32 @@ export function ChatScreen({
     };
   }, [conversationId]);
 
-  /** 入队当前 composer 内容（agent 跑时回车走这里）。乐观显示 + 失败回滚。 */
-  const enqueueCurrentComposer = useCallback(async () => {
+  /** 入队当前 composer 内容（agent 跑时回车走这里）。乐观显示 + 失败回滚。
+   *  opts.overrideText：程序化入队一条纯文本（show_visual 图卡忙态回注），不读/不清 composer、
+   *  不动听写、不带引用。无该字段时行为不变。 */
+  const enqueueCurrentComposer = useCallback(async (opts?: { overrideText?: string }) => {
     const id = String(conversationIdRef.current || '').trim();
     if (!id || !session) return;
-    const { content: rawContent, flops_refs } = serializeSlateDocumentToUserMessage(
-      composerDoc,
-      composerRefDataByKeyRef.current,
-    );
-    /* 打断进行中的听写并取回 pending 尾巴，并进入队文本（跟 handleSendMessage 一致的语义）。 */
-    const dictationTail = cancelActiveDictation();
-    const text = (rawContent + dictationTail).trim();
-    if (!text && flops_refs.length === 0) return;
-    setComposerDoc([{ type: 'paragraph', children: [{ text: '' }] }]);
-    composerRefDataByKeyRef.current = new Map();
-    /* 可靠清空：imperative 命令直接清 native 内容。不靠 keyed-remount 重读空 initialContent——
-       Fabric view 回收 + initialContentApplied 守卫让 remount 清空不可靠（旧文本残留）；
-       保持同一 native view + setContent('[]') 是可靠路径。切页回来重对齐也是同一套（见 useFocusEffect）。 */
-    composerAdapterRef.current?.clear();
+    const overrideText = typeof opts?.overrideText === 'string' ? opts.overrideText.trim() : '';
+    const isOverride = Boolean(overrideText);
+    let text: string;
+    let flops_refs: unknown[] = [];
+    if (isOverride) {
+      text = overrideText;
+    } else {
+      const ser = serializeSlateDocumentToUserMessage(composerDoc, composerRefDataByKeyRef.current);
+      flops_refs = ser.flops_refs;
+      /* 打断进行中的听写并取回 pending 尾巴，并进入队文本（跟 handleSendMessage 一致的语义）。 */
+      const dictationTail = cancelActiveDictation();
+      text = (ser.content + dictationTail).trim();
+      if (!text && flops_refs.length === 0) return;
+      setComposerDoc([{ type: 'paragraph', children: [{ text: '' }] }]);
+      composerRefDataByKeyRef.current = new Map();
+      /* 可靠清空：imperative 命令直接清 native 内容。不靠 keyed-remount 重读空 initialContent——
+         Fabric view 回收 + initialContentApplied 守卫让 remount 清空不可靠（旧文本残留）；
+         保持同一 native view + setContent('[]') 是可靠路径。切页回来重对齐也是同一套（见 useFocusEffect）。 */
+      composerAdapterRef.current?.clear();
+    }
     const tempId = `tmp-${Date.now()}`;
     setSendQueue((q) => [...q, { id: tempId, text, pending: true }]);
     try {
@@ -2022,14 +2036,20 @@ export function ChatScreen({
     [session],
   );
 
-  const handleSendMessage = useCallback(async () => {
+  /** opts.overrideText：程序化发一条纯文本消息（show_visual 图卡回注），不读/不清 composer、
+   *  不动听写、不带附件与引用；其余（建会话 / runV2WithHandlers / 收尾同步）与普通发送同路。
+   *  注意本函数也直接挂在发送键 onPress 上（届时首参是 GestureResponderEvent，无该字段）→ 行为不变。 */
+  const handleSendMessage = useCallback(async (opts?: { overrideText?: string }) => {
+    const overrideText = typeof opts?.overrideText === 'string' ? opts.overrideText.trim() : '';
+    const isOverride = Boolean(overrideText);
     /* 语音听写进行中按发送：pending 灰字只在原生层。先同步取 session.lastText 当"尾巴"，让它跟
        composerDoc 的内容一起决定能否发送 / 一起拼进消息。真正打断（cancel 会话 + 丢 native 灰字）
        放到确定要发送之后，避免 guard 未过就误杀听写。 */
-    const dictationTail = dictationSessionRef.current?.lastText ?? '';
+    const dictationTail = isOverride ? '' : dictationSessionRef.current?.lastText ?? '';
     const hasDictationTail = dictationTail.trim().length > 0;
     // P2：agent 在跑时回车 → 入待发队列（不打断当前 run）；enqueue 内部会自己打断听写并并入 tail
     if (
+      !isOverride &&
       loading &&
       session &&
       (composerStats.hasContent || hasDictationTail) &&
@@ -2039,34 +2059,35 @@ export function ChatScreen({
       return;
     }
     /* 「发送文件」就绪附件：即便正文为空也可发送（对齐 web —— 会自动补一句提示文案）。 */
-    const readyAtts = readyAttachmentsToFlops(pendingAttachmentsRef.current);
+    const readyAtts = isOverride ? [] : readyAttachmentsToFlops(pendingAttachmentsRef.current);
     if (
       !session ||
-      (!composerStats.hasContent && !hasDictationTail && readyAtts.length === 0) ||
+      (!isOverride && !composerStats.hasContent && !hasDictationTail && readyAtts.length === 0) ||
       loading ||
       conversationHistoryLoading
     )
       return;
     /* 序列化 composerDoc → content（pill 还原为 mention_text）+ flops_refs（按 pill 出现顺序） */
-    const { content: rawContent, flops_refs } = serializeSlateDocumentToUserMessage(
-      composerDoc,
-      composerRefDataByKeyRef.current,
-    );
+    const { content: rawContent, flops_refs } = isOverride
+      ? { content: overrideText, flops_refs: [] as FlopsRef[] }
+      : serializeSlateDocumentToUserMessage(composerDoc, composerRefDataByKeyRef.current);
     /* 确定发送 → 立刻打断听写（cancel 会话 + 丢 native 灰字），pending 文字通过 dictationTail 并进 content。 */
-    cancelActiveDictation();
+    if (!isOverride) cancelActiveDictation();
     const nextMessage = (rawContent + dictationTail).trim();
     if (!nextMessage && flops_refs.length === 0 && readyAtts.length === 0) return;
     /* 有附件 → message 走多模态数组（text + flops_attachment parts）；无附件保持纯字符串旧行为。 */
     const outboundMessage = buildOutboundChatMessage(nextMessage, readyAtts);
-    /* 附件已随本次发送带走 → 清空待发附件 chips。 */
-    if (readyAtts.length > 0) setPendingAttachments([]);
-    /* 清空 composer：把 SlateDocument 重置为单段空 paragraph，refDataByKey 清空，再 bump key 强制 remount native */
-    setComposerDoc([{ type: 'paragraph', children: [{ text: '' }] }]);
-    composerRefDataByKeyRef.current = new Map();
-    /* 可靠清空：imperative 命令直接清 native 内容。不靠 keyed-remount 重读空 initialContent——
-       Fabric view 回收 + initialContentApplied 守卫让 remount 清空不可靠（旧文本残留）；
-       保持同一 native view + setContent('[]') 是可靠路径。切页回来重对齐也是同一套（见 useFocusEffect）。 */
-    composerAdapterRef.current?.clear();
+    if (!isOverride) {
+      /* 附件已随本次发送带走 → 清空待发附件 chips。 */
+      if (readyAtts.length > 0) setPendingAttachments([]);
+      /* 清空 composer：把 SlateDocument 重置为单段空 paragraph，refDataByKey 清空，再 bump key 强制 remount native */
+      setComposerDoc([{ type: 'paragraph', children: [{ text: '' }] }]);
+      composerRefDataByKeyRef.current = new Map();
+      /* 可靠清空：imperative 命令直接清 native 内容。不靠 keyed-remount 重读空 initialContent——
+         Fabric view 回收 + initialContentApplied 守卫让 remount 清空不可靠（旧文本残留）；
+         保持同一 native view + setContent('[]') 是可靠路径。切页回来重对齐也是同一套（见 useFocusEffect）。 */
+      composerAdapterRef.current?.clear();
+    }
     setError('');
     setLoading(true);
     setStreamingText('');
@@ -2214,6 +2235,10 @@ export function ChatScreen({
     enqueueCurrentComposer,
     cancelActiveDictation,
   ]);
+  /** 发送键的 onPress 适配：吞掉 GestureResponderEvent，别让它落到 handleSendMessage 的 opts 上。 */
+  const handleSendPress = useCallback(() => {
+    void handleSendMessage();
+  }, [handleSendMessage]);
 
   // 打开对话 / 流式起止时同步待发队列；流结束清掉乐观穿插钉
   useEffect(() => {
@@ -3450,6 +3475,45 @@ export function ChatScreen({
     );
   }
 
+  /* show_visual 图卡回注：图内 sendPrompt(text) → 卡片 onEcho → 这里拼【图卡·title】溯源前缀，
+     作为一条新的**用户消息**发出，agent 据前缀认出是自己画的哪张卡（与 Web/Desktop 同一契约）。
+     忙态入待发队列、空闲直发，对齐 Web；软上限挡住"狂点把队列灌满"，回合结束（loading 落定）归零。 */
+  const widgetEchoQueuedRef = useRef(0);
+  useEffect(() => {
+    if (!loading) widgetEchoQueuedRef.current = 0;
+  }, [loading]);
+  const handleWidgetEcho = useCallback(
+    (title: string, text: string) => {
+      if (!session) return;
+      const outbound = formatWidgetEcho(title, text);
+      if (loading && conversationIdRef.current) {
+        if (widgetEchoQueuedRef.current >= WIDGET_ECHO_QUEUE_SOFT_MAX) return;
+        widgetEchoQueuedRef.current += 1;
+        void enqueueCurrentComposer({ overrideText: outbound });
+        return;
+      }
+      void handleSendMessage({ overrideText: outbound });
+    },
+    [session, loading, enqueueCurrentComposer, handleSendMessage],
+  );
+
+  function renderVisualWidgetBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+    const { error: widgetError, title, mode, code } = parseVisualWidget(block);
+    return (
+      <VisualWidgetCard
+        key={key}
+        code={code}
+        mode={mode}
+        title={title}
+        isCompleted={block.status === 'completed'}
+        error={widgetError}
+        colors={colors}
+        isDark={isDark}
+        onEcho={(text) => handleWidgetEcho(title, text)}
+      />
+    );
+  }
+
   // ask_user_question：用户点选 → POST /ask/answer 解阻塞正在等待的本轮 run（卡片自管 submitted 乐观态）
   const handleAskUserAnswer = useCallback(
     async (answers: { header?: string; question?: string; answer: string }[]) => {
@@ -3822,6 +3886,9 @@ export function ChatScreen({
     }
     if (block.tool_name === 'ask_user_question') {
       return renderAskUserQuestionBlock(block, key);
+    }
+    if (block.tool_name === 'show_visual') {
+      return renderVisualWidgetBlock(block, key);
     }
     if (block.tool_name === 'open_tool_packages' || block.tool_name === 'close_tool_packages') {
       return (
@@ -4824,7 +4891,9 @@ export function ChatScreen({
                           : colors.textPrimary,
                       },
                     ]}
-                    onPress={sendIsStop ? handleStop : handleSendMessage}
+                    /* handleSendPress 包一层：handleSendMessage 现在收可选 opts（图卡回注的
+                       overrideText），直接挂 onPress 会把 GestureResponderEvent 当 opts 传进去。 */
+                    onPress={sendIsStop ? handleStop : handleSendPress}
                     disabled={sendDisabled}
                     accessibilityLabel={sendIsStop ? '停止' : '发送'}
                     activeOpacity={0.7}
