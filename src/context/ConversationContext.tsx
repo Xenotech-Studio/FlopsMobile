@@ -338,7 +338,7 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
         backoff = BACKOFF_START;
         startStream();
         loadConvsRef.current({ silent: true, force: true });
-      } else {
+      } else if (status === 'background') {
         // 切后台：abort 当前流 + 清退避定时器（省电，且避免后台 socket 被系统杀无声重试）
         clearReconnect();
         if (ac) {
@@ -347,6 +347,9 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
         }
         setStreamConnected(false);
       }
+      /* 'inactive' 是 iOS 瞬时态（底部上滑进 App Switcher 预览 / 控制中心 / 通知横幅 / 来电），
+       * app 仍在前台、网络照跑。不 abort —— 否则每次上滑预览都要掐断 inbox SSE 再重连一次。
+       * 对齐 BeaconReporter 的处理；真离开时紧跟的 'background' 才收尾。 */
     };
 
     const sub = AppState.addEventListener('change', onAppState);

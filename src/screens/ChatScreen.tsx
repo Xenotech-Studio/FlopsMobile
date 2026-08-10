@@ -662,6 +662,9 @@ export function ChatScreen({
   );
   /** 正在执行 resumeV2Stream（含 AppState 恢复），用于空占位文案显示 Resuming... */
   const [v2ResumeUiActive, setV2ResumeUiActive] = useState(false);
+  /** bgPauseRecoveringRef 的渲染镜像：为 true 时不显示「Flops未回复任何内容」，
+   *  否则回前台 resync/resume 落地前会闪一下这条误报。 */
+  const [bgPauseRecovering, setBgPauseRecovering] = useState(false);
   const [streamingText, setStreamingText] = useState('');
   const [streamStatus, setStreamStatus] = useState('');
   /** P2 待发队列（agent 在跑时用户发的消息排这里，服务端存、多端可见）+ 立刻穿插乐观钉 */
@@ -707,6 +710,9 @@ export function ChatScreen({
   const sessionRef = useRef(session);
   const pausedByBackgroundRef = useRef(false);
   const hadBackgroundPauseRef = useRef(false);
+  /** 本轮流是被「进后台」掐断的、还没定论（回前台后要么 resume 要么 resync）。
+   *  ref 供 AppState 异步回调同步读，state 供渲染门控「未回复」提示。 */
+  const bgPauseRecoveringRef = useRef(false);
   const streamInFlightRef = useRef(false);
   /** 供 Abort 后 catch 中读取本轮已流式片段（避免闭包陈旧） */
   const streamCaptureRef = useRef<{ text: string; blocks: StreamBlock[] }>({ text: '', blocks: [] });
@@ -3043,11 +3049,16 @@ export function ChatScreen({
         }
       } catch (e) {
         clearTimeout(timeout);
-        if (e && (e as { name?: string }).name === 'AbortError' && pausedByBackgroundRef.current) {
+        const isAbort = Boolean(e && (e as { name?: string }).name === 'AbortError');
+        const bgAbort = isAbort && pausedByBackgroundRef.current;
+        if (bgAbort) {
           pausedByBackgroundRef.current = false;
-        } else if (!(e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current)) {
+        } else if (!(isAbort && manualStopRef.current)) {
           setError(e instanceof Error ? e.message : String(e));
         }
+        /* 被后台掐断：马上就要进后台了，这一发全量拉取白费（且回来还要再拉一次）。
+           统一交给回前台的 AppState 分支 resync/resume。 */
+        if (bgAbort) return;
         try {
           const { conversation, messagesWindow } = await getConversation(session, cid, CHAT_MESSAGES_INITIAL_LIMIT);
           applyConversationUsageState(conversation, messagesWindow);
@@ -3077,12 +3088,24 @@ export function ChatScreen({
   );
 
   useEffect(() => {
+    const endBgPauseRecovery = () => {
+      bgPauseRecoveringRef.current = false;
+      setBgPauseRecovering(false);
+    };
     const sub = AppState.addEventListener('change', (next) => {
-      if (next === 'background' || next === 'inactive') {
+      /* 只认 'background'，不认 'inactive'。iOS 的 inactive 是瞬时态（底部上滑进 App Switcher
+       * 预览、控制中心、通知横幅、来电、系统弹窗）—— app 仍在前台、网络照跑。以前把 inactive
+       * 一并当后台，正常跑着的流会被 abort 掉：finally 里 loading=false，而消息尾巴此时是
+       * user（回复还没落库/已被 truncate），底下那条「Flops未回复任何内容」就闪出来，
+       * 直到回到 active 起 resume 才消失。对齐 BeaconReporter 对 inactive 的处理。 */
+      if (next === 'background') {
         hadBackgroundPauseRef.current = true;
         if (abortRef.current && !manualStopRef.current) {
           pausedByBackgroundRef.current = true;
           abortRef.current.abort();
+          // 流是我们自己掐断的：回前台 resync/resume 定论之前，不许把「尾巴是 user」判成没回复。
+          bgPauseRecoveringRef.current = true;
+          setBgPauseRecovering(true);
         }
       }
       if (next !== 'active') return;
@@ -3090,15 +3113,34 @@ export function ChatScreen({
       hadBackgroundPauseRef.current = false;
       const sess = sessionRef.current;
       const cid = conversationIdRef.current;
-      if (!sess || !cid || streamInFlightRef.current) return;
+      if (!sess || !cid || streamInFlightRef.current) {
+        endBgPauseRecovery();
+        return;
+      }
       // 先用轻量 meta 接口看有没有活动 run；绝大多数情况无 run，省掉一次全量拉取。
       getConversationMeta(sess, cid)
         .then(({ conversation: meta }) => {
           const rid = meta?.active_chat_v2_run_id;
           const s = typeof rid === 'string' ? rid.trim() : '';
-          if (!s) return;
-          // 确实有活动 run 才拉全量消息做 resume。
           if (streamInFlightRef.current || conversationIdRef.current !== cid) return;
+          if (!s) {
+            /* 无活动 run。若这轮流是被后台掐断的，run 多半是在后台期间跑完的 —— 不能停在本地
+             * 被截断的消息尾上（那会把「Flops未回复任何内容」永久钉在页面上），拉一次全量把
+             * 服务端已落库的回复补回来。没掐断过就是纯粹的前后台切换，什么都不用做。 */
+            if (!bgPauseRecoveringRef.current) return;
+            return getConversation(sess, cid, CHAT_MESSAGES_INITIAL_LIMIT).then(
+              ({ conversation, messagesWindow }) => {
+                if (streamInFlightRef.current || conversationIdRef.current !== cid) return;
+                applyConversationUsageState(conversation, messagesWindow);
+                const raw =
+                  conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
+                setMessages(rawMessagesToLocal(raw));
+                const t = conversation?.title?.trim();
+                if (t) setConversationTitle(t);
+              }
+            );
+          }
+          // 确实有活动 run 才拉全量消息做 resume。
           return getConversation(sess, cid, CHAT_MESSAGES_INITIAL_LIMIT).then(
             ({ conversation, messagesWindow }) => {
               const rid2 = conversation?.active_chat_v2_run_id;
@@ -3108,13 +3150,16 @@ export function ChatScreen({
               const raw =
                 conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
               setMessages(truncateMessagesAfterLastUser(rawMessagesToLocal(raw)));
+              /* 同步跑到第一个 await 前：setLoading(true) 会在这个 then 结束前落下，
+                 下面 finally 解除门控时不会露出空窗。 */
               resumeV2Stream(s2, cid);
             }
           );
         })
         .catch(() => {
           /* ignore */
-        });
+        })
+        .finally(endBgPauseRecovery);
     });
     return () => sub.remove();
   }, [resumeV2Stream, applyConversationUsageState]);
@@ -4397,6 +4442,7 @@ export function ChatScreen({
                 {!conversationHistoryLoading &&
                 messages.length > 0 &&
                 !loading &&
+                !bgPauseRecovering &&
                 (() => {
                   const lastMsg = messages[messages.length - 1];
                   if (lastMsg.role !== 'user') return null;
