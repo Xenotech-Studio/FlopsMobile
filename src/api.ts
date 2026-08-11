@@ -419,7 +419,7 @@ async function throwHttpError(res: Response, fallback: string): Promise<never> {
 export async function sendSmsCode(
   session: Session,
   phone: string,
-  captcha?: { ticket: string; randstr: string }
+  captcha?: CaptchaCreds
 ): Promise<{ cooldown: number; code_ttl: number }> {
   const base = ensureSlash(session.server_base_url);
   const res = await fetchWithDebugLog(
@@ -483,11 +483,20 @@ export async function bindPhone(
   return { phone: data.phone ?? phone, previous_phone: data.previous_phone ?? null };
 }
 
+/** 人机验证凭据。captcha 未启用时两个字段都是空串，服务端也不会校验。 */
+export type CaptchaCreds = { ticket: string; randstr: string };
+
+/** 移动端 WebView 用的验证码承载页 URL（后端以真实 https 源提供，见 auth_verify/captcha_page.py） */
+export function captchaPageUrl(serverBaseUrl: string): string {
+  return `${ensureSlash(serverBaseUrl)}api/auth/captcha.html`;
+}
+
 /** POST /api/auth/send_email_code */
 export async function sendEmailCode(
   serverBaseUrl: string,
   email: string,
-  accessToken?: string
+  accessToken?: string,
+  captcha?: CaptchaCreds
 ): Promise<{ cooldown: number; code_ttl: number }> {
   const base = ensureSlash(serverBaseUrl);
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -497,7 +506,11 @@ export async function sendEmailCode(
     {
       method: 'POST',
       headers,
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({
+        email,
+        captcha_ticket: captcha?.ticket ?? '',
+        captcha_randstr: captcha?.randstr ?? '',
+      }),
     },
     { log4xxAsInfo: true }
   );

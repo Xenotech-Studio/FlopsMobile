@@ -1,7 +1,8 @@
 /**
  * 邮箱补绑 / 改绑页：登录后从「账户操作」进入。
  * 流程：填邮箱 → 发码 → 填验证码 → 提交绑定。
- * 服务端启用 captcha 时移动端暂不支持，给出提示让用户去 Web 端操作。
+ * 人机验证：服务端启用 captcha 时走 useCaptcha（WebView 加载后端 /api/auth/captcha.html）
+ * 拿 ticket/randstr 后再发码；未启用则直接发码。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -21,6 +22,7 @@ import { useNavigation } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
 import { bindEmail, getAuthConfig, sendEmailCode, verifyEmailCode } from '../api';
+import { isCaptchaCanceled, useCaptcha } from '../components/CaptchaWebView';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 import loginErrorMessage from '../utils/loginErrorMessage';
@@ -74,16 +76,6 @@ function createStyles(c: AppColors) {
       alignItems: 'center',
     },
     codeBtnText: { fontSize: 14, color: c.textPrimary, fontWeight: '500' },
-    warnBanner: {
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      borderRadius: 8,
-      backgroundColor: c.surface,
-      borderWidth: 1,
-      borderColor: c.borderMuted,
-      marginBottom: 16,
-    },
-    warnText: { color: c.textMuted, fontSize: 13, lineHeight: 19 },
     errorText: { fontSize: 14, color: c.danger, marginBottom: 12 },
     submitBtn: {
       backgroundColor: c.primary,
@@ -113,6 +105,7 @@ export function BindEmailScreen() {
   const [cooldown, setCooldown] = useState(0);
   const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [captchaEnabled, setCaptchaEnabled] = useState<boolean | null>(null);
+  const { requestCaptcha, captchaModal } = useCaptcha(serverBaseUrl, captchaEnabled === true);
 
   useEffect(() => {
     let cancelled = false;
@@ -159,10 +152,13 @@ export function BindEmailScreen() {
     setError('');
     setLoading(true);
     try {
-      const { cooldown: cd } = await sendEmailCode(serverBaseUrl, e, session?.access_token);
+      // 先过人机验证（captcha 未启用时立即返回空凭据，不弹窗）
+      const creds = await requestCaptcha();
+      const { cooldown: cd } = await sendEmailCode(serverBaseUrl, e, session?.access_token, creds);
       startCooldown(cd || 60);
     } catch (err) {
-      setError(loginErrorMessage(err));
+      // 用户主动关掉验证码弹窗：静默返回，不报红
+      if (!isCaptchaCanceled(err)) setError(loginErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -200,8 +196,6 @@ export function BindEmailScreen() {
     }
   }, [session, serverBaseUrl, email, code, verifyToken, navigation]);
 
-  const captchaBlocking = captchaEnabled === true;
-
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
@@ -225,14 +219,6 @@ export function BindEmailScreen() {
             填入邮箱并完成验证后，将作为账户的找回邮箱。改绑会替换原邮箱。
           </Text>
 
-          {captchaBlocking ? (
-            <View style={styles.warnBanner}>
-              <Text style={styles.warnText}>
-                服务端启用了人机验证，移动端暂不支持。请先在 Web 端完成绑定。
-              </Text>
-            </View>
-          ) : null}
-
           <Text style={styles.label}>邮箱</Text>
           <TextInput
             style={styles.input}
@@ -243,7 +229,7 @@ export function BindEmailScreen() {
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="email-address"
-            editable={!loading && !captchaBlocking}
+            editable={!loading}
             textContentType="emailAddress"
           />
 
@@ -256,14 +242,14 @@ export function BindEmailScreen() {
               placeholder="邮箱里收到的 6 位验证码"
               placeholderTextColor={colors.placeholder}
               keyboardType="number-pad"
-              editable={!loading && !captchaBlocking}
+              editable={!loading}
             />
             <TouchableOpacity
               style={[
                 styles.codeBtn,
-                (cooldown > 0 || loading || captchaBlocking) && styles.submitBtnDisabled,
+                (cooldown > 0 || loading) && styles.submitBtnDisabled,
               ]}
-              disabled={cooldown > 0 || loading || captchaBlocking}
+              disabled={cooldown > 0 || loading}
               onPress={handleSendCode}
             >
               <Text style={styles.codeBtnText}>
@@ -277,10 +263,9 @@ export function BindEmailScreen() {
           <TouchableOpacity
             style={[
               styles.submitBtn,
-              (loading || captchaBlocking || !email.trim() || !code.trim()) &&
-                styles.submitBtnDisabled,
+              (loading || !email.trim() || !code.trim()) && styles.submitBtnDisabled,
             ]}
-            disabled={loading || captchaBlocking || !email.trim() || !code.trim()}
+            disabled={loading || !email.trim() || !code.trim()}
             onPress={handleSubmit}
           >
             {loading ? (
@@ -291,6 +276,8 @@ export function BindEmailScreen() {
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {captchaModal}
     </SafeAreaView>
   );
 }

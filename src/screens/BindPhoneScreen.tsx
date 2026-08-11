@@ -2,10 +2,12 @@
  * 手机号补绑 / 改绑页：登录后从「账户操作」进入。
  * 流程：填手机号 → 发码 → 填验证码 → 提交绑定。
  *
- * 与 BindEmailScreen 同构，三处差异源于短信是付费通道：
+ * 与 BindEmailScreen 同构，两处差异源于短信是付费通道：
  *   1. 三个端点**都要登录态**（邮箱侧 verify 不需要）
- *   2. 服务端对短信**强制 captcha**，移动端暂不支持 → 与邮箱侧一样给出去 Web 端的提示
- *   3. 号码提交前收敛成 E.164，与服务端 phone_index 的键保持一致
+ *   2. 号码提交前收敛成 E.164，与服务端 phone_index 的键保持一致
+ *
+ * 人机验证：服务端对短信**强制 captcha**，这里走 useCaptcha（WebView 加载后端的
+ * /api/auth/captcha.html）拿 ticket/randstr 再发码。
  *
  * 频控：本地不做任何限制，一律由服务端返回的文案兜底（429 + 中文 detail）。
  * 倒计时 30s 只是按钮的展示，与服务端返回的 cooldown 对齐。
@@ -28,6 +30,7 @@ import { useNavigation } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
 import { ApiHttpError, bindPhone, getAuthConfig, sendSmsCode, verifySmsCode } from '../api';
+import { isCaptchaCanceled, useCaptcha } from '../components/CaptchaWebView';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
 
@@ -111,7 +114,6 @@ function createStyles(c: AppColors) {
     scroll: { flex: 1 },
     scrollContent: { padding: 20, paddingBottom: 40 },
     hint: { fontSize: 14, color: c.textMuted, lineHeight: 20, marginBottom: 20 },
-    current: { fontSize: 13, color: c.textMuted, marginBottom: 16 },
     label: { fontSize: 14, color: c.textSecondary, marginBottom: 8 },
     input: {
       borderWidth: 1,
@@ -143,16 +145,6 @@ function createStyles(c: AppColors) {
       alignItems: 'center',
     },
     codeBtnText: { fontSize: 14, color: c.textPrimary, fontWeight: '500' },
-    warnBanner: {
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      borderRadius: 8,
-      backgroundColor: c.surface,
-      borderWidth: 1,
-      borderColor: c.borderMuted,
-      marginBottom: 16,
-    },
-    warnText: { color: c.textMuted, fontSize: 13, lineHeight: 19 },
     errorText: { fontSize: 14, color: c.danger, marginBottom: 12 },
     submitBtn: {
       backgroundColor: c.primary,
@@ -182,6 +174,7 @@ export function BindPhoneScreen() {
   const [cooldown, setCooldown] = useState(0);
   const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [captchaEnabled, setCaptchaEnabled] = useState<boolean | null>(null);
+  const { requestCaptcha, captchaModal } = useCaptcha(serverBaseUrl, captchaEnabled === true);
 
   const target = normalizePhone(phone);
   const targetValid = !!target;
@@ -239,10 +232,15 @@ export function BindPhoneScreen() {
     setError('');
     setLoading(true);
     try {
-      const { cooldown: cd } = await sendSmsCode(session, target);
+      // 先过人机验证（captcha 未启用时立即返回空凭据，不弹窗）
+      const creds = await requestCaptcha();
+      const { cooldown: cd } = await sendSmsCode(session, target, creds);
       startCooldown(cd || 30);
     } catch (err) {
-      setError(bindPhoneErrorMessage(err, '验证码发送失败'));
+      // 用户主动关掉验证码弹窗：静默返回，不当成错误报红
+      if (!isCaptchaCanceled(err)) {
+        setError(bindPhoneErrorMessage(err, '验证码发送失败'));
+      }
     } finally {
       setLoading(false);
     }
@@ -284,8 +282,6 @@ export function BindPhoneScreen() {
     }
   }, [session, phone, code, verifyToken, navigation]);
 
-  // 服务端对短信强制人机验证，移动端暂无 captcha 能力 → 与邮箱页同样的降级提示
-  const captchaBlocking = captchaEnabled === true;
   const showFormatHint = phone.trim().length > 0 && !targetValid;
 
   return (
@@ -315,14 +311,6 @@ export function BindPhoneScreen() {
             填入手机号并完成验证后，将作为账户的绑定手机号。改绑会替换原手机号。
           </Text>
 
-          {captchaBlocking ? (
-            <View style={styles.warnBanner}>
-              <Text style={styles.warnText}>
-                短信验证需要人机验证，移动端暂不支持。请先在 Web 端完成绑定。
-              </Text>
-            </View>
-          ) : null}
-
           <Text style={styles.label}>手机号</Text>
           <TextInput
             style={[styles.input, showFormatHint && styles.inputNoGap]}
@@ -334,7 +322,7 @@ export function BindPhoneScreen() {
             autoCorrect={false}
             keyboardType="phone-pad"
             maxLength={20}
-            editable={!loading && !captchaBlocking}
+            editable={!loading}
             textContentType="telephoneNumber"
           />
           {showFormatHint ? (
@@ -351,16 +339,16 @@ export function BindPhoneScreen() {
               placeholderTextColor={colors.placeholder}
               keyboardType="number-pad"
               maxLength={6}
-              editable={!loading && !captchaBlocking}
+              editable={!loading}
               textContentType="oneTimeCode"
             />
             <TouchableOpacity
               style={[
                 styles.codeBtn,
-                (cooldown > 0 || loading || captchaBlocking || !targetValid) &&
+                (cooldown > 0 || loading || !targetValid) &&
                   styles.submitBtnDisabled,
               ]}
-              disabled={cooldown > 0 || loading || captchaBlocking || !targetValid}
+              disabled={cooldown > 0 || loading || !targetValid}
               onPress={handleSendCode}
             >
               <Text style={styles.codeBtnText}>
@@ -374,10 +362,10 @@ export function BindPhoneScreen() {
           <TouchableOpacity
             style={[
               styles.submitBtn,
-              (loading || captchaBlocking || !targetValid || !code.trim()) &&
+              (loading || !targetValid || !code.trim()) &&
                 styles.submitBtnDisabled,
             ]}
-            disabled={loading || captchaBlocking || !targetValid || !code.trim()}
+            disabled={loading || !targetValid || !code.trim()}
             onPress={handleSubmit}
           >
             {loading ? (
@@ -388,6 +376,8 @@ export function BindPhoneScreen() {
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {captchaModal}
     </SafeAreaView>
   );
 }
