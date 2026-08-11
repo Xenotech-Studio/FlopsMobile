@@ -1,5 +1,6 @@
 /**
- * 账户操作子页：修改密码、绑定邮箱、退出登录，从 Profile 进入。
+ * 账户操作子页：修改密码、绑定邮箱、绑定手机号、退出登录，从 Profile 进入。
+ * 手机号一行仅在服务端 /api/auth/config 返回 sms_enabled 时出现。
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
@@ -9,7 +10,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useSession } from '../context/SessionContext';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
-import { getCurrentUserInfo } from '../api';
+import { getAuthConfig, getCurrentUserInfo } from '../api';
 
 function createAccountActionsStyles(c: AppColors) {
   return StyleSheet.create({
@@ -70,6 +71,9 @@ export function AccountActionsScreen() {
   const styles = useMemo(() => createAccountActionsStyles(colors), [colors]);
   const { session, serverBaseUrl, logout } = useSession();
   const [email, setEmail] = useState<string | null>(null);
+  const [phone, setPhone] = useState<string | null>(null);
+  // 服务端未开短信通道（未配 FLOPS_SMS_* 或未配 captcha）→ 整行不出现
+  const [smsEnabled, setSmsEnabled] = useState(false);
 
   const refreshUserInfo = useCallback(() => {
     if (!session) return;
@@ -79,6 +83,8 @@ export function AccountActionsScreen() {
       if (cancelled) return;
       const e = typeof info?.email === 'string' ? info.email.trim() : '';
       setEmail(e || null);
+      const p = typeof info?.phone === 'string' ? info.phone.trim() : '';
+      setPhone(p || null);
     })();
     return () => {
       cancelled = true;
@@ -86,10 +92,25 @@ export function AccountActionsScreen() {
   }, [session, serverBaseUrl]);
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cfg = await getAuthConfig(serverBaseUrl);
+        if (!cancelled) setSmsEnabled(Boolean(cfg.sms_enabled));
+      } catch {
+        if (!cancelled) setSmsEnabled(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [serverBaseUrl]);
+
+  useEffect(() => {
     refreshUserInfo();
   }, [refreshUserInfo]);
 
-  // 从 BindEmailScreen 返回时刷新一次邮箱展示
+  // 从 BindEmailScreen / BindPhoneScreen 返回时刷新一次绑定信息展示
   useFocusEffect(
     useCallback(() => {
       refreshUserInfo();
@@ -149,6 +170,25 @@ export function AccountActionsScreen() {
             ) : null}
             <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
           </TouchableOpacity>
+          {smsEnabled ? (
+            <>
+              <View style={styles.rowDivider} />
+              <TouchableOpacity
+                style={styles.row}
+                activeOpacity={0.7}
+                onPress={() => navigation.navigate('BindPhone')}
+              >
+                <Ionicons name="phone-portrait-outline" size={22} color={colors.textMuted} />
+                <Text style={styles.rowLabel}>{phone ? '改绑手机号' : '绑定手机号'}</Text>
+                {phone ? (
+                  <Text style={styles.rowValue} numberOfLines={1} ellipsizeMode="middle">
+                    {phone}
+                  </Text>
+                ) : null}
+                <Ionicons name="chevron-forward" size={20} color={colors.placeholder} />
+              </TouchableOpacity>
+            </>
+          ) : null}
         </View>
 
         <TouchableOpacity

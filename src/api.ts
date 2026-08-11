@@ -358,31 +358,129 @@ export async function changePassword(
   return { message: data.message ?? 'Password changed successfully' };
 }
 
-/** 当前用户信息（含头像、昵称、邮箱），来自 GET /api/user/{user_id} */
+/** 当前用户信息（含头像、昵称、邮箱、手机号），来自 GET /api/user/{user_id} */
 export type CurrentUserInfo = {
   id?: string;
   nickname?: string;
   avatarUrl?: string;
   email?: string;
+  /** E.164，如 +8613800138000；未绑定则无此字段 */
+  phone?: string;
   [key: string]: unknown;
 };
 
-/** /api/auth/config 返回：captcha 是否启用 */
+/** /api/auth/config 返回：captcha / 短信通道 是否启用 */
 export type AuthConfig = {
   captcha_enabled: boolean;
   captcha_app_id?: string | null;
+  /** 服务端短信通道可用（同时要求已配置 captcha）。false 时手机号绑定入口不展示。 */
+  sms_enabled: boolean;
 };
 
 /** GET /api/auth/config —— 前端启动 / 进入注册页时拉一次 */
 export async function getAuthConfig(serverBaseUrl: string): Promise<AuthConfig> {
   const base = ensureSlash(serverBaseUrl);
   const res = await fetchWithDebugLog(`${base}api/auth/config`, { method: 'GET' });
-  if (!res.ok) return { captcha_enabled: false };
+  if (!res.ok) return { captcha_enabled: false, sms_enabled: false };
   const data = (await res.json()) as Partial<AuthConfig>;
   return {
     captcha_enabled: Boolean(data.captcha_enabled),
     captcha_app_id: data.captcha_app_id ?? null,
+    sms_enabled: Boolean(data.sms_enabled),
   };
+}
+
+/**
+ * 带 HTTP 状态码的 API 错误。
+ * 短信相关端点的 detail 后端已保证是可直接展示的中文（含频控文案与业务错误码），
+ * 但界面还要按 429 / 502 / 其它分场景兜底，所以把 status 一并带出来。
+ */
+export class ApiHttpError extends Error {
+  status: number;
+  detail: string;
+  constructor(status: number, detail: string, fallback: string) {
+    super(detail || fallback);
+    this.name = 'ApiHttpError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+async function throwHttpError(res: Response, fallback: string): Promise<never> {
+  const err = (await res.json().catch(() => ({}))) as { detail?: string };
+  throw new ApiHttpError(res.status, (err.detail || '').trim(), `${fallback}: ${res.status}`);
+}
+
+/**
+ * POST /api/auth/send_sms_code —— 手机号绑定发码。
+ * 与邮箱侧的差异：**必须带登录态**，且服务端强制 captcha（未带 captcha 凭据会 400）。
+ * phone 需为 E.164（+8613800138000）。
+ */
+export async function sendSmsCode(
+  session: Session,
+  phone: string,
+  captcha?: { ticket: string; randstr: string }
+): Promise<{ cooldown: number; code_ttl: number }> {
+  const base = ensureSlash(session.server_base_url);
+  const res = await fetchWithDebugLog(
+    `${base}api/auth/send_sms_code`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({
+        phone,
+        captcha_ticket: captcha?.ticket ?? '',
+        captcha_randstr: captcha?.randstr ?? '',
+      }),
+    },
+    { log4xxAsInfo: true }
+  );
+  if (!res.ok) await throwHttpError(res, '发送验证码失败');
+  const data = (await res.json()) as { cooldown?: number; code_ttl?: number };
+  return { cooldown: data.cooldown ?? 30, code_ttl: data.code_ttl ?? 300 };
+}
+
+/** POST /api/auth/verify_sms_code —— 验码换一次性 token（需登录态） */
+export async function verifySmsCode(
+  session: Session,
+  phone: string,
+  code: string
+): Promise<{ verify_token: string; token_ttl: number }> {
+  const base = ensureSlash(session.server_base_url);
+  const res = await fetchWithDebugLog(
+    `${base}api/auth/verify_sms_code`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({ phone, code }),
+    },
+    { log4xxAsInfo: true }
+  );
+  if (!res.ok) await throwHttpError(res, '验证码校验失败');
+  const data = (await res.json()) as { verify_token?: string; token_ttl?: number };
+  if (!data.verify_token) throw new Error('服务端未返回 verify_token');
+  return { verify_token: data.verify_token, token_ttl: data.token_ttl ?? 600 };
+}
+
+/** POST /api/auth/bind_phone —— 补绑 / 改绑手机号（需登录态） */
+export async function bindPhone(
+  session: Session,
+  phone: string,
+  verifyToken: string
+): Promise<{ phone: string; previous_phone?: string | null }> {
+  const base = ensureSlash(session.server_base_url);
+  const res = await fetchWithDebugLog(
+    `${base}api/auth/bind_phone`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify({ phone, verify_token: verifyToken }),
+    },
+    { log4xxAsInfo: true }
+  );
+  if (!res.ok) await throwHttpError(res, '绑定手机号失败');
+  const data = (await res.json()) as { phone?: string; previous_phone?: string | null };
+  return { phone: data.phone ?? phone, previous_phone: data.previous_phone ?? null };
 }
 
 /** POST /api/auth/send_email_code */
