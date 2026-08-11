@@ -617,6 +617,9 @@ export type Conversation = {
   usage_runs?: UsageRun[];
   bound_agent_id?: string;
   agent_profile?: AgentProfile;
+  /** 对话级所选模型（后端 conv meta 的 model 字段，创建时以用户默认为种子）。
+   *  服务端跑这个对话时优先用它，所以 composer 的模型标签也该按它显示。 */
+  model?: string;
   /** 当前生效的上下文摘要 id（若有则可能存在压缩分界展示） */
   active_context_summary_id?: string;
   context_summaries?: ContextSummary[];
@@ -1104,7 +1107,7 @@ export async function injectSendQueueItem(
 export async function createConversation(
   session: Session,
   opts?: { bound_agent_id?: string; encrypted?: boolean }
-): Promise<{ id: string; bound_agent_id?: string; agent_profile?: AgentProfile }> {
+): Promise<{ id: string; bound_agent_id?: string; agent_profile?: AgentProfile; model?: string }> {
   const base = session.server_base_url;
   const body: Record<string, unknown> = {};
   const bid = String(opts?.bound_agent_id || '').trim();
@@ -1132,7 +1135,12 @@ export async function createConversation(
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail || `创建会话失败: ${res.status}`);
   }
-  const data = (await res.json()) as { id?: string; bound_agent_id?: string; agent_profile?: AgentProfile };
+  const data = (await res.json()) as {
+    id?: string;
+    bound_agent_id?: string;
+    agent_profile?: AgentProfile;
+    model?: string;
+  };
   if (!data.id) throw new Error('服务端未返回会话 id');
   // 创建成功后注册 K_conv 到 cache
   if (opts?.encrypted) {
@@ -1143,10 +1151,12 @@ export async function createConversation(
   }
   // 返回 bound_agent_id + agent_profile（对齐 web）：惰性创建的草稿对话靠这个在首条消息前
   // 灌进 conversationMetaRef，否则加密 bound agent 的 chat_v2 缺 k_agent_wire → server 400。
+  // model = server 以用户默认为种子写的对话级模型，供 composer 标签立即显示。
   return {
     id: data.id,
     bound_agent_id: typeof data.bound_agent_id === 'string' ? data.bound_agent_id : undefined,
     agent_profile: data.agent_profile,
+    model: typeof data.model === 'string' ? data.model : undefined,
   };
 }
 
@@ -1976,6 +1986,9 @@ export type ModelsConfigResponse = {
   /** 官方精选套餐订阅状态 */
   official_subscription?: OfficialSubscriptionInfo;
   default_model?: string;
+  /** POST /models/select 带 conversation_id 时回显：本次写入的对话级模型 */
+  conversation_id?: string;
+  conversation_model?: string;
 };
 
 /** 模型 id 为 `<owner>:<market_id>`；按「首个冒号且左侧无斜杠」切分（与后端一致）。 */
@@ -2032,14 +2045,26 @@ export async function getModelsConfig(session: Session): Promise<ModelsConfigRes
   return (await res.json()) as ModelsConfigResponse;
 }
 
-/** POST /api/models/select — body `{ model }`，返回完整模型配置 payload */
-export async function selectModel(session: Session, model: string): Promise<ModelsConfigResponse> {
+/**
+ * POST /api/models/select — 返回完整模型配置 payload。
+ * 双语义端点（与后端 set_model_config 一致）：
+ *   - 带 conversation_id → 只改该对话的模型（对话级覆盖，可中途切换），回显 conversation_model；
+ *   - 不带 → 改用户级默认模型（新对话创建时的种子）。
+ * 跑对话时服务端优先读对话 meta 的 model，所以在已有对话里切模型**必须**带 conversationId，
+ * 否则只写了用户默认、压不过对话级覆盖（表现为"切了模型没生效"）。
+ */
+export async function selectModel(
+  session: Session,
+  model: string,
+  conversationId?: string
+): Promise<ModelsConfigResponse> {
   const base = session.server_base_url;
   const m = String(model || '').trim();
+  const cid = String(conversationId || '').trim();
   const res = await fetchWithDebugLog(`${base}api/models/select`, {
     method: 'POST',
     headers: { ...authHeaders(session.access_token), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: m }),
+    body: JSON.stringify(cid ? { model: m, conversation_id: cid } : { model: m }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

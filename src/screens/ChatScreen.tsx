@@ -509,6 +509,8 @@ export function ChatScreen({
   const [conversationMeta, setConversationMeta] = useState<{
     bound_agent_id?: string;
     agent_profile?: AgentProfile;
+    /** 对话级所选模型（conv meta 的 model 字段）；effectiveSelectedModel 优先用它 */
+    model?: string;
   } | null>(null);
   /** runV2WithHandlers 是 useCallback([session, ...])，里头读 conversationMeta 不稳；
    *  用 ref 把最新 meta 镜像出来给 streamChatV2Loop 的 agentEncryption 选项。 */
@@ -759,6 +761,7 @@ export function ChatScreen({
     const nextMeta = {
       bound_agent_id: typeof conversation.bound_agent_id === 'string' ? conversation.bound_agent_id : undefined,
       agent_profile: conversation.agent_profile,
+      model: typeof conversation.model === 'string' ? conversation.model : undefined,
     };
     /* 同步写 ref：路由打开/前台恢复时会在同 microtask 里紧接调 resumeV2Stream → runV2WithHandlers
        同步读 conversationMetaRef，靠 useEffect 镜像太晚——会漏掉 agentEncryption，导致加密 agent
@@ -905,19 +908,57 @@ export function ChatScreen({
     return [];
   }, [availableModels, selectedModelId, modelConfigLabel]);
 
+  /** 当前生效的模型（对话级）：开了对话用该对话的 model；草稿（无对话）用用户默认模型。
+   *  对话的 model 已不在可切换列表（如供应商被移出 allowlist）时回退用户默认——与后端
+   *  get_conversation_model / Web effectiveSelectedModel 一致。 */
+  const effectiveSelectedModel = useMemo(() => {
+    const userDefault = selectedModelId;
+    if (!conversationId) return userDefault;
+    const convModel = String(conversationMeta?.model || '').trim();
+    if (convModel && modelOptions.some((o) => o.value === convModel)) return convModel;
+    return userDefault;
+  }, [conversationId, conversationMeta?.model, selectedModelId, modelOptions]);
+
   const composerModelTriggerLabel = useMemo(() => {
-    const sel = selectedModelId;
+    const sel = effectiveSelectedModel;
     if (!sel) return '模型';
     const found = modelOptions.find((o) => o.value === sel);
     if (found) return found.label;
     return modelConfigLabel || sel;
-  }, [selectedModelId, modelOptions, modelConfigLabel]);
+  }, [effectiveSelectedModel, modelOptions, modelConfigLabel]);
 
   const handleSelectModel = useCallback(
     async (modelId: string) => {
       const model = String(modelId || '').trim();
       if (!session || !model) return;
       setModelPickerOpen(false);
+      const cid = String(conversationId || '').trim();
+      /* 开了对话：只改这个对话的模型（对话级覆盖，可中途切换），不动用户默认。
+         必须带 conversation_id —— 服务端跑对话时优先读对话 meta 的 model，只写用户默认
+         压不过对话级覆盖（对话一旦在任意端切过模型就被钉死 = "切了不生效"的根因）。 */
+      if (cid) {
+        const prevModel = String(conversationMeta?.model || '').trim();
+        if (model === prevModel) return;
+        const patchConvModel = (m: string) =>
+          setConversationMeta((c) => ({ ...(c ?? {}), model: m }));
+        patchConvModel(model);
+        try {
+          const data = await selectModel(session, model, cid);
+          patchConvModel(
+            typeof data.conversation_model === 'string' ? data.conversation_model : model
+          );
+          // 价格表等全局映射顺带刷新（若返回）；其余对话级状态不动
+          if (data.model_price_reference && typeof data.model_price_reference === 'object') {
+            setModelPriceReference(data.model_price_reference as Record<string, unknown>);
+          }
+        } catch (e) {
+          patchConvModel(prevModel);
+          const msg = e instanceof Error ? e.message : String(e);
+          Alert.alert('切换模型失败', msg);
+        }
+        return;
+      }
+      // 草稿（无对话）：改用户级默认模型——它会成为新对话创建时的种子
       if (model === selectedModelId) return;
       const prevId = selectedModelId;
       const prevLabel = modelConfigLabel;
@@ -938,6 +979,8 @@ export function ChatScreen({
     },
     [
       session,
+      conversationId,
+      conversationMeta?.model,
       selectedModelId,
       modelConfigLabel,
       modelPriceReference,
@@ -2122,6 +2165,7 @@ export function ChatScreen({
         const nextMeta = {
           bound_agent_id: created.bound_agent_id,
           agent_profile: created.agent_profile,
+          model: created.model,
         };
         conversationMetaRef.current = nextMeta;
         setConversationMeta(nextMeta);
@@ -3014,6 +3058,7 @@ export function ChatScreen({
         const nextMeta = {
           bound_agent_id: created.bound_agent_id,
           agent_profile: created.agent_profile,
+          model: created.model,
         };
         conversationMetaRef.current = nextMeta;
         setConversationMeta(nextMeta);
@@ -4044,7 +4089,7 @@ export function ChatScreen({
         ? formatUsageHoverDetail(usageByAssistantIdx[idx], {
             currencyMode: usageCurrencyDisplay,
             modelPriceReference,
-            selectedModelId,
+            selectedModelId: effectiveSelectedModel,
             scope: 'segment',
           })
         : undefined;
@@ -5050,7 +5095,7 @@ export function ChatScreen({
                               body: formatUsageHoverDetail(usageStats, {
                                 currencyMode: usageCurrencyDisplay,
                                 modelPriceReference,
-                                selectedModelId,
+                                selectedModelId: effectiveSelectedModel,
                                 scope: 'conversation',
                               }),
                             })
