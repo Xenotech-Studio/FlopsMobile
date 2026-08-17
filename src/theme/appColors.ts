@@ -21,6 +21,11 @@ export type AppColors = {
   androidCircleFabHairline: string;
   surface: string;
   surfaceMuted: string;
+  /** 骨架屏占位块底色。要求同时压得住三种画布：列表底(#f9fafb/#101010)、抽屉底(#ededef/#070708)、
+   *  卡片底(surface)——所以浅色比 surfaceMuted 再深一档，暗色取 surface 与 surfaceMuted 之间。 */
+  skeletonBase: string;
+  /** 骨架屏扫光高亮：白色低透明，叠在 skeletonBase 上横扫。两端的 0 alpha 白由组件补。 */
+  skeletonHighlight: string;
   /** 实心顶栏 / 顶栏条背景（不含毛玻璃头上的圆形操作钮，圆钮仍用 surface） */
   headerBarBackground: string;
   /** 顶栏、Modal/Sheet 标题栏底部分割线宽度；暗色为 0 */
@@ -139,6 +144,8 @@ export const lightColors: AppColors = {
   androidCircleFabHairline: 'rgba(0,0,0,0.04)',
   surface: '#ffffff',
   surfaceMuted: '#f3f4f6',
+  skeletonBase: '#e0e1e5',
+  skeletonHighlight: 'rgba(255,255,255,0.7)',
   headerBarBackground: '#ffffff',
   headerBarBottomBorderWidth: 1,
   headerBarBottomBorderColor: '#e5e7eb',
@@ -223,6 +230,8 @@ export const darkColors: AppColors = {
   androidCircleFabHairline: 'rgba(255,255,255,0.02)',
   surface: '#1f1f1f',
   surfaceMuted: '#2c2c2e',
+  skeletonBase: '#252528',
+  skeletonHighlight: 'rgba(255,255,255,0.07)',
   headerBarBackground: '#141414',
   headerBarBottomBorderWidth: 0,
   headerBarBottomBorderColor: '#3f3f46',

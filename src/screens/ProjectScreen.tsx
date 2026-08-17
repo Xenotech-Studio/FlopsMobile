@@ -57,6 +57,7 @@ import {
   useUnreadConvMap,
 } from '../context/ConversationContext';
 import { ConversationRow } from '../components/ConversationRow';
+import { ConversationListSkeleton } from '../components/Skeleton';
 import type { RootStackParamList } from '../navigation/types';
 import { fetchTasks, type TaskItem } from '../taskApi';
 import { TaskRow } from '../components/TaskRow';
@@ -588,7 +589,12 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
                       />
                     }
                   >
-                    {visibleConvs.length === 0 ? (
+                    {convsLoading && projectConvs.length === 0 ? (
+                      /* 首次拉本项目对话：骨架而不是"暂无对话"——那句话在加载中出现是误导。
+                         按 projectConvs 判而非 visibleConvs：数据已到、只是这个 folder 空，
+                         那就该老老实实显示空态。 */
+                      <ConversationListSkeleton count={5} />
+                    ) : visibleConvs.length === 0 ? (
                       <View style={styles.convFolderEmpty}>
                         <Text style={styles.convFolderEmptyText}>该文件夹下暂无对话</Text>
                       </View>

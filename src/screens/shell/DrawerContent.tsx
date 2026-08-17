@@ -41,7 +41,8 @@ import {
   getCurrentUserInfo,
   type ConversationListItem,
 } from '../../api';
-import { useConversations } from '../../context/ConversationContext';
+import { useConversations, useConversationsStatus } from '../../context/ConversationContext';
+import { DrawerRecentsSkeleton } from '../../components/Skeleton';
 import type { AppColors } from '../../theme/appColors';
 import { IS_IOS_LIQUID_GLASS } from '../../components/AnimatedCircleButton';
 import { BouncyGlassCard } from '../../components/BouncyGlassCard';
@@ -130,6 +131,8 @@ export function DrawerContent() {
 
   /** Recents 列表（前 5 条）：取自全局 ConversationContext，零加载即用 */
   const recents = useConversations().slice(0, 5);
+  /** 没快照可秒开时（冷启动首次 / 登出后重进）先画骨架，别让 Recents 一上来就写"暂无对话" */
+  const { loading: convLoading } = useConversationsStatus();
 
   /** Project context 在首次渲染时也要拉一遍，确保抽屉刚打开就能看到列表 */
   useEffect(() => {
@@ -272,7 +275,9 @@ export function DrawerContent() {
 
         {/* Recents 段头 + 5 条 */}
         <SectionLabel text="Recents" colors={colors} />
-        {recents.length === 0 ? (
+        {convLoading && recents.length === 0 ? (
+          <DrawerRecentsSkeleton count={5} />
+        ) : recents.length === 0 ? (
           <Text style={styles.emptyHint}>暂无对话</Text>
         ) : (
           <View style={styles.menuGroup}>

@@ -94,6 +94,7 @@ import { BlurHeaderBackground, BlurFooterBackground } from '../components/BlurHe
 import { PullToRefreshRing } from '../components/PullToRefreshRing';
 import { InboxRunSpinner, InboxUnreadCheck } from '../components/InboxListIndicators';
 import { ConversationRow } from '../components/ConversationRow';
+import { ConversationListSkeleton } from '../components/Skeleton';
 import { HamburgerButton } from './shell/HamburgerButton';
 import {
   AnimatedCircleButton,
@@ -859,9 +860,9 @@ export function TodayScreen() {
       </View>
 
       {convLoading && convList.length === 0 ? (
-        <View style={styles.convLoading}>
-          <ActivityIndicator size="small" color={colors.primary} />
-        </View>
+        /* 冷启动没快照可秒开时的加载态：骨架行而非居中菊花——预告内容形状，且行几何与
+           ConversationRow 一致，真列表到位时页面不跳。有快照的路径走不到这里。 */
+        <ConversationListSkeleton count={CONV_PAGE_SIZE} />
       ) : convList.length === 0 ? (
         <View style={styles.convEmpty}>
           <Ionicons
