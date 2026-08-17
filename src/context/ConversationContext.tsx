@@ -12,8 +12,18 @@
  *   AppState active=重连 + catchup fetch，background=abort + 清 backoff 定时器（照抄 BeaconReporter）。
  * - sidebar_refresh → 静默 loadConvs（自己 echo 的 refresh 按 client_instance_id 跳过）。
  *
+ * 服务端分页（2026-08）：convList 不再是「该用户全部会话」，而是 updated_at DESC 的**前 N 页**。
+ * 起因是全量拉 920 条 = 1.4MB 明文 + 服务端几十 MB JSON，而今日页只画 10 行。
+ * - loadConvs 拉第一页（replace 语义）；loadMoreConversations 拉下一页（append 语义，按 id 去重）。
+ * - 刷新（下拉 / AppState catchup / sidebar_refresh）重拉「当前已加载的窗口大小」而非固定一页，
+ *   否则用户滚了 5 页后一次静默刷新会把列表缩回 1 页。
+ * - 项目页要的是「某项目下**全部**会话」，跟这条分页主流不是一个集合，所以单独按 project 走
+ *   服务端过滤（?flowtask_project_id=）缓存在 projectConvsRef/projectConvs 里，见
+ *   useProjectConversations —— 不塞进 convList，避免把老会话插进分页主流搞乱顺序与 offset。
+ *
  * 消费方通过 hooks 零加载即用：useConversations / useProjectConversations /
  * useRunningConvMap / useUnreadConvMap，以及 actions refreshConversations /
+ * loadMoreConversations / refreshProjectConversations /
  * addConversationOptimistic / removeConversationOptimistic。
  */
 import React, {
@@ -27,7 +37,12 @@ import React, {
 } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { listConversations, runInboxStream, type ConversationListItem } from '../api';
+import {
+  CONV_LIST_PAGE_SIZE,
+  listConversations,
+  runInboxStream,
+  type ConversationListItem,
+} from '../api';
 import { useSession } from './SessionContext';
 import { getOrCreateClientInstanceId } from '../utils/clientInstanceId';
 import { notifyRemoteMicBye, notifyRemoteMicInvite } from '../utils/remoteMicInviteBus';
@@ -36,6 +51,9 @@ const CACHED_CONVS_KEY = '@FlopsMobile/cachedConversations';
 const DEDUPE_MS = 2000;
 const BACKOFF_START = 1000;
 const BACKOFF_MAX = 30_000;
+/** 刷新时重拉「当前已加载窗口」的条数上限（= 服务端单次 limit 上限）。滚过这个量的用户，
+ *  刷新只重拉前 200 条，再往下的靠继续上滑重新分页取回（列表会自愈，不会缺行）。 */
+const REFRESH_WINDOW_MAX = 200;
 
 type BoolMap = Record<string, boolean>;
 
@@ -48,9 +66,19 @@ type ConversationContextValue = {
   loading: boolean;
   error: string | null;
   streamConnected: boolean;
+  /** 服务端在已加载页之后还有更多会话（今日页据此决定滚到底要不要继续拉） */
+  hasMoreConversations: boolean;
+  /** 正在拉下一页（并发触发的 onEndReached 由它挡住） */
+  loadingMoreConversations: boolean;
   refreshConversations: () => Promise<void>;
+  /** 拉下一页并**追加**到 convList 尾部（按 id 去重）。没有更多 / 正在拉 时是 no-op。 */
+  loadMoreConversations: () => Promise<void>;
   addConversationOptimistic: (conv: ConversationListItem) => void;
   removeConversationOptimistic: (id: string) => void;
+  /** 某项目下的全部会话（服务端过滤，独立于分页主流）。 */
+  projectConvs: Record<string, ConversationListItem[]>;
+  projectConvsLoading: Record<string, boolean>;
+  loadProjectConversations: (projectId: string, force?: boolean) => Promise<void>;
   /** 声明「当前正打开着的对话」（ChatScreen 获焦时上报、失焦清 null）。用于未读闪点守卫：见下。 */
   setActiveConversation: (id: string | null) => void;
 };
@@ -105,9 +133,28 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [streamConnected, setStreamConnected] = useState(false);
+  const [hasMoreConversations, setHasMoreConversations] = useState(false);
+  const [loadingMoreConversations, setLoadingMoreConversations] = useState(false);
+  /** 项目页数据源：projectId → 该项目下全部会话（服务端 ?flowtask_project_id= 过滤） */
+  const [projectConvs, setProjectConvs] = useState<Record<string, ConversationListItem[]>>({});
+  const [projectConvsLoading, setProjectConvsLoading] = useState<Record<string, boolean>>({});
 
   const lastLoadRef = useRef<number>(0);
   const localInstanceIdRef = useRef<string | null>(null);
+  /** 已从服务端分页取回的条数 = 下一页的 offset。**不能**用 convList.length 代替：
+   *  乐观新增 / 删除会让两者脱钩，offset 一错就整段跳页。 */
+  const pagedCountRef = useRef(0);
+  /** loadMore 的并发闸（state 更新是异步的，onEndReached 连发两次会同 offset 拉两遍） */
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(false);
+  /** projectConvs 的同步读镜像：loadProjectConversations 要在闭包里判「这个项目拉过没」，
+   *  用 state 会读到旧快照，导致每次 mount 都重拉一遍。 */
+  const projectConvsRef = useRef<Record<string, ConversationListItem[]>>({});
+  useEffect(() => {
+    projectConvsRef.current = projectConvs;
+  }, [projectConvs]);
+  /** 正在拉的 projectId 集合（同 id 并发去重） */
+  const projectLoadingRef = useRef<Set<string>>(new Set());
 
   /* 行点击守卫的两个 ref + 恒定引用的 value（见 RowTapGuardContext 注释）。 */
   const menuOpenRef = useRef(false);
@@ -147,6 +194,8 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
     AsyncStorage.setItem(CACHED_CONVS_KEY, JSON.stringify(rows)).catch(() => {});
   }, []);
 
+  /** 拉第一页（replace 语义）。刷新时窗口不缩水：重拉「已加载过多少条」而非固定一页，
+   *  否则滚了 5 页之后来一次 sidebar_refresh，列表会当场缩回 20 条。 */
   const loadConvs = useCallback(
     async (opts: LoadOpts = {}) => {
       if (!session) return;
@@ -156,9 +205,19 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
       if (!force && lastLoadRef.current && now - lastLoadRef.current < DEDUPE_MS) return;
       lastLoadRef.current = now;
       if (!silent) setLoading(true);
+      const want = Math.min(
+        Math.max(pagedCountRef.current, CONV_LIST_PAGE_SIZE),
+        REFRESH_WINDOW_MAX
+      );
       try {
-        const { conversations } = await listConversations(session);
+        const { conversations, hasMore } = await listConversations(session, {
+          limit: want,
+          offset: 0,
+        });
         const rows = conversations ?? [];
+        pagedCountRef.current = rows.length;
+        hasMoreRef.current = hasMore;
+        setHasMoreConversations(hasMore);
         setConvList(rows);
         setRunningMap((prev) => mergeFlag(prev, rows, 'chat_v2_running'));
         setUnreadMap((prev) => mergeFlag(prev, rows, 'chat_v2_unread'));
@@ -173,6 +232,73 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
     [session, persist]
   );
 
+  /** 拉下一页并追加到尾部。offset 走 pagedCountRef（服务端口径），去重按 id ——
+   *  翻页途中有会话被更新上浮时 offset 分页会跨页重复，去重后顺序仍是 updated_at DESC。 */
+  const loadMoreConversations = useCallback(async () => {
+    if (!session) return;
+    if (loadingMoreRef.current || !hasMoreRef.current) return;
+    loadingMoreRef.current = true;
+    setLoadingMoreConversations(true);
+    const offset = pagedCountRef.current;
+    try {
+      const { conversations, hasMore } = await listConversations(session, {
+        limit: CONV_LIST_PAGE_SIZE,
+        offset,
+      });
+      const rows = conversations ?? [];
+      // offset 按「请求回来的条数」推进，而不是去重后的条数——服务端口径是行数，
+      // 用去重后的数会让下一页重复读同一段。
+      pagedCountRef.current = offset + rows.length;
+      hasMoreRef.current = hasMore;
+      setHasMoreConversations(hasMore);
+      if (rows.length > 0) {
+        setConvList((prev) => {
+          const seen = new Set(prev.map((c) => c.id));
+          const fresh = rows.filter((c) => !seen.has(c.id));
+          if (fresh.length === 0) return prev;
+          const next = [...prev, ...fresh];
+          persist(next);
+          return next;
+        });
+        setRunningMap((prev) => mergeFlag(prev, rows, 'chat_v2_running'));
+        setUnreadMap((prev) => mergeFlag(prev, rows, 'chat_v2_unread'));
+      }
+    } catch {
+      // 静默失败：保留已加载的页，用户可再次上滑重试
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMoreConversations(false);
+    }
+  }, [session, persist]);
+
+  /** 某项目下的全部会话：服务端 ?flowtask_project_id= 过滤，独立缓存。
+   *  不分页——单个项目的会话数是「几十条」量级，跟全量 900 条不是一个问题。 */
+  const loadProjectConversations = useCallback(
+    async (projectId: string, force = false) => {
+      if (!session || !projectId) return;
+      if (!force && projectConvsRef.current[projectId]) return;
+      // 同一 projectId 的并发请求只放一个（项目页里多个组件同时消费同一个 hook）
+      if (projectLoadingRef.current.has(projectId)) return;
+      projectLoadingRef.current.add(projectId);
+      setProjectConvsLoading((prev) => ({ ...prev, [projectId]: true }));
+      try {
+        const { conversations } = await listConversations(session, {
+          flowtaskProjectId: projectId,
+        });
+        const rows = conversations ?? [];
+        setProjectConvs((prev) => ({ ...prev, [projectId]: rows }));
+        setRunningMap((prev) => mergeFlag(prev, rows, 'chat_v2_running'));
+        setUnreadMap((prev) => mergeFlag(prev, rows, 'chat_v2_unread'));
+      } catch {
+        // 静默失败：保留上次的项目会话（下拉刷新可重试）
+      } finally {
+        projectLoadingRef.current.delete(projectId);
+        setProjectConvsLoading((prev) => ({ ...prev, [projectId]: false }));
+      }
+    },
+    [session]
+  );
+
   // loadConvs 通过 ref 给 SSE effect 用，避免把它塞进 [session] effect 依赖导致反复重连
   const loadConvsRef = useRef(loadConvs);
   useEffect(() => {
@@ -185,14 +311,24 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
       setConvList([]);
       setRunningMap({});
       setUnreadMap({});
+      setProjectConvs({});
+      setProjectConvsLoading({});
       setError(null);
       lastLoadRef.current = 0;
+      pagedCountRef.current = 0;
+      hasMoreRef.current = false;
+      setHasMoreConversations(false);
       // 登出清缓存：缓存 key 全局共用，避免下个账号登录时短暂看到上一个账号的对话标题
       AsyncStorage.removeItem(CACHED_CONVS_KEY).catch(() => {});
       return;
     }
     let cancelled = false;
     lastLoadRef.current = 0;
+    // 换账号：分页游标必须归零，否则新账号的第一页会从上个账号的 offset 起切
+    pagedCountRef.current = 0;
+    hasMoreRef.current = false;
+    setProjectConvs({});
+    setProjectConvsLoading({});
     (async () => {
       try {
         const cached = await AsyncStorage.getItem(CACHED_CONVS_KEY);
@@ -390,6 +526,9 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
         persist(next);
         return next;
       });
+      // 本地多出一条（服务端还没算进分页口径）→ 下一页 offset 跟着 +1，
+      // 否则会把服务端第 N 条重读一遍（去重后表现为「上滑一次没长出新行」）。
+      pagedCountRef.current += 1;
     },
     [persist]
   );
@@ -397,9 +536,22 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
   const removeConversationOptimistic = useCallback(
     (id: string) => {
       setConvList((prev) => {
+        if (!prev.some((c) => c.id === id)) return prev;
         const next = prev.filter((c) => c.id !== id);
         persist(next);
+        // 服务端也少了一条 → offset 回退 1，否则下一页会跳过一条（漏行）
+        pagedCountRef.current = Math.max(0, pagedCountRef.current - 1);
         return next;
+      });
+      setProjectConvs((prev) => {
+        let touched = false;
+        const next: Record<string, ConversationListItem[]> = {};
+        for (const [pid, rows] of Object.entries(prev)) {
+          const kept = rows.filter((c) => c.id !== id);
+          if (kept.length !== rows.length) touched = true;
+          next[pid] = kept;
+        }
+        return touched ? next : prev;
       });
       setRunningMap((prev) => {
         if (!prev[id]) return prev;
@@ -424,9 +576,15 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
     loading,
     error,
     streamConnected,
+    hasMoreConversations,
+    loadingMoreConversations,
     refreshConversations,
+    loadMoreConversations,
     addConversationOptimistic,
     removeConversationOptimistic,
+    projectConvs,
+    projectConvsLoading,
+    loadProjectConversations,
     setActiveConversation,
   };
 
@@ -449,18 +607,48 @@ function useConversationContext(): ConversationContextValue {
   return ctx;
 }
 
-/** 全局对话列表（全量，消费方自行 slice / filter）。 */
+/** 全局对话列表：updated_at DESC 的**已加载页**（不是全量，见文件头分页说明）。
+ *  想要更多用 useConversationPaging().loadMore。消费方自行 slice / filter。 */
 export function useConversations(): ConversationListItem[] {
   return useConversationContext().convList;
 }
 
-/** 某项目下的对话（按 flowtask_project_id 过滤，与 Web ConversationList 语义一致）。 */
+/** 服务端分页状态 + 拉下一页（今日页 onEndReached 用）。 */
+export function useConversationPaging(): {
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMore: () => Promise<void>;
+} {
+  const { hasMoreConversations, loadingMoreConversations, loadMoreConversations } =
+    useConversationContext();
+  return {
+    hasMore: hasMoreConversations,
+    loadingMore: loadingMoreConversations,
+    loadMore: loadMoreConversations,
+  };
+}
+
+/** 某项目下的**全部**对话（服务端 ?flowtask_project_id= 过滤，首次消费时自动拉）。
+ *  为什么不复用 convList 过滤：convList 现在只有前几页，项目里更老的会话不在里面。 */
 export function useProjectConversations(projectId: string): ConversationListItem[] {
-  const { convList } = useConversationContext();
-  return useMemo(
-    () => convList.filter((c) => c.flowtask_project_id === projectId),
-    [convList, projectId]
+  const { projectConvs, loadProjectConversations } = useConversationContext();
+  useEffect(() => {
+    if (projectId) void loadProjectConversations(projectId);
+  }, [projectId, loadProjectConversations]);
+  return useMemo(() => projectConvs[projectId] ?? [], [projectConvs, projectId]);
+}
+
+/** 某项目会话的加载态 + 强制重拉（项目页下拉刷新用）。 */
+export function useProjectConversationsStatus(projectId: string): {
+  loading: boolean;
+  refresh: () => Promise<void>;
+} {
+  const { projectConvsLoading, loadProjectConversations } = useConversationContext();
+  const refresh = useCallback(
+    () => loadProjectConversations(projectId, true),
+    [loadProjectConversations, projectId]
   );
+  return { loading: Boolean(projectConvsLoading[projectId]), refresh };
 }
 
 /** 「进行中」状态 map（conversationId → true）。 */
@@ -485,12 +673,27 @@ export function useConversationsStatus(): { loading: boolean; error: string | nu
   return { loading, error, streamConnected };
 }
 
-/** actions：刷新 / 乐观增删（避免整表重拉）。 */
+/** actions：刷新 / 分页 / 乐观增删（避免整表重拉）。 */
 export function useConversationActions(): Pick<
   ConversationContextValue,
-  'refreshConversations' | 'addConversationOptimistic' | 'removeConversationOptimistic'
+  | 'refreshConversations'
+  | 'loadMoreConversations'
+  | 'loadProjectConversations'
+  | 'addConversationOptimistic'
+  | 'removeConversationOptimistic'
 > {
-  const { refreshConversations, addConversationOptimistic, removeConversationOptimistic } =
-    useConversationContext();
-  return { refreshConversations, addConversationOptimistic, removeConversationOptimistic };
+  const {
+    refreshConversations,
+    loadMoreConversations,
+    loadProjectConversations,
+    addConversationOptimistic,
+    removeConversationOptimistic,
+  } = useConversationContext();
+  return {
+    refreshConversations,
+    loadMoreConversations,
+    loadProjectConversations,
+    addConversationOptimistic,
+    removeConversationOptimistic,
+  };
 }

@@ -69,6 +69,7 @@ import {
 } from '../api';
 import {
   useConversations,
+  useConversationPaging,
   useRunningConvMap,
   useUnreadConvMap,
   useConversationsStatus,
@@ -233,9 +234,13 @@ export function TodayScreen() {
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const { loading: convLoading } = useConversationsStatus();
   const { refreshConversations, removeConversationOptimistic } = useConversationActions();
+  /** 服务端分页：convList 只有已加载的那几页，滚到底再从服务端补（增量追加，见 ConversationContext）。 */
+  const { hasMore: serverHasMoreConvs, loadMore: loadMoreConvsFromServer } = useConversationPaging();
   /** 客户端分页：footer 只渲染前 convVisibleCount 条对话，滚到底每次 +CONV_PAGE_SIZE。
    *  根因——之前 convList 全量 .map() 渲染在 footer（零虚拟化），几百条对话一次性 mount → 卡。
-   *  纯客户端切片：滚动位置不跳变（footer 尾部追加内容，已有项偏移不变，自然向下延伸）。iOS/Android 同生效。 */
+   *  纯客户端切片：滚动位置不跳变（footer 尾部追加内容，已有项偏移不变，自然向下延伸）。iOS/Android 同生效。
+   *  两层分页并存：客户端切片管「渲染多少」（瞬时），服务端分页管「手上有多少」（走网络）。
+   *  客户端页(10) < 服务端页(20)，所以多数上滑只是切片，两次才摸一次网络。 */
   const CONV_PAGE_SIZE = 10;
   const [convVisibleCount, setConvVisibleCount] = useState(CONV_PAGE_SIZE);
   const [deleteConvTarget, setDeleteConvTarget] = useState<ConversationListItem | null>(null);
@@ -776,13 +781,18 @@ export function TodayScreen() {
     }
   }, [onFilterMenuOpen, layoutWidth]);
 
-  /** 当前可见对话切片 + 是否还有更多 */
+  /** 当前可见对话切片 + 是否还有更多（本地未渲染的 或 服务端还没拉的） */
   const filteredConvList = showUnreadOnly ? convList.filter((c) => chatV2UnreadByConv[c.id]) : convList;
   const visibleConvs = filteredConvList.slice(0, convVisibleCount);
-  const hasMoreConvs = convVisibleCount < filteredConvList.length;
+  const hasMoreConvs = convVisibleCount < filteredConvList.length || serverHasMoreConvs;
   const loadMoreConvs = useCallback(() => {
+    // 先放本地切片（纯 slice，瞬时）
     setConvVisibleCount((n) => (n < filteredConvList.length ? n + CONV_PAGE_SIZE : n));
-  }, [filteredConvList.length]);
+    // 手上剩余不足一屏 → 顺手从服务端补下一页（context 内部有并发闸 + hasMore 守卫，重复调用无害）
+    if (filteredConvList.length - convVisibleCount <= CONV_PAGE_SIZE) {
+      void loadMoreConvsFromServer();
+    }
+  }, [filteredConvList.length, convVisibleCount, loadMoreConvsFromServer]);
 
   /** 列表尾：[结束今天]（新建任务已去掉，走右下角 FAB）+ 对话段 */
   const ListFooter = (
@@ -874,7 +884,7 @@ export function TodayScreen() {
             />
           ))}
           {/* 还有更多：占位加载行（滚到底由 onEndReached 触发 loadMoreConvs 放出下一页）。
-           *  渲染占位即代表"正在补充"，下一页几乎瞬时（纯切片），所以这就是过渡态。 */}
+           *  本地还有未渲染的切片时几乎瞬时；切到底了则是在等服务端下一页，同一个占位复用。 */}
           {hasMoreConvs ? (
             <View style={styles.convLoading}>
               <ActivityIndicator size="small" color={colors.primary} />

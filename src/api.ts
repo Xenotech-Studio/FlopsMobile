@@ -739,16 +739,80 @@ export type Conversation = {
   context_projection_l1?: Record<string, unknown>;
 };
 
+/** 会话列表页大小（服务端分页）：首屏 + 每次滚到底加载的条数。
+ *  今日页一屏只画 10 行，取 20 让「首屏 + 一次上滑」都不用等网络；再大就是白拉。 */
+export const CONV_LIST_PAGE_SIZE = 20;
+
+/** 一页会话列表 + 服务端分页元信息。 */
+export type ConversationListPage = {
+  conversations: ConversationListItem[];
+  /** 服务端在本页之后还有更多（不传 limit 的全量请求恒 false） */
+  hasMore: boolean;
+  /** 该用户会话总数（服务端分页时由 COUNT 给出；全量请求 = 本次条数） */
+  total: number;
+};
+
+/** 列表里每条 encrypted conv 都带 (title_ciphertext, k_conv_blob)，用 K_user 派 K_conv
+ *  后本地解出 title **原地写回**。对齐 FlopsWeb `utils/convTitleDecrypt.js` 的语义。
+ *  K_user 缺失或单条解失败都保留原 title sentinel，不抛错。 */
+async function decryptConvListTitles(list: ConversationListItem[]): Promise<void> {
+  try {
+    const kUserStr = await getStoredKUser();
+    if (!kUserStr) return;
+    const kUserBytes = base64ToBytes(kUserStr);
+    const { aesGcmDecrypt } = await import('./lib/srp');
+    for (const c of list) {
+      const raw = c as ConversationListItem & {
+        encrypted?: boolean;
+        title_ciphertext?: string;
+        k_conv_blob?: string;
+      };
+      if (!raw.encrypted || !raw.title_ciphertext) continue;
+      try {
+        let kConv = getCachedKConv(raw.id);
+        if (!kConv && raw.k_conv_blob) {
+          kConv = deriveKConvFromBlob(raw.k_conv_blob, kUserBytes);
+          setCachedKConv(raw.id, kConv);
+        }
+        if (!kConv) continue;
+        const blob = base64ToBytes(raw.title_ciphertext);
+        const pt = aesGcmDecrypt(blob, kConv);
+        const decoded = new TextDecoder().decode(pt);
+        // server 把 title 当 JSON 字符串存进密文：`"foo"`，所以这里要 parse 一层
+        raw.title = JSON.parse(decoded);
+      } catch {
+        // 单条解失败保留原 sentinel
+      }
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[conv list mobile] title decrypt batch failed:', (e as Error)?.message || e);
+  }
+}
+
 /**
- * 获取对话列表：GET /api/conversations。
- * 列表里每条 encrypted conv 都带 (title_ciphertext, k_conv_blob)，用 K_user 派 K_conv
- * 后本地解出 title 写回。对齐 FlopsWeb `utils/convTitleDecrypt.js` 的语义。
+ * 获取对话列表：GET /api/conversations?limit=&offset=[&flowtask_project_id=]。
+ *
+ * 服务端按 `updated_at DESC` 排完序再切窗，所以翻页稳定。传 limit 时服务端回
+ * `{conversations, has_more, total}` 信封；不传则回旧的裸数组（本函数两种都吃）。
+ * 手机端一律传 limit —— 全量是 900+ 条 / 1.4MB，今日页只画 10 行。
+ *
+ * 注：offset 分页的固有语义 —— 翻页途中有会话被更新而上浮时，可能跨页重复/漏一条。
+ * 重复由调用方按 id 去重（见 ConversationContext.loadMore）。
  */
 export async function listConversations(
-  session: Session
-): Promise<{ conversations: ConversationListItem[] }> {
+  session: Session,
+  opts: { limit?: number; offset?: number; flowtaskProjectId?: string } = {}
+): Promise<ConversationListPage> {
   const base = session.server_base_url;
-  const res = await fetchWithDebugLog(`${base}api/conversations`, {
+  const qs = new URLSearchParams();
+  if (typeof opts.limit === 'number') {
+    qs.set('limit', String(opts.limit));
+    qs.set('offset', String(opts.offset ?? 0));
+  }
+  if (opts.flowtaskProjectId) qs.set('flowtask_project_id', opts.flowtaskProjectId);
+  const q = qs.toString();
+  const res = await fetchWithDebugLog(`${base}api/conversations${q ? `?${q}` : ''}`, {
     method: 'GET',
     headers: authHeaders(session.access_token),
   });
@@ -756,45 +820,19 @@ export async function listConversations(
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail || `获取对话列表失败: ${res.status}`);
   }
-  const data = (await res.json()) as ConversationListItem[] | { conversations?: ConversationListItem[] };
-  const list = Array.isArray(data) ? data : (data as { conversations?: ConversationListItem[] }).conversations ?? [];
+  const data = (await res.json()) as
+    | ConversationListItem[]
+    | { conversations?: ConversationListItem[]; has_more?: boolean; total?: number };
+  const envelope = Array.isArray(data) ? null : data;
+  const list = Array.isArray(data) ? data : envelope?.conversations ?? [];
 
-  // 加密 conv title 本地解：K_user 缺失或单条解失败都保留原 title sentinel，不抛错
-  try {
-    const kUserStr = await getStoredKUser();
-    if (kUserStr) {
-      const kUserBytes = base64ToBytes(kUserStr);
-      const { aesGcmDecrypt } = await import('./lib/srp');
-      for (const c of list) {
-        const raw = c as ConversationListItem & {
-          encrypted?: boolean;
-          title_ciphertext?: string;
-          k_conv_blob?: string;
-        };
-        if (!raw.encrypted || !raw.title_ciphertext) continue;
-        try {
-          let kConv = getCachedKConv(raw.id);
-          if (!kConv && raw.k_conv_blob) {
-            kConv = deriveKConvFromBlob(raw.k_conv_blob, kUserBytes);
-            setCachedKConv(raw.id, kConv);
-          }
-          if (!kConv) continue;
-          const blob = base64ToBytes(raw.title_ciphertext);
-          const pt = aesGcmDecrypt(blob, kConv);
-          const decoded = new TextDecoder().decode(pt);
-          // server 把 title 当 JSON 字符串存进密文：`"foo"`，所以这里要 parse 一层
-          raw.title = JSON.parse(decoded);
-        } catch {
-          // 单条解失败保留原 sentinel
-        }
-      }
-    }
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    console.warn('[conv list mobile] title decrypt batch failed:', (e as Error)?.message || e);
-  }
+  await decryptConvListTitles(list);
 
-  return { conversations: list };
+  return {
+    conversations: list,
+    hasMore: Boolean(envelope?.has_more),
+    total: typeof envelope?.total === 'number' ? envelope.total : list.length,
+  };
 }
 
 /** Flops 后端给项目维护的子文件夹（跟 Flowtask 项目挂钩的那种）。 */

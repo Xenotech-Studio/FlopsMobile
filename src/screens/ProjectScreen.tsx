@@ -52,8 +52,7 @@ import {
 } from '../api';
 import {
   useProjectConversations,
-  useConversationsStatus,
-  useConversationActions,
+  useProjectConversationsStatus,
   useRunningConvMap,
   useUnreadConvMap,
 } from '../context/ConversationContext';
@@ -197,7 +196,10 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
   /** null = 「默认」段（flowtask_folder_id 为空的对话），string = 某 folder.id */
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
 
-  /** 跟 Web ConversationList 的语义一致：按 conversation.flowtask_project_id 等于当前项目 ID 过滤 */
+  /** 本项目下的全部对话。服务端过滤（GET /api/conversations?flowtask_project_id=），与 Web
+   *  ConversationList 的 flowtask_project_id 语义一致。
+   *  注：不能改成「过滤全局 convList」——全局列表自 2026-08 起是服务端分页的前几页，
+   *  项目里更老的对话根本不在里面。 */
   const projectConvs = useProjectConversations(projectId);
   /** running / unread 一律读 SSE 增量维护的 map（与今日页 useUnreadConvMap 及 Web ConversationList
    *  的 chatV2UnreadByConv 同源）。绝不直接读 conv.chat_v2_unread——那份只由整表 loadConvs 刷新，
@@ -205,9 +207,9 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
    *  直接读会漏掉「别端已读→SSE 广播 unread=False」这类增量，绿勾残留到下次整表重拉才灭。 */
   const runningByConv = useRunningConvMap();
   const unreadByConv = useUnreadConvMap();
-  const { loading: convsLoading } = useConversationsStatus();
-  const { refreshConversations } = useConversationActions();
-  /** 下拉刷新 spinner：对话（全局）或 folder（本地）任一在加载都转。 */
+  const { loading: convsLoading, refresh: refreshProjectConvs } =
+    useProjectConversationsStatus(projectId);
+  /** 下拉刷新 spinner：对话（本项目）或 folder（本地）任一在加载都转。 */
   const convLoading = convsLoading || foldersLoading;
 
   const loadFolders = useCallback(async () => {
@@ -227,10 +229,10 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
     loadFolders();
   }, [loadFolders]);
 
-  /** 下拉刷新：全局对话列表 + 本项目 folder 一起刷。 */
+  /** 下拉刷新：本项目对话 + 本项目 folder 一起刷。 */
   const onRefreshConvs = useCallback(async () => {
-    await Promise.all([refreshConversations(), loadFolders()]);
-  }, [refreshConversations, loadFolders]);
+    await Promise.all([refreshProjectConvs(), loadFolders()]);
+  }, [refreshProjectConvs, loadFolders]);
 
   /** 按 folder 分组：null key = "默认"；string key = folder.id。计数给 capsule tab 用 */
   const convCountByFolder = useMemo(() => {
@@ -283,12 +285,12 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
         flowtask_folder_id: activeFolderId,
       }).catch(() => undefined);
       navigation.navigate('Chat', { conversationId: id, conversationTitle: '新对话' });
-      // 不 await，让导航先发生；全局对话列表刷新跟在后台
-      refreshConversations();
+      // 不 await，让导航先发生；本项目对话列表刷新跟在后台
+      refreshProjectConvs();
     } catch (e) {
       Alert.alert('新建对话失败', e instanceof Error ? e.message : String(e));
     }
-  }, [session, projectId, activeFolderId, navigation, refreshConversations]);
+  }, [session, projectId, activeFolderId, navigation, refreshProjectConvs]);
 
   const statusKey = useMemo(() => `statusLevel_project_${projectId}`, [projectId]);
   const statusLevelCalendarKey = useMemo(
