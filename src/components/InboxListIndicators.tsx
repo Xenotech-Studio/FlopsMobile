@@ -1,27 +1,41 @@
-import React, { useEffect, useRef } from 'react';
-import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import Animated, {
+  Easing,
+  cancelAnimation,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from 'react-native-reanimated';
 import { useAppTheme } from '../context/ThemeContext';
 
-/** 与 FlopsWeb `.inbox-run-spinner` 一致：14px 环、灰底 + 深顶弧、0.7s 旋转 */
+/**
+ * 「agent 正在生成回复」：14px 环、灰底 + 深顶弧、0.7s 匀速转（对齐 FlopsWeb `.inbox-run-spinner`）。
+ *
+ * 用 Reanimated 而不是 RN 自带 Animated —— 后者那版在列表里会「转一下就不转了」：
+ * 它每次 render 都新建一个 `spin.interpolate(...)` 节点挂到 Animated.View 上，
+ * 而这一行所在的会话列表是随 inbox SSE 每帧重渲染的（running/unread/后台任务三份 map 任一变化
+ * 都会刷新整个 context value），插值节点被反复重挂，原生驱动那条动画就跟当前节点脱钩、视觉上定住。
+ * Reanimated 把角度放在 shared value 上、动画跑在 UI 线程，与 React 重渲染完全解耦，
+ * 重渲染多少次都不影响它转。本仓其它常驻动画（骨架屏扫光等）也都是这条路。
+ */
 export function InboxRunSpinner() {
-  const spin = useRef(new Animated.Value(0)).current;
+  const angle = useSharedValue(0);
   useEffect(() => {
-    const anim = Animated.loop(
-      Animated.timing(spin, {
-        toValue: 1,
-        duration: 700,
-        easing: Easing.linear,
-        useNativeDriver: true,
-      })
+    angle.value = 0;
+    angle.value = withRepeat(
+      withTiming(360, { duration: 700, easing: Easing.linear }),
+      -1, // 无限
+      false // 不回摆，转满一圈直接从 0 再来
     );
-    anim.start();
-    return () => anim.stop();
-  }, [spin]);
-  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+    return () => cancelAnimation(angle);
+  }, [angle]);
+  const spinStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${angle.value}deg` }] }));
   return (
     <Animated.View
-      style={[styles.runSpinner, { transform: [{ rotate }] }]}
+      style={[styles.runSpinner, spinStyle]}
       accessibilityLabel="生成中"
       accessibilityRole="image"
     />
