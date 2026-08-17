@@ -71,6 +71,7 @@ import {
   useConversations,
   useConversationPaging,
   useRunningConvMap,
+  useBgTaskRunningConvMap,
   useUnreadConvMap,
   useConversationsStatus,
   useConversationActions,
@@ -231,6 +232,8 @@ export function TodayScreen() {
   /* ---------- 对话段（数据源为全局 ConversationContext）---------- */
   const convList = useConversations();
   const chatV2RunningByConv = useRunningConvMap();
+  /** agent 没跑但后台任务在跑的会话（只有 inbox SSE 有这份，列表接口没这个字段） */
+  const bgTaskRunningByConv = useBgTaskRunningConvMap();
   const chatV2UnreadByConv = useUnreadConvMap();
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
@@ -886,6 +889,7 @@ export function TodayScreen() {
               title={(c.title && c.title.trim()) || '新对话'}
               timeLabel={c.updated_at ? formatTime(c.updated_at) : null}
               running={chatV2RunningByConv[c.id]}
+              bgRunning={bgTaskRunningByConv[c.id]}
               unread={chatV2UnreadByConv[c.id]}
               onPress={() => onConvPress(c)}
               onLongPress={() => setDeleteConvTarget(c)}

@@ -70,6 +70,9 @@ const BACKOFF_MAX = 30_000;
 const REFRESH_WINDOW_MAX = 200;
 
 type BoolMap = Record<string, boolean>;
+/** conversationId → { taskId: true }。存 id 集合而不是布尔：一个会话可能同时跑多个后台任务，
+ *  粗粒度布尔会在其中一个结束时把整条会话的转圈误灭（服务端注释里点名的坑）。 */
+type TaskIdMap = Record<string, Record<string, true>>;
 
 type LoadOpts = {
   silent?: boolean;
@@ -82,6 +85,8 @@ type ConversationContextValue = {
   convList: ConversationListItem[];
   runningMap: BoolMap;
   unreadMap: BoolMap;
+  /** 会话是否有后台任务在跑（agent 未跑但任务还在跑的那种）。与 runningMap 独立，UI 取或。 */
+  bgTaskRunningMap: BoolMap;
   loading: boolean;
   error: string | null;
   streamConnected: boolean;
@@ -147,11 +152,32 @@ function snapshotToMap(obj: unknown): BoolMap {
   ) as BoolMap;
 }
 
+/** inbox_snapshot.tasks（`{cid: [taskId, ...]}`）→ `{cid: {taskId: true}}`。
+ *  空数组 / 非法项直接丢掉，保证「有 key 就一定有在跑的任务」。 */
+function snapshotToTaskIds(obj: unknown): TaskIdMap {
+  if (!obj || typeof obj !== 'object') return {};
+  const out: TaskIdMap = {};
+  for (const [cid, tids] of Object.entries(obj as Record<string, unknown>)) {
+    if (!Array.isArray(tids)) continue;
+    const ids: Record<string, true> = {};
+    tids.forEach((t) => {
+      const s = String(t ?? '').trim();
+      if (s) ids[s] = true;
+    });
+    if (Object.keys(ids).length > 0) out[String(cid)] = ids;
+  }
+  return out;
+}
+
 export function ConversationProvider({ children }: { children: React.ReactNode }) {
   const { session } = useSession();
   const [convList, setConvList] = useState<ConversationListItem[]>([]);
   const [runningMap, setRunningMap] = useState<BoolMap>({});
   const [unreadMap, setUnreadMap] = useState<BoolMap>({});
+  /** 「有后台任务在跑」的会话 → 任务 id 集合。**只由 inbox SSE 维护**：
+   *  GET /api/conversations 的行投影里根本没有后台任务字段（server.py 的 _project），
+   *  所以列表刷新既补不出它、也绝不能清它 —— mergeFlag 那套 running/unread 语义不碰这份。 */
+  const [bgTaskIdsByConv, setBgTaskIdsByConv] = useState<TaskIdMap>({});
   const [loading, setLoading] = useState(false);
   /** 本账号的首次列表请求是否已跑完（成功/失败都算）。loading 初始是 false、要等 effect 里
    *  loadConvs 起步才变 true，只看 loading 的话首帧会先闪一下「暂无历史对话」空态。 */
@@ -372,6 +398,7 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
       setConvList([]);
       setRunningMap({});
       setUnreadMap({});
+      setBgTaskIdsByConv({});
       setProjectConvs({});
       setProjectConvsLoading({});
       setError(null);
@@ -389,6 +416,8 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
     hasMoreRef.current = false;
     // 换账号：新账号的首屏要重新走骨架，别继承上一个账号的「已加载过」
     setEverLoaded(false);
+    // 后台任务集合是上个账号的，清掉等新账号的 inbox_snapshot 重新种
+    setBgTaskIdsByConv({});
     setProjectConvs({});
     setProjectConvsLoading({});
     const userId = session.user_id;
@@ -462,6 +491,29 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
         if (Object.prototype.hasOwnProperty.call(msg, 'unread') && msg.unread && typeof msg.unread === 'object') {
           setUnreadMap(snapshotToMap(msg.unread));
         }
+        // 后台任务运行集种子：msg.tasks = { cid: [taskId, ...] }。快照即权威 —— 服务端是对
+        // 该用户**全部**对话做的全量扫描（server.py _inbox_snapshot_conv_pairs 传 only_conv_ids=None），
+        // 所以整表替换、缺省即清空：断线期间跑完的任务靠重连这一帧收尾，不会残留 ⏳。
+        setBgTaskIdsByConv(snapshotToTaskIds(msg.tasks));
+        return;
+      }
+      if (type === 'task_status' && msg.conversation_id != null) {
+        /* 后台任务级实时状态（与 conversation_run 互补：那个是「agent 在跑」，这个是
+         * 「agent 未跑但后台任务还在跑」）。按 task_id 精确增删 —— 存集合而不是布尔，
+         * 否则一个会话里多个任务、先结束的那个就会把整条会话的转圈误灭。 */
+        const id = String(msg.conversation_id).trim();
+        const taskId = String(msg.task_id ?? '').trim();
+        const status = String(msg.status ?? '').toLowerCase();
+        if (!id || !taskId) return;
+        setBgTaskIdsByConv((prev) => {
+          const cur = { ...(prev[id] ?? {}) };
+          if (status === 'running') cur[taskId] = true;
+          else delete cur[taskId];
+          const next = { ...prev };
+          if (Object.keys(cur).length > 0) next[id] = cur;
+          else delete next[id];
+          return next;
+        });
         return;
       }
       if (type === 'conversation_run' && msg.conversation_id != null) {
@@ -639,10 +691,20 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
     });
   }, []);
 
+  /** `{cid: {taskId: true}}` → `{cid: true}`，给行渲染直接用（有 key 即有在跑的任务）。 */
+  const bgTaskRunningMap = useMemo<BoolMap>(() => {
+    const out: BoolMap = {};
+    for (const [cid, ids] of Object.entries(bgTaskIdsByConv)) {
+      if (ids && Object.keys(ids).length > 0) out[cid] = true;
+    }
+    return out;
+  }, [bgTaskIdsByConv]);
+
   const value: ConversationContextValue = {
     convList,
     runningMap,
     unreadMap,
+    bgTaskRunningMap,
     loading,
     error,
     streamConnected,
@@ -730,6 +792,14 @@ export function useRunningConvMap(): BoolMap {
 /** 「未读」状态 map（conversationId → true）。 */
 export function useUnreadConvMap(): BoolMap {
   return useConversationContext().unreadMap;
+}
+
+/** 「有后台任务在跑」map（conversationId → true）。
+ *  与 useRunningConvMap 分开两份：前者是 chat_v2 agent 在跑（服务端列表字段 + conversation_run 事件），
+ *  这份是 agent 没跑但后台任务还在跑（只有 inbox SSE 的 inbox_snapshot.tasks / task_status 才有）。
+ *  行渲染时取或——Desktop 的 tab ⏳ 就是这么判的（FlopsDesktop index.js panelRunningTasksById）。 */
+export function useBgTaskRunningConvMap(): BoolMap {
+  return useConversationContext().bgTaskRunningMap;
 }
 
 /** 上报「当前正打开着的对话」（ChatScreen 获焦调 setActiveConversation(id)、失焦调 null）。

@@ -16,7 +16,10 @@ type Props = {
   title: string;
   /** 灰色时间标签，已格式化；不传 / 空则不显示 */
   timeLabel?: string | null;
+  /** chat_v2 agent 在跑 */
   running?: boolean;
+  /** agent 没跑但会话名下还有后台任务在跑（数据源只有 inbox SSE，见 useBgTaskRunningConvMap） */
+  bgRunning?: boolean;
   unread?: boolean;
   onPress: () => void;
   onLongPress?: () => void;
@@ -26,6 +29,7 @@ export function ConversationRow({
   title,
   timeLabel,
   running,
+  bgRunning,
   unread,
   onPress,
   onLongPress,
@@ -50,7 +54,9 @@ export function ConversationRow({
           <Text style={styles.title} numberOfLines={1}>
             {title}
           </Text>
-          {running ? <InboxRunSpinner /> : unread ? <InboxUnreadCheck /> : null}
+          {/* 「在跑」有两条独立来源：agent 在跑 / 后台任务在跑。任一为真都转圈，
+              跟 Desktop 的 tab ⏳ 判定一致。未读只在都不跑时才显示。 */}
+          {running || bgRunning ? <InboxRunSpinner /> : unread ? <InboxUnreadCheck /> : null}
         </View>
         {timeLabel ? (
           <Text style={styles.meta} numberOfLines={1}>

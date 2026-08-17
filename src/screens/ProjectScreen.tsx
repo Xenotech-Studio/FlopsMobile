@@ -54,6 +54,7 @@ import {
   useProjectConversations,
   useProjectConversationsStatus,
   useRunningConvMap,
+  useBgTaskRunningConvMap,
   useUnreadConvMap,
 } from '../context/ConversationContext';
 import { ConversationRow } from '../components/ConversationRow';
@@ -207,6 +208,8 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
    *  inbox SSE 的 conversation_unread / inbox_snapshot / 活动会话守卫都只动 map、不回写 convList，
    *  直接读会漏掉「别端已读→SSE 广播 unread=False」这类增量，绿勾残留到下次整表重拉才灭。 */
   const runningByConv = useRunningConvMap();
+  /** agent 没跑但后台任务在跑（与今日页同源，见 useBgTaskRunningConvMap） */
+  const bgTaskRunningByConv = useBgTaskRunningConvMap();
   const unreadByConv = useUnreadConvMap();
   const { loading: convsLoading, refresh: refreshProjectConvs } =
     useProjectConversationsStatus(projectId);
@@ -605,6 +608,7 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
                           title={(c.title && c.title.trim()) || '新对话'}
                           timeLabel={c.updated_at ? formatConvTime(c.updated_at) : null}
                           running={runningByConv[c.id]}
+                          bgRunning={bgTaskRunningByConv[c.id]}
                           unread={unreadByConv[c.id]}
                           onPress={() => onConvPress(c)}
                         />
