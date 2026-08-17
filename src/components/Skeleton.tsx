@@ -12,6 +12,7 @@
  */
 import React, { useEffect, useMemo } from 'react';
 import { StyleSheet, View, type DimensionValue, type LayoutChangeEvent } from 'react-native';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import Animated, {
   Easing,
@@ -54,6 +55,8 @@ const TASK_RING_SIZE = 24;
 /** 段标题行（"今日 N 个任务" / "对话"）的高度：文字只有 17，但同一行右侧挂着 padding 10 的
  *  筛选按钮（20pt 图标 → 40x40），所以真实行高由按钮决定。骨架照 40 撑，段间距才对得上。 */
 const SECTION_ROW_H = 40;
+/** 段标题条宽度。真实段头文字（"今日 N 个任务"）大约就是这个量级，同时够宽到一眼是"标题"。 */
+const SECTION_LABEL_W = 140;
 
 /** 标题条宽度循环：等宽会像表格，错开才像一列长短不一的对话标题。 */
 const TITLE_WIDTHS: DimensionValue[] = ['72%', '54%', '86%', '63%', '45%', '78%', '58%', '68%'];
@@ -143,8 +146,10 @@ function ConversationRowSkeleton({ index }: { index: number }) {
           <SkeletonBar width={56} height={9} delay={delay} />
         </View>
       </View>
-      {/* 右侧 chevron 的占位：不画灰块（一个箭头画成方块很怪），只占同样的宽度让标题条右缘对齐 */}
-      <View style={s.chevronSpacer} />
+      {/* 右侧 chevron：画**真图标**而不是灰方块。它是行的固定 chrome（每条对话行都有，
+          跟数据无关），用骨架灰上色既不会假装"已加载"，又能让对话行一眼区别于上面
+          带完成圆环的任务行。尺寸跟 ConversationRow 的 chevron-forward 一致（18）。 */}
+      <Ionicons name="chevron-forward" size={18} color={colors.skeletonBase} />
     </View>
   );
 }
@@ -187,11 +192,13 @@ function TaskRowSkeleton({ index }: { index: number }) {
   );
 }
 
-/** 段标题占位（"今日 N 个任务" / "对话"）。右侧留出筛选按钮的 40x40，行高才跟真实段头一致。 */
+/** 段标题占位（"今日 N 个任务" / "对话"）。右侧留出筛选按钮的 40x40，行高才跟真实段头一致。
+ *  条子刻意做得比行内文字条**宽而方**（140 × 14，圆角 4 而非全圆）—— 全圆细条跟下面的
+ *  标题条长得一样，整屏就糊成一片连续列表，分不出哪儿是分区。 */
 function SectionHeaderSkeleton({ index }: { index: number }) {
   return (
     <View style={sectionStyles.row}>
-      <SkeletonBar width={96} height={12} delay={index * ROW_STAGGER_MS} />
+      <SkeletonBar width={SECTION_LABEL_W} height={14} radius={4} delay={index * ROW_STAGGER_MS} />
       <View style={sectionStyles.btnSpacer} />
     </View>
   );
@@ -210,7 +217,7 @@ function SectionHeaderSkeleton({ index }: { index: number }) {
  */
 export function TodayContentSkeleton({
   paddingTop,
-  taskRows = 4,
+  taskRows = 2,
   convRows = 3,
 }: {
   paddingTop: number;
@@ -219,13 +226,20 @@ export function TodayContentSkeleton({
 }) {
   return (
     <View style={[todayStyles.wrap, { paddingTop }]} accessible accessibilityLabel="正在加载今日内容">
-      <SectionHeaderSkeleton index={0} />
+      {/* 任务段。行数少（默认 2）不是为了省——铺满一屏的等高行会让两个区糊成一片，
+          任务区短、对话区长，加上中间那道 12pt 的段间距，分区才立得住。 */}
+      <View style={todayStyles.taskHeaderWrap}>
+        <SectionHeaderSkeleton index={0} />
+      </View>
       {Array.from({ length: taskRows }, (_, i) => (
         <TaskRowSkeleton key={i} index={i} />
       ))}
-      {/* 对话段：段头 + 若干对话行，错峰延迟接着任务段往后排 */}
-      <SectionHeaderSkeleton index={taskRows} />
-      <ConversationListSkeleton count={convRows} startIndex={taskRows + 1} />
+      {/* 对话段：外面这层 paddingTop 12 对齐真实今日页的 footerWrap —— 真列表里任务段与
+          对话段之间就有这一档间距，骨架照抄既更像真页面，也正好把两区拉开。 */}
+      <View style={todayStyles.convSection}>
+        <SectionHeaderSkeleton index={taskRows} />
+        <ConversationListSkeleton count={convRows} startIndex={taskRows + 1} />
+      </View>
     </View>
   );
 }
@@ -271,8 +285,6 @@ function createConvStyles(c: AppColors) {
     /** 行盒高度写死 = 真实 Text 的自然行高，条本身比行盒矮一点（跟字形高度接近） */
     titleLine: { height: TITLE_LINE_H, justifyContent: 'center' },
     metaLine: { height: META_LINE_H, marginTop: 2, justifyContent: 'center' },
-    /** = ConversationRow 右侧 Ionicons chevron-forward 的 size */
-    chevronSpacer: { width: 18 },
   });
 }
 
@@ -315,6 +327,10 @@ const sectionStyles = StyleSheet.create({
   btnSpacer: { width: 40, height: 40 },
 });
 
+/** 今日页两段的外层间距，逐项对齐真实今日页：
+ *  任务段头包在 taskHeaderWrap（8/4）里，对话段整体挂在 footerWrap（paddingTop 12）下。 */
 const todayStyles = StyleSheet.create({
   wrap: { flex: 1 },
+  taskHeaderWrap: { paddingTop: 8, paddingBottom: 4 },
+  convSection: { paddingTop: 12 },
 });

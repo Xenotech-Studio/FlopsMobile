@@ -169,6 +169,72 @@ test('今日页整页骨架：任务段 + 对话段都在（对话骨架不再�
   expect(taskRows[0].gap).toBe(12);
 });
 
+test('分区感：默认任务段只有 2 行，对话段 3 行（等高行铺满一屏会糊成一片）', async () => {
+  const tree = await render(<TodayContentSkeleton paddingTop={100} />);
+  const taskRows: unknown[] = [];
+  const walk = (n: Json | null) => {
+    if (!n || typeof n !== 'object') return;
+    const flat = StyleSheet.flatten(n.props?.style as never) as Record<string, unknown>;
+    if (flat && flat.minHeight === TASK_ROW_MIN_HEIGHT) taskRows.push(flat);
+    (n.children ?? []).forEach(walk);
+  };
+  walk(tree);
+  expect(taskRows).toHaveLength(2);
+  expect(countBy(tree, isRow)).toBe(3);
+});
+
+test('分区感：两段之间留出真实今日页那 12pt（footerWrap），段头包在 8/4 里', async () => {
+  const tree = await render(<TodayContentSkeleton paddingTop={0} />);
+  const paddings: Record<string, unknown>[] = [];
+  const walk = (n: Json | null) => {
+    if (!n || typeof n !== 'object') return;
+    const flat = StyleSheet.flatten(n.props?.style as never) as Record<string, unknown>;
+    if (flat && (flat.paddingTop === 12 || flat.paddingBottom === 4)) paddings.push(flat);
+    (n.children ?? []).forEach(walk);
+  };
+  walk(tree);
+  // 任务段头 wrap（8/4）+ 对话段 wrap（12）各一个
+  expect(paddings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ paddingTop: 8, paddingBottom: 4 }),
+      expect.objectContaining({ paddingTop: 12 }),
+    ])
+  );
+});
+
+test('分区感：段头条比行内标题条更宽更方（不然跟正文条长一样）', async () => {
+  const tree = await render(<TodayContentSkeleton paddingTop={0} />);
+  const bars: Record<string, unknown>[] = [];
+  const walk = (n: Json | null) => {
+    if (!n || typeof n !== 'object') return;
+    const flat = StyleSheet.flatten(n.props?.style as never) as Record<string, unknown>;
+    if (flat && flat.backgroundColor === lightColors.skeletonBase) bars.push(flat);
+    (n.children ?? []).forEach(walk);
+  };
+  walk(tree);
+  const headerBars = bars.filter((b) => b.width === 140);
+  expect(headerBars).toHaveLength(2); // 任务段头 + 对话段头
+  headerBars.forEach((b) => expect(b.borderRadius).toBe(4)); // 方角，区别于全圆的文字条
+});
+
+test('对话行画真 chevron（跟真实行一致），一眼区别于带完成圆环的任务行', async () => {
+  const tree = await render(<TodayContentSkeleton paddingTop={0} convRows={3} />);
+  const chevrons = countBy(
+    tree,
+    (n) => n.type === 'Ionicons' && (n.props as { name?: string }).name === 'chevron-forward'
+  );
+  expect(chevrons).toBe(3); // 每条对话行一个，任务行没有
+  // 用的是骨架灰而不是正常图标色——是占位，不是"已加载"
+  const walkColor: string[] = [];
+  const walk = (n: Json | null) => {
+    if (!n || typeof n !== 'object') return;
+    if (n.type === 'Ionicons') walkColor.push((n.props as { color: string }).color);
+    (n.children ?? []).forEach(walk);
+  };
+  walk(tree);
+  expect(new Set(walkColor)).toEqual(new Set([lightColors.skeletonBase]));
+});
+
 test('整页骨架的 paddingTop 透传（跟真实列表 contentContainerStyle 对齐，替换时不跳）', async () => {
   const tree = await render(<TodayContentSkeleton paddingTop={137} />);
   const outer = StyleSheet.flatten(tree.props?.style as never) as Record<string, unknown>;
