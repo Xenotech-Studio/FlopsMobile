@@ -190,15 +190,16 @@ class FlopsAudioModule: RCTEventEmitter {
   // MARK: - 外部录音让路（听写占用共享 AVAudioSession）
   //
   // iOS 只在 setActive(true) 的那一刻做音频仲裁（谁打断谁、谁 duck 谁）——session 已经是
-  // active 的时候，光改 category / options 既压不低也打断不了别人（同 749 行「朗读窗口」
-  // 一节里 mix↔duck 要走降级循环的道理）。而实时流的保活态会把 session 长期摁在 active
-  // （.playback + mixWithOthers + 引擎渲染静音），于是听写侧 AudioManager 的
-  // playAndRecord + duckOthers 激活退化成空操作，画中画视频既不停也不压低。
+  // active 的时候，光改 category / options 既打断不了也压不低别人（同「朗读窗口」一节里
+  // mix↔duck 要走降级循环的道理）。而实时流的保活态会把 session 长期摁在 active
+  // （.playback + mixWithOthers + 引擎渲染静音），于是听写侧 AudioManager 的非混音
+  // playAndRecord 激活退化成空操作，画中画视频既不停也不让位。
   //
   // 所以听写开始前先让路：停保活引擎 + 真正 setActive(false)，把仲裁权交出去；随后
-  // react-native-audio-api 的激活才是一次真正的 inactive→active 跃迁，duckOthers 生效。
+  // react-native-audio-api 的激活才是一次真正的 inactive→active 跃迁，打断请求才真发得出去。
   // 让路期间本模块一律不碰 session（见 configureSession / startEngineIfNeeded 的 guard），
-  // 否则会把 category 抢回 .playback —— 那既顶掉 duck，也让录音全程静音。
+  // 否则会把 category 抢回 .playback —— 那既顶掉打断，也让录音全程静音。
+  // 让路那次 deactivate 还必须不带 notifyOthersOnDeactivation，理由见 configureSession 注释。
   // JS 侧调用点见 src/utils/voiceDictationMobile.ts 的 start() / _stopCapture()。
 
   /// 外部录音（听写）正持有共享 session。true 期间本模块不激活 / 不启引擎 / 不吃 PCM。
@@ -212,15 +213,16 @@ class FlopsAudioModule: RCTEventEmitter {
                               rejecter reject: @escaping RCTPromiseRejectBlock) {
     player?.pause() // 播放器还在出声时 setActive(false) 会 busy 失败
     stopEngineForCycle()
-    configureSession(active: false) // 置 flag 前调：否则被自己的 guard 挡住
+    // notifyOthers: false —— 让路不是收尾，紧接着就要抢回来打断对方，别先递一句「你可以恢复了」
+    configureSession(active: false, notifyOthers: false) // 置 flag 前调：否则被自己的 guard 挡住
     externalRecording = true
     resolve(nil)
   }
 
   /// 录音结束，收回 session。WS 仍该连着则重建 mix 保活态（渲染静音维持后台存活）；
   /// 否则什么都不做，session 留给下一次调用方激活。
-  /// duck 的解除不在这里——由 JS 侧那次带 notifyOthersOnDeactivation 的 deactivate 完成，
-  /// 故 JS 必须先 deactivate 再调本方法。
+  /// 打断的解除不在这里——由 JS 侧那次带 notifyOthersOnDeactivation 的 deactivate 完成
+  /// （被打断方收到 .ended/.shouldResume 才会恢复），故 JS 必须先 deactivate 再调本方法。
   @objc(endExternalRecording:rejecter:)
   func endExternalRecording(_ resolve: @escaping RCTPromiseResolveBlock,
                             rejecter reject: @escaping RCTPromiseRejectBlock) {
@@ -406,8 +408,15 @@ class FlopsAudioModule: RCTEventEmitter {
 
   /// audible=true：真要出声（回放播放 / 实时朗读窗口），按用户偏好 duck 或 mix；
   /// audible=false：仅保活（WS 连着但没在朗读），一律 mix，不压低其它 App。
-  private func configureSession(active: Bool, audible: Bool = true) {
-    // 听写持有 session 期间不抢激活：抢回 .playback 会顶掉听写激活时拿到的 duck 仲裁，
+  ///
+  /// notifyOthers 仅在 active=false 时有意义，语义是「我播完了，你们可以恢复」——
+  /// 收尾路径都该带（默认 true）。唯独 beginExternalRecording 的让路要传 false：那次
+  /// deactivate 不是收尾，而是马上要以非混音 session 抢回来打断对方。带上这面旗子等于
+  /// 在打断前几毫秒先广播一句 .ended/.shouldResume，而跨进程通知投递是异步的——对不看
+  /// shouldResume、收到 .ended 就无条件 setActive(true) 的播放器（如 ijkplayer 系），
+  /// 这条 .ended 若排在 .began 之后落地，表现就是「顿一下又继续播」。
+  private func configureSession(active: Bool, audible: Bool = true, notifyOthers: Bool = true) {
+    // 听写持有 session 期间不抢激活：抢回 .playback 会顶掉听写激活时拿到的打断仲裁，
     // 还会让录音全程静音。deactivate 放行——beginExternalRecording 的让路本身要用。
     if externalRecording && active { return }
     let session = AVAudioSession.sharedInstance()
@@ -422,7 +431,7 @@ class FlopsAudioModule: RCTEventEmitter {
         wireInterruptionsIfNeeded()
       } else {
         guard sessionActive else { return }
-        try session.setActive(false, options: [.notifyOthersOnDeactivation])
+        try session.setActive(false, options: notifyOthers ? [.notifyOthersOnDeactivation] : [])
         sessionActive = false
       }
     } catch {
@@ -761,7 +770,7 @@ class FlopsAudioModule: RCTEventEmitter {
 
   private func startEngineIfNeeded() {
     // 听写持有 session 期间不重启保活引擎：引擎一跑就重新占住音频图，
-    // 听写结束时那次 deactivate 会 busy 失败，duck 卡着解不掉。
+    // 听写结束时那次 deactivate 会 busy 失败，被打断的 App 收不到 .ended 就一直不恢复。
     guard !externalRecording else { return }
     if !engineWired {
       engine.attach(playerNode)
