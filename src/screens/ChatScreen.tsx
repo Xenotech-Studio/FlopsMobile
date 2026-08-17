@@ -138,6 +138,13 @@ import { TaskEventCardView, UserInjectionInline } from './chat/TaskEventCardView
 import { ComposerContextRing } from './chat/ComposerContextRing';
 import { HistoryLoadingOverlay } from './chat/HistoryLoadingOverlay';
 import { mergeToolResultChunk } from '../utils/toolResultPatch';
+import {
+  armForOpen,
+  armOnce,
+  consumeScrollIntent,
+  createBottomPinState,
+  release as releaseBottomPin,
+} from '../utils/chatBottomPin';
 import { ansiToSegments } from '../utils/ansiToSegments';
 import {
   parseFileToolArgs,
@@ -710,10 +717,11 @@ export function ChatScreen({
   const execCardTimeRef = useRef<Record<string, { startMs: number; completedSec?: number }>>({});
   const abortRef = useRef<AbortController | null>(null);
   const manualStopRef = useRef(false);
-  /** 仅在有新消息/回复完成时滚到底部，避免展开折叠工具卡片时误滚 */
-  const shouldScrollToEndRef = useRef(false);
-  /** 与 shouldScrollToEndRef 配套：历史对话首次定位到底部用无动画，其余保持 true */
-  const scrollToEndAnimatedRef = useRef(true);
+  /** 「钉底」状态机（见 utils/chatBottomPin）：
+   *  - 一次性触发：有新消息 / 回复完成时滚一下，避免展开折叠工具卡片时误滚；
+   *  - 打开对话额外武装一个时间窗口：首个 onContentSizeChange 往往发生在图片（fit-image
+   *    异步量高）、flowdoc 附件、resume 流式气泡都还没量出高度时，只滚那一次会停在半路。 */
+  const bottomPinRef = useRef(createBottomPinState());
   const conversationIdRef = useRef(conversationId);
   const sessionRef = useRef(session);
   const pausedByBackgroundRef = useRef(false);
@@ -1651,7 +1659,7 @@ export function ChatScreen({
                     conversation.active_chat_v2_run_id.trim();
                   if (stillRunning) synced = truncateMessagesAfterLastUser(synced);
                   if (conversationIdRef.current === cid) {
-                    shouldScrollToEndRef.current = true;
+                    armOnce(bottomPinRef.current);
                     setMessages(synced);
                   }
                 } catch {
@@ -2145,7 +2153,7 @@ export function ChatScreen({
         ...(readyAtts.length > 0 ? { attachments: readyAtts } : {}),
       },
     ]);
-    shouldScrollToEndRef.current = true;
+    armOnce(bottomPinRef.current);
 
     let convId = conversationId;
     if (!convId) {
@@ -2208,7 +2216,7 @@ export function ChatScreen({
             conversation.active_chat_v2_run_id.trim();
           if (stillRunning) synced = truncateMessagesAfterLastUser(synced);
           if (streamDone || finalText.trim() || synced.length > 0) {
-            shouldScrollToEndRef.current = true;
+            armOnce(bottomPinRef.current);
             setMessages(synced);
           }
           const t = conversation?.title?.trim();
@@ -2216,7 +2224,7 @@ export function ChatScreen({
         }
       } catch {
         if (streamDone || finalText.trim()) {
-          shouldScrollToEndRef.current = true;
+          armOnce(bottomPinRef.current);
           setMessages((prev) => [
             ...prev,
             {
@@ -2233,7 +2241,7 @@ export function ChatScreen({
         pausedByBackgroundRef.current = false;
         silentBackgroundAbort = true;
       } else if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
-        shouldScrollToEndRef.current = true;
+        armOnce(bottomPinRef.current);
         const stopNote = '[用户手动打断回复]';
         const cap = streamCaptureRef.current;
         const text = (cap.text || '').trim();
@@ -2247,7 +2255,7 @@ export function ChatScreen({
           },
         ]);
       } else if (!silentBackgroundAbort) {
-        shouldScrollToEndRef.current = true;
+        armOnce(bottomPinRef.current);
         const msg =
           (e as { name?: string })?.name === 'AbortError'
             ? '已手动停止本轮执行。'
@@ -2317,7 +2325,7 @@ export function ChatScreen({
     const snapshotBlocks = [...currentAssistantBlocks];
     const snapshotText = streamingText;
     if (snapshotBlocks.length > 0 || (snapshotText && snapshotText.trim())) {
-      shouldScrollToEndRef.current = true;
+      armOnce(bottomPinRef.current);
       const stopNote = '[用户手动打断回复]';
       const text = (snapshotText || '').trim();
       setMessages((prev) => [
@@ -2441,7 +2449,7 @@ export function ChatScreen({
     setStreamingText('');
     setCurrentAssistantBlocks([]);
     setStreamStatus('thinking');
-    shouldScrollToEndRef.current = true;
+    armOnce(bottomPinRef.current);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -2490,7 +2498,7 @@ export function ChatScreen({
             conversation.active_chat_v2_run_id.trim();
           if (stillRunning) synced = truncateMessagesAfterLastUser(synced);
           if (streamDone || finalText.trim() || synced.length > 0) {
-            shouldScrollToEndRef.current = true;
+            armOnce(bottomPinRef.current);
             setMessages(synced);
           }
           const t = conversation?.title?.trim();
@@ -2498,7 +2506,7 @@ export function ChatScreen({
         }
       } catch {
         if (streamDone || finalText.trim()) {
-          shouldScrollToEndRef.current = true;
+          armOnce(bottomPinRef.current);
           setMessages((prev) => [
             ...prev,
             {
@@ -2553,7 +2561,7 @@ export function ChatScreen({
         pausedByBackgroundRef.current = false;
         silentBackgroundAbort = true;
       } else if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
-        shouldScrollToEndRef.current = true;
+        armOnce(bottomPinRef.current);
         const stopNote = '[用户手动打断回复]';
         const cap = streamCaptureRef.current;
         const text = (cap.text || '').trim();
@@ -2567,7 +2575,7 @@ export function ChatScreen({
           },
         ]);
       } else if (!silentBackgroundAbort) {
-        shouldScrollToEndRef.current = true;
+        armOnce(bottomPinRef.current);
         const msg =
           (e as { name?: string })?.name === 'AbortError'
             ? '已手动停止本轮执行。'
@@ -3080,7 +3088,7 @@ export function ChatScreen({
       setStreamingText('');
       setCurrentAssistantBlocks([]);
       setStreamStatus('thinking');
-      shouldScrollToEndRef.current = true;
+      armOnce(bottomPinRef.current);
       const controller = new AbortController();
       abortRef.current = controller;
       manualStopRef.current = false;
@@ -3106,7 +3114,7 @@ export function ChatScreen({
           if (t) setConversationTitle(t);
         } catch {
           if (streamDone || finalText.trim()) {
-            shouldScrollToEndRef.current = true;
+            armOnce(bottomPinRef.current);
             setMessages((prev) => [
               ...prev,
               {
@@ -3380,8 +3388,9 @@ export function ChatScreen({
         const tUi0 = perfNowMs();
         setConversationHistoryLoading(false);
         const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
-        shouldScrollToEndRef.current = true;
-        scrollToEndAnimatedRef.current = false;
+        /* 打开对话：不是滚一次就完事——图片/附件/流式气泡的高度都是随后才量出来的，
+           所以武装一个窗口，这段时间内容每次变高都重新贴到底（用户一碰列表即作废）。 */
+        armForOpen(bottomPinRef.current, Date.now());
         const rid = conversation?.active_chat_v2_run_id;
         const runId = typeof rid === 'string' ? rid.trim() : '';
         const tMap0 = perfNowMs();
@@ -4485,20 +4494,26 @@ export function ChatScreen({
              * 未来方向：把 KAV 的 padding 模式换成 ScrollView contentInset.bottom 动态跟键盘，
              * 或者 bottomOverlay 改用 transform translateY 直接跟 kbAnimHeight 走、彻底不让
              * KAV 缩 ScrollView frame。当前评估边缘 bug、性价比不高，先搁置。 */
-            onTouchStartCapture={dismissComposer}
-            onScrollBeginDrag={Platform.OS === 'android' ? dismissComposer : undefined}
+            /* 用户一碰列表就放弃钉底：正往上翻的时候，图片量完高度不能把人拽回底部。 */
+            onTouchStartCapture={() => {
+              releaseBottomPin(bottomPinRef.current);
+              dismissComposer();
+            }}
+            onScrollBeginDrag={() => {
+              releaseBottomPin(bottomPinRef.current);
+              if (Platform.OS === 'android') dismissComposer();
+            }}
             keyboardDismissMode="on-drag"
             onContentSizeChange={(_w, h) => {
               scrollContentHeightRef.current = h;
               /* 加载更旧的锚定已交给 maintainVisibleContentPosition（原生帧级维持），这里只管触底滚动。 */
-              if (shouldScrollToEndRef.current) {
-                shouldScrollToEndRef.current = false;
-                const animated = scrollToEndAnimatedRef.current;
-                scrollToEndAnimatedRef.current = true;
-                scrollRef.current?.scrollToEnd({ animated });
+              const intent = consumeScrollIntent(bottomPinRef.current, Date.now());
+              if (intent) {
+                scrollRef.current?.scrollToEnd({ animated: intent.animated });
                 /* Android：onContentSizeChange 经常在内容真正布局完前先 fire 一次（中间高度），
                    单次 scrollToEnd 只滚到那个中间位置。再补两次延迟滚动盖住后续布局抖动。
-                   iOS 同步布局基本一次到位，不需要。 */
+                   （iOS 那侧靠打开对话时武装的钉底窗口兜——图片/附件量完高度会再来一次
+                   onContentSizeChange，窗口内照样贴底。） */
                 if (Platform.OS === 'android') {
                   requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
                   setTimeout(() => scrollRef.current?.scrollToEnd({ animated: false }), 200);
