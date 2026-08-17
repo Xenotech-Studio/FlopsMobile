@@ -142,6 +142,9 @@ type TaskContextValue = {
   todayDate: Date;
   isAheadOfToday: boolean;
   isLoadingTasks: boolean;
+  /** 本账号的首次任务加载是否已跑完（成功/失败都算）。首帧 isLoadingTasks 还是 false，
+   *  今日页要靠它区分「还没开始拉」与「拉完了确实没任务」。 */
+  tasksEverLoaded: boolean;
   isLoadingProjects: boolean;
   errorMessage: string | null;
   loadTasks: (forceRefresh?: boolean) => Promise<void>;
@@ -172,6 +175,10 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   const [lastTasksLoad, setLastTasksLoad] = useState<number>(0);
   const [lastProjectsLoad, setLastProjectsLoad] = useState<number>(0);
   const [isLoadingTasks, setIsLoadingTasks] = useState(false);
+  /** 首次任务加载是否已经跑完（成功或失败都算）。给今日页判「画骨架还是画空态」用：
+   *  isLoadingTasks 初始是 false、要等 TodayScreen 的 effect 调 loadTasks 才变 true，
+   *  只看它的话首帧会先闪一下「今日无任务」空态。 */
+  const [tasksEverLoaded, setTasksEverLoaded] = useState(false);
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -244,6 +251,8 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
         setErrorMessage(e instanceof Error ? e.message : '加载任务失败');
       } finally {
         setIsLoadingTasks(false);
+        // 失败也算「跑过一次」：否则拉不动时今日页会永远停在骨架上，看不到错误条
+        setTasksEverLoaded(true);
       }
     },
     [auth, lastTasksLoad]
@@ -436,6 +445,12 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     loadEndedToday();
   }, [loadEndedToday]);
 
+  /** 换账号 / 登出：下一个账号的首屏要重新走骨架，别继承上一个账号的「已加载过」。
+   *  依赖挂 user_id 而非 auth 对象——access_token 刷新不该把首屏打回加载态。 */
+  React.useEffect(() => {
+    setTasksEverLoaded(false);
+  }, [session?.user_id]);
+
   const value: TaskContextValue = {
     tasks,
     projects,
@@ -443,6 +458,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     todayDate,
     isAheadOfToday,
     isLoadingTasks,
+    tasksEverLoaded,
     isLoadingProjects,
     errorMessage,
     loadTasks,

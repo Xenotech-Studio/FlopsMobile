@@ -94,7 +94,7 @@ import { BlurHeaderBackground, BlurFooterBackground } from '../components/BlurHe
 import { PullToRefreshRing } from '../components/PullToRefreshRing';
 import { InboxRunSpinner, InboxUnreadCheck } from '../components/InboxListIndicators';
 import { ConversationRow } from '../components/ConversationRow';
-import { ConversationListSkeleton } from '../components/Skeleton';
+import { ConversationListSkeleton, TodayContentSkeleton } from '../components/Skeleton';
 import { HamburgerButton } from './shell/HamburgerButton';
 import {
   AnimatedCircleButton,
@@ -171,6 +171,7 @@ export function TodayScreen() {
     tasks,
     projects,
     isLoadingTasks,
+    tasksEverLoaded,
     errorMessage,
     loadTasks,
     loadProjects,
@@ -233,7 +234,9 @@ export function TodayScreen() {
   const chatV2UnreadByConv = useUnreadConvMap();
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
-  const { loading: convLoading } = useConversationsStatus();
+  /** pending = 首次列表请求还没跑完（含还没起步）。不能只看 loading——它初始是 false，
+   *  首帧会先闪一下「暂无历史对话」空态再进骨架。 */
+  const { pending: convPending } = useConversationsStatus();
   const { refreshConversations, removeConversationOptimistic } = useConversationActions();
   /** 服务端分页：convList 只有已加载的那几页，滚到底再从服务端补（增量追加，见 ConversationContext）。 */
   const { hasMore: serverHasMoreConvs, loadMore: loadMoreConvsFromServer } = useConversationPaging();
@@ -704,7 +707,10 @@ export function TodayScreen() {
   }
 
   const headerHeight = insets.top + 8 + 12 + HEADER_CIRCLE_BTN_SIZE;
-  const taskLoading = isLoadingTasks && todayTasks.length === 0;
+  /** 内容区该画骨架：手上没任务，且首次加载还没跑完（含还没起步）。
+   *  只看 isLoadingTasks 不行——它初始 false，要等本屏 effect 调 loadTasks 才变 true，
+   *  中间那一帧会露出「今日无任务」空态。 */
+  const taskLoading = todayTasks.length === 0 && (isLoadingTasks || !tasksEverLoaded);
   const showEndToday = shouldShowEndTodayButton();
 
   /** 列表头：filter 段头 */
@@ -859,7 +865,7 @@ export function TodayScreen() {
         )}
       </View>
 
-      {convLoading && convList.length === 0 ? (
+      {convPending && convList.length === 0 ? (
         /* 冷启动没快照可秒开时的加载态：骨架行而非居中菊花——预告内容形状，且行几何与
            ConversationRow 一致，真列表到位时页面不跳。有快照的路径走不到这里。 */
         <ConversationListSkeleton count={CONV_PAGE_SIZE} />
@@ -960,12 +966,12 @@ export function TodayScreen() {
         </AnimatedCircleButton>
       </View>
 
-      {/* 主列表 */}
+      {/* 主列表。加载态是**整页骨架**而不是居中大菊花：菊花那条路把整个内容区（含
+          ListFooterComponent 里的对话段）都换掉了，对话骨架根本没机会挂载——冷启动看到的
+          就是「header + 全屏菊花 → 直接真内容」。骨架 paddingTop 跟下面 list 的
+          contentContainerStyle 对齐，替换时第一行不跳。 */}
       {taskLoading ? (
-        <View style={[styles.centered, { paddingTop: headerHeight }]}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.loadingText}>加载中...</Text>
-        </View>
+        <TodayContentSkeleton paddingTop={headerHeight + 8} />
       ) : (
         <DraggableFlatList<ListRow>
           containerStyle={{ flex: 1 }}
@@ -1357,7 +1363,6 @@ function createStyles(c: AppColors) {
     kavInner: { flex: 1 },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     placeholderText: { fontSize: 16, color: c.textMuted },
-    loadingText: { marginTop: 12, fontSize: TASK_FONT_SIZE_SMALL, color: c.textMuted },
     topBar: {
       position: 'absolute',
       top: 0,

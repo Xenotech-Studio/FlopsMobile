@@ -25,7 +25,12 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useAppTheme } from '../context/ThemeContext';
 import type { AppColors } from '../theme/appColors';
-import { LIST_ROW_TITLE_SIZE } from '../theme/typography';
+import { LIST_ROW_TITLE_SIZE, TASK_FONT_SIZE_SMALL } from '../theme/typography';
+import {
+  TASK_ROW_MIN_HEIGHT,
+  TASK_ROW_PADDING_RIGHT,
+  TASK_ROW_PADDING_VERTICAL,
+} from '../theme/layout';
 
 /** 一趟扫光时长。比常见的 1s 稍慢——加载态往往只闪现半秒，太快反而像在抖。 */
 const SHIMMER_MS = 1150;
@@ -42,6 +47,13 @@ const lineBox = (fontSize: number) => Math.round(fontSize * 1.2);
 const TITLE_LINE_H = lineBox(LIST_ROW_TITLE_SIZE);
 /** 对话行时间标签的行盒（ConversationRow 的 meta 是 12） */
 const META_LINE_H = lineBox(12);
+/** 任务行副标题的行盒（TaskRowContent 的 subtitle 用 TASK_FONT_SIZE_SMALL） */
+const TASK_SUB_LINE_H = lineBox(TASK_FONT_SIZE_SMALL);
+/** 任务行左侧完成圆环的直径（TaskRowContent 的 RING_SIZE） */
+const TASK_RING_SIZE = 24;
+/** 段标题行（"今日 N 个任务" / "对话"）的高度：文字只有 17，但同一行右侧挂着 padding 10 的
+ *  筛选按钮（20pt 图标 → 40x40），所以真实行高由按钮决定。骨架照 40 撑，段间距才对得上。 */
+const SECTION_ROW_H = 40;
 
 /** 标题条宽度循环：等宽会像表格，错开才像一列长短不一的对话标题。 */
 const TITLE_WIDTHS: DimensionValue[] = ['72%', '54%', '86%', '63%', '45%', '78%', '58%', '68%'];
@@ -137,13 +149,83 @@ function ConversationRowSkeleton({ index }: { index: number }) {
   );
 }
 
-/** 会话列表骨架（今日页 / 项目页对话段）。count 取「够铺满一屏可见区」即可，多了纯浪费。 */
-export function ConversationListSkeleton({ count = 6 }: { count?: number }) {
+/** 会话列表骨架（今日页 / 项目页对话段）。count 取「够铺满一屏可见区」即可，多了纯浪费。
+ *  startIndex 让扫光的错峰延迟接着上一段继续排（今日页把任务段排在前面）。 */
+export function ConversationListSkeleton({
+  count = 6,
+  startIndex = 0,
+}: {
+  count?: number;
+  startIndex?: number;
+}) {
   return (
     <View accessible accessibilityLabel="正在加载对话列表">
       {Array.from({ length: count }, (_, i) => (
-        <ConversationRowSkeleton key={i} index={i} />
+        <ConversationRowSkeleton key={i} index={startIndex + i} />
       ))}
+    </View>
+  );
+}
+
+/** 一行任务骨架。几何对齐 components/TaskRowContent：minHeight 76 / paddingVertical 14 /
+ *  左 18 右 18 / gap 12 / 左侧 24pt 完成圆环 / 标题行盒 + 2 + 副标题行盒。 */
+function TaskRowSkeleton({ index }: { index: number }) {
+  const delay = index * ROW_STAGGER_MS;
+  return (
+    <View style={taskStyles.row}>
+      {/* 完成圆环的占位：真实行这里就是个圆，所以骨架也画圆 */}
+      <SkeletonBar width={TASK_RING_SIZE} height={TASK_RING_SIZE} delay={delay} />
+      <View style={taskStyles.body}>
+        <View style={taskStyles.titleLine}>
+          <SkeletonBar width={TITLE_WIDTHS[index % TITLE_WIDTHS.length]} height={13} delay={delay} />
+        </View>
+        <View style={taskStyles.subtitleLine}>
+          <SkeletonBar width={104} height={10} delay={delay} />
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/** 段标题占位（"今日 N 个任务" / "对话"）。右侧留出筛选按钮的 40x40，行高才跟真实段头一致。 */
+function SectionHeaderSkeleton({ index }: { index: number }) {
+  return (
+    <View style={sectionStyles.row}>
+      <SkeletonBar width={96} height={12} delay={index * ROW_STAGGER_MS} />
+      <View style={sectionStyles.btnSpacer} />
+    </View>
+  );
+}
+
+/**
+ * 今日页**整个内容区**的骨架：段头 + 任务行 + 段头 + 对话行。
+ *
+ * 为什么需要它：今日页在 `isLoadingTasks && todayTasks.length === 0` 时整块内容区被一个
+ * 大菊花占着，对话段（连同它自己的骨架）在 ListFooterComponent 里根本没挂载 —— 所以
+ * 冷启动时用户看到的是「header + 全屏菊花 → 直接真内容」，对话骨架一帧都轮不到。
+ * 这里把那个菊花换成整页骨架，覆盖任务与对话两段。
+ *
+ * paddingTop 传 headerHeight + 8，跟真实列表的 contentContainerStyle 对齐，
+ * 骨架被真内容替换时第一行不会上下跳。
+ */
+export function TodayContentSkeleton({
+  paddingTop,
+  taskRows = 4,
+  convRows = 3,
+}: {
+  paddingTop: number;
+  taskRows?: number;
+  convRows?: number;
+}) {
+  return (
+    <View style={[todayStyles.wrap, { paddingTop }]} accessible accessibilityLabel="正在加载今日内容">
+      <SectionHeaderSkeleton index={0} />
+      {Array.from({ length: taskRows }, (_, i) => (
+        <TaskRowSkeleton key={i} index={i} />
+      ))}
+      {/* 对话段：段头 + 若干对话行，错峰延迟接着任务段往后排 */}
+      <SectionHeaderSkeleton index={taskRows} />
+      <ConversationListSkeleton count={convRows} startIndex={taskRows + 1} />
     </View>
   );
 }
@@ -194,9 +276,45 @@ function createConvStyles(c: AppColors) {
   });
 }
 
-/** 抽屉骨架不吃主题色（灰块颜色在 SkeletonBar 里拿），所以是模块级常量表。 */
+/* 下面几张表都不吃主题色（灰块颜色在 SkeletonBar 里拿），所以是模块级常量表。 */
+
+/** 抽屉 Recents：对齐 DrawerContent 的 MenuRow + menuGroup。 */
 const drawerStyles = StyleSheet.create({
   group: { marginTop: 2 },
   row: { paddingVertical: 12, paddingHorizontal: 12 },
   labelLine: { height: TITLE_LINE_H, justifyContent: 'center' },
+});
+
+/** 任务行：对齐 TaskRowContent 的 row / body / title / subtitle。 */
+const taskStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: TASK_ROW_MIN_HEIGHT,
+    paddingVertical: TASK_ROW_PADDING_VERTICAL,
+    paddingLeft: 18,
+    paddingRight: TASK_ROW_PADDING_RIGHT,
+    gap: 12,
+  },
+  body: { flex: 1, minWidth: 0 },
+  titleLine: { height: TITLE_LINE_H, justifyContent: 'center' },
+  subtitleLine: { height: TASK_SUB_LINE_H, marginTop: 2, justifyContent: 'center' },
+});
+
+/** 段标题行：对齐 TodayScreen 的 sectionRow（marginVertical 8 / paddingHorizontal 18）。 */
+const sectionStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    height: SECTION_ROW_H,
+    marginVertical: 8,
+    paddingHorizontal: 18,
+  },
+  /** 真实段头右侧那颗筛选按钮（padding 10 包 20pt 图标）占的位 */
+  btnSpacer: { width: 40, height: 40 },
+});
+
+const todayStyles = StyleSheet.create({
+  wrap: { flex: 1 },
 });

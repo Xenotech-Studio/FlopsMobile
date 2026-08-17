@@ -50,6 +50,7 @@ const snapshotOf = (userId: string, r: Row[], extra: Record<string, unknown> = {
 type Probe = {
   list: Row[];
   paging: { hasMore: boolean; loadingMore: boolean; loadMore: () => Promise<void> };
+  status: { loading: boolean; pending: boolean; error: string | null };
   actions: {
     refreshConversations: (opts?: { reset?: boolean }) => Promise<void>;
   };
@@ -74,11 +75,20 @@ async function coldStart(preloadSnapshot?: unknown) {
   await snapMod.ensureSnapshot('__warmup__');
 
   const frames: number[] = [];
+  /** 每一帧的 pending（首次请求还没跑完）——骨架屏就挂在它上面 */
+  const pendingFrames: boolean[] = [];
   let probe: Probe | null = null;
   function Capture() {
     const list = ctxMod.useConversations();
+    const status = ctxMod.useConversationsStatus();
     frames.push(list.length);
-    probe = { list, paging: ctxMod.useConversationPaging(), actions: ctxMod.useConversationActions() };
+    pendingFrames.push(status.pending);
+    probe = {
+      list,
+      status,
+      paging: ctxMod.useConversationPaging(),
+      actions: ctxMod.useConversationActions(),
+    };
     return null;
   }
 
@@ -94,6 +104,7 @@ async function coldStart(preloadSnapshot?: unknown) {
 
   return {
     frames,
+    pendingFrames,
     get: () => probe as unknown as Probe,
     act: (fn: () => Promise<void>) => RTR.act(fn),
     /** 让 Provider 重新读一次 useSession（用于换账号用例） */
@@ -224,6 +235,29 @@ test('网络失败不清空：保留快照 seed 的行（离线可用）', async
   mockListConversations.mockRejectedValue(new Error('offline'));
   const t = await coldStart(snapshotOf('u1', rows(0, 7)));
   expect(t.get().list).toHaveLength(7);
+});
+
+test('无快照冷启动：首帧起 pending 就是 true（骨架有机会出现），拉完落回 false', async () => {
+  mockListConversations.mockResolvedValue({ conversations: rows(0, 5), hasMore: false, total: 5 });
+  const t = await coldStart();
+  // 关键：loading 初始是 false（loadConvs 还没起步），只看它的话首帧会露出空态
+  expect(t.pendingFrames[0]).toBe(true);
+  expect(t.frames[0]).toBe(0); // 列表确实是空的 —— 所以这一帧必须画骨架而不是"暂无对话"
+  expect(t.get().status.pending).toBe(false);
+});
+
+test('列表请求失败也算跑完：pending 落回 false，界面才能从骨架切到空态/错误', async () => {
+  mockListConversations.mockRejectedValue(new Error('offline'));
+  const t = await coldStart();
+  expect(t.pendingFrames[0]).toBe(true);
+  expect(t.get().status.pending).toBe(false);
+  expect(t.get().status.error).toBeTruthy();
+});
+
+test('有快照秒开时不画骨架：首帧就有行，pending 与否都不影响', async () => {
+  mockListConversations.mockResolvedValue({ conversations: rows(0, 6), hasMore: false, total: 6 });
+  const t = await coldStart(snapshotOf('u1', rows(0, 6)));
+  expect(t.frames[0]).toBe(6); // 骨架分支的前提是 length===0，这里进不去
 });
 
 test('直接换账号：上个账号的行当场清掉，分页游标归零（首页仍是 limit=20）', async () => {

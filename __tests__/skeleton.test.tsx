@@ -38,10 +38,15 @@ jest.mock('react-native-reanimated', () => {
 });
 
 import { ThemeProvider } from '../src/context/ThemeContext';
-import { ConversationListSkeleton, DrawerRecentsSkeleton } from '../src/components/Skeleton';
+import {
+  ConversationListSkeleton,
+  DrawerRecentsSkeleton,
+  TodayContentSkeleton,
+} from '../src/components/Skeleton';
 import { ConversationRow } from '../src/components/ConversationRow';
 import { darkColors, lightColors } from '../src/theme/appColors';
 import { LIST_ROW_TITLE_SIZE } from '../src/theme/typography';
+import { TASK_ROW_MIN_HEIGHT, TASK_ROW_PADDING_VERTICAL } from '../src/theme/layout';
 
 type Json = {
   type: string;
@@ -144,6 +149,30 @@ test('占位条用主题骨架色，深浅两套都有（且不是同一个色�
   // 默认（jest 下 useColorScheme 为 light）渲染出来的条应当就是浅色骨架色
   const tree = await render(<ConversationListSkeleton count={2} />);
   expect(countBy(tree, isBar(lightColors.skeletonBase))).toBe(4); // 每行 标题 + 时间 两条
+});
+
+test('今日页整页骨架：任务段 + 对话段都在（对话骨架不再被任务 loading 挡掉）', async () => {
+  const tree = await render(<TodayContentSkeleton paddingTop={100} taskRows={4} convRows={3} />);
+  // 对话行 = 带 borderBottom 的行；任务行 = minHeight 76 的行
+  expect(countBy(tree, isRow)).toBe(3);
+  const taskRows: Record<string, unknown>[] = [];
+  const walk = (n: Json | null) => {
+    if (!n || typeof n !== 'object') return;
+    const flat = StyleSheet.flatten(n.props?.style as never) as Record<string, unknown>;
+    if (flat && flat.minHeight === TASK_ROW_MIN_HEIGHT) taskRows.push(flat);
+    (n.children ?? []).forEach(walk);
+  };
+  walk(tree);
+  expect(taskRows).toHaveLength(4);
+  // 任务骨架行的盒模型跟 TaskRowContent 对齐
+  expect(taskRows[0].paddingVertical).toBe(TASK_ROW_PADDING_VERTICAL);
+  expect(taskRows[0].gap).toBe(12);
+});
+
+test('整页骨架的 paddingTop 透传（跟真实列表 contentContainerStyle 对齐，替换时不跳）', async () => {
+  const tree = await render(<TodayContentSkeleton paddingTop={137} />);
+  const outer = StyleSheet.flatten(tree.props?.style as never) as Record<string, unknown>;
+  expect(outer.paddingTop).toBe(137);
 });
 
 test('抽屉 Recents 骨架：每行一条，行内 padding 与 MenuRow 一致', async () => {

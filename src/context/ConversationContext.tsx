@@ -85,6 +85,8 @@ type ConversationContextValue = {
   loading: boolean;
   error: string | null;
   streamConnected: boolean;
+  /** 本账号的首次列表请求已跑完（成功/失败都算） */
+  everLoaded: boolean;
   /** 服务端在已加载页之后还有更多会话（今日页据此决定滚到底要不要继续拉） */
   hasMoreConversations: boolean;
   /** 正在拉下一页（并发触发的 onEndReached 由它挡住） */
@@ -151,6 +153,9 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
   const [runningMap, setRunningMap] = useState<BoolMap>({});
   const [unreadMap, setUnreadMap] = useState<BoolMap>({});
   const [loading, setLoading] = useState(false);
+  /** 本账号的首次列表请求是否已跑完（成功/失败都算）。loading 初始是 false、要等 effect 里
+   *  loadConvs 起步才变 true，只看 loading 的话首帧会先闪一下「暂无历史对话」空态。 */
+  const [everLoaded, setEverLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [streamConnected, setStreamConnected] = useState(false);
   const [hasMoreConversations, setHasMoreConversations] = useState(false);
@@ -242,6 +247,8 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
         // 失败不清列表：离线/弱网时保留快照 seed 的那份，比空屏有用
       } finally {
         if (!silent) setLoading(false);
+        // 失败也算「跑过一次」：否则拉不动时列表位置会永远停在骨架上
+        setEverLoaded(true);
       }
     },
     [session]
@@ -368,6 +375,7 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
       setProjectConvs({});
       setProjectConvsLoading({});
       setError(null);
+      setEverLoaded(false);
       lastLoadRef.current = 0;
       pagedCountRef.current = 0;
       hasMoreRef.current = false;
@@ -379,6 +387,8 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
     let cancelled = false;
     lastLoadRef.current = 0;
     hasMoreRef.current = false;
+    // 换账号：新账号的首屏要重新走骨架，别继承上一个账号的「已加载过」
+    setEverLoaded(false);
     setProjectConvs({});
     setProjectConvsLoading({});
     const userId = session.user_id;
@@ -636,6 +646,7 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
     loading,
     error,
     streamConnected,
+    everLoaded,
     hasMoreConversations,
     loadingMoreConversations,
     refreshConversations,
@@ -728,9 +739,15 @@ export function useSetActiveConversation(): (id: string | null) => void {
 }
 
 /** 列表加载态 / 错误态 / SSE 连接态。 */
-export function useConversationsStatus(): { loading: boolean; error: string | null; streamConnected: boolean } {
-  const { loading, error, streamConnected } = useConversationContext();
-  return { loading, error, streamConnected };
+export function useConversationsStatus(): {
+  loading: boolean;
+  error: string | null;
+  streamConnected: boolean;
+  /** 首次列表请求还没跑完（含还没起步）。列表为空时用它决定画骨架还是画空态。 */
+  pending: boolean;
+} {
+  const { loading, error, streamConnected, everLoaded } = useConversationContext();
+  return { loading, error, streamConnected, pending: loading || !everLoaded };
 }
 
 /** actions：刷新 / 分页 / 乐观增删（避免整表重拉）。 */
