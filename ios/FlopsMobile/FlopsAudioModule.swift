@@ -187,6 +187,51 @@ class FlopsAudioModule: RCTEventEmitter {
     resolve(nil)
   }
 
+  // MARK: - 外部录音让路（听写占用共享 AVAudioSession）
+  //
+  // iOS 只在 setActive(true) 的那一刻做音频仲裁（谁打断谁、谁 duck 谁）——session 已经是
+  // active 的时候，光改 category / options 既压不低也打断不了别人（同 749 行「朗读窗口」
+  // 一节里 mix↔duck 要走降级循环的道理）。而实时流的保活态会把 session 长期摁在 active
+  // （.playback + mixWithOthers + 引擎渲染静音），于是听写侧 AudioManager 的
+  // playAndRecord + duckOthers 激活退化成空操作，画中画视频既不停也不压低。
+  //
+  // 所以听写开始前先让路：停保活引擎 + 真正 setActive(false)，把仲裁权交出去；随后
+  // react-native-audio-api 的激活才是一次真正的 inactive→active 跃迁，duckOthers 生效。
+  // 让路期间本模块一律不碰 session（见 configureSession / startEngineIfNeeded 的 guard），
+  // 否则会把 category 抢回 .playback —— 那既顶掉 duck，也让录音全程静音。
+  // JS 侧调用点见 src/utils/voiceDictationMobile.ts 的 start() / _stopCapture()。
+
+  /// 外部录音（听写）正持有共享 session。true 期间本模块不激活 / 不启引擎 / 不吃 PCM。
+  private var externalRecording = false
+
+  /// 让出 session：暂停回放、停保活引擎、真正 deactivate。JS 须在
+  /// AudioManager.setAudioSessionActivity(false) **之前**调——引擎还跑着时那次
+  /// deactivate 会拿到 AVAudioSessionErrorCodeIsBusy 被静默吞掉，让路就白做了。
+  @objc(beginExternalRecording:rejecter:)
+  func beginExternalRecording(_ resolve: @escaping RCTPromiseResolveBlock,
+                              rejecter reject: @escaping RCTPromiseRejectBlock) {
+    player?.pause() // 播放器还在出声时 setActive(false) 会 busy 失败
+    stopEngineForCycle()
+    configureSession(active: false) // 置 flag 前调：否则被自己的 guard 挡住
+    externalRecording = true
+    resolve(nil)
+  }
+
+  /// 录音结束，收回 session。WS 仍该连着则重建 mix 保活态（渲染静音维持后台存活）；
+  /// 否则什么都不做，session 留给下一次调用方激活。
+  /// duck 的解除不在这里——由 JS 侧那次带 notifyOthersOnDeactivation 的 deactivate 完成，
+  /// 故 JS 必须先 deactivate 再调本方法。
+  @objc(endExternalRecording:rejecter:)
+  func endExternalRecording(_ resolve: @escaping RCTPromiseResolveBlock,
+                            rejecter reject: @escaping RCTPromiseRejectBlock) {
+    externalRecording = false
+    if shouldStreamConnect {
+      configureSession(active: true, audible: false)
+      startEngineIfNeeded()
+    }
+    resolve(nil)
+  }
+
   // MARK: - 播报模式 Live Activity（灵动岛 / 锁屏）
   //
   // 播报模式全局单例，JS 侧 setBroadcastMode(true/false) 的收敛处调这两个方法（见
@@ -362,6 +407,9 @@ class FlopsAudioModule: RCTEventEmitter {
   /// audible=true：真要出声（回放播放 / 实时朗读窗口），按用户偏好 duck 或 mix；
   /// audible=false：仅保活（WS 连着但没在朗读），一律 mix，不压低其它 App。
   private func configureSession(active: Bool, audible: Bool = true) {
+    // 听写持有 session 期间不抢激活：抢回 .playback 会顶掉听写激活时拿到的 duck 仲裁，
+    // 还会让录音全程静音。deactivate 放行——beginExternalRecording 的让路本身要用。
+    if externalRecording && active { return }
     let session = AVAudioSession.sharedInstance()
     do {
       if active {
@@ -683,6 +731,8 @@ class FlopsAudioModule: RCTEventEmitter {
   }
 
   private func handlePcm(_ incoming: Data) {
+    // 听写期间到的 PCM 直接丢：此刻用户在说话、引擎已停，排队只会在录完后炸出一段陈音。
+    guard !externalRecording else { return }
     tailGeneration += 1 // 还有 PCM 进来 = 还在朗读，作废挂起的「尾音播完→降回保活态」
     enterSpeakingSessionIfNeeded()
     var bytes = incoming
@@ -710,6 +760,9 @@ class FlopsAudioModule: RCTEventEmitter {
   // MARK: AVAudioEngine
 
   private func startEngineIfNeeded() {
+    // 听写持有 session 期间不重启保活引擎：引擎一跑就重新占住音频图，
+    // 听写结束时那次 deactivate 会 busy 失败，duck 卡着解不掉。
+    guard !externalRecording else { return }
     if !engineWired {
       engine.attach(playerNode)
       engine.connect(playerNode, to: engine.mainMixerNode, format: streamFormat)
@@ -762,6 +815,7 @@ class FlopsAudioModule: RCTEventEmitter {
   /// speak_start / 首帧 PCM：进入朗读窗口。偏好 duck 且 session 已按 mix 保活激活时，
   /// 需经一次降/升级循环换成 duck 选项——发生在首帧 PCM 排队之前，无可闻断裂。
   private func enterSpeakingSessionIfNeeded() {
+    guard !externalRecording else { return } // 听写占着 session：不进朗读窗口、不做 duck 循环
     if !realtimeSpeaking {
       realtimeSpeaking = true
       if audioMixingMode == "duck", sessionActive {

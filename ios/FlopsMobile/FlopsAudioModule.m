@@ -46,6 +46,12 @@ RCT_EXTERN_METHOD(setKeepScreenOn:(BOOL)on
                          resolver:(RCTPromiseResolveBlock)resolve
                          rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(beginExternalRecording:(RCTPromiseResolveBlock)resolve
+                                rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(endExternalRecording:(RCTPromiseResolveBlock)resolve
+                              rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(startLiveActivity)
 
 RCT_EXTERN_METHOD(endLiveActivity)
