@@ -138,6 +138,7 @@ import { TaskEventCardView, UserInjectionInline } from './chat/TaskEventCardView
 import { ComposerContextRing } from './chat/ComposerContextRing';
 import { HistoryLoadingOverlay } from './chat/HistoryLoadingOverlay';
 import { mergeToolResultChunk } from '../utils/toolResultPatch';
+import { usageRunEqual } from '../utils/usageRuns';
 import {
   armForOpen,
   armOnce,
@@ -693,6 +694,14 @@ export function ChatScreen({
   /** server SIGTERM 期间收到 v2_reload_pending：消息流末尾显示「服务器热更新中」banner，
    *  下一次 fetch 收到任意非 reload_pending 事件时清掉。 */
   const [reloadPending, setReloadPending] = useState(false);
+  /** reloadPending 的同步镜像。onEvent 是流式帧的入口（subagent 跑起来时每秒几十上百帧），
+   *  必须能在**不触发状态写入**的前提下判断 banner 当前是不是亮着：
+   *  - 直接 `setReloadPending(false)` 即使值没变也会让 React 重新渲染本组件（bail out 不保证
+   *    跳过自身渲染），一帧一次，ChatScreen 这么大的树扛不住，提交首尾相接就撞
+   *    "Maximum update depth exceeded"；
+   *  - 读 `reloadPending` 又不行：onEvent 挂在 runV2WithHandlers 的闭包里，那个 useCallback
+   *    只依赖 [session, applyConversationUsageState]，整条流期间闭包不刷新，读到的是陈旧值。 */
+  const reloadPendingRef = useRef(false);
   const [currentAssistantBlocks, setCurrentAssistantBlocks] = useState<StreamBlock[]>([]);
   const [error, setError] = useState('');
   const [submittingReviewId, setSubmittingReviewId] = useState('');
@@ -1405,10 +1414,17 @@ export function ChatScreen({
            reload reconnect 后 buffer replay 第一条往往是 v2_run，会被下面 early return 吞掉，
            如果 setReloadPending(false) 放后面就永远清不掉 banner。 */
         if ('type' in event && event.type === 'v2_reload_pending') {
+          reloadPendingRef.current = true;
           setReloadPending(true);
           return;
         }
-        setReloadPending(false);
+        /* 只在 banner 真亮着时才写状态。这里每帧都跑，无条件 setState 会把整棵 ChatScreen
+           推着一帧重渲染一次（见 reloadPendingRef 声明处）。判定读 ref 不读 state：闭包里的
+           reloadPending 是陈旧的。 */
+        if (reloadPendingRef.current) {
+          reloadPendingRef.current = false;
+          setReloadPending(false);
+        }
         if ('type' in event && event.type === 'v2_run') return;
         if ('conversation_id' in event && event.conversation_id) {
           streamTargetRef.current = event.conversation_id;
@@ -1425,8 +1441,11 @@ export function ChatScreen({
           if (ev.usage_run) {
             const run = ev.usage_run;
             setUsageRuns((prev) => {
+              const ix = prev.findIndex((x) => x.run_id === run.run_id);
+              // 同一条 run 的 usage 会被反复推送；内容没变就返回 prev 让 React bail out，
+              // 否则每个 usage 帧都新建数组 → 必然重渲染整棵 ChatScreen。
+              if (ix >= 0 && usageRunEqual(prev[ix], run)) return prev;
               const ur = [...prev];
-              const ix = ur.findIndex((x) => x.run_id === run.run_id);
               if (ix >= 0) ur[ix] = run;
               else ur.push(run);
               return ur;
@@ -1439,10 +1458,16 @@ export function ChatScreen({
              API 层自动断开 reader 进入 reconnect 等 server 起来。任何后续 chunk（包括 v2_step_rollback
              或新内容）来时把 banner 清掉。 */
           if (event.type === 'v2_reload_pending') {
+            reloadPendingRef.current = true;
             setReloadPending(true);
             return;
           }
-          if (reloadPending) setReloadPending(false);
+          /* 到这里 banner 其实已被上面那处清掉了，留着兜「上面提前 return 的路径」；
+             同样读 ref——闭包里的 reloadPending 是陈旧值，会漏清或空写。 */
+          if (reloadPendingRef.current) {
+            reloadPendingRef.current = false;
+            setReloadPending(false);
+          }
           if (event.type === 'thinking') setStreamStatus('thinking');
           if (event.type === 'thinking_delta') {
             setStreamStatus('thinking');
@@ -2295,8 +2320,9 @@ export function ChatScreen({
   // 打开对话 / 流式起止时同步待发队列；流结束清掉乐观穿插钉
   useEffect(() => {
     if (conversationId) void fetchSendQueue(conversationId);
-    else setSendQueue([]);
-    if (!loading) setLiveInjections([]);
+    else setSendQueue((prev) => (prev.length === 0 ? prev : []));
+    // 空数组也是新引用：本来就空的时候直接返回 prev，让 React bail out 掉这次重渲染
+    if (!loading) setLiveInjections((prev) => (prev.length === 0 ? prev : []));
   }, [conversationId, loading, fetchSendQueue]);
   // 持久化的穿插用户消息（user_injection block）到达 messages 后移除对应乐观钉，避免重复
   useEffect(() => {
