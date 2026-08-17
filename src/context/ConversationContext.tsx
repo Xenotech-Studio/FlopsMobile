@@ -6,7 +6,7 @@
  * TodayScreen 的 useEffect 上——页面卸载就断、无重连、丢弃 sidebar_refresh。
  *
  * 这里把「一份 convList + 一个 inbox SSE 单例」提到 SessionProvider 直下常驻：
- * - convList 全局唯一，mount 时 load（先吃 AsyncStorage 缓存 → 零加载即用，再拉网络）。
+ * - convList 全局唯一，mount 时 load（先吃本地快照 → 首帧即有内容，再拉网络对账）。
  * - runningMap / unreadMap 由 inbox SSE 增量维护（对齐旧 TodayScreen 语义）。
  * - inbox SSE：断线指数退避重连（照抄 flowbase TableSocket：1s→30s cap，收到数据即复位）；
  *   AppState active=重连 + catchup fetch，background=abort + 清 backoff 定时器（照抄 BeaconReporter）。
@@ -20,6 +20,13 @@
  * - 项目页要的是「某项目下**全部**会话」，跟这条分页主流不是一个集合，所以单独按 project 走
  *   服务端过滤（?flowtask_project_id=）缓存在 projectConvsRef/projectConvs 里，见
  *   useProjectConversations —— 不塞进 convList，避免把老会话插进分页主流搞乱顺序与 offset。
+ *
+ * 本地快照秒开（2026-08）：冷启动第一帧就把上次的列表画出来，不再 await 存储。
+ * - 快照在 bundle eval 时预读进内存（utils/conversationSnapshot），session 落地时**渲染期**
+ *   同步 seed（不是 effect —— effect 在 commit 之后跑，今日页会先画一帧空列表/菊花）。
+ * - 落盘走防抖：convList / runningMap / unreadMap 任一变化后 800ms 写一次最终态，
+ *   所以列表刷新、乐观增删、SSE 改 running/unread 全都自动进快照，无需逐处手写。
+ * - 失效：登出清；user_id 对不上不认；>24h 仍显示但首屏立刻强制刷新；网络回来整窗替换即对账。
  *
  * 消费方通过 hooks 零加载即用：useConversations / useProjectConversations /
  * useRunningConvMap / useUnreadConvMap，以及 actions refreshConversations /
@@ -36,7 +43,6 @@ import React, {
   useState,
 } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   CONV_LIST_PAGE_SIZE,
   listConversations,
@@ -46,8 +52,16 @@ import {
 import { useSession } from './SessionContext';
 import { getOrCreateClientInstanceId } from '../utils/clientInstanceId';
 import { notifyRemoteMicBye, notifyRemoteMicInvite } from '../utils/remoteMicInviteBus';
+import {
+  buildSnapshot,
+  clearSnapshot,
+  ensureSnapshot,
+  isSnapshotStale,
+  readSnapshotSync,
+  schedulePersistSnapshot,
+  type ConversationSnapshot,
+} from '../utils/conversationSnapshot';
 
-const CACHED_CONVS_KEY = '@FlopsMobile/cachedConversations';
 const DEDUPE_MS = 2000;
 const BACKOFF_START = 1000;
 const BACKOFF_MAX = 30_000;
@@ -57,7 +71,12 @@ const REFRESH_WINDOW_MAX = 200;
 
 type BoolMap = Record<string, boolean>;
 
-type LoadOpts = { silent?: boolean; force?: boolean };
+type LoadOpts = {
+  silent?: boolean;
+  force?: boolean;
+  /** 分页窗口回到第一页（只给下拉刷新用）。静默刷新不传，否则滚了 5 页会被缩回 20 条。 */
+  reset?: boolean;
+};
 
 type ConversationContextValue = {
   convList: ConversationListItem[];
@@ -70,7 +89,8 @@ type ConversationContextValue = {
   hasMoreConversations: boolean;
   /** 正在拉下一页（并发触发的 onEndReached 由它挡住） */
   loadingMoreConversations: boolean;
-  refreshConversations: () => Promise<void>;
+  /** 重新拉列表。默认保持「当前已加载窗口」的大小；`reset` = 回到第一页（下拉刷新用）。 */
+  refreshConversations: (opts?: { reset?: boolean }) => Promise<void>;
   /** 拉下一页并**追加**到 convList 尾部（按 id 去重）。没有更多 / 正在拉 时是 no-op。 */
   loadMoreConversations: () => Promise<void>;
   addConversationOptimistic: (conv: ConversationListItem) => void;
@@ -190,25 +210,20 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
       .catch(() => {});
   }, []);
 
-  const persist = useCallback((rows: ConversationListItem[]) => {
-    AsyncStorage.setItem(CACHED_CONVS_KEY, JSON.stringify(rows)).catch(() => {});
-  }, []);
-
   /** 拉第一页（replace 语义）。刷新时窗口不缩水：重拉「已加载过多少条」而非固定一页，
    *  否则滚了 5 页之后来一次 sidebar_refresh，列表会当场缩回 20 条。 */
   const loadConvs = useCallback(
     async (opts: LoadOpts = {}) => {
       if (!session) return;
-      const { silent = false, force = false } = opts;
+      const { silent = false, force = false, reset = false } = opts;
       const now = Date.now();
       // dedupe：2s 内重复 loadConvs 跳过（force 例外，用于下拉刷新 / AppState catchup）
       if (!force && lastLoadRef.current && now - lastLoadRef.current < DEDUPE_MS) return;
       lastLoadRef.current = now;
       if (!silent) setLoading(true);
-      const want = Math.min(
-        Math.max(pagedCountRef.current, CONV_LIST_PAGE_SIZE),
-        REFRESH_WINDOW_MAX
-      );
+      const want = reset
+        ? CONV_LIST_PAGE_SIZE
+        : Math.min(Math.max(pagedCountRef.current, CONV_LIST_PAGE_SIZE), REFRESH_WINDOW_MAX);
       try {
         const { conversations, hasMore } = await listConversations(session, {
           limit: want,
@@ -222,14 +237,14 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
         setRunningMap((prev) => mergeFlag(prev, rows, 'chat_v2_running'));
         setUnreadMap((prev) => mergeFlag(prev, rows, 'chat_v2_unread'));
         setError(null);
-        persist(rows);
       } catch (e) {
         setError(e instanceof Error ? e.message : '加载对话列表失败');
+        // 失败不清列表：离线/弱网时保留快照 seed 的那份，比空屏有用
       } finally {
         if (!silent) setLoading(false);
       }
     },
-    [session, persist]
+    [session]
   );
 
   /** 拉下一页并追加到尾部。offset 走 pagedCountRef（服务端口径），去重按 id ——
@@ -256,9 +271,7 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
           const seen = new Set(prev.map((c) => c.id));
           const fresh = rows.filter((c) => !seen.has(c.id));
           if (fresh.length === 0) return prev;
-          const next = [...prev, ...fresh];
-          persist(next);
-          return next;
+          return [...prev, ...fresh];
         });
         setRunningMap((prev) => mergeFlag(prev, rows, 'chat_v2_running'));
         setUnreadMap((prev) => mergeFlag(prev, rows, 'chat_v2_unread'));
@@ -269,7 +282,7 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
       loadingMoreRef.current = false;
       setLoadingMoreConversations(false);
     }
-  }, [session, persist]);
+  }, [session]);
 
   /** 某项目下的全部会话：服务端 ?flowtask_project_id= 过滤，独立缓存。
    *  不分页——单个项目的会话数是「几十条」量级，跟全量 900 条不是一个问题。 */
@@ -305,9 +318,50 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
     loadConvsRef.current = loadConvs;
   }, [loadConvs]);
 
-  /** 登录态变化：清缓存态 → 先吃本地缓存（零加载即用）→ 拉网络。登出则清空。 */
+  /* 三份 state 的同步镜像：快照落盘要在定时器里读「此刻的最终态」，用 state 会读到旧闭包。 */
+  const convListRef = useRef(convList);
+  const runningMapRef = useRef(runningMap);
+  const unreadMapRef = useRef(unreadMap);
+  convListRef.current = convList;
+  runningMapRef.current = runningMap;
+  unreadMapRef.current = unreadMap;
+
+  /* ---- 本地快照：渲染期同步 seed（不是 effect）。见文件头「本地快照秒开」。 ----
+   * 为什么在 render 里 setState：session 落地那一次 render 里，本 Provider 和它下面的今日页
+   * 是同一个 commit；放 effect 里就晚一帧——用户先看到空列表/菊花再看到内容，正是要消掉的那下。
+   * React 允许组件在自己的 render 期更新自己的 state（会就地重跑本组件、再渲染子树），
+   * seededForUserRef 保证只发生一次、不会循环。 */
+  const seededForUserRef = useRef<string | null>(null);
+  const applySnapshot = useCallback((snap: ConversationSnapshot) => {
+    setConvList(snap.rows);
+    setRunningMap(snap.running);
+    setUnreadMap(snap.unread);
+    // 快照不是「服务端分页取回的」，但冷启动那次刷新要按它的行数重拉，
+    // 否则 40 行的列表会在网络回来时缩成 20 行（可见的抖一下）。
+    pagedCountRef.current = snap.rows.length;
+  }, []);
+  if (session && seededForUserRef.current !== session.user_id) {
+    const prevUserId = seededForUserRef.current;
+    seededForUserRef.current = session.user_id;
+    const snap = readSnapshotSync(session.user_id);
+    if (snap && snap.rows.length > 0) {
+      applySnapshot(snap);
+    } else {
+      // 换账号：分页游标必须跟着换，否则新账号的首页会按上个账号的窗口大小拉；
+      // 上个账号的行也当场清掉，别让它们挂到新账号名下（正常登出已清，这里兜直接切号）。
+      pagedCountRef.current = 0;
+      if (prevUserId) {
+        setConvList([]);
+        setRunningMap({});
+        setUnreadMap({});
+      }
+    }
+  }
+
+  /** 登录态变化：先吃本地快照（同步已在上面做了，这里兜异步）→ 拉网络对账。登出则清空。 */
   useEffect(() => {
     if (!session) {
+      seededForUserRef.current = null;
       setConvList([]);
       setRunningMap({});
       setUnreadMap({});
@@ -318,36 +372,44 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
       pagedCountRef.current = 0;
       hasMoreRef.current = false;
       setHasMoreConversations(false);
-      // 登出清缓存：缓存 key 全局共用，避免下个账号登录时短暂看到上一个账号的对话标题
-      AsyncStorage.removeItem(CACHED_CONVS_KEY).catch(() => {});
+      // 登出清快照：key 全局共用，避免下个账号登录时首帧闪一下上个账号的对话标题
+      clearSnapshot();
       return;
     }
     let cancelled = false;
     lastLoadRef.current = 0;
-    // 换账号：分页游标必须归零，否则新账号的第一页会从上个账号的 offset 起切
-    pagedCountRef.current = 0;
     hasMoreRef.current = false;
     setProjectConvs({});
     setProjectConvsLoading({});
+    const userId = session.user_id;
     (async () => {
-      try {
-        const cached = await AsyncStorage.getItem(CACHED_CONVS_KEY);
-        if (!cancelled && cached) {
-          const rows = JSON.parse(cached) as ConversationListItem[];
-          if (Array.isArray(rows)) {
-            setConvList((prev) => (prev.length === 0 ? rows : prev));
-          }
-        }
-      } catch {
-        /* ignore */
+      // 同步 seed 没赶上（预热读还没回来）时的兜底：等预热完再补一次。
+      const snap = await ensureSnapshot(userId);
+      if (cancelled) return;
+      // 手上已经有行了（同步 seed 成功，或网络先回来了）就别再用快照盖一遍
+      if (snap && snap.rows.length > 0 && convListRef.current.length === 0) {
+        applySnapshot(snap);
       }
-      if (!cancelled) loadConvs();
+      if (cancelled) return;
+      // 快照陈旧（>24h）：照样先显示，但这次刷新绕过 dedupe 立刻打网络
+      loadConvs({ force: isSnapshotStale(snap) });
     })();
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
+
+  /* ---- 快照落盘：列表 / running / unread 任一变化后防抖写一次最终态。 ----
+   * 集中在这一处，所以列表刷新、分页追加、乐观增删、SSE 增量全都自动进快照，不必逐处手写 persist。 */
+  useEffect(() => {
+    if (!session) return;
+    if (convList.length === 0) return; // 空列表不写：登出/切号途中的中间态别把好快照抹了
+    const userId = session.user_id;
+    schedulePersistSnapshot(() =>
+      buildSnapshot(userId, convListRef.current, runningMapRef.current, unreadMapRef.current)
+    );
+  }, [session, convList, runningMap, unreadMap]);
 
   /** inbox SSE 单例：保活 + 断线退避重连 + AppState 前后台适配。 */
   useEffect(() => {
@@ -514,60 +576,58 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
     });
   }, [activeConversationId, unreadMap]);
 
-  const refreshConversations = useCallback(async () => {
-    await loadConvs({ force: true });
-  }, [loadConvs]);
+  const refreshConversations = useCallback(
+    async (opts: { reset?: boolean } = {}) => {
+      await loadConvs({ force: true, reset: opts.reset });
+    },
+    [loadConvs]
+  );
 
-  const addConversationOptimistic = useCallback(
-    (conv: ConversationListItem) => {
-      setConvList((prev) => {
-        if (prev.some((c) => c.id === conv.id)) return prev;
-        const next = [conv, ...prev];
-        persist(next);
-        return next;
-      });
-      // 本地多出一条（服务端还没算进分页口径）→ 下一页 offset 跟着 +1，
-      // 否则会把服务端第 N 条重读一遍（去重后表现为「上滑一次没长出新行」）。
+  const addConversationOptimistic = useCallback((conv: ConversationListItem) => {
+    // 本地多出一条（服务端还没算进分页口径）→ 下一页 offset 跟着 +1，
+    // 否则会把服务端第 N 条重读一遍（去重后表现为「上滑一次没长出新行」）。
+    if (!convListRef.current.some((c) => c.id === conv.id)) {
       pagedCountRef.current += 1;
-    },
-    [persist]
-  );
+    }
+    setConvList((prev) => {
+      if (prev.some((c) => c.id === conv.id)) return prev;
+      return [conv, ...prev];
+    });
+  }, []);
 
-  const removeConversationOptimistic = useCallback(
-    (id: string) => {
-      setConvList((prev) => {
-        if (!prev.some((c) => c.id === id)) return prev;
-        const next = prev.filter((c) => c.id !== id);
-        persist(next);
-        // 服务端也少了一条 → offset 回退 1，否则下一页会跳过一条（漏行）
-        pagedCountRef.current = Math.max(0, pagedCountRef.current - 1);
-        return next;
-      });
-      setProjectConvs((prev) => {
-        let touched = false;
-        const next: Record<string, ConversationListItem[]> = {};
-        for (const [pid, rows] of Object.entries(prev)) {
-          const kept = rows.filter((c) => c.id !== id);
-          if (kept.length !== rows.length) touched = true;
-          next[pid] = kept;
-        }
-        return touched ? next : prev;
-      });
-      setRunningMap((prev) => {
-        if (!prev[id]) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-      setUnreadMap((prev) => {
-        if (!prev[id]) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-    },
-    [persist]
-  );
+  const removeConversationOptimistic = useCallback((id: string) => {
+    // 服务端也少了一条 → offset 回退 1，否则下一页会跳过一条（漏行）。
+    // 放 updater 外面按 ref 判：updater 可能被 React 重复调用，游标不能在里面改。
+    if (convListRef.current.some((c) => c.id === id)) {
+      pagedCountRef.current = Math.max(0, pagedCountRef.current - 1);
+    }
+    setConvList((prev) => {
+      if (!prev.some((c) => c.id === id)) return prev;
+      return prev.filter((c) => c.id !== id);
+    });
+    setProjectConvs((prev) => {
+      let touched = false;
+      const next: Record<string, ConversationListItem[]> = {};
+      for (const [pid, rows] of Object.entries(prev)) {
+        const kept = rows.filter((c) => c.id !== id);
+        if (kept.length !== rows.length) touched = true;
+        next[pid] = kept;
+      }
+      return touched ? next : prev;
+    });
+    setRunningMap((prev) => {
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setUnreadMap((prev) => {
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
 
   const value: ConversationContextValue = {
     convList,

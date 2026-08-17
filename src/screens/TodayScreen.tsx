@@ -312,9 +312,10 @@ export function TodayScreen() {
     clearError();
     const startedAt = Date.now();
     try {
-      // 下拉刷新：可见数回到首页大小，从头分页（对齐旧 loadConvs 行为）
+      // 下拉刷新：可见数回到首页大小，服务端窗口也重置回第一页（reset）。
+      // 只有这里 reset —— 静默刷新（SSE / 回前台 catchup）要保持已加载窗口，否则滚了几页会缩回去。
       setConvVisibleCount(CONV_PAGE_SIZE);
-      await Promise.all([loadTasks(true), loadProjects(true), refreshConversations()]);
+      await Promise.all([loadTasks(true), loadProjects(true), refreshConversations({ reset: true })]);
     } finally {
       const elapsed = Date.now() - startedAt;
       const remain = MIN_REFRESH_DURATION_MS - elapsed;
