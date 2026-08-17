@@ -7,6 +7,10 @@
  * 注册表里 require（否则两份 React → hooks dispatcher 为 null），所以这里用 createElement
  * 而不是 JSX（JSX 会绑到文件顶层那份 react/jsx-runtime）。
  */
+// 没有顶层 import 的文件在 TS 眼里是「全局脚本」，跟别的测试文件同名常量会撞；
+// 空 export 把它标成模块，作用域就关起来了。
+export {};
+
 const SNAPSHOT_KEY = '@FlopsMobile/convSnapshot.v1';
 const SESSION = { user_id: 'u1', server_base_url: 'https://x/', access_token: 't' };
 const SESSION_2 = { user_id: 'u2', server_base_url: 'https://x/', access_token: 't2' };

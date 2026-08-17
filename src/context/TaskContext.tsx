@@ -3,17 +3,29 @@
  * - 使用 Flops Session 的 user_id + access_token 调用任务 API
  * - todayDate 含 4 点规则与「结束今天」
  * - todayTasks 筛选 + 排序
+ *
+ * 本地快照秒开（2026-08）：冷启动首帧直接用上次的任务/项目铺出来，不等网络。
+ * - 快照在 bundle eval 时预读进内存（utils/taskSnapshot），TaskProvider 是在 session
+ *   落地后才挂载的，所以首次 render 用 useState 初始化器**同步**取即可（不用 effect —— effect
+ *   在 commit 之后跑，今日页会先画一帧骨架）。
+ * - 落盘走防抖：tasks / projects 任一变化后 800ms 写一次最终态，整表刷新、乐观勾选、
+ *   mergeProjectTasksSnapshot 全都自动进快照。原先散在三处的 setItem 已删。
+ * - 失效：登出清（SessionContext.logout）；user_id 对不上不认；>24h 仍显示但首屏立刻强刷；
+ *   网络失败保留（离线可用）。
  */
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { TaskItem, Project, NewTaskPayload } from '../taskApi';
 import * as taskApi from '../taskApi';
 import { useSession } from './SessionContext';
 import { getDoneQualityWhenToggling, projectHasAcceptancePhase } from '../utils/taskAcceptance';
+import {
+  buildTaskSnapshot,
+  readTaskSnapshotSync,
+  schedulePersistTaskSnapshot,
+} from '../utils/taskSnapshot';
 
 const ENDED_TODAY_KEY = '@FlopsMobile/endedTodayDate';
-const CACHED_TASKS_KEY = '@FlopsMobile/cachedTasks';
-const CACHED_PROJECTS_KEY = '@FlopsMobile/cachedProjects';
 const DEDUPE_MS = 2000;
 
 function parseISO(s: string | null | undefined): Date | null {
@@ -169,8 +181,20 @@ const TaskContext = createContext<TaskContextValue | null>(null);
 
 export function TaskProvider({ children }: { children: React.ReactNode }) {
   const { session } = useSession();
-  const [tasks, setTasks] = useState<TaskItem[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
+  /* ---- 本地快照 seed ----
+   * TaskProvider 挂在 App.tsx 的 `session ?` 分支里 —— 登出即卸载、登录重新挂载，
+   * 所以「首次 render 就同步取快照」用 useState 初始化器就够了，换账号那条路走的是重新挂载。
+   * 只有 A→B 直接切号（中间不经过 null）不会重挂，下面 seededForUserRef 那段兜它。
+   * 只在挂载那一次读：readTaskSnapshotSync 会把窄行还原成几百个 TaskItem，
+   * 每次 render 都算一遍纯属白烧（本 Provider 每次勾选任务都会重渲染）。 */
+  const initialSnapshotRef = useRef<ReturnType<typeof readTaskSnapshotSync> | undefined>(undefined);
+  if (initialSnapshotRef.current === undefined) {
+    initialSnapshotRef.current = session?.user_id ? readTaskSnapshotSync(session.user_id) : null;
+  }
+  const initialSnapshot = initialSnapshotRef.current;
+  const [tasks, setTasks] = useState<TaskItem[]>(() => initialSnapshot?.tasks ?? []);
+  const [projects, setProjects] = useState<Project[]>(() => initialSnapshot?.projects ?? []);
+  const seededForUserRef = useRef<string | null>(session?.user_id ?? null);
   const [endedTodayDate, setEndedTodayDate] = useState<string | null>(null);
   const [lastTasksLoad, setLastTasksLoad] = useState<number>(0);
   const [lastProjectsLoad, setLastProjectsLoad] = useState<number>(0);
@@ -186,6 +210,15 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     if (!session?.user_id || !session?.access_token) return null;
     return { userId: session.user_id, accessToken: session.access_token };
   }, [session?.user_id, session?.access_token]);
+
+  /* A→B 直接切号（不经过登出、Provider 不重挂）时的 re-seed：渲染期同步换成新账号的快照，
+   * 没有快照就清空——否则新账号的今日页会先显示上一个账号的任务。 */
+  if (session?.user_id && seededForUserRef.current !== session.user_id) {
+    seededForUserRef.current = session.user_id;
+    const snap = readTaskSnapshotSync(session.user_id);
+    setTasks(snap?.tasks ?? []);
+    setProjects(snap?.projects ?? []);
+  }
 
   const loadEndedToday = useCallback(async () => {
     try {
@@ -242,13 +275,9 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
         const safeList = Array.isArray(list) ? list.filter((t) => t && typeof t === 'object' && t.id != null) : [];
         setTasks(safeList);
         setLastTasksLoad(now);
-        try {
-          await AsyncStorage.setItem(CACHED_TASKS_KEY, JSON.stringify(safeList));
-        } catch {
-          /* ignore */
-        }
       } catch (e) {
         setErrorMessage(e instanceof Error ? e.message : '加载任务失败');
+        // 失败不清列表：离线/弱网时保留快照 seed 的那份，比空屏有用
       } finally {
         setIsLoadingTasks(false);
         // 失败也算「跑过一次」：否则拉不动时今日页会永远停在骨架上，看不到错误条
@@ -270,11 +299,6 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
         const safeList = Array.isArray(list) ? list.filter((p) => p && typeof p === 'object' && p.id != null) : [];
         setProjects(safeList);
         setLastProjectsLoad(now);
-        try {
-          await AsyncStorage.setItem(CACHED_PROJECTS_KEY, JSON.stringify(safeList));
-        } catch {
-          /* ignore */
-        }
       } catch (e) {
         setErrorMessage(e instanceof Error ? e.message : '加载项目失败');
       } finally {
@@ -434,9 +458,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
   const mergeProjectTasksSnapshot = useCallback((projectId: string, projectTasks: TaskItem[]) => {
     setTasks((prev) => {
       const others = prev.filter((t) => t.project_id !== projectId);
-      const next = sortTasks([...others, ...projectTasks]);
-      AsyncStorage.setItem(CACHED_TASKS_KEY, JSON.stringify(next)).catch(() => {});
-      return next;
+      return sortTasks([...others, ...projectTasks]);
     });
     setLastTasksLoad(Date.now());
   }, []);
@@ -445,11 +467,40 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     loadEndedToday();
   }, [loadEndedToday]);
 
+  /** 快照陈旧（>24h）：照样先显示，但不等某个页面来触发——自己立刻拉一次对账。
+   *  （新鲜快照不走这条：今日页挂载时本来就会 loadTasks(true)。） */
+  const staleSeedRef = useRef(Boolean(initialSnapshot?.stale));
+  React.useEffect(() => {
+    if (!staleSeedRef.current) return;
+    staleSeedRef.current = false;
+    loadTasks(true);
+    loadProjects(true);
+  }, [loadTasks, loadProjects]);
+
   /** 换账号 / 登出：下一个账号的首屏要重新走骨架，别继承上一个账号的「已加载过」。
    *  依赖挂 user_id 而非 auth 对象——access_token 刷新不该把首屏打回加载态。 */
   React.useEffect(() => {
     setTasksEverLoaded(false);
   }, [session?.user_id]);
+
+  /* ---- 快照落盘：tasks / projects 任一变化后防抖写一次最终态。 ----
+   * 集中在这一处，所以整表刷新、乐观勾选/改优先级/增删、mergeProjectTasksSnapshot
+   * 全都自动进快照，不必逐处手写 setItem。 */
+  const tasksRef = useRef(tasks);
+  const projectsRef = useRef(projects);
+  const todayTasksRef = useRef(todayTasks);
+  tasksRef.current = tasks;
+  projectsRef.current = projects;
+  todayTasksRef.current = todayTasks;
+  React.useEffect(() => {
+    const userId = session?.user_id;
+    if (!userId) return;
+    // 空表不写：登出/切号途中的中间态别把好快照抹了
+    if (tasks.length === 0 && projects.length === 0) return;
+    schedulePersistTaskSnapshot(() =>
+      buildTaskSnapshot(userId, tasksRef.current, todayTasksRef.current, projectsRef.current)
+    );
+  }, [session?.user_id, tasks, projects, todayTasks]);
 
   const value: TaskContextValue = {
     tasks,

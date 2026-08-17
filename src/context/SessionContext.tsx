@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '../api';
 import { DEFAULT_SERVER_URL, normalizeServerUrl } from '../config';
 import { clearStoredKUser } from '../lib/kUserStorage';
+import { clearTaskSnapshot } from '../utils/taskSnapshot';
 import { clearCachedKAgent, clearCachedKConv } from '../lib/srp';
 
 const STORAGE_KEY_SESSION = '@FlopsMobile/session';
@@ -38,6 +39,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     setSession(null);
     await AsyncStorage.removeItem(STORAGE_KEY_SESSION);
     await clearStoredKUser();
+    /* 任务快照在这里清而不是在 TaskProvider 里：TaskProvider 挂在 App.tsx 的 `session ?`
+     * 分支内，登出那一刻就卸载了，自己没机会收尾。（会话列表快照由常驻的
+     * ConversationProvider 在 session effect 里清，不走这条。） */
+    try { clearTaskSnapshot(); } catch { /* ignore */ }
     try { clearCachedKConv(); } catch { /* ignore */ }
     try { clearCachedKAgent(); } catch { /* ignore */ }
   }, []);
