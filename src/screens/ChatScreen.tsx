@@ -476,6 +476,11 @@ export function ChatScreen({
   const serverRawMessagesRef = useRef<ConversationMessage[]>([]);
   const scrollOffsetYRef = useRef(0);
   const scrollContentHeightRef = useRef(0);
+  /** 视口是否贴在列表底部（onScroll 里维护）。用途：回前台补消息时决定要不要贴底 ——
+   *  「走的时候在看最新」才跟到底，用户手动上翻过就不拽回。用 ref 不用 state：
+   *  滚动中每帧都在更新，进 state 会把整棵 ChatScreen 推着重渲染。
+   *  初值 false：内容还没铺开时谈不上"在底部"，真到底了 onScroll/onContentSizeChange 会纠正。 */
+  const atBottomRef = useRef(false);
   const loadingOlderRef = useRef(false);
   /** 防抖:顶部触发过一次加载后置 true，直到用户滚离顶部(y>300)才重新武装，避免一次滚动连环触发多批。 */
   const nearTopTriggeredRef = useRef(false);
@@ -3135,6 +3140,10 @@ export function ChatScreen({
           if (stillRunning) {
             synced = truncateMessagesAfterLastUser(synced);
           }
+          /* resume 跑完后的整表对账：本轮开头那次 armOnce 早被流式中的第一次内容变化消费掉了，
+             这里补一次，否则「后台期间 run 继续跑、回前台后才跑完」的最后一批消息不贴底。
+             同样只在贴着底时才跟。 */
+          if (atBottomRef.current) armForOpen(bottomPinRef.current, Date.now());
           setMessages(synced);
           const t = conversation?.title?.trim();
           if (t) setConversationTitle(t);
@@ -3238,6 +3247,10 @@ export function ChatScreen({
                 applyConversationUsageState(conversation, messagesWindow);
                 const raw =
                   conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
+                /* 后台跑完的回复要补进来：走的时候在看最新就跟到底。用 armForOpen 而不是
+                   armOnce —— 这批消息里的图片/附件同样是随后才量出高度的，需要窗口兜住。
+                   用户切后台前手动上翻过的话 atBottomRef 是 false，这里不动，不把人拽回去。 */
+                if (atBottomRef.current) armForOpen(bottomPinRef.current, Date.now());
                 setMessages(rawMessagesToLocal(raw));
                 const t = conversation?.title?.trim();
                 if (t) setConversationTitle(t);
@@ -3253,6 +3266,8 @@ export function ChatScreen({
               applyConversationUsageState(conversation, messagesWindow);
               const raw =
                 conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
+              // 同上：run 还在跑，回来先把后台期间攒下的这批贴到底，再接着 resume
+              if (atBottomRef.current) armForOpen(bottomPinRef.current, Date.now());
               setMessages(truncateMessagesAfterLastUser(rawMessagesToLocal(raw)));
               /* 同步跑到第一个 await 前：setLoading(true) 会在这个 then 结束前落下，
                  下面 finally 解除门控时不会露出空窗。 */
@@ -4535,6 +4550,10 @@ export function ChatScreen({
               /* 加载更旧的锚定已交给 maintainVisibleContentPosition（原生帧级维持），这里只管触底滚动。 */
               const intent = consumeScrollIntent(bottomPinRef.current, Date.now());
               if (intent) {
+                /* 主动贴底了就直接把 atBottom 记上，不等 onScroll 回声：内容没撑满视口时
+                   根本不会有滚动事件，光靠 onScroll 维护的话这种会话永远是 false，
+                   后台跑出新消息回前台就不会跟到底了。 */
+                atBottomRef.current = true;
                 scrollRef.current?.scrollToEnd({ animated: intent.animated });
                 /* Android：onContentSizeChange 经常在内容真正布局完前先 fire 一次（中间高度），
                    单次 scrollToEnd 只滚到那个中间位置。再补两次延迟滚动盖住后续布局抖动。
@@ -4550,6 +4569,13 @@ export function ChatScreen({
             onScroll={(e) => {
               const y = e.nativeEvent.contentOffset.y;
               scrollOffsetYRef.current = y;
+              /* 记「此刻贴没贴底」：回前台补消息时靠它决定要不要跟到底。用事件自带的
+                 contentSize/layoutMeasurement 而不是那两个 ref —— 同一帧里它们才是配套的，
+                 混用可能拿到上一帧的内容高度算出假的 near-bottom。阈值 80 与 Web 的 100px 同量级。 */
+              const ne = e.nativeEvent;
+              const contentH = ne.contentSize?.height ?? scrollContentHeightRef.current;
+              const viewportH = ne.layoutMeasurement?.height ?? scrollViewportHeightRef.current;
+              atBottomRef.current = contentH - y - viewportH < 80;
               // 离开顶部 → 重新武装（下次滚到顶才再触发，避免一次滚动在顶部附近连环触发多批）
               if (y > 300) nearTopTriggeredRef.current = false;
               if (
