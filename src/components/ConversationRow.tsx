@@ -10,7 +10,7 @@ import { useAppTheme } from '../context/ThemeContext';
 import { useRowTapGuard } from '../context/ConversationContext';
 import type { AppColors } from '../theme/appColors';
 import { LIST_ROW_TITLE_SIZE } from '../theme/typography';
-import { InboxRunSpinner, InboxUnreadCheck } from './InboxListIndicators';
+import { InboxBgTaskIcon, InboxRunSpinner, InboxUnreadCheck } from './InboxListIndicators';
 
 type Props = {
   title: string;
@@ -54,9 +54,16 @@ export function ConversationRow({
           <Text style={styles.title} numberOfLines={1}>
             {title}
           </Text>
-          {/* 「在跑」有两条独立来源：agent 在跑 / 后台任务在跑。任一为真都转圈，
-              跟 Desktop 的 tab ⏳ 判定一致。未读只在都不跑时才显示。 */}
-          {running || bgRunning ? <InboxRunSpinner /> : unread ? <InboxUnreadCheck /> : null}
+          {/* 优先级 agent 在跑 > 后台任务在跑 > 未读，与 Desktop 的 tab 一致。
+              三种状态三个图标：转圈（agent 正在答）/ 时钟（agent 没跑但挂着后台任务）/ 对勾（未读）。
+              后台任务不能也用转圈——那会让人以为 agent 在答。 */}
+          {running ? (
+            <InboxRunSpinner />
+          ) : bgRunning ? (
+            <InboxBgTaskIcon />
+          ) : unread ? (
+            <InboxUnreadCheck />
+          ) : null}
         </View>
         {timeLabel ? (
           <Text style={styles.meta} numberOfLines={1}>
