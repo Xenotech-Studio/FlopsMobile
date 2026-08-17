@@ -314,7 +314,7 @@ function setRecordingDuck(active: boolean): void {
  *
  *  iOS 只在 setActive(true) 那一刻做音频仲裁；session 已经是 active 时，光换 category /
  *  options 既压不低也打断不了别人。而实时朗读的保活态（播报模式开、或对话内朗读开着）会把
- *  session 长期摁在 active，于是下面那次 playAndRecord + duckOthers 激活退化成空操作——
+ *  session 长期摁在 active，于是下面那次非混音 playAndRecord 激活退化成空操作——
  *  表现为画中画视频既不停也不压低。先让路，后面的激活才是一次真正的 inactive→active 跃迁。
  *
  *  必须在 AudioManager.setAudioSessionActivity(false) 之前调：保活引擎还跑着时那次
@@ -337,9 +337,9 @@ async function beginExternalRecording(): Promise<boolean> {
 }
 
 /** iOS：录音结束后把 session 还给 FlopsAudio（WS 仍连着则重建 mix 保活态）。
- *  须在 setAudioSessionActivity(false) **之后**调——duck 的解除靠那次带
- *  notifyOthersOnDeactivation 的 deactivate（对方收到 .shouldResume 恢复音量），
- *  顺序反了会让别家 App 的音量卡在被压低的状态。 */
+ *  须在 setAudioSessionActivity(false) **之后**调——打断的解除靠那次带
+ *  notifyOthersOnDeactivation 的 deactivate（对方收到 .shouldResume 才恢复播放），
+ *  顺序反了会让被打断的 App 一直停着不恢复。 */
 function endExternalRecording(): void {
   const native = (NativeModules as any).FlopsAudio;
   if (!native?.endExternalRecording) return;
@@ -447,7 +447,7 @@ export class VoiceDictationSession {
     this.preferredMicSource = opts.preferredMicSource || 'auto';
     this.inviteId = opts.inviteId || '';
     this.forwardTo = opts.forwardTo || '';
-    // Android：录音时自动申请 duck 焦点降低其他 app 音量；iOS 走 audio session 的 duckOthers（见 start()）
+    // Android：录音时自动申请 duck 焦点降低其他 app 音量；iOS 走非混音 session 的打断（见 start()）
     this._duckDuringRecord = Platform.OS === 'android';
   }
 
@@ -464,15 +464,17 @@ export class VoiceDictationSession {
       // 按用户长按 mic 选的源动态配 options：headset → HFP（耳机麦）、builtin/auto → A2DP 分离（iPhone 内置麦+蓝牙高音质）
       const wantHeadsetMic = this.preferredMicSource === 'headset';
       console.log('[dictation] wantHeadsetMic=', wantHeadsetMic);
-      // duckOthers：录音期间把其它 App 的音量压到极低。原先靠 playAndRecord 的「非混音」
-      // 语义打断对方，但实测有的播放器（iPad 画中画视频）收到打断通知只顿一下就强行续播，
-      // 压音量才是它躲不掉的。duck 与打断一样只在 setActive(true) 的仲裁时刻生效，
-      // 所以下面那次真跃迁（beginExternalRecording 让路 → deactivate → activate）是前提。
+      // 不带任何 mix / duck 选项 = 纯非混音 playAndRecord：激活时系统向其它 App 发打断
+      // 请求，对方遵守就暂停、音量归零。曾短暂改用 duckOthers，但实测只压到约 -20dB，
+      // 画中画视频的声音照样进麦克风；打断是唯一能真正归零的路子（代价是对方 App 可以
+      // 不遵守）。两条路径都只在 setActive(true) 的仲裁时刻生效，所以下面那次真跃迁
+      // （beginExternalRecording 让路 → deactivate → activate）是前提——修复前那种
+      // 「视频顿一下就续播」是激活空操作下的伪打断，跟现在的真打断不是一回事。
       const iosOpts = (wantHeadsetMic
-        ? ['allowBluetoothHFP', 'duckOthers']
-        : ['allowBluetoothA2DP', 'defaultToSpeaker', 'duckOthers']) as any;
+        ? ['allowBluetoothHFP']
+        : ['allowBluetoothA2DP', 'defaultToSpeaker']) as any;
       // 让 FlopsAudio 先交出 session（实时朗读保活会长期占着），否则下面这次 deactivate
-      // 拿到 busy 失败、activate 退化成空操作，duck 压根不会发生。
+      // 拿到 busy 失败、activate 退化成空操作，打断请求压根不会发出。
       this._externalRecordingHeld = await beginExternalRecording();
       // 再强制 deactivate 一次：react-native-audio-api 内部有 isActive 缓存，为 true 时
       // setAudioSessionActivity(true) 直接 early-return、跳过 configureAudioSession；而 TTS
@@ -789,8 +791,8 @@ export class VoiceDictationSession {
     this._appStateSub?.remove();
     this._appStateSub = null;
     releaseKeepScreenOn(this._keepAwakeTag);
-    // 先 deactivate（notifyOthersOnDeactivation 默认 true → 被压的 App 收到 .shouldResume
-    // 恢复音量），再把 session 还给 FlopsAudio 重建保活；顺序反了 duck 会卡着解不掉。
+    // 先 deactivate（notifyOthersOnDeactivation 默认 true → 被打断的 App 收到 .shouldResume
+    // 恢复播放），再把 session 还给 FlopsAudio 重建保活；顺序反了对方会一直停着不恢复。
     const held = this._externalRecordingHeld;
     this._externalRecordingHeld = false;
     AudioManager.setAudioSessionActivity(false)
