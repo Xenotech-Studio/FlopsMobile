@@ -748,6 +748,22 @@ export function ChatScreen({
   const conversationIdRef = useRef(conversationId);
   const sessionRef = useRef(session);
   const pausedByBackgroundRef = useRef(false);
+  /**
+   * 「这一轮是被切后台掐断的吗」——消费式判定（true 只返回一次）。
+   *
+   * 不能只在 catch 里判：abort **不一定抛异常**。consumeReader 的循环条件是
+   * `while (alive() && !signal?.aborted)`，abort 若落在两次 read 之间（流式中处理帧的时候，
+   * 也就是绝大多数时候），下一轮条件不成立就**正常返回**；streamChatV2Loop 那边同样有
+   * `if (streamCompleted || signal?.aborted || !alive()) return;` 正常收尾。于是调用方的
+   * try 顺利走完、catch 根本不执行，silentBackgroundAbort 一直是 false，finally 就把本地
+   * 那半截流式内容清掉了 —— 回前台没有底可续，只能整轮重放。
+   * 真机上「App Switcher（只 inactive、不 abort）好、真切后台（abort）坏」正是这个差别。
+   */
+  const consumeBackgroundAbortFlag = useCallback((): boolean => {
+    if (!pausedByBackgroundRef.current) return false;
+    pausedByBackgroundRef.current = false;
+    return true;
+  }, []);
   const hadBackgroundPauseRef = useRef(false);
   /** 本轮流是被「进后台」掐断的、还没定论（回前台后要么 resume 要么 resync）。
    *  ref 供 AppState 异步回调同步读，state 供渲染门控「未回复」提示。 */
@@ -2257,6 +2273,14 @@ export function ChatScreen({
         signal: controller.signal,
       });
       clearTimeout(timeout);
+      /* abort 常常不抛异常、直接正常返回（见 consumeBackgroundAbortFlag）。这里补判一次：
+         被后台掐断就跟 catch 那条路一样收尾 —— 标记 silentBackgroundAbort 让 finally 保留
+         本地半截内容（回前台好接着收），并跳过下面这发全量同步（马上进后台，白拉；
+         回前台的 AppState 分支会统一 resync/resume）。 */
+      if (consumeBackgroundAbortFlag()) {
+        silentBackgroundAbort = true;
+        return;
+      }
       const syncId = lastConvId;
       try {
         if (session) {
@@ -2343,6 +2367,7 @@ export function ChatScreen({
     conversationHistoryLoading,
     runV2WithHandlers,
     applyConversationUsageState,
+    consumeBackgroundAbortFlag,
     draftAgentId,
     enqueueCurrentComposer,
     cancelActiveDictation,
@@ -2546,6 +2571,14 @@ export function ChatScreen({
         signal: controller.signal,
       });
       clearTimeout(timeout);
+      /* abort 常常不抛异常、直接正常返回（见 consumeBackgroundAbortFlag）。这里补判一次：
+         被后台掐断就跟 catch 那条路一样收尾 —— 标记 silentBackgroundAbort 让 finally 保留
+         本地半截内容（回前台好接着收），并跳过下面这发全量同步（马上进后台，白拉；
+         回前台的 AppState 分支会统一 resync/resume）。 */
+      if (consumeBackgroundAbortFlag()) {
+        silentBackgroundAbort = true;
+        return;
+      }
       const syncId = lastConvId;
       try {
         if (session) {
@@ -2669,6 +2702,7 @@ export function ChatScreen({
       conversationHistoryLoading,
       runV2WithHandlers,
       applyConversationUsageState,
+      consumeBackgroundAbortFlag,
       handleStop,
     ]
   );
@@ -3187,6 +3221,11 @@ export function ChatScreen({
           seedBlocks: canResumeIncrementally ? currentAssistantBlocksRef.current : undefined,
         });
         clearTimeout(timeout);
+        // 同上：abort 可能不抛异常就正常返回，这里补判，保留半截 + 跳过白拉的全量同步
+        if (consumeBackgroundAbortFlag()) {
+          silentBackgroundAbort = true;
+          return;
+        }
         try {
           const { conversation, messagesWindow } = await getConversation(session, lastConvId, CHAT_MESSAGES_INITIAL_LIMIT);
           applyConversationUsageState(conversation, messagesWindow);
@@ -3257,7 +3296,7 @@ export function ChatScreen({
         setStreamStatus('');
       }
     },
-    [session, runV2WithHandlers, applyConversationUsageState]
+    [session, runV2WithHandlers, applyConversationUsageState, consumeBackgroundAbortFlag]
   );
 
   useEffect(() => {

@@ -1802,7 +1802,10 @@ export async function streamChatV2Loop(
         ...(start.confirm_non_latest_regenerate ? { confirm_non_latest_regenerate: true } : {}),
       };
     } else {
-      body = { subscribe_only: true, run_id: v2RunId, replay_from: 0 };
+      /* resume 首发。**必须用 replayFrom 而不是写死 0** —— 它已按 initialReplayFrom 预置
+         （没有可续的游标时本来就是 0）。写死 0 的话服务端 subscribe(from_cursor=0) 会把整轮
+         从头重放一遍，切后台回来就是「稀里哗啦重收一遍」。下面 isReconnect 分支同源。 */
+      body = { subscribe_only: true, run_id: v2RunId, replay_from: replayFrom };
     }
 
     // 加密 conv + agent：用 cached K_conv / K_agent 算 k_conv_wire / k_agent_wire 附在 body 里
