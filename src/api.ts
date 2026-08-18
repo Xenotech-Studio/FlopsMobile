@@ -1575,6 +1575,19 @@ export type ChatV2StreamStart =
 export type StreamChatV2LoopOptions = {
   /** 返回 false 时停止循环（例如已切换对话） */
   isAlive?: () => boolean;
+  /**
+   * resume 时的起始游标（`subscribe(from_cursor)` 口径）。省略 / 0 = 从这轮 run 的开头
+   * 补全部历史（新客户端、或本地没有可续的内容时的正确选择）。
+   *
+   * 之所以要从外面传：replayFrom 本来是本函数闭包里的 let，切后台 abort 后闭包连同游标
+   * 一起没了，下一次 resume 只能从 0 重来 —— 表现为「回前台整轮重放一遍」。
+   */
+  initialReplayFrom?: number;
+  /**
+   * 游标推进时回调，供调用方把它存到组件外（ref）以便跨调用 resume。
+   * 每帧都会触发，实现里别做重活、更别 setState。
+   */
+  onCursorAdvance?: (runId: string, cursor: number) => void;
   /** 加密 agent 时，让 loop 知道当前 bound agent + k_agent_blob 兜底（缓存里没有时用 K_user 派生）。
    *  对应 server 端：encrypted agent 的 chat_v2 必须带 k_agent_wire，否则 400。 */
   agentEncryption?: {
@@ -1622,7 +1635,9 @@ export async function streamChatV2Loop(
   const base = session.server_base_url;
   const alive = options?.isAlive ?? (() => true);
   let v2RunId = start.tag === 'resume' ? String(start.run_id || '').trim() : '';
-  let replayFrom = 0;
+  /* resume 续流：从调用方存下来的游标接着走；其余情况（新消息 / regenerate）恒 0。
+     只有 resume 认这个值 —— 新起一轮 run 的游标空间跟上一轮无关，混用会错位。 */
+  let replayFrom = start.tag === 'resume' ? Math.max(0, options?.initialReplayFrom ?? 0) : 0;
   let reconnectAttempt = 0;
   let streamCompleted = false;
   const decoder = getTextDecoder();
@@ -1708,6 +1723,9 @@ export async function streamChatV2Loop(
             continue;
           }
         }
+        /* 游标推进。两种来源：实时段由服务端注入绝对游标（_replay_from / v2_buffer_cursor），
+           回放段不带游标、只能本地累加 —— 所以起点必须是「服务端口径的绝对值」，
+           这也是 initialReplayFrom 只接受来自上一轮同 run 的记录、其余一律 0 的原因。 */
         if (typeof data._replay_from === 'number' && Number.isFinite(data._replay_from)) {
           replayFrom = data._replay_from;
         } else if (
@@ -1723,6 +1741,9 @@ export async function streamChatV2Loop(
           const rid = (data as { run_id: string }).run_id;
           if (rid) v2RunId = rid;
         }
+        /* 放在 v2_run 之后上报：新起一轮时 run_id 是靠这一帧才知道的，
+           先认到 id 再报，这一帧的游标也就一并记上了。没有 run_id 就无从归属，跳过。 */
+        if (v2RunId) options?.onCursorAdvance?.(v2RunId, replayFrom);
         if (data.type === 'v2_reload_pending') {
           /* server SIGTERM 前主动通知：靠应用层事件让 client 立刻退出本次 reader 走 reconnect。
              把事件透传给上层 UI 显示「服务器热更新中…」（onEvent 处理者负责 UI）。 */

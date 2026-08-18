@@ -708,6 +708,10 @@ export function ChatScreen({
    *    只依赖 [session, applyConversationUsageState]，整条流期间闭包不刷新，读到的是陈旧值。 */
   const reloadPendingRef = useRef(false);
   const [currentAssistantBlocks, setCurrentAssistantBlocks] = useState<StreamBlock[]>([]);
+  /** 渲染期镜像：resumeV2Stream 是 useCallback（依赖只有 session 那几个），闭包里读不到最新的
+   *  currentAssistantBlocks，而它要靠「本地还有没有半截内容」决定能不能增量续流。 */
+  const currentAssistantBlocksRef = useRef<StreamBlock[]>([]);
+  currentAssistantBlocksRef.current = currentAssistantBlocks;
   const [error, setError] = useState('');
   const [submittingReviewId, setSubmittingReviewId] = useState('');
   /** 工具卡片展示状态：key -> 'collapsed' | 'preview' | 'full' */
@@ -731,6 +735,11 @@ export function ChatScreen({
   const execCardTimeRef = useRef<Record<string, { startMs: number; completedSec?: number }>>({});
   const abortRef = useRef<AbortController | null>(null);
   const manualStopRef = useRef(false);
+  /** 上一次流收到哪儿了：{这轮 run 的 id, 服务端口径的绝对游标}。
+   *  切后台会 abort 流，streamChatV2Loop 的闭包（游标就在里面）随之消失；靠这个 ref 把位置
+   *  留在组件上，回前台 resume 时接着往下收，而不是从 run 开头整轮重放。
+   *  只在 runId 对得上时才用它，否则一律退回 0（新一轮 run 的游标空间与上一轮无关）。 */
+  const resumeCursorRef = useRef<{ runId: string; cursor: number } | null>(null);
   /** 「钉底」状态机（见 utils/chatBottomPin）：
    *  - 一次性触发：有新消息 / 回复完成时滚一下，避免展开折叠工具卡片时误滚；
    *  - 打开对话额外武装一个时间窗口：首个 onContentSizeChange 往往发生在图片（fit-image
@@ -1355,6 +1364,12 @@ export function ChatScreen({
       convId: string;
       start: ChatV2StreamStart;
       signal: AbortSignal;
+      /** resume 续流的起始游标；省略 = 从这轮 run 开头全量回放 */
+      initialReplayFrom?: number;
+      /** 续流时把本地已有的半截 blocks 垫进来，后续增量在它之上追加。
+       *  不垫的话第一帧 syncBlocks 就会用「只含增量」的数组覆盖掉本地已有内容，
+       *  界面上表现为前半段凭空消失、只剩尾巴。 */
+      seedBlocks?: StreamBlock[];
     }): Promise<{
       streamDone: boolean;
       finalText: string;
@@ -1363,10 +1378,14 @@ export function ChatScreen({
     }> => {
       if (!session) throw new Error('未登录');
       const streamTargetRef = { current: opts.convId };
-      const localBlocks: StreamBlock[] = [];
-      let finalText = '';
+      // 续流时以本地已有内容为底，增量在其上继续（见 seedBlocks 注释）
+      const localBlocks: StreamBlock[] = opts.seedBlocks ? [...opts.seedBlocks] : [];
+      let finalText = localBlocks
+        .filter((b): b is { type: 'text'; content: string } => b.type === 'text')
+        .map((b) => b.content)
+        .join('');
       let streamDone = false;
-      streamCaptureRef.current = { text: '', blocks: [] };
+      streamCaptureRef.current = { text: finalText, blocks: [...localBlocks] };
 
       const syncBlocks = () => {
         setCurrentAssistantBlocks([...localBlocks]);
@@ -1787,6 +1806,11 @@ export function ChatScreen({
       await streamChatV2Loop(session, streamTargetRef.current, opts.start, onEvent, opts.signal, {
         isAlive: () => conversationIdRef.current === streamSessionConvId && !opts.signal.aborted,
         agentEncryption: _agentEnc,
+        initialReplayFrom: opts.initialReplayFrom,
+        /* 记住「这轮 run 收到哪儿了」，供切后台再回来时续流。每帧都调，只写 ref 不 setState。 */
+        onCursorAdvance: (runId, cursor) => {
+          resumeCursorRef.current = { runId, cursor };
+        },
       });
 
       return { streamDone, finalText, localBlocks, lastConvId: streamTargetRef.current };
@@ -2300,8 +2324,14 @@ export function ChatScreen({
       manualStopRef.current = false;
       setSubmittingReviewId('');
       setLoading(false);
-      setStreamingText('');
-      setCurrentAssistantBlocks([]);
+      /* 被后台掐断时**保留**这半截流式内容：run 在服务端还跑着，回前台 resume 要拿它当底
+         接着往下收（见 resumeV2Stream 的 canResumeIncrementally）。清掉的话本地没底了，
+         只能退回从 run 开头整轮重放 —— 那正是「切回来稀里哗啦重放一遍」的由来。
+         正常结束/报错仍旧清空：那时回复已落库进 messages，留着会显示两份。 */
+      if (!silentBackgroundAbort) {
+        setStreamingText('');
+        setCurrentAssistantBlocks([]);
+      }
       setStreamStatus('');
     }
   }, [
@@ -2621,8 +2651,14 @@ export function ChatScreen({
       manualStopRef.current = false;
       setSubmittingReviewId('');
       setLoading(false);
-      setStreamingText('');
-      setCurrentAssistantBlocks([]);
+      /* 被后台掐断时**保留**这半截流式内容：run 在服务端还跑着，回前台 resume 要拿它当底
+         接着往下收（见 resumeV2Stream 的 canResumeIncrementally）。清掉的话本地没底了，
+         只能退回从 run 开头整轮重放 —— 那正是「切回来稀里哗啦重放一遍」的由来。
+         正常结束/报错仍旧清空：那时回复已落库进 messages，留着会显示两份。 */
+      if (!silentBackgroundAbort) {
+        setStreamingText('');
+        setCurrentAssistantBlocks([]);
+      }
       setStreamStatus('');
     }
   },
@@ -3112,23 +3148,43 @@ export function ChatScreen({
     async (runId: string, cid: string) => {
       if (!session) return;
       if (streamInFlightRef.current) return;
+      /* 能不能「接着收」而不是「整轮重放」：必须同时满足
+         ①上次记的游标属于同一个 run（新一轮 run 的游标空间与上一轮无关）
+         ②本地确实还留着这轮的半截内容（没有的话续流会只拿到后半段，前半段永远缺）
+         任一不满足就退回老路：replay_from=0 + 清空本地，慢但一定正确。
+         注意判定只看游标与本地有无内容，不做任何内容比对去重 —— 服务端回放段是合并段、
+         实时段是原始事件，两者粒度不同，按内容对不上。 */
+      const cursorRec = resumeCursorRef.current;
+      const canResumeIncrementally =
+        !!cursorRec &&
+        cursorRec.runId === runId &&
+        cursorRec.cursor > 0 &&
+        currentAssistantBlocksRef.current.length > 0;
       streamInFlightRef.current = true;
       setV2ResumeUiActive(true);
       setError('');
       setLoading(true);
-      setStreamingText('');
-      setCurrentAssistantBlocks([]);
+      if (!canResumeIncrementally) {
+        // 全量回放：本地那份要清掉，否则回放内容会叠在旧内容后面变成两份
+        setStreamingText('');
+        setCurrentAssistantBlocks([]);
+        resumeCursorRef.current = null;
+      }
       setStreamStatus('thinking');
       armOnce(bottomPinRef.current);
       const controller = new AbortController();
       abortRef.current = controller;
       manualStopRef.current = false;
       const timeout = setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
+      /** 这一轮是被切后台掐断的（catch 里置位，finally 据此决定要不要保留半截内容） */
+      let silentBackgroundAbort = false;
       try {
         const { streamDone, finalText, localBlocks, lastConvId } = await runV2WithHandlers({
           convId: cid,
           start: { tag: 'resume', run_id: runId },
           signal: controller.signal,
+          initialReplayFrom: canResumeIncrementally ? cursorRec!.cursor : 0,
+          seedBlocks: canResumeIncrementally ? currentAssistantBlocksRef.current : undefined,
         });
         clearTimeout(timeout);
         try {
@@ -3166,6 +3222,7 @@ export function ChatScreen({
         const bgAbort = isAbort && pausedByBackgroundRef.current;
         if (bgAbort) {
           pausedByBackgroundRef.current = false;
+          silentBackgroundAbort = true;
         } else if (!(isAbort && manualStopRef.current)) {
           setError(e instanceof Error ? e.message : String(e));
         }
@@ -3192,8 +3249,11 @@ export function ChatScreen({
         setSubmittingReviewId('');
         setV2ResumeUiActive(false);
         setLoading(false);
-        setStreamingText('');
-        setCurrentAssistantBlocks([]);
+        // 同上：被后台掐断就留着这半截，回前台好接着往下收（见发送路径 finally 的说明）
+        if (!silentBackgroundAbort) {
+          setStreamingText('');
+          setCurrentAssistantBlocks([]);
+        }
         setStreamStatus('');
       }
     },
