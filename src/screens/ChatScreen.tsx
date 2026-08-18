@@ -139,6 +139,11 @@ import { ComposerContextRing } from './chat/ComposerContextRing';
 import { HistoryLoadingOverlay } from './chat/HistoryLoadingOverlay';
 import { mergeToolResultChunk } from '../utils/toolResultPatch';
 import { truncateMessagesAfterLastUser } from '../utils/chatMessageWindow';
+import {
+  clearResumeSnapshot,
+  saveResumeSnapshot,
+  takeResumeSnapshot,
+} from '../utils/chatResumeCache';
 import { usageRunEqual } from '../utils/usageRuns';
 import {
   armForOpen,
@@ -703,6 +708,11 @@ export function ChatScreen({
    *  currentAssistantBlocks，而它要靠「本地还有没有半截内容」决定能不能增量续流。 */
   const currentAssistantBlocksRef = useRef<StreamBlock[]>([]);
   currentAssistantBlocksRef.current = currentAssistantBlocks;
+  /* 同款镜像：卸载的 cleanup 里要把这两个一起落进续流快照，而 cleanup 读不到最新 state。 */
+  const streamingTextRef = useRef('');
+  const streamStatusRef = useRef('');
+  streamingTextRef.current = streamingText;
+  streamStatusRef.current = streamStatus;
   const [error, setError] = useState('');
   const [submittingReviewId, setSubmittingReviewId] = useState('');
   /** 工具卡片展示状态：key -> 'collapsed' | 'preview' | 'full' */
@@ -1814,7 +1824,8 @@ export function ChatScreen({
         isAlive: () => conversationIdRef.current === streamSessionConvId && !opts.signal.aborted,
         agentEncryption: _agentEnc,
         initialReplayFrom: opts.initialReplayFrom,
-        /* 记住「这轮 run 收到哪儿了」，供切后台再回来时续流。每帧都调，只写 ref 不 setState。 */
+        /* 记住「这轮 run 收到哪儿了」，供切后台 / 切页面再回来时续流。每帧都调，只写 ref
+           不 setState。卸载时再由 cleanup 把它连同 blocks 一起落进模块级快照。 */
         onCursorAdvance: (runId, cursor) => {
           resumeCursorRef.current = { runId, cursor };
         },
@@ -2080,6 +2091,28 @@ export function ChatScreen({
     };
   }, [conversationId]);
 
+  /* 卸载时把「这轮 run 收到哪儿了 + 已经收到了什么」落进模块级快照。
+   * DrawerShell 只挂一个顶层页且用 key 强制 remount（产品定的「不保留状态」），所以切到今日页
+   * 本组件整个消失，state/ref 全没；再点回来是全新挂载，没有半截内容就只能 replay_from:0
+   * 整轮重放。存到组件外面，重新挂载时就能接着收。
+   * 只在这一处写 blocks（一次性 O(n) 拷贝），流式热路径上只更新 resumeCursorRef 那个数字。 */
+  useEffect(() => {
+    return () => {
+      const cur = resumeCursorRef.current;
+      const blocks = currentAssistantBlocksRef.current;
+      if (!cur || !conversationIdRef.current || blocks.length === 0) return;
+      saveResumeSnapshot({
+        conversationId: conversationIdRef.current,
+        runId: cur.runId,
+        cursor: cur.cursor,
+        blocks,
+        text: streamingTextRef.current,
+        status: streamStatusRef.current,
+        savedAt: Date.now(),
+      });
+    };
+  }, []);
+
   /** 入队当前 composer 内容（agent 跑时回车走这里）。乐观显示 + 失败回滚。
    *  opts.overrideText：程序化入队一条纯文本（show_visual 图卡忙态回注），不读/不清 composer、
    *  不动听写、不带引用。无该字段时行为不变。 */
@@ -2284,6 +2317,8 @@ export function ChatScreen({
             typeof conversation?.active_chat_v2_run_id === 'string' &&
             conversation.active_chat_v2_run_id.trim();
           if (stillRunning) synced = truncateMessagesAfterLastUser(synced);
+          // run 收尾：答案已经并进 messages，续流快照没用了（留着也会被 runId 不匹配挡下，这里主动清）
+          if (!stillRunning) clearResumeSnapshot(syncId);
           if (streamDone || finalText.trim() || synced.length > 0) {
             armOnce(bottomPinRef.current);
             setMessages(synced);
@@ -2583,6 +2618,8 @@ export function ChatScreen({
             typeof conversation?.active_chat_v2_run_id === 'string' &&
             conversation.active_chat_v2_run_id.trim();
           if (stillRunning) synced = truncateMessagesAfterLastUser(synced);
+          // run 收尾：答案已经并进 messages，续流快照没用了（留着也会被 runId 不匹配挡下，这里主动清）
+          if (!stillRunning) clearResumeSnapshot(syncId);
           if (streamDone || finalText.trim() || synced.length > 0) {
             armOnce(bottomPinRef.current);
             setMessages(synced);
@@ -3228,6 +3265,8 @@ export function ChatScreen({
           if (stillRunning) {
             synced = truncateMessagesAfterLastUser(synced);
           }
+          // run 收尾：答案已并进 messages，续流快照可以清了
+          if (!stillRunning) clearResumeSnapshot(lastConvId);
           /* resume 跑完后的整表对账：本轮开头那次 armOnce 早被流式中的第一次内容变化消费掉了，
              这里补一次，否则「后台期间 run 继续跑、回前台后才跑完」的最后一批消息不贴底。
              同样只在贴着底时才跟。 */
@@ -3562,6 +3601,17 @@ export function ChatScreen({
           });
         });
         if (runId) {
+          /* 上次卸载（比如切去今日页）时留下的续流快照：conversation + run 都对得上就把半截
+             内容与游标恢复回来，resumeV2Stream 里的 canResumeIncrementally 随之成立，
+             接着往下收而不是整轮重放。对不上 / 过期 / 没有 → 什么都不做，走原来的全量回放。 */
+          const snap = takeResumeSnapshot(id, runId);
+          if (snap) {
+            setCurrentAssistantBlocks(snap.blocks);
+            setStreamingText(snap.text);
+            setStreamStatus(snap.status);
+            currentAssistantBlocksRef.current = snap.blocks;
+            resumeCursorRef.current = { runId, cursor: snap.cursor };
+          }
           resumeV2Stream(runId, id);
         } else {
           setLoading(false);
