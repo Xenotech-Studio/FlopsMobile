@@ -1418,11 +1418,17 @@ export function ChatScreen({
       let currentFrameIsReplay = false; // 由 onEvent 每帧按 meta.replayed 置位
       let replayPending = false; // 有攒着没画的回放内容
       let replayPendingCount = 0;
-      let replayPendingSince = 0;
-      /** 回放期间攒够这么多帧就先画一次，免得超长回放期间界面长时间没反应 */
+      let replayQuietTimer: ReturnType<typeof setTimeout> | null = null;
+      /** 回放期间攒够这么多帧就先画一次，免得超长回放（几千帧）期间界面长时间没反应 */
       const REPLAY_FLUSH_FRAMES = 60;
-      /** 或者攒了这么久也先画一次 */
-      const REPLAY_FLUSH_MS = 500;
+      /**
+       * 「安静期」——距上一帧回放这么久还没有新帧，就把攒着的画出来。
+       *
+       * 必须是**防抖**（每来一帧重置）而不是从第一帧起算的固定窗口：回放帧是成串到达的，
+       * 固定窗口会在串到一半时踩点触发，画出个位数帧的内容 —— 真机上就是「先冒一小段思考、
+       * 卡一下、再瞬间全出来」。防抖则整串期间一次不画，串结束（或流真的停住）才画一次。
+       */
+      const REPLAY_QUIET_MS = 150;
 
       const applyBlocksToState = () => {
         setCurrentAssistantBlocks([...localBlocks]);
@@ -1434,12 +1440,19 @@ export function ChatScreen({
         streamCaptureRef.current = { text: finalText, blocks: [...localBlocks] };
       };
 
+      const clearReplayQuietTimer = () => {
+        if (replayQuietTimer) {
+          clearTimeout(replayQuietTimer);
+          replayQuietTimer = null;
+        }
+      };
+
       /** 把攒着的回放内容画出来（没攒东西就是空操作）。 */
       const flushReplayPending = () => {
+        clearReplayQuietTimer();
         if (!replayPending) return;
         replayPending = false;
         replayPendingCount = 0;
-        replayPendingSince = 0;
         applyBlocksToState();
       };
 
@@ -1447,22 +1460,21 @@ export function ChatScreen({
       const syncBlocks = () => {
         if (!currentFrameIsReplay) {
           // 实时帧：直接画（攒着的回放内容已在 localBlocks 里，这一次就一起出来了）
+          clearReplayQuietTimer();
           replayPending = false;
           replayPendingCount = 0;
-          replayPendingSince = 0;
           applyBlocksToState();
           return;
         }
         replayPending = true;
         replayPendingCount += 1;
-        const now = Date.now();
-        if (replayPendingSince === 0) replayPendingSince = now;
-        if (
-          replayPendingCount >= REPLAY_FLUSH_FRAMES ||
-          now - replayPendingSince >= REPLAY_FLUSH_MS
-        ) {
+        if (replayPendingCount >= REPLAY_FLUSH_FRAMES) {
           flushReplayPending();
+          return;
         }
+        // 防抖：每来一帧就把「安静期」推后，整串回放期间一次都不画
+        clearReplayQuietTimer();
+        replayQuietTimer = setTimeout(flushReplayPending, REPLAY_QUIET_MS);
       };
 
       const findLastToolBlockByIndex = (index: number): number => {

@@ -1723,9 +1723,19 @@ export async function streamChatV2Loop(
             try {
               const innerStr = decryptSseChunkLocal(`data: ${jsonStr}\n\n`, _kc);
               if (innerStr && innerStr.startsWith('data: ')) {
+                /* 服务端的 sse_inject_replay_cursor 是往**最外层** JSON 上加 _replay_from 的，
+                   加密对话的最外层是 encrypted_chunk 信封 —— 解出 inner 直接替换 data 会把它丢掉。
+                   丢了之后：游标退化成本地累加（实时段按原始事件数 +1，而服务端日志只按合并段
+                   增长，重连游标会飘），并且「有没有 _replay_from」这个回放判据恒为假 ——
+                   加密对话的**实时帧会被全部误判成回放**、跟着走批量攒批，表现就是流式不再逐字长。
+                   所以解包后要把外层游标带回来。 */
+                const _outerCursor = data._replay_from;
                 data = JSON.parse(
                   innerStr.slice('data: '.length).replace(/\n\n$/, '').trim()
                 ) as typeof data;
+                if (typeof _outerCursor === 'number' && Number.isFinite(_outerCursor)) {
+                  data._replay_from = _outerCursor;
+                }
               }
             } catch (e) {
               // eslint-disable-next-line no-console
