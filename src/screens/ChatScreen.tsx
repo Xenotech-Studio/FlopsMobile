@@ -138,6 +138,7 @@ import { TaskEventCardView, UserInjectionInline } from './chat/TaskEventCardView
 import { ComposerContextRing } from './chat/ComposerContextRing';
 import { HistoryLoadingOverlay } from './chat/HistoryLoadingOverlay';
 import { mergeToolResultChunk } from '../utils/toolResultPatch';
+import { truncateMessagesAfterLastUser } from '../utils/chatMessageWindow';
 import { usageRunEqual } from '../utils/usageRuns';
 import {
   armForOpen,
@@ -319,16 +320,6 @@ function modelDropdownPriceLine(
   return null;
 }
 
-/** 与 FlopsWeb Chat.jsx 一致：存在进行中的 chat_v2 run 时去掉最后一条 user 之后的回复，避免与 subscribe 回放叠两套 */
-function truncateMessagesAfterLastUser(messages: ChatMessage[]): ChatMessage[] {
-  let lastUserIdx = -1;
-  for (let i = 0; i < messages.length; i++) {
-    // task_event（后台任务灰条）按边界保留，避免流式时被截掉
-    if (messages[i].role === 'user' || messages[i].role === 'task_event') lastUserIdx = i;
-  }
-  if (lastUserIdx < 0) return messages;
-  return messages.slice(0, lastUserIdx + 1);
-}
 
 type ChatRouteParams = RootStackParamList['Chat'];
 
