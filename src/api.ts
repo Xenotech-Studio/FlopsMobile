@@ -1716,26 +1716,21 @@ export async function streamChatV2Loop(
         } catch {
           continue;
         }
-        // 加密对话：encrypted_chunk wrapper → 解出 inner JSON 再分发
+        /* 加密对话：encrypted_chunk wrapper → 解出 inner JSON 再分发。
+           注意顺序 —— 服务端是**先**把 _replay_from 注入内层事件 JSON
+           （_chat_v2_subscribe_stream 里的 sse_inject_replay_cursor），**再**把整块包成
+           encrypted_chunk（_sse_response → maybe_encrypt_sse_stream）。所以游标在密文内层，
+           外层信封只有 {type, ciphertext}。这里解包后 data 就是带游标的内层事件，
+           下面的游标推进与回放判定直接读它即可，不需要额外从外层搬运。 */
         if (data && data.type === 'encrypted_chunk' && data.ciphertext) {
           const _kc = getCachedKConv(conversationId);
           if (_kc) {
             try {
               const innerStr = decryptSseChunkLocal(`data: ${jsonStr}\n\n`, _kc);
               if (innerStr && innerStr.startsWith('data: ')) {
-                /* 服务端的 sse_inject_replay_cursor 是往**最外层** JSON 上加 _replay_from 的，
-                   加密对话的最外层是 encrypted_chunk 信封 —— 解出 inner 直接替换 data 会把它丢掉。
-                   丢了之后：游标退化成本地累加（实时段按原始事件数 +1，而服务端日志只按合并段
-                   增长，重连游标会飘），并且「有没有 _replay_from」这个回放判据恒为假 ——
-                   加密对话的**实时帧会被全部误判成回放**、跟着走批量攒批，表现就是流式不再逐字长。
-                   所以解包后要把外层游标带回来。 */
-                const _outerCursor = data._replay_from;
                 data = JSON.parse(
                   innerStr.slice('data: '.length).replace(/\n\n$/, '').trim()
                 ) as typeof data;
-                if (typeof _outerCursor === 'number' && Number.isFinite(_outerCursor)) {
-                  data._replay_from = _outerCursor;
-                }
               }
             } catch (e) {
               // eslint-disable-next-line no-console
