@@ -1572,6 +1572,19 @@ export type ChatV2StreamStart =
     }
   | { tag: 'resume'; run_id: string };
 
+/** 每帧的投递元信息。 */
+export type ChatStreamFrameMeta = {
+  /**
+   * 这帧来自**回放段**（服务端补历史），而不是实时段。
+   *
+   * 判据是服务端契约（server.py `_chat_v2_subscribe_stream`）：回放段原样吐、不注入游标；
+   * 实时段注入 `_replay_from`。所以「没有 `_replay_from` 且不是 `v2_buffer_cursor`」⟺ 回放。
+   * 不用内容比对 —— 回放段是合并段、实时段是原始事件，粒度不同，按内容对不上
+   * （engine/execution.py subscribe 的文档明确写了这点）。
+   */
+  replayed: boolean;
+};
+
 export type StreamChatV2LoopOptions = {
   /** 返回 false 时停止循环（例如已切换对话） */
   isAlive?: () => boolean;
@@ -1628,7 +1641,9 @@ export async function streamChatV2Loop(
   session: Session,
   conversationId: string,
   start: ChatV2StreamStart,
-  onEvent: (event: ChatStreamEvent) => void,
+  /** 第二参给出该帧的投递元信息：`replayed` = 这是回放段（服务端未注入游标）。
+   *  调用方可据此把回放段攒起来批量渲染，实时段维持逐帧。可选，不读也不影响正确性。 */
+  onEvent: (event: ChatStreamEvent, meta?: ChatStreamFrameMeta) => void,
   signal?: AbortSignal,
   options?: StreamChatV2LoopOptions
 ): Promise<void> {
@@ -1723,9 +1738,11 @@ export async function streamChatV2Loop(
             continue;
           }
         }
-        /* 游标推进。两种来源：实时段由服务端注入绝对游标（_replay_from / v2_buffer_cursor），
-           回放段不带游标、只能本地累加 —— 所以起点必须是「服务端口径的绝对值」，
-           这也是 initialReplayFrom 只接受来自上一轮同 run 的记录、其余一律 0 的原因。 */
+        /* 游标推进 + 判定这帧是不是「回放」。
+           服务端契约（server.py _chat_v2_subscribe_stream）：回放段原样吐、**不注入游标**；
+           实时段注入 _replay_from。所以「没有 _replay_from 且不是 v2_buffer_cursor」⟺ 回放帧。
+           严格按这个契约判，不看内容 —— 回放段是合并段、实时段是原始事件，按内容对不上。 */
+        let isReplayFrame = false;
         if (typeof data._replay_from === 'number' && Number.isFinite(data._replay_from)) {
           replayFrom = data._replay_from;
         } else if (
@@ -1736,6 +1753,7 @@ export async function streamChatV2Loop(
           replayFrom = data.replay_from;
         } else {
           replayFrom += 1;
+          isReplayFrame = true;
         }
         if (data.type === 'v2_run' && typeof (data as { run_id?: string }).run_id === 'string') {
           const rid = (data as { run_id: string }).run_id;
@@ -1749,19 +1767,19 @@ export async function streamChatV2Loop(
              把事件透传给上层 UI 显示「服务器热更新中…」（onEvent 处理者负责 UI）。 */
           // eslint-disable-next-line no-console
           console.warn('[chat_v2 mobile] server reload pending, will reconnect');
-          onEvent(data as ChatStreamEvent);
+          onEvent(data as ChatStreamEvent, { replayed: isReplayFrame });
           return;
         }
         if (data.type === 'v2_step_rollback') {
           /* server reload 后 resume worker 重跑当前 step 前发此事件——上层 UI 应清掉本 step
              已显示的 partial blocks，避免 LLM 重生成内容与旧 partial 重复。 */
-          onEvent(data as ChatStreamEvent);
+          onEvent(data as ChatStreamEvent, { replayed: isReplayFrame });
           continue;
         }
         if ('error' in data && data.error) {
           throw new Error(String(data.error));
         }
-        onEvent(data as ChatStreamEvent);
+        onEvent(data as ChatStreamEvent, { replayed: isReplayFrame });
         if ('done' in data && data.done === true) {
           streamCompleted = true;
           return;
@@ -1770,7 +1788,9 @@ export async function streamChatV2Loop(
           streamCompleted = true;
           return;
         }
-        if ('type' in data && data.type === 'tool_result_chunk') {
+        /* 每帧让路只为**实时**流畅（让 UI 有机会画一帧）。回放段不能让：那会把
+           「瞬间追平」拆成几百次渲染，正是「稀里哗啦重放一遍」的直接来源。 */
+        if (!isReplayFrame && 'type' in data && data.type === 'tool_result_chunk') {
           await yieldToolResultChunkFrame();
         }
       }

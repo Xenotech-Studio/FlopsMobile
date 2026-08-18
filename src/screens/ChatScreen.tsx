@@ -73,6 +73,7 @@ import {
   getAgentProfile,
   type ModelsConfigResponse,
   type ChatStreamEvent,
+  type ChatStreamFrameMeta,
   type ChatV2StreamStart,
   type ConversationMessage,
   type Conversation,
@@ -1407,7 +1408,23 @@ export function ChatScreen({
       let streamDone = false;
       streamCaptureRef.current = { text: finalText, blocks: [...localBlocks] };
 
-      const syncBlocks = () => {
+      /* ── 回放段批量应用 ──────────────────────────────────────────────────
+       * 打开一个还在跑的对话时，服务端先补全部历史（回放段）再追实时。回放帧和实时帧
+       * 以前走同一条路：每帧一次 syncBlocks → 两次 setState → 整棵 ChatScreen 重渲染，
+       * 于是几百帧的回放变成肉眼可见的「重新打一遍字」。
+       * 现在回放帧只改 localBlocks（内存），攒到交界处一次性 flush —— 已有进展瞬间出现，
+       * 之后的实时帧恢复逐帧（流式的顺滑感来自那个逐帧）。
+       * 判据是服务端契约给的 meta.replayed，不做任何内容比对。 */
+      let currentFrameIsReplay = false; // 由 onEvent 每帧按 meta.replayed 置位
+      let replayPending = false; // 有攒着没画的回放内容
+      let replayPendingCount = 0;
+      let replayPendingSince = 0;
+      /** 回放期间攒够这么多帧就先画一次，免得超长回放期间界面长时间没反应 */
+      const REPLAY_FLUSH_FRAMES = 60;
+      /** 或者攒了这么久也先画一次 */
+      const REPLAY_FLUSH_MS = 500;
+
+      const applyBlocksToState = () => {
         setCurrentAssistantBlocks([...localBlocks]);
         finalText = localBlocks
           .filter((b): b is { type: 'text'; content: string } => b.type === 'text')
@@ -1415,6 +1432,37 @@ export function ChatScreen({
           .join('');
         setStreamingText(finalText);
         streamCaptureRef.current = { text: finalText, blocks: [...localBlocks] };
+      };
+
+      /** 把攒着的回放内容画出来（没攒东西就是空操作）。 */
+      const flushReplayPending = () => {
+        if (!replayPending) return;
+        replayPending = false;
+        replayPendingCount = 0;
+        replayPendingSince = 0;
+        applyBlocksToState();
+      };
+
+      /** 事件处理器统一调它。回放帧只记账不渲染，实时帧照旧立即渲染。 */
+      const syncBlocks = () => {
+        if (!currentFrameIsReplay) {
+          // 实时帧：直接画（攒着的回放内容已在 localBlocks 里，这一次就一起出来了）
+          replayPending = false;
+          replayPendingCount = 0;
+          replayPendingSince = 0;
+          applyBlocksToState();
+          return;
+        }
+        replayPending = true;
+        replayPendingCount += 1;
+        const now = Date.now();
+        if (replayPendingSince === 0) replayPendingSince = now;
+        if (
+          replayPendingCount >= REPLAY_FLUSH_FRAMES ||
+          now - replayPendingSince >= REPLAY_FLUSH_MS
+        ) {
+          flushReplayPending();
+        }
       };
 
       const findLastToolBlockByIndex = (index: number): number => {
@@ -1453,7 +1501,14 @@ export function ChatScreen({
         }
       };
 
-      const onEvent = (event: ChatStreamEvent) => {
+      const onEvent = (event: ChatStreamEvent, meta?: ChatStreamFrameMeta) => {
+        /* 本帧是不是回放段：syncBlocks 据此决定「攒着」还是「立刻画」。
+           缺省当实时处理 —— 老行为，宁可多渲染也不会漏画。 */
+        currentFrameIsReplay = meta?.replayed === true;
+        /* 回放→实时的交界：在这里就把攒着的画出来，不能等某个实时帧恰好调 syncBlocks。
+           像 usage / v2_run 这类帧不碰 blocks，若只在 syncBlocks 里 flush，回放内容会一直
+           挂着不显示，直到下一个内容帧或流结束。 */
+        if (!currentFrameIsReplay) flushReplayPending();
         /* Phase 4 reload-pending：必须在所有 early return（v2_run / 错误 / etc）之前处理。
            reload reconnect 后 buffer replay 第一条往往是 v2_run，会被下面 early return 吞掉，
            如果 setReloadPending(false) 放后面就永远清不掉 banner。 */
@@ -1823,16 +1878,23 @@ export function ChatScreen({
               kAgentBlobB64: _meta.agent_profile.k_agent_blob ?? null,
             }
           : undefined;
-      await streamChatV2Loop(session, streamTargetRef.current, opts.start, onEvent, opts.signal, {
-        isAlive: () => conversationIdRef.current === streamSessionConvId && !opts.signal.aborted,
-        agentEncryption: _agentEnc,
-        initialReplayFrom: opts.initialReplayFrom,
-        /* 记住「这轮 run 收到哪儿了」，供切后台 / 切页面再回来时续流。每帧都调，只写 ref
-           不 setState。卸载时再由 cleanup 把它连同 blocks 一起落进模块级快照。 */
-        onCursorAdvance: (runId, cursor) => {
-          resumeCursorRef.current = { runId, cursor };
-        },
-      });
+      try {
+        await streamChatV2Loop(session, streamTargetRef.current, opts.start, onEvent, opts.signal, {
+          isAlive: () => conversationIdRef.current === streamSessionConvId && !opts.signal.aborted,
+          agentEncryption: _agentEnc,
+          initialReplayFrom: opts.initialReplayFrom,
+          /* 记住「这轮 run 收到哪儿了」，供切后台 / 切页面再回来时续流。每帧都调，只写 ref
+             不 setState。卸载时再由 cleanup 把它连同 blocks 一起落进模块级快照。 */
+          onCursorAdvance: (runId, cursor) => {
+            resumeCursorRef.current = { runId, cursor };
+          },
+        });
+      } finally {
+        /* 兜底 flush：整轮全是回放（run 已跑完、末尾直接 done）时永远等不到「实时帧」那个
+           交界，攒着的内容就画不出来。done / cancelled / reader 结束 / abort / 抛错 —— 所有
+           出口都会走到这里，统一补一次。没攒东西时是空操作。 */
+        flushReplayPending();
+      }
 
       return { streamDone, finalText, localBlocks, lastConvId: streamTargetRef.current };
     },
