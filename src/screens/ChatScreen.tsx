@@ -2355,8 +2355,9 @@ export function ChatScreen({
       if (!silentBackgroundAbort) {
         setStreamingText('');
         setCurrentAssistantBlocks([]);
+        // 状态文案也一起留着：恢复窗口里气泡还挂着，清空会让标题在「thinking」和空之间闪一下
+        setStreamStatus('');
       }
-      setStreamStatus('');
     }
   }, [
     session,
@@ -2691,8 +2692,9 @@ export function ChatScreen({
       if (!silentBackgroundAbort) {
         setStreamingText('');
         setCurrentAssistantBlocks([]);
+        // 状态文案也一起留着：恢复窗口里气泡还挂着，清空会让标题在「thinking」和空之间闪一下
+        setStreamStatus('');
       }
-      setStreamStatus('');
     }
   },
     [
@@ -3292,8 +3294,8 @@ export function ChatScreen({
         if (!silentBackgroundAbort) {
           setStreamingText('');
           setCurrentAssistantBlocks([]);
+          setStreamStatus('');
         }
-        setStreamStatus('');
       }
     },
     [session, runV2WithHandlers, applyConversationUsageState, consumeBackgroundAbortFlag]
@@ -3351,6 +3353,12 @@ export function ChatScreen({
                    用户切后台前手动上翻过的话 atBottomRef 是 false，这里不动，不把人拽回去。 */
                 if (atBottomRef.current) armForOpen(bottomPinRef.current, Date.now());
                 setMessages(rawMessagesToLocal(raw));
+                /* run 已经跑完，这份回复此刻已在 messages 里了 —— 把切后台时保留下来的那半截
+                   流式内容清掉，跟 setMessages 落在同一批里，不会闪出「气泡 + 正式消息」两份。
+                   （保留是给「回来还要续流」用的，这条路不续流。） */
+                setCurrentAssistantBlocks([]);
+                setStreamingText('');
+                setStreamStatus('');
                 const t = conversation?.title?.trim();
                 if (t) setConversationTitle(t);
               }
@@ -4751,7 +4759,14 @@ export function ChatScreen({
                 })()}
               </>
             )}
-            {loading && !conversationHistoryLoading ? (
+            {/* bgPauseRecovering 也要显示：切后台把流 abort 掉之后，loading 已经落回 false，
+                而回前台要先后跑 getConversationMeta + getConversation 两个来回才轮到
+                resumeV2Stream 把 loading 重新置 true。这中间几百毫秒如果只看 loading，
+                这条还留着内容的流式气泡会整个消失 —— 界面看起来「这轮已经结束了」（露出
+                上一条助手消息的复制按钮行 / 未回复提示），紧接着又冒出来继续长，
+                中间还因为内容忽短忽长跳一次滚动位置。三个现象是同一个原因。
+                bgPauseRecovering 由 AppState 那个 handler 的 .finally 兜底清除，不会漏。 */}
+            {(loading || bgPauseRecovering) && !conversationHistoryLoading ? (
               <View style={[styles.bubbleWrap, styles.assistantBubbleWrap]}>
                 <View style={[styles.bubble, styles.assistantBubble]}>
                   <Text style={styles.bubbleRole}>
