@@ -749,6 +749,9 @@ export function ChatScreen({
   const conversationIdRef = useRef(conversationId);
   const sessionRef = useRef(session);
   const pausedByBackgroundRef = useRef(false);
+  /** 本实例是否还挂着。卸载后仍可能有在途的 promise 收尾（abort 是异步生效的），
+   *  那些收尾不许再去动模块级的续流快照——否则会把「用户已经切回来、新实例正在用」的那份抹掉。 */
+  const mountedRef = useRef(true);
   /**
    * 「这一轮是被切后台掐断的吗」——消费式判定（true 只返回一次）。
    *
@@ -2098,18 +2101,28 @@ export function ChatScreen({
    * 只在这一处写 blocks（一次性 O(n) 拷贝），流式热路径上只更新 resumeCursorRef 那个数字。 */
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
       const cur = resumeCursorRef.current;
       const blocks = currentAssistantBlocksRef.current;
-      if (!cur || !conversationIdRef.current || blocks.length === 0) return;
-      saveResumeSnapshot({
-        conversationId: conversationIdRef.current,
-        runId: cur.runId,
-        cursor: cur.cursor,
-        blocks,
-        text: streamingTextRef.current,
-        status: streamStatusRef.current,
-        savedAt: Date.now(),
-      });
+      if (cur && conversationIdRef.current && blocks.length > 0) {
+        saveResumeSnapshot({
+          conversationId: conversationIdRef.current,
+          runId: cur.runId,
+          cursor: cur.cursor,
+          blocks,
+          text: streamingTextRef.current,
+          status: streamStatusRef.current,
+          savedAt: Date.now(),
+        });
+      }
+      /* 存完必须把流掐掉。卸载时本来没有任何地方 abort——isAlive 读的 conversationIdRef 在
+         闭包里活得好好的，于是这条流变成「孤儿」继续跑：它照样在收帧、照样会在 run 结束时
+         走收尾同步，那里的 clearResumeSnapshot 就把刚存的快照抹了（也会跟用户回来后新起的
+         那条流抢着改全局状态）。abort 只断本端订阅，服务端的 run 不受影响，跟切后台同理。 */
+      if (abortRef.current && !manualStopRef.current) {
+        abortRef.current.abort();
+        abortRef.current = null;
+      }
     };
   }, []);
 
@@ -2318,7 +2331,7 @@ export function ChatScreen({
             conversation.active_chat_v2_run_id.trim();
           if (stillRunning) synced = truncateMessagesAfterLastUser(synced);
           // run 收尾：答案已经并进 messages，续流快照没用了（留着也会被 runId 不匹配挡下，这里主动清）
-          if (!stillRunning) clearResumeSnapshot(syncId);
+          if (!stillRunning && mountedRef.current) clearResumeSnapshot(syncId);
           if (streamDone || finalText.trim() || synced.length > 0) {
             armOnce(bottomPinRef.current);
             setMessages(synced);
@@ -2619,7 +2632,7 @@ export function ChatScreen({
             conversation.active_chat_v2_run_id.trim();
           if (stillRunning) synced = truncateMessagesAfterLastUser(synced);
           // run 收尾：答案已经并进 messages，续流快照没用了（留着也会被 runId 不匹配挡下，这里主动清）
-          if (!stillRunning) clearResumeSnapshot(syncId);
+          if (!stillRunning && mountedRef.current) clearResumeSnapshot(syncId);
           if (streamDone || finalText.trim() || synced.length > 0) {
             armOnce(bottomPinRef.current);
             setMessages(synced);
@@ -3266,7 +3279,7 @@ export function ChatScreen({
             synced = truncateMessagesAfterLastUser(synced);
           }
           // run 收尾：答案已并进 messages，续流快照可以清了
-          if (!stillRunning) clearResumeSnapshot(lastConvId);
+          if (!stillRunning && mountedRef.current) clearResumeSnapshot(lastConvId);
           /* resume 跑完后的整表对账：本轮开头那次 armOnce 早被流式中的第一次内容变化消费掉了，
              这里补一次，否则「后台期间 run 继续跑、回前台后才跑完」的最后一批消息不贴底。
              同样只在贴着底时才跟。 */
@@ -3403,9 +3416,21 @@ export function ChatScreen({
               applyConversationUsageState(conversation, messagesWindow);
               const raw =
                 conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
-              // 同上：run 还在跑，回来先把后台期间攒下的这批贴到底，再接着 resume
-              if (atBottomRef.current) armForOpen(bottomPinRef.current, Date.now());
-              setMessages(truncateMessagesAfterLastUser(rawMessagesToLocal(raw)));
+              /* 能增量续流时，别再整表刷一遍 messages：本地那半截回复还在 currentAssistantBlocks
+                 里，而这份服务端快照会被 truncate 掉尾巴 —— 先塌一截、增量再涨回来，视觉上就是
+                 「回来先跳一下再滚回底部」。判定与 resumeV2Stream 内部同源（同一个 run + 本地
+                 还有内容），不满足才按老路整表替换。 */
+              const rc = resumeCursorRef.current;
+              const willResumeIncrementally =
+                !!rc &&
+                rc.runId === s2 &&
+                rc.cursor > 0 &&
+                currentAssistantBlocksRef.current.length > 0;
+              if (!willResumeIncrementally) {
+                // 走全量回放：内容会整段重来，按需贴底
+                if (atBottomRef.current) armForOpen(bottomPinRef.current, Date.now());
+                setMessages(truncateMessagesAfterLastUser(rawMessagesToLocal(raw)));
+              }
               /* 同步跑到第一个 await 前：setLoading(true) 会在这个 then 结束前落下，
                  下面 finally 解除门控时不会露出空窗。 */
               resumeV2Stream(s2, cid);
