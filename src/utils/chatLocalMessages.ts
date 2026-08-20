@@ -26,6 +26,15 @@ export type TaskEventPayload = {
   task_id?: string;
   device_id?: string;
   ended_at?: string;
+  /** 事件种类。缺省（旧执行端 / 后台命令）= 子进程任务完成；'browser_download' = 内建浏览器下载。 */
+  kind?: string;
+  /** 下载事件分两阶段：'started' 触发时、'done' 结束时。 */
+  phase?: string;
+  download_url?: string;
+  download_filename?: string;
+  download_save_path?: string;
+  download_total_bytes?: number;
+  download_received_bytes?: number;
 };
 
 export type StreamBlock =

@@ -1,5 +1,8 @@
 /**
- * 后台任务完成事件卡片（RN）。
+ * 执行端异步事件卡片（RN）：后台命令完成 / 浏览器下载 …
+ *
+ * **标题、失败判定、展开字段三者都按 ev.kind 走**，不再假定"事件 = 后台命令退出"。
+ * 与 Web / Desktop 的 TaskEventCard.jsx 是同一份逻辑的 RN 实现，改一处要三处同步。
  * - variant='trigger'（agent 空闲被唤醒、自成一轮）：对齐用户消息——右对齐、深色气泡（userBubble）、
  *   顶部时间、底部小操作（复制 / 重新处理）。
  * - variant='injection'（工作期间穿插）：灰色全宽 inline 条。
@@ -18,6 +21,20 @@ function formatRuntime(sec?: number): string | null {
   const m = Math.floor(n / 60);
   const s = Math.round(n % 60);
   return s ? `${m}m${s}s` : `${m}m`;
+}
+
+/** 字节数 → 紧凑文案（与 Web/Desktop 版 formatTaskBytes 同款换算）。 */
+function formatBytes(n?: number): string | null {
+  const b = typeof n === 'number' ? n : Number(n);
+  if (!Number.isFinite(b) || b <= 0) return null;
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let v = b;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return i === 0 ? `${Math.round(v)} B` : `${v.toFixed(1)} ${units[i]}`;
 }
 
 function formatClock(iso?: string): string {
@@ -46,18 +63,57 @@ function TaskEventCardViewImpl({
   const styles = createStyles(colors);
   const [open, setOpen] = useState(false);
 
-  const ev = taskEvent || {};
+  const ev: TaskEventPayload = taskEvent || {};
   const status = String(ev.status || 'exited').trim();
   const exitCode = ev.exit_code;
+  /** 事件种类。空 = 后台命令（历史唯一种类，旧执行端也不带这个字段）。 */
+  const kind = String(ev.kind || '').trim();
+  const isDownload = kind === 'browser_download';
+  const phase = String(ev.phase || '').trim();
+
+  /** **只有明确的失败信号才算失败**，其余（含进行中、未知）一律中性。
+   *
+   *  从前是「不是 completed / exited 就算失败」——那是照"进程已退出"写的判据。浏览器下载的
+   *  started 阶段 status=running，于是整条被染成 danger 红，用户看到"一个失败一个成功"。
+   *  反过来写之后，将来再加事件种类也不会被误伤。 */
   const failed =
-    (status !== 'completed' && status !== 'exited') ||
+    ['interrupted', 'cancelled', 'canceled', 'failed', 'error'].includes(status.toLowerCase()) ||
     (typeof exitCode === 'number' && exitCode !== 0);
-  const desc = typeof ev.description === 'string' ? ev.description.trim() : '';
+
+  const dlFilename = typeof ev.download_filename === 'string' ? ev.download_filename.trim() : '';
+  const dlSavePath = typeof ev.download_save_path === 'string' ? ev.download_save_path.trim() : '';
+  const dlUrl = typeof ev.download_url === 'string' ? ev.download_url.trim() : '';
+  const dlTotal = formatBytes(ev.download_total_bytes);
+  const dlReceived = formatBytes(ev.download_received_bytes);
+
+  // 标题不再写死。下载事件分三态，其余保持原文案。
+  const title = isDownload
+    ? phase === 'started'
+      ? '浏览器下载已开始'
+      : failed
+        ? '浏览器下载未完成'
+        : '浏览器下载完成'
+    : '后台任务完成';
+
+  // 中间那行「desc」槽位：后台命令显示 description，下载显示文件名——那是这类事件里
+  // 最该一眼看到的东西。
+  const desc = isDownload
+    ? dlFilename
+    : typeof ev.description === 'string'
+      ? ev.description.trim()
+      : '';
   const runtime = formatRuntime(ev.runtime_seconds);
   const tail = typeof ev.log_tail === 'string' ? ev.log_tail.trim() : '';
-  const summary = [exitCode != null ? `${status} (exit_code=${exitCode})` : status, runtime]
-    .filter(Boolean)
-    .join(' · ');
+  // 右侧摘要：下载看字节数（exit_code / runtime 对它没有意义），其余保持原样。
+  const summary = isDownload
+    ? phase === 'started'
+      ? dlTotal || '正在下载'
+      : dlReceived && dlTotal
+        ? `${dlReceived} / ${dlTotal}`
+        : dlReceived || dlTotal || status
+    : [exitCode != null ? `${status} (exit_code=${exitCode})` : status, runtime]
+        .filter(Boolean)
+        .join(' · ');
   const logVal = ev.log_path
     ? `${ev.log_path}${typeof ev.log_size_bytes === 'number' ? ` (${ev.log_size_bytes} bytes)` : ''}`
     : '';
@@ -68,7 +124,7 @@ function TaskEventCardViewImpl({
   const renderHead = () => (
     <TouchableOpacity onPress={() => setOpen((v) => !v)} activeOpacity={0.6} style={styles.head}>
       <View style={[styles.dot, { backgroundColor: failed ? colors.danger : colors.success }]} />
-      <Text style={[styles.title, { color: fg }]}>后台任务完成</Text>
+      <Text style={[styles.title, { color: fg }]}>{title}</Text>
       {desc ? (
         <Text style={[styles.desc, { color: fgMuted }]} numberOfLines={1}>
           {desc}
@@ -84,14 +140,33 @@ function TaskEventCardViewImpl({
   const renderBody = () =>
     open ? (
       <View style={[styles.body, trigger && styles.bodyOnBubble]}>
-        {[
-          ['task_id', ev.task_id],
-          ['command', ev.command],
-          ['cwd', ev.cwd],
-          ['log', logVal],
-          ['device_id', ev.device_id],
-          ['ended_at', ev.ended_at],
-        ].map(([k, v]) =>
+        {/* 展开区按事件种类换字段组：exec 的 command/cwd/log 对下载毫无意义，而下载真正要给人看的
+            是「文件叫什么、多大、存到哪、从哪来」——尤其**保存路径**，那是点开这张卡的首要目的。 */}
+        {(isDownload
+          ? ([
+              ['文件', dlFilename],
+              [
+                phase === 'started' ? '大小' : '已接收',
+                phase === 'started'
+                  ? dlTotal
+                  : dlReceived && dlTotal
+                    ? `${dlReceived} / ${dlTotal}`
+                    : dlReceived || dlTotal,
+              ],
+              [phase === 'started' ? '将保存到' : '保存在', dlSavePath],
+              ['来源', dlUrl],
+              ['device_id', ev.device_id],
+              ['ended_at', ev.ended_at],
+            ] as Array<[string, unknown]>)
+          : ([
+              ['task_id', ev.task_id],
+              ['command', ev.command],
+              ['cwd', ev.cwd],
+              ['log', logVal],
+              ['device_id', ev.device_id],
+              ['ended_at', ev.ended_at],
+            ] as Array<[string, unknown]>)
+        ).map(([k, v]) =>
           v == null || v === '' ? null : (
             <View style={styles.field} key={String(k)}>
               <Text style={[styles.fieldKey, { color: fgMuted }]}>{k}</Text>
@@ -114,7 +189,11 @@ function TaskEventCardViewImpl({
           </View>
         ) : null}
         <Text style={[styles.hint, { color: fgMuted }]}>
-          完整输出用 local_read_file 读 log 路径（支持 offset/limit 分页）。
+          {isDownload
+            ? failed
+              ? '下载没有正常结束。可以重新触发一次，或改用命令行下载。'
+              : '文件已经在执行端本机，可直接用 local_read_file 处理它。'
+            : '完整输出用 local_read_file 读 log 路径（支持 offset/limit 分页）。'}
         </Text>
       </View>
     ) : null;
@@ -124,7 +203,7 @@ function TaskEventCardViewImpl({
     const copyText =
       typeof content === 'string' && content.trim()
         ? content
-        : `后台任务完成 ${desc} ${summary}`.trim();
+        : `${title} ${desc} ${summary}`.trim();
     return (
       <View style={styles.triggerWrap}>
         {timeStr ? <Text style={styles.triggerTime}>{timeStr}</Text> : null}
