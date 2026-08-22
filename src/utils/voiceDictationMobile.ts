@@ -467,7 +467,14 @@ export class VoiceDictationSession {
       // 不带任何 mix / duck 选项 = 纯非混音 playAndRecord：激活时系统向其它 App 发打断
       // 请求，对方遵守就暂停、音量归零。曾短暂改用 duckOthers，但实测只压到约 -20dB，
       // 画中画视频的声音照样进麦克风；打断是唯一能真正归零的路子（代价是对方 App 可以
-      // 不遵守）。两条路径都只在 setActive(true) 的仲裁时刻生效，所以下面那次真跃迁
+      // 不遵守）。
+      //
+      // KNOWN ISSUE（不修、也修不了）：哔哩哔哩 iPad 画中画，用户上传类视频（用户投稿/
+      // 自制）无视系统打断请求，语音输入时照常播放；剧集类（如生活大爆炸）则正常停止。
+      // 实测确认是 B 站对不同视频类型走不同播放路径所致，非本端缺陷。系统打断只是请求，
+      // 无任何 API 能强制对方暂停，iOS 不提供"静音他人类音频"的能力。
+      //
+      // 两条路径都只在 setActive(true) 的仲裁时刻生效，所以下面那次真跃迁
       // （beginExternalRecording 让路 → deactivate → activate）是前提——修复前那种
       // 「视频顿一下就续播」是激活空操作下的伪打断，跟现在的真打断不是一回事。
       const iosOpts = (wantHeadsetMic
