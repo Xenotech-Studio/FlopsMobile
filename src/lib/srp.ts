@@ -485,6 +485,39 @@ export function decryptSseChunkLocal(chunkStr: string, kConvBytes: Uint8Array): 
   }
 }
 
+/**
+ * S9：加密 flops 子对话的 K_conv 存在**父对话 meta 的加密字段** subagent_children
+ * ( = AES-GCM(JSON({childId: base64(child_K_conv)}), 父 K_conv) )。解父对话时顺带把
+ * 子 key 全部预缓存 —— 之后打开任意子对话直接 getCachedKConv 命中。返回缓存进去的数量。
+ */
+export function decryptSubagentChildrenIntoCache(
+  convData: { subagent_children_ciphertext?: string } | null | undefined,
+  parentKConvBytes: Uint8Array,
+): number {
+  if (!convData || typeof convData.subagent_children_ciphertext !== 'string' || !convData.subagent_children_ciphertext) {
+    return 0;
+  }
+  if (parentKConvBytes.length !== KEY_LEN) return 0;
+  let n = 0;
+  try {
+    const blob = base64ToBytesLocal(convData.subagent_children_ciphertext);
+    const pt = aesGcmDecrypt(blob, parentKConvBytes);
+    const map = JSON.parse(new TextDecoder().decode(pt)) as Record<string, string>;
+    if (map && typeof map === 'object') {
+      for (const [childId, b64key] of Object.entries(map)) {
+        try {
+          const kc = base64ToBytesLocal(b64key);
+          if (kc && kc.length === KEY_LEN) { setCachedKConv(childId, kc); n++; }
+        } catch (_e) { /* 单个坏 key 跳过 */ }
+      }
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[encrypted conv mobile] subagent_children decrypt failed:', (e as Error)?.message || e);
+  }
+  return n;
+}
+
 // K_conv 缓存（per conv_id，模块级；进程生命期；logout 时由 SessionContext 清）
 const _kConvCache: Map<string, Uint8Array> = new Map();
 

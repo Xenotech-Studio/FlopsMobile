@@ -19,6 +19,7 @@ import {
   bytesToBase64,
   base64ToBytes,
   deriveKConvFromBlob,
+  decryptSubagentChildrenIntoCache,
   wrapKConvForWire,
   decryptMessageLocal,
   decryptSseChunkLocal,
@@ -1003,11 +1004,14 @@ export async function getConversation(
     messages?: Array<Record<string, unknown>>;
   };
   const tParse = typeof performance !== 'undefined' ? performance.now() : Date.now();
-  // 加密对话：用本机 K_user 派生 K_conv 缓存 + 本地解密 messages + title
-  if (conversation && conversation.encrypted && conversation.k_conv_blob) {
+  // 加密对话：用本机 K_user 派生 K_conv 缓存 + 本地解密 messages + title。
+  // S9：加密 flops 子对话没有自己的 k_conv_blob，K_conv 存在父对话 meta 里 → 打开父对话时
+  // 已被 decryptSubagentChildrenIntoCache 预缓存；这里用 getCachedKConv 命中即可解。
+  // （子对话直开且父未加载 → 缓存 miss → 保持锁定，用户先打开父对话再回来；跨对话属授权桥 S10。）
+  if (conversation && conversation.encrypted && (conversation.k_conv_blob || getCachedKConv(conversationId))) {
     try {
       let kConv = getCachedKConv(conversationId);
-      if (!kConv) {
+      if (!kConv && conversation.k_conv_blob) {
         const kUserStr = await getStoredKUser();
         if (kUserStr) {
           const kUserBytes = base64ToBytes(kUserStr);
@@ -1016,6 +1020,11 @@ export async function getConversation(
         }
       }
       if (kConv) {
+        // 本对话若是父对话（带 subagent_children_ciphertext）→ 顺带把子 key 预缓存
+        decryptSubagentChildrenIntoCache(
+          conversation as { subagent_children_ciphertext?: string },
+          kConv,
+        );
         if (Array.isArray(conversation.messages)) {
           conversation.messages = conversation.messages.map((m) => decryptMessageLocal(m, kConv!));
         }
