@@ -661,6 +661,12 @@ export type ConversationListItem = {
   flowtask_project_id?: string | null;
   /** 关联的 Flowtask 项目内 folder ID；null / 缺省 = 项目直属，不在子文件夹里 */
   flowtask_folder_id?: string | null;
+  /**
+   * S9 加密子对话解不开时的原因。'need_parent' = K_conv 存在**父对话 meta 的加密字段**里，
+   * 本次会话还没打开过那个父对话（服务端也解不开，这是零知识设计的必然结果）。
+   * 置位时 title 已被换成可读占位，不再是服务端落库的 [encrypted title] 哨兵。
+   */
+  locked_reason?: 'need_parent' | null;
 };
 
 export type ConversationMessage = {
@@ -739,6 +745,12 @@ export type Conversation = {
   /** 上下文 L1 投影：主 system / 摘要注入 / 逐字尾 / 工具 schema 各自的 L1 字符数 + 上限。
    *  用于 composer 旁环形进度条算"上下文已用比例"。后端按需返回，缺省时退化用"消息条数已压缩"。 */
   context_projection_l1?: Record<string, unknown>;
+  /**
+   * S9 加密子对话解不开时的原因。'need_parent' = K_conv 存在**父对话 meta 的加密字段**里，
+   * 而那个父对话已被删除 / 不在当前账号下（正常情况 getConversation 会自动去捞，捞到就没这个字段）。
+   * 置位时 messages 仍是密文哨兵形态，UI 该说清楚原因而不是假装内容为空。
+   */
+  locked_reason?: 'need_parent' | null;
 };
 
 /** 会话列表页大小（服务端分页）：首屏 + 每次滚到底加载的条数。
@@ -776,12 +788,23 @@ async function decryptConvListTitles(list: ConversationListItem[]): Promise<void
           kConv = deriveKConvFromBlob(raw.k_conv_blob, kUserBytes);
           setCachedKConv(raw.id, kConv);
         }
-        if (!kConv) continue;
+        if (!kConv) {
+          // S9 加密子对话（列表端点不带 k_conv_source，只能靠「加密 + 有 title 密文 +
+          // 没有 k_conv_blob」这个形态判定 —— 普通加密对话一定带 blob，不会误判）。
+          // 钥匙在发起它的那个对话手里，没打开过就解不开。给个能看懂的占位，
+          // 别把服务端哨兵 [encrypted title] 直接摆给用户。
+          if (!raw.k_conv_blob) {
+            raw.locked_reason = 'need_parent';
+            raw.title = '子对话 · 待解锁';
+          }
+          continue;
+        }
         const blob = base64ToBytes(raw.title_ciphertext);
         const pt = aesGcmDecrypt(blob, kConv);
         const decoded = new TextDecoder().decode(pt);
         // server 把 title 当 JSON 字符串存进密文：`"foo"`，所以这里要 parse 一层
         raw.title = JSON.parse(decoded);
+        raw.locked_reason = null;  // 父对话刚被打开、本轮重解走的就是这条
       } catch {
         // 单条解失败保留原 sentinel
       }
@@ -979,6 +1002,54 @@ function parseMessageWindow(data: unknown): MessageWindow | null {
   return null;
 }
 
+/**
+ * S9 加密子对话：K_conv 存在**父对话 meta 的加密字段** subagent_children 里（受父 K_conv
+ * 保护，服务器解不开）。用户可能从推送直接点进子对话，此时父对话本次会话压根没打开过 ——
+ * 缓存里没有这把钥匙。这里去把父对话的 meta 捞回来，本地解出全部子 key 入缓存，返回本条那把。
+ *
+ * 走 /conversations/{parent}/meta 轻量端点：只要 k_conv_blob +
+ * subagent_children_ciphertext 两个字段，没必要为一把钥匙把父对话上百条消息拉下来再逐条解密
+ * （手机上那是几 MB 的响应，实测 400 条要 4.3s）。
+ *
+ * 捞不到（父对话被删 / 不在当前账号下 / 无 K_user）返回 null —— 调用方保持密文形态，
+ * UI 显示锁定态，不装作解开了。
+ */
+async function resolveChildKConvViaParent(
+  session: Session,
+  conv: { id?: string; k_conv_source?: string; k_conv_parent?: string }
+): Promise<Uint8Array | null> {
+  if (conv?.k_conv_source !== 'parent_meta') return null;
+  const parentId = String(conv?.k_conv_parent || '').trim();
+  const childId = String(conv?.id || '').trim();
+  if (!parentId || !childId) return null;
+  try {
+    const kUserStr = await getStoredKUser();
+    if (!kUserStr) return null;
+    const kUserBytes = base64ToBytes(kUserStr);
+    const res = await fetchWithDebugLog(
+      `${session.server_base_url}api/conversations/${encodeURIComponent(parentId)}/meta`,
+      { method: 'GET', headers: authHeaders(session.access_token) }
+    );
+    if (!res.ok) return null;
+    const parentMeta = (await res.json()) as {
+      id?: string;
+      k_conv_blob?: string;
+      subagent_children_ciphertext?: string;
+    };
+    let parentK = getCachedKConv(parentId);
+    if (!parentK && parentMeta?.k_conv_blob) {
+      parentK = deriveKConvFromBlob(parentMeta.k_conv_blob, kUserBytes);
+      setCachedKConv(parentId, parentK);
+    }
+    if (!parentK) return null;
+    decryptSubagentChildrenIntoCache(parentMeta, parentK);
+    return getCachedKConv(childId);
+  } catch (e) {
+    console.warn('[encrypted child mobile] 经父对话取 K_conv 失败:', (e as Error)?.message || e);
+    return null;
+  }
+}
+
 export async function getConversation(
   session: Session,
   conversationId: string,
@@ -1003,13 +1074,17 @@ export async function getConversation(
     k_conv_blob?: string;
     title_ciphertext?: string;
     messages?: Array<Record<string, unknown>>;
+    /** S9 加密子对话的明文路由字段：K_conv 去哪儿取、父对话是谁 */
+    k_conv_source?: string;
+    k_conv_parent?: string;
+    locked_reason?: 'need_parent' | null;
   };
   const tParse = typeof performance !== 'undefined' ? performance.now() : Date.now();
   // 加密对话：用本机 K_user 派生 K_conv 缓存 + 本地解密 messages + title。
   // S9：加密 flops 子对话没有自己的 k_conv_blob，K_conv 存在父对话 meta 里 → 打开父对话时
   // 已被 decryptSubagentChildrenIntoCache 预缓存；这里用 getCachedKConv 命中即可解。
   // （子对话直开且父未加载 → 缓存 miss → 保持锁定，用户先打开父对话再回来；跨对话属授权桥 S10。）
-  if (conversation && conversation.encrypted && (conversation.k_conv_blob || getCachedKConv(conversationId))) {
+  if (conversation && conversation.encrypted) {
     try {
       let kConv = getCachedKConv(conversationId);
       if (!kConv && conversation.k_conv_blob) {
@@ -1020,12 +1095,18 @@ export async function getConversation(
           setCachedKConv(conversationId, kConv);
         }
       }
+      if (!kConv && !conversation.k_conv_blob) {
+        // S9 加密子对话：钥匙不在自己身上，去父对话 meta 里捞（父对话没打开过时的常态）
+        kConv = await resolveChildKConvViaParent(session, conversation);
+        if (!kConv) conversation.locked_reason = 'need_parent';
+      }
       if (kConv) {
         // 本对话若是父对话（带 subagent_children_ciphertext）→ 顺带把子 key 预缓存
         decryptSubagentChildrenIntoCache(
           conversation as { subagent_children_ciphertext?: string },
           kConv,
         );
+        conversation.locked_reason = null;
         // S9 删父自愈：本对话是「密钥存父 meta」的加密子对话且尚未 direct → 用 K_user 重包一份
         // 独立 k_conv_blob 上送升级，脱离对父依赖（父删也不丢）。fire-and-forget。
         const _convAny = conversation as { k_conv_source?: string; k_conv_blob?: string };

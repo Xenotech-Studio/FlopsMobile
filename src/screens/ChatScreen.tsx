@@ -387,6 +387,12 @@ export function ChatScreen({
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Chat'>>();
   const { colors, isDark } = useAppTheme();
   const styles = useMemo(() => createChatStyles(colors), [colors]);
+  /**
+   * S9 加密子对话锁定态。K_conv 存在**父对话 meta 的加密字段**里（服务器也解不开），
+   * getConversation 会自动去父对话捞一次 —— 捞到就没这个态。捞不到（父对话被删 /
+   * 不在当前账号下）才置位，此时消息仍是密文哨兵，得跟用户说清楚原因而不是显示成空对话。
+   */
+  const [convLockedReason, setConvLockedReason] = useState<'need_parent' | null>(null);
   const headerHeight = insets.top + 8 + 12 + HEADER_CIRCLE_BTN_SIZE;
   /** 底部渐变条高度（叠在滚动内容上，透明→白） */
   const gradientStripHeight = 48;
@@ -799,6 +805,7 @@ export function ChatScreen({
     if (messagesWindow !== undefined) {
       setMessageWindowMeta(messagesWindow);
     }
+    setConvLockedReason(conversation.locked_reason === 'need_parent' ? 'need_parent' : null);
     setUsageStats(conversation.usage_stats ?? null);
     setUsageRuns(Array.isArray(conversation.usage_runs) ? conversation.usage_runs : []);
     setConversationAttachments(
@@ -4755,6 +4762,12 @@ export function ChatScreen({
       >
         {error ? (
           <Text style={[styles.globalError, { marginTop: headerHeight + 8 }]}>{error}</Text>
+        ) : null}
+        {convLockedReason === 'need_parent' ? (
+          <Text style={[styles.convLockedNotice, error ? null : { marginTop: headerHeight + 8 }]}>
+            这是一个子 agent 的对话，它的密钥由发起它的那个对话保管（服务端也解不开）。
+            现在取不到那个对话 —— 多半是它已被删除，或不在当前登录的账号下，所以内容无法解密。
+          </Text>
         ) : null}
 
         <View style={styles.scrollAndGradientWrap}>

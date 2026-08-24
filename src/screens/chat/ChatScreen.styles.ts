@@ -340,6 +340,8 @@ export function createChatStyles(c: AppColors) {
     maxWidth: '100%',
   },
   globalError: { color: c.danger, fontSize: 13, paddingHorizontal: CHAT_SCROLL_PADDING_H, paddingVertical: 8 },
+  /* S9 加密子对话解不开（父对话已删/不在本账号）时的说明条。不是错误，是状态，所以用弱化色。 */
+  convLockedNotice: { color: c.textMuted, fontSize: 13, lineHeight: 18, paddingHorizontal: CHAT_SCROLL_PADDING_H, paddingVertical: 8 },
   scroll: { flex: 1 },
   scrollContent: {
     paddingHorizontal: CHAT_SCROLL_PADDING_H,
