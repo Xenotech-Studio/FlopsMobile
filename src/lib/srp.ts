@@ -416,6 +416,16 @@ export function deriveKConvFromBlob(kConvBlobB64: string, kUserBytes: Uint8Array
   return kConv;
 }
 
+/**
+ * S9 删父自愈：把一把 K_conv 用 K_user 重包成独立 k_conv_blob（= /new 同款）。
+ * 加密 flops 子对话「升级 direct」用：解出 child_K_conv 后重包一份自包含 blob 上送，脱离父依赖。
+ */
+export function wrapKConvBlobForUser(kConvBytes: Uint8Array, kUserBytes: Uint8Array): string {
+  if (kConvBytes.length !== KEY_LEN) throw new Error('wrapKConvBlobForUser: K_conv invalid');
+  if (kUserBytes.length !== KEY_LEN) throw new Error('wrapKConvBlobForUser: K_user invalid');
+  return bytesToBase64(aesGcmEncrypt(kConvBytes, kUserBytes));
+}
+
 /** K_conv → RSA-OAEP-SHA256(transport.pub) → base64。每次 chat_v2 POST 都重算。 */
 export function wrapKConvForWire(kConvBytes: Uint8Array, transportPubPem: string): string {
   if (kConvBytes.length !== KEY_LEN) throw new Error('wrapKConvForWire: K_conv invalid');

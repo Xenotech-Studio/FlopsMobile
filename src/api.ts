@@ -20,6 +20,7 @@ import {
   base64ToBytes,
   deriveKConvFromBlob,
   decryptSubagentChildrenIntoCache,
+  wrapKConvBlobForUser,
   wrapKConvForWire,
   decryptMessageLocal,
   decryptSseChunkLocal,
@@ -1025,6 +1026,25 @@ export async function getConversation(
           conversation as { subagent_children_ciphertext?: string },
           kConv,
         );
+        // S9 删父自愈：本对话是「密钥存父 meta」的加密子对话且尚未 direct → 用 K_user 重包一份
+        // 独立 k_conv_blob 上送升级，脱离对父依赖（父删也不丢）。fire-and-forget。
+        const _convAny = conversation as { k_conv_source?: string; k_conv_blob?: string };
+        if (_convAny.k_conv_source === 'parent_meta' && !_convAny.k_conv_blob) {
+          try {
+            const kUserStr2 = await getStoredKUser();
+            if (kUserStr2) {
+              const blobB64 = wrapKConvBlobForUser(kConv, base64ToBytes(kUserStr2));
+              void fetchWithDebugLog(`${base}api/conversations/${conversationId}/upgrade_encrypted_kconv`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...authHeaders(session.access_token) },
+                body: JSON.stringify({ k_conv_blob: blobB64 }),
+              }).catch(() => {});
+            }
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.warn('[encrypted child mobile] 升级 direct 失败(不影响解密):', (e as Error)?.message || e);
+          }
+        }
         if (Array.isArray(conversation.messages)) {
           conversation.messages = conversation.messages.map((m) => decryptMessageLocal(m, kConv!));
         }
