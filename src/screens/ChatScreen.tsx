@@ -136,6 +136,7 @@ import {
   COMPOSER_TEXT_INSET_TALL,
 } from './chat/ChatScreen.styles';
 import { ChatMessageArea, type ChatMessageAreaHandle } from './chat/ChatMessageArea';
+import { createBottomPinState } from '../utils/chatBottomPin';
 import { WorkspaceBody } from './chat/WorkspaceBody';
 import {
   applyCollabLayoutPayload,
@@ -494,11 +495,18 @@ export function ChatScreen({
     ],
     [collabSheetPeekHeight],
   );
-  /* 最高档的顶沿 Y（sheet 容器坐标系，容器 = 屏幕挖掉 topInset=headerHeight 之后那块）。
-   * gorhom 恒按**最高档**给 sheet body 布局，停在更低档时靠 translateY 把整个 body 往下推 ——
-   * 露不出屏幕的那一截就是 position - 这个值，见 collabSheetContentStyle。 */
+  /* 最高档的顶沿 Y，**屏幕坐标系**。
+   * gorhom 恒按最高档给 sheet body 布局，停在更低档时靠 translateY 把整个 body 往下推，
+   * 露不出屏幕的那一截 = position - 这个值（见 collabSheetContentStyle）。
+   *
+   * 坐标系必须跟 collabSheetPosition 对齐：gorhom 内部那个 animatedPosition 是**容器**坐标
+   * （容器 = 屏幕挖掉 topInset 之后那块），但往外抛给 animatedPosition prop 时会加回 topInset
+   *   `_providedAnimatedPosition.value = _animatedPosition + topInset`（BottomSheet.tsx:1743）
+   * —— 也就是说我们收到的是屏幕坐标。所以这里也得加上 headerHeight 换算到同一系；
+   * 少加的话补偿会**整体多出一个 headerHeight**，ScrollView 视口比 sheet 内容区矮一截，
+   * 表现就是滚动条明显比 sheet 短、底部空出一条。 */
   const collabSheetHighestPosition =
-    Math.max(0, windowHeight - headerHeight) * (1 - COLLAB_SHEET_MAX_RATIO);
+    headerHeight + Math.max(0, windowHeight - headerHeight) * (1 - COLLAB_SHEET_MAX_RATIO);
   /* bottomOverlay 的 bottom 偏移：iOS 完全由 lib KAV 缩 scrollAndGradientWrap (flex:1) 自动上浮
    * (base=0)；Android lib KAV 同样接管几何，base=0 即可（之前 RN KAV 在 Android adjustResize
    * 下 absolute children 飘忽，那条手挂 h offset 是兜底）。lib 两端统一 native 接管。 */
@@ -795,6 +803,12 @@ export function ChatScreen({
   } | null>(null);
   /** 消息区（ScrollView + 全套钉底/贴底机制）的命令句柄，见 ChatMessageArea。 */
   const messageAreaRef = useRef<ChatMessageAreaHandle>(null);
+  /** 消息区的钉底状态机（utils/chatBottomPin）。**刻意挂在这一层**：协同模式的布局分叉会把
+   *  ChatMessageArea 换到 BottomSheet 下（跨父节点 = 整个实例重挂），状态若归它自己所有，
+   *  路由 open 时武装的那个窗口会跟旧实例一起消失，新实例带着全量内容挂出来又不会再有
+   *  内容变高事件，窗口就永远没人消费 → 列表停在最顶部。放这里能穿过重挂活下来。
+   *  ChatScreen 本身按 conversationId 上 key，所以换会话时它自然是新的。 */
+  const chatBottomPinRef = useRef(createBottomPinState());
   /** 摘要分界行原生节点，用于 measureLayout 相对 ScrollView 内容容器得到可 scrollTo 的偏移 */
   const contextCompressAnchorRef = useRef<View>(null);
   /** 流式文件卡片(半折叠)内部 ScrollView 引用，保持视图跟随最后几行 */
@@ -4879,6 +4893,7 @@ export function ChatScreen({
       conversationAttachmentsMap={conversationAttachmentsMap}
       contextCompressPlacement={contextCompressPlacement}
       contextCompressAnchorRef={contextCompressAnchorRef}
+      bottomPin={chatBottomPinRef.current}
       showEmpty={showEmpty}
       loading={loading}
       bgPauseRecovering={bgPauseRecovering}

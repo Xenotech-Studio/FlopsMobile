@@ -8,8 +8,9 @@
  * - 数据源不归它管。messages / currentAssistantBlocks 等一律由 ChatScreen 下发；
  *   renderMessage / renderToolBlock 也留在 ChatScreen（它们闭包了十几个局部状态），
  *   这里只负责摆放。
- * - 滚动归它管。scrollRef / atBottomRef / bottomPinRef / 三个尺寸 ref 都在这里，
- *   外部要滚动/钉底一律走 ref 上的命令（见 ChatMessageAreaHandle）。
+ * - 滚动归它管。scrollRef / atBottomRef / 三个尺寸 ref 都在这里，外部要滚动/钉底一律走
+ *   ref 上的命令（见 ChatMessageAreaHandle）。例外是钉底状态机本身（bottomPin）：它得
+ *   熬过协同模式换容器的重挂，所以归 ChatScreen 持有、当 prop 传进来。
  * - 顶部「加载更旧」的**触发与防抖**在这里，**网络调用**在 ChatScreen（onReachTop 桥接）。
  */
 import React, { forwardRef, useImperativeHandle, useRef } from 'react';
@@ -38,9 +39,9 @@ import {
   armForOpen,
   armOnce,
   consumeScrollIntent,
-  createBottomPinState,
   isInOpenWindow,
   release as releaseBottomPin,
+  type BottomPinState,
 } from '../../utils/chatBottomPin';
 
 type ChatStyles = ReturnType<typeof createChatStyles>;
@@ -76,6 +77,9 @@ export type ChatMessageAreaProps = {
   contextCompressPlacement: ContextCompressDividerPlacement | null;
   /** 摘要分界行原生节点 ref：ChatScreen 持有（renderMessage 里也要挂），这里只是转交给分界行。 */
   contextCompressAnchorRef: React.RefObject<View | null>;
+  /** 钉底状态机（utils/chatBottomPin）。**由 ChatScreen 持有**，好让它熬过协同模式换容器
+   *  带来的重挂；本组件只读写它，不负责创建。理由详见组件内声明区那段注释。 */
+  bottomPin: BottomPinState;
 
   /* ---- 状态门控 ---- */
   showEmpty: boolean;
@@ -129,6 +133,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
       conversationAttachmentsMap,
       contextCompressPlacement,
       contextCompressAnchorRef,
+      bottomPin,
       showEmpty,
       loading,
       bgPauseRecovering,
@@ -165,13 +170,21 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
     const atBottomRef = useRef(false);
     /** 防抖:顶部触发过一次加载后置 true，直到用户滚离顶部(y>300)才重新武装，避免一次滚动连环触发多批。 */
     const nearTopTriggeredRef = useRef(false);
-    /** 「钉底」状态机（见 utils/chatBottomPin）：
+    /* 「钉底」状态机（见 utils/chatBottomPin）：
      *  - 一次性触发：有新消息 / 回复完成时滚一下，避免展开折叠工具卡片时误滚；
      *  - 打开对话额外武装一个时间窗口：首个 onContentSizeChange 往往发生在图片（fit-image
-     *    异步量高）、flowdoc 附件、resume 流式气泡都还没量出高度时，只滚那一次会停在半路。 */
-    const bottomPinRef = useRef(createBottomPinState());
+     *    异步量高）、flowdoc 附件、resume 流式气泡都还没量出高度时，只滚那一次会停在半路。
+     *
+     *  它**不在这里 useRef**，而是由 ChatScreen 持有后当 prop 传进来（见 bottomPin）：
+     *  协同模式的布局分叉会把消息区换到 BottomSheet 下 —— 跨父节点 = 整个实例重挂，内部
+     *  useRef 全部重建。而「打开对话」那次 armForOpen 武装在 setMessages **之前**，正好
+     *  赶在这次重挂之前：状态若归本组件所有，窗口就跟着旧实例一起没了，新实例带着全量内容
+     *  挂出来、内容高度不再变化，窗口永远等不到触发源 → 列表停在 offset 0（远古历史）。
+     *  挂到父级后窗口能穿过重挂活下来，新实例挂载时必然 fire 的 onLayout /
+     *  onContentSizeChange 直接就能消费它，不必再赌 effect 与原生布局事件的先后。 */
 
-    /* 命令全部只碰 ref，句柄本身恒定 —— ChatScreen 那些长寿闭包（onEvent / AppState 回调）
+    /* 命令全部只碰 ref / 父级状态，句柄本身恒定 —— ChatScreen 那些长寿闭包（onEvent /
+       AppState 回调）
        捕获到的 messageAreaRef 永远指向当前实例，不会拿到陈旧命令。 */
     useImperativeHandle(
       ref,
@@ -180,10 +193,10 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
           scrollRef.current?.scrollToEnd({ animated });
         },
         armOnce: () => {
-          armOnce(bottomPinRef.current);
+          armOnce(bottomPin);
         },
         armForOpen: () => {
-          armForOpen(bottomPinRef.current, Date.now());
+          armForOpen(bottomPin, Date.now());
           /* 光武装窗口不够 —— 窗口的唯一触发源是 onContentSizeChange（内容**变高**）。
              平铺路径下成立：ScrollView 先空着挂出来，armForOpen 又排在 setMessages 之前，
              内容 0 → N 必然 fire 一次，窗口顺势被消费。
@@ -205,7 +218,9 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
         getInnerViewNode: () => scrollRef.current?.getInnerViewNode?.() ?? null,
         getViewportHeight: () => scrollViewportHeightRef.current,
       }),
-      []
+      /* bottomPin 是 ChatScreen 那边 useRef 里的对象，整个会话期间恒定，句柄实际不会重建；
+         列进依赖只为满足 exhaustive-deps，顺带保证万一父级换了对象也不会拿到旧的。 */
+      [bottomPin]
     );
 
     return (
@@ -222,7 +237,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
                一整段收不到任何信号。挂在这里就不必去猜动画什么时候停。
                只认窗口、不消费 once：一次性 latch 说的是「下次内容**变高**时滚」，让一次纯
                视口变化（发完消息键盘收起之类）提前吃掉，真正的新消息反而会落在屏幕外。 */
-            if (isInOpenWindow(bottomPinRef.current, Date.now())) {
+            if (isInOpenWindow(bottomPin, Date.now())) {
               atBottomRef.current = true;
               scrollRef.current?.scrollToEnd({ animated: false });
               return;
@@ -258,18 +273,18 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
            * KAV 缩 ScrollView frame。当前评估边缘 bug、性价比不高，先搁置。 */
           /* 用户一碰列表就放弃钉底：正往上翻的时候，图片量完高度不能把人拽回底部。 */
           onTouchStartCapture={() => {
-            releaseBottomPin(bottomPinRef.current);
+            releaseBottomPin(bottomPin);
             onDismissComposer();
           }}
           onScrollBeginDrag={() => {
-            releaseBottomPin(bottomPinRef.current);
+            releaseBottomPin(bottomPin);
             if (Platform.OS === 'android') onDismissComposer();
           }}
           keyboardDismissMode="on-drag"
           onContentSizeChange={(_w, h) => {
             scrollContentHeightRef.current = h;
             /* 加载更旧的锚定已交给 maintainVisibleContentPosition（原生帧级维持），这里只管触底滚动。 */
-            const intent = consumeScrollIntent(bottomPinRef.current, Date.now());
+            const intent = consumeScrollIntent(bottomPin, Date.now());
             if (intent) {
               /* 主动贴底了就直接把 atBottom 记上，不等 onScroll 回声：内容没撑满视口时
                  根本不会有滚动事件，光靠 onScroll 维护的话这种会话永远是 false，
@@ -302,12 +317,18 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
             /* hasOlder / loadingOlder 是 props：两者的来源（messageWindowMeta、loadingOlder）
                都是 ChatScreen 的 state，state 一变父子一起重渲染，这里的闭包与原来读 ref
                取到的是同一时刻的值。父那边 loadOlderMessages 入口另有 ref 级重入保护。 */
+            /* 「打开对话」窗口还开着 = 初始定位还没落定（协同模式尤其明显：sheet 进场动画
+               期间视口高度一路在变），此刻的 y 不代表用户真的在看顶部。不挡的话，挂载瞬间
+               offset=0 的那一下就会自动拉一批更旧的回来 —— 顶部转菊花、prepend 再经
+               maintainVisibleContentPosition 一锚，视图就钉死在那批旧内容里了。
+               用户真去翻历史时 onTouchStartCapture 会先 release 掉窗口，不受影响。 */
             if (
               y <= 160 &&
               !nearTopTriggeredRef.current &&
               hasOlder &&
               !loadingOlder &&
-              !loading
+              !loading &&
+              !isInOpenWindow(bottomPin, Date.now())
             ) {
               nearTopTriggeredRef.current = true;
               onReachTop();
