@@ -184,8 +184,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
      *  onContentSizeChange 直接就能消费它，不必再赌 effect 与原生布局事件的先后。 */
 
     /* 命令全部只碰 ref / 父级状态，句柄本身恒定 —— ChatScreen 那些长寿闭包（onEvent /
-       AppState 回调）
-       捕获到的 messageAreaRef 永远指向当前实例，不会拿到陈旧命令。 */
+       AppState 回调）捕获到的 messageAreaRef 永远指向当前实例，不会拿到陈旧命令。 */
     useImperativeHandle(
       ref,
       () => ({
