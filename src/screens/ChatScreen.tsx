@@ -4202,7 +4202,10 @@ export function ChatScreen({
       // 清投影，避免 effect 又把 block 翻回 awaiting_authorization
       setPendingAuthProjection(null);
       setSubmittingAuthorizationId(requestId);
-      patchToolBlocksByAuthRequestId(requestId, { authorization_error: '' });
+      // 乐观置态：与 ask/safety 一致，点击即把工具卡推进（confirming/rejected），右上角徽标随之
+      // 切「提交中」覆盖「待授权」，而非二者并存。失败再回滚成 awaiting_authorization。
+      const optimisticStatus = decision === 'approve' ? 'confirming' : 'rejected_by_user';
+      patchToolBlocksByAuthRequestId(requestId, { status: optimisticStatus, authorization_error: '' });
       try {
         if (kind === 'access') {
           await submitConversationAccessDecision(session, {
@@ -4219,11 +4222,9 @@ export function ChatScreen({
             targetIds: Array.isArray(payload?.target_ids) ? payload.target_ids : [],
           });
         }
-        patchToolBlocksByAuthRequestId(requestId, {
-          status: decision === 'approve' ? 'confirming' : 'rejected_by_user',
-        });
       } catch (e) {
         patchToolBlocksByAuthRequestId(requestId, {
+          status: 'awaiting_authorization',
           authorization_error: e instanceof Error ? e.message : '提交授权失败',
         });
       } finally {
@@ -4821,6 +4822,19 @@ export function ChatScreen({
         if (b.type === 'text') lastTextBlockIdx = i;
       });
     }
+    // 本条含"挂起等待用户"的工具卡（安全确认 / 工具授权 / ask 选择题）时，本轮尚未结束——
+    // 与 Web/Desktop VirtualMessageList.msgHasAwaitingTool 一致，抑制回复结束操作栏（复制/重新生成）。
+    const msgHasAwaitingTool =
+      !isUser &&
+      msg.role === 'assistant' &&
+      Array.isArray(msg.blocks) &&
+      msg.blocks.some(
+        (b) =>
+          b?.type === 'tool' &&
+          (b?.status === 'awaiting_confirmation' ||
+            b?.status === 'awaiting_authorization' ||
+            String((b as ToolBlock)?.tool_name || '') === 'ask_user_question')
+      );
     // TTS 语音播放（本条 assistant 消息服务端已合成的 metadata.audio）。
     const msgAudio = msg.role === 'assistant' ? msg.audio : undefined;
     const audioSegments = msgAudio?.segments;
@@ -4928,8 +4942,8 @@ export function ChatScreen({
                     >
                       <MarkdownContent
                         text={block.content}
-                        showCopyButton={isLastAssistant && bi === lastTextBlockIdx}
-                        showRegenerateButton={bi === lastTextBlockIdx}
+                        showCopyButton={isLastAssistant && bi === lastTextBlockIdx && !msgHasAwaitingTool}
+                        showRegenerateButton={bi === lastTextBlockIdx && !msgHasAwaitingTool}
                         showPlayButton={hasAudio && bi === lastTextBlockIdx}
                         isPlaying={audioIsPlaying}
                         isPlayLoading={audioIsLoading}
@@ -4979,6 +4993,7 @@ export function ChatScreen({
               {/* 仅有工具块、无 assistant 文本时：与 Web ChatMessageList renderBlocks 一致（有重新生成和/或用量、压缩条） */}
               {lastTextBlockIdx < 0 &&
               msg.role === 'assistant' &&
+              !msgHasAwaitingTool &&
               (afterUserIndex >= 0 ||
                 hasAudio ||
                 (showTokenUsageInChat && Boolean(segmentUsage)) ||
