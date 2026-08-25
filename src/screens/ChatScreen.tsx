@@ -115,7 +115,6 @@ import {
 } from 'react-native-image-picker';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { MarkdownContent } from '../components/MarkdownContent';
-import { ConversationAttachmentsContext } from '../chat/ConversationAttachmentsContext';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { AnimatedBouncyGlassCard } from '../components/BouncyGlassCard';
 import { HEADER_CIRCLE_BTN_SIZE, bottomInsetTotal } from '../theme/layout';
@@ -134,10 +133,11 @@ import {
   COMPOSER_TEXT_INSET_SHORT,
   COMPOSER_TEXT_INSET_TALL,
 } from './chat/ChatScreen.styles';
+import { ChatMessageArea, type ChatMessageAreaHandle } from './chat/ChatMessageArea';
 import { ThinkingBlockView } from './chat/ThinkingBlockView';
 import { TaskEventCardView, UserInjectionInline } from './chat/TaskEventCardView';
 import { ComposerContextRing } from './chat/ComposerContextRing';
-import { HistoryLoadingOverlay } from './chat/HistoryLoadingOverlay';
+import { isClosedThinkingBlock, isToolPackageNavBlock } from '../utils/chatStreamBlockKinds';
 import { mergeToolResultChunk } from '../utils/toolResultPatch';
 import { truncateMessagesAfterLastUser } from '../utils/chatMessageWindow';
 import {
@@ -146,13 +146,6 @@ import {
   takeResumeSnapshot,
 } from '../utils/chatResumeCache';
 import { usageRunEqual } from '../utils/usageRuns';
-import {
-  armForOpen,
-  armOnce,
-  consumeScrollIntent,
-  createBottomPinState,
-  release as releaseBottomPin,
-} from '../utils/chatBottomPin';
 import { ansiToSegments } from '../utils/ansiToSegments';
 import {
   parseFileToolArgs,
@@ -186,7 +179,6 @@ import { SubagentMetaCard } from './chat-cards/SubagentMetaCard';
 import { AskUserQuestionCard } from './chat-cards/AskUserQuestionCard';
 import { ReadPagesCard } from './chat-cards/ReadPagesCard';
 import { VisualWidgetCard } from './chat-cards/VisualWidgetCard';
-import { FlowDocItemMetaProvider } from '../context/FlowDocItemMetaContext';
 import {
   FlowDocSlateAdapter,
   slateDocumentToContent,
@@ -214,7 +206,7 @@ import { FlowDocPatchCard } from './chat-cards/FlowDocPatchCard';
 import { FlowDocWriteCard } from './chat-cards/FlowDocWriteCard';
 import { FlowDocReadCard } from './chat-cards/FlowDocReadCard';
 import { FlowDocGetTreeCard } from './chat-cards/FlowDocGetTreeCard';
-import { useResponsive, READING_MAX_WIDTH } from '../hooks/useResponsive';
+import { useResponsive } from '../hooks/useResponsive';
 
 type ToolBlock = Extract<StreamBlock, { type: 'tool' }>;
 
@@ -255,9 +247,6 @@ function perfNowMs(): number {
   return typeof n === 'function' ? n.call(w.performance) : Date.now();
 }
 
-const TOOL_PACKAGE_NAV_NAMES = ['open_tool_packages', 'close_tool_packages'];
-
-
 function getToolPackageNavLabel(name: string, argsStr: string | undefined): string {
   let paths: string[] = [];
   try {
@@ -271,19 +260,6 @@ function getToolPackageNavLabel(name: string, argsStr: string | undefined): stri
   if (list.length === 0) return isOpen ? '工具包已激活' : '工具包已关闭';
   if (list.length === 1) return `${list[0]} 工具包已${isOpen ? '激活' : '关闭'}`;
   return `${list[0]} 等 ${list.length} 个工具包已${isOpen ? '激活' : '关闭'}`;
-}
-
-function isToolPackageNavBlock(b: { type: string; tool_name?: string }): boolean {
-  return b.type === 'tool' && b.tool_name != null && TOOL_PACKAGE_NAV_NAMES.includes(b.tool_name);
-}
-
-/* 闭合思考块作为前驱：下一段 markdown 文本应贴紧（对齐 FlopsWeb
-   .tool-cards-wrap > .thinking-block.closed + .assistant-text-block 的紧凑处理） */
-function isClosedThinkingBlock(b: {
-  type: string;
-  closed?: boolean;
-}): boolean {
-  return b.type === 'thinking' && b.closed === true;
 }
 
 /** lucide Package icon path（与 FlopsWeb ToolPackageNav 用的同一组路径） */
@@ -475,18 +451,9 @@ export function ChatScreen({
   /** 最新值镜像 ref：供 handleRegenerate 等 useCallback 读 userCountBefore，不必进依赖。 */
   const messageWindowMetaRef = useRef<MessageWindow | null>(null);
   messageWindowMetaRef.current = messageWindowMeta;
-  /** 加载更旧分页用的 refs（滚动锚定 / 防抖）；serverRawMessages 镜像供 prepend 读最新值不进依赖。 */
+  /** serverRawMessages 镜像供 prepend 读最新值不进依赖。 */
   const serverRawMessagesRef = useRef<ConversationMessage[]>([]);
-  const scrollOffsetYRef = useRef(0);
-  const scrollContentHeightRef = useRef(0);
-  /** 视口是否贴在列表底部（onScroll 里维护）。用途：回前台补消息时决定要不要贴底 ——
-   *  「走的时候在看最新」才跟到底，用户手动上翻过就不拽回。用 ref 不用 state：
-   *  滚动中每帧都在更新，进 state 会把整棵 ChatScreen 推着重渲染。
-   *  初值 false：内容还没铺开时谈不上"在底部"，真到底了 onScroll/onContentSizeChange 会纠正。 */
-  const atBottomRef = useRef(false);
   const loadingOlderRef = useRef(false);
-  /** 防抖:顶部触发过一次加载后置 true，直到用户滚离顶部(y>300)才重新武装，避免一次滚动连环触发多批。 */
-  const nearTopTriggeredRef = useRef(false);
   /** 加载更旧时顶部转圈（state 驱动渲染；loadingOlderRef 用于防抖，不触发 re-render）。 */
   const [loadingOlder, setLoadingOlder] = useState(false);
   serverRawMessagesRef.current = serverRawMessages;
@@ -732,9 +699,8 @@ export function ChatScreen({
     entryKey: string;
     entry: Record<string, unknown>;
   } | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
-  /** ScrollView 可视区域高度，用于把摘要分界滚到竖直方向居中 */
-  const scrollViewportHeightRef = useRef(0);
+  /** 消息区（ScrollView + 全套钉底/贴底机制）的命令句柄，见 ChatMessageArea。 */
+  const messageAreaRef = useRef<ChatMessageAreaHandle>(null);
   /** 摘要分界行原生节点，用于 measureLayout 相对 ScrollView 内容容器得到可 scrollTo 的偏移 */
   const contextCompressAnchorRef = useRef<View>(null);
   /** 流式文件卡片(半折叠)内部 ScrollView 引用，保持视图跟随最后几行 */
@@ -748,11 +714,6 @@ export function ChatScreen({
    *  留在组件上，回前台 resume 时接着往下收，而不是从 run 开头整轮重放。
    *  只在 runId 对得上时才用它，否则一律退回 0（新一轮 run 的游标空间与上一轮无关）。 */
   const resumeCursorRef = useRef<{ runId: string; cursor: number } | null>(null);
-  /** 「钉底」状态机（见 utils/chatBottomPin）：
-   *  - 一次性触发：有新消息 / 回复完成时滚一下，避免展开折叠工具卡片时误滚；
-   *  - 打开对话额外武装一个时间窗口：首个 onContentSizeChange 往往发生在图片（fit-image
-   *    异步量高）、flowdoc 附件、resume 流式气泡都还没量出高度时，只滚那一次会停在半路。 */
-  const bottomPinRef = useRef(createBottomPinState());
   const conversationIdRef = useRef(conversationId);
   const sessionRef = useRef(session);
   const pausedByBackgroundRef = useRef(false);
@@ -887,22 +848,22 @@ export function ChatScreen({
 
   const scrollToContextCompressAnchor = useCallback(() => {
     const divider = contextCompressAnchorRef.current;
-    const sv = scrollRef.current;
+    const area = messageAreaRef.current;
     // 去掉 chatContentWrap 后，measureLayout 的参照改用 ScrollView 内容容器节点（即 contentContainerStyle
     // 那个 View）。相对它的 top 已含 contentContainer 的 paddingTop，等于该分界在滚动内容里的偏移。
-    const innerNode = sv?.getInnerViewNode?.();
-    if (!divider || !sv || innerNode == null) return;
+    const innerNode = area?.getInnerViewNode();
+    if (!divider || !area || innerNode == null) return;
     const runMeasure = () => {
       divider.measureLayout(
         innerNode,
         (_left, top, _width, height) => {
           const dividerCenter = top + Math.max(0, height) / 2;
-          let viewportH = scrollViewportHeightRef.current;
+          let viewportH = area.getViewportHeight();
           if (!(viewportH > 0)) {
             viewportH = Dimensions.get('window').height * 0.45;
           }
           const scrollY = Math.max(0, dividerCenter - viewportH / 2);
-          sv.scrollTo({ y: scrollY, animated: true });
+          area.scrollToPosition(scrollY, true);
         },
         () => {
           /* measureLayout 失败时忽略 */
@@ -1806,7 +1767,7 @@ export function ChatScreen({
                     conversation.active_chat_v2_run_id.trim();
                   if (stillRunning) synced = truncateMessagesAfterLastUser(synced);
                   if (conversationIdRef.current === cid) {
-                    armOnce(bottomPinRef.current);
+                    messageAreaRef.current?.armOnce();
                     setMessages(synced);
                   }
                 } catch {
@@ -2345,7 +2306,7 @@ export function ChatScreen({
         ...(readyAtts.length > 0 ? { attachments: readyAtts } : {}),
       },
     ]);
-    armOnce(bottomPinRef.current);
+    messageAreaRef.current?.armOnce();
 
     let convId = conversationId;
     if (!convId) {
@@ -2418,7 +2379,7 @@ export function ChatScreen({
           // run 收尾：答案已经并进 messages，续流快照没用了（留着也会被 runId 不匹配挡下，这里主动清）
           if (!stillRunning && mountedRef.current) clearResumeSnapshot(syncId);
           if (streamDone || finalText.trim() || synced.length > 0) {
-            armOnce(bottomPinRef.current);
+            messageAreaRef.current?.armOnce();
             setMessages(synced);
           }
           const t = conversation?.title?.trim();
@@ -2426,7 +2387,7 @@ export function ChatScreen({
         }
       } catch {
         if (streamDone || finalText.trim()) {
-          armOnce(bottomPinRef.current);
+          messageAreaRef.current?.armOnce();
           setMessages((prev) => [
             ...prev,
             {
@@ -2443,7 +2404,7 @@ export function ChatScreen({
         pausedByBackgroundRef.current = false;
         silentBackgroundAbort = true;
       } else if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
-        armOnce(bottomPinRef.current);
+        messageAreaRef.current?.armOnce();
         const stopNote = '[用户手动打断回复]';
         const cap = streamCaptureRef.current;
         const text = (cap.text || '').trim();
@@ -2457,7 +2418,7 @@ export function ChatScreen({
           },
         ]);
       } else if (!silentBackgroundAbort) {
-        armOnce(bottomPinRef.current);
+        messageAreaRef.current?.armOnce();
         const msg =
           (e as { name?: string })?.name === 'AbortError'
             ? '已手动停止本轮执行。'
@@ -2536,7 +2497,7 @@ export function ChatScreen({
     const snapshotBlocks = [...currentAssistantBlocks];
     const snapshotText = streamingText;
     if (snapshotBlocks.length > 0 || (snapshotText && snapshotText.trim())) {
-      armOnce(bottomPinRef.current);
+      messageAreaRef.current?.armOnce();
       const stopNote = '[用户手动打断回复]';
       const text = (snapshotText || '').trim();
       setMessages((prev) => [
@@ -2660,7 +2621,7 @@ export function ChatScreen({
     setStreamingText('');
     setCurrentAssistantBlocks([]);
     setStreamStatus('thinking');
-    armOnce(bottomPinRef.current);
+    messageAreaRef.current?.armOnce();
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -2719,7 +2680,7 @@ export function ChatScreen({
           // run 收尾：答案已经并进 messages，续流快照没用了（留着也会被 runId 不匹配挡下，这里主动清）
           if (!stillRunning && mountedRef.current) clearResumeSnapshot(syncId);
           if (streamDone || finalText.trim() || synced.length > 0) {
-            armOnce(bottomPinRef.current);
+            messageAreaRef.current?.armOnce();
             setMessages(synced);
           }
           const t = conversation?.title?.trim();
@@ -2727,7 +2688,7 @@ export function ChatScreen({
         }
       } catch {
         if (streamDone || finalText.trim()) {
-          armOnce(bottomPinRef.current);
+          messageAreaRef.current?.armOnce();
           setMessages((prev) => [
             ...prev,
             {
@@ -2782,7 +2743,7 @@ export function ChatScreen({
         pausedByBackgroundRef.current = false;
         silentBackgroundAbort = true;
       } else if (e && (e as { name?: string }).name === 'AbortError' && manualStopRef.current) {
-        armOnce(bottomPinRef.current);
+        messageAreaRef.current?.armOnce();
         const stopNote = '[用户手动打断回复]';
         const cap = streamCaptureRef.current;
         const text = (cap.text || '').trim();
@@ -2796,7 +2757,7 @@ export function ChatScreen({
           },
         ]);
       } else if (!silentBackgroundAbort) {
-        armOnce(bottomPinRef.current);
+        messageAreaRef.current?.armOnce();
         const msg =
           (e as { name?: string })?.name === 'AbortError'
             ? '已手动停止本轮执行。'
@@ -3333,7 +3294,7 @@ export function ChatScreen({
         resumeCursorRef.current = null;
       }
       setStreamStatus('thinking');
-      armOnce(bottomPinRef.current);
+      messageAreaRef.current?.armOnce();
       const controller = new AbortController();
       abortRef.current = controller;
       manualStopRef.current = false;
@@ -3368,13 +3329,13 @@ export function ChatScreen({
           /* resume 跑完后的整表对账：本轮开头那次 armOnce 早被流式中的第一次内容变化消费掉了，
              这里补一次，否则「后台期间 run 继续跑、回前台后才跑完」的最后一批消息不贴底。
              同样只在贴着底时才跟。 */
-          if (atBottomRef.current) armForOpen(bottomPinRef.current, Date.now());
+          if (messageAreaRef.current?.isAtBottom()) messageAreaRef.current.armForOpen();
           setMessages(synced);
           const t = conversation?.title?.trim();
           if (t) setConversationTitle(t);
         } catch {
           if (streamDone || finalText.trim()) {
-            armOnce(bottomPinRef.current);
+            messageAreaRef.current?.armOnce();
             setMessages((prev) => [
               ...prev,
               {
@@ -3478,8 +3439,8 @@ export function ChatScreen({
                   conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
                 /* 后台跑完的回复要补进来：走的时候在看最新就跟到底。用 armForOpen 而不是
                    armOnce —— 这批消息里的图片/附件同样是随后才量出高度的，需要窗口兜住。
-                   用户切后台前手动上翻过的话 atBottomRef 是 false，这里不动，不把人拽回去。 */
-                if (atBottomRef.current) armForOpen(bottomPinRef.current, Date.now());
+                   用户切后台前手动上翻过的话 isAtBottom() 是 false，这里不动，不把人拽回去。 */
+                if (messageAreaRef.current?.isAtBottom()) messageAreaRef.current.armForOpen();
                 setMessages(rawMessagesToLocal(raw));
                 /* run 已经跑完，这份回复此刻已在 messages 里了 —— 把切后台时保留下来的那半截
                    流式内容清掉，跟 setMessages 落在同一批里，不会闪出「气泡 + 正式消息」两份。
@@ -3513,7 +3474,7 @@ export function ChatScreen({
                 currentAssistantBlocksRef.current.length > 0;
               if (!willResumeIncrementally) {
                 // 走全量回放：内容会整段重来，按需贴底
-                if (atBottomRef.current) armForOpen(bottomPinRef.current, Date.now());
+                if (messageAreaRef.current?.isAtBottom()) messageAreaRef.current.armForOpen();
                 setMessages(truncateMessagesAfterLastUser(rawMessagesToLocal(raw)));
               }
               /* 同步跑到第一个 await 前：setLoading(true) 会在这个 then 结束前落下，
@@ -3678,7 +3639,7 @@ export function ChatScreen({
         const raw = conversation?.messages && Array.isArray(conversation.messages) ? conversation.messages : [];
         /* 打开对话：不是滚一次就完事——图片/附件/流式气泡的高度都是随后才量出来的，
            所以武装一个窗口，这段时间内容每次变高都重新贴到底（用户一碰列表即作废）。 */
-        armForOpen(bottomPinRef.current, Date.now());
+        messageAreaRef.current?.armForOpen();
         const rid = conversation?.active_chat_v2_run_id;
         const runId = typeof rid === 'string' ? rid.trim() : '';
         const tMap0 = perfNowMs();
@@ -4771,256 +4732,40 @@ export function ChatScreen({
         ) : null}
 
         <View style={styles.scrollAndGradientWrap}>
-          <ScrollView
-            ref={scrollRef}
-            style={styles.scroll}
-            onLayout={(e) => {
-              scrollViewportHeightRef.current = e.nativeEvent.layout.height;
-            }}
-            contentContainerStyle={[
-              styles.scrollContent,
-              { paddingTop: headerHeight + 20, paddingBottom: scrollBottomPadding },
-              /* 宽屏：消息列限宽放大到桌面级（仍居中、两侧留白），覆盖 styles.scrollContent 的窄列 380。 */
-              wideChat && { maxWidth: READING_MAX_WIDTH },
-            ]}
-            /* 点击触发：touchStart capture，绕过消息子组件（TouchableOpacity / RNGH）
-             * 抢 responder 导致 ScrollView 自身 onTouchStart 不 fire 的情形。
-             * 滚动触发：iOS 用 keyboardDismissMode='on-drag'（native interactive），
-             * Android 用 JS onScrollBeginDrag。
-             *
-             * [已知边缘 bug] iOS 上滚动 dismiss 时消息区会抖（持续到键盘动画结束）；
-             * 点击 dismiss 不抖。怀疑根因是 lib KAV behavior='padding' 在 dismiss 期间
-             * 缩 ScrollView frame，触底状态下 contentOffset 被强制修正引发跳动。
-             * 排除过：
-             *   - JS 侧重复调 Keyboard.dismiss()（去掉只留 native blur — 不改善）
-             *   - on-drag 跟 onScrollBeginDrag 显式 blur 并发（iOS 改 onScrollEndDrag — 不改善）
-             *   - UIScrollView 自动 keyboard contentInset（关 automaticallyAdjustKeyboardInsets
-             *     + contentInsetAdjustmentBehavior='never' — 不改善）
-             * 未来方向：把 KAV 的 padding 模式换成 ScrollView contentInset.bottom 动态跟键盘，
-             * 或者 bottomOverlay 改用 transform translateY 直接跟 kbAnimHeight 走、彻底不让
-             * KAV 缩 ScrollView frame。当前评估边缘 bug、性价比不高，先搁置。 */
-            /* 用户一碰列表就放弃钉底：正往上翻的时候，图片量完高度不能把人拽回底部。 */
-            onTouchStartCapture={() => {
-              releaseBottomPin(bottomPinRef.current);
-              dismissComposer();
-            }}
-            onScrollBeginDrag={() => {
-              releaseBottomPin(bottomPinRef.current);
-              if (Platform.OS === 'android') dismissComposer();
-            }}
-            keyboardDismissMode="on-drag"
-            onContentSizeChange={(_w, h) => {
-              scrollContentHeightRef.current = h;
-              /* 加载更旧的锚定已交给 maintainVisibleContentPosition（原生帧级维持），这里只管触底滚动。 */
-              const intent = consumeScrollIntent(bottomPinRef.current, Date.now());
-              if (intent) {
-                /* 主动贴底了就直接把 atBottom 记上，不等 onScroll 回声：内容没撑满视口时
-                   根本不会有滚动事件，光靠 onScroll 维护的话这种会话永远是 false，
-                   后台跑出新消息回前台就不会跟到底了。 */
-                atBottomRef.current = true;
-                scrollRef.current?.scrollToEnd({ animated: intent.animated });
-                /* Android：onContentSizeChange 经常在内容真正布局完前先 fire 一次（中间高度），
-                   单次 scrollToEnd 只滚到那个中间位置。再补两次延迟滚动盖住后续布局抖动。
-                   （iOS 那侧靠打开对话时武装的钉底窗口兜——图片/附件量完高度会再来一次
-                   onContentSizeChange，窗口内照样贴底。） */
-                if (Platform.OS === 'android') {
-                  requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
-                  setTimeout(() => scrollRef.current?.scrollToEnd({ animated: false }), 200);
-                }
-              }
-            }}
-            /* 滚到顶附近(<160)且还有更旧 → 触发分页加载。同时记录 offset 供 prepend 锚定。 */
-            onScroll={(e) => {
-              const y = e.nativeEvent.contentOffset.y;
-              scrollOffsetYRef.current = y;
-              /* 记「此刻贴没贴底」：回前台补消息时靠它决定要不要跟到底。用事件自带的
-                 contentSize/layoutMeasurement 而不是那两个 ref —— 同一帧里它们才是配套的，
-                 混用可能拿到上一帧的内容高度算出假的 near-bottom。阈值 80 与 Web 的 100px 同量级。 */
-              const ne = e.nativeEvent;
-              const contentH = ne.contentSize?.height ?? scrollContentHeightRef.current;
-              const viewportH = ne.layoutMeasurement?.height ?? scrollViewportHeightRef.current;
-              atBottomRef.current = contentH - y - viewportH < 80;
-              // 离开顶部 → 重新武装（下次滚到顶才再触发，避免一次滚动在顶部附近连环触发多批）
-              if (y > 300) nearTopTriggeredRef.current = false;
-              if (
-                y <= 160 &&
-                !nearTopTriggeredRef.current &&
-                messageWindowMetaRef.current?.hasOlder &&
-                !loadingOlderRef.current &&
-                !loading
-              ) {
-                nearTopTriggeredRef.current = true;
-                void loadOlderMessages();
-              }
-            }}
-            scrollEventThrottle={16}
-            keyboardShouldPersistTaps="handled"
-            /* 加载更旧消息时，原生维持当前可见消息的位置（帧级、绘制前调好 offset）→ 顶部插入更早内容
-             * 时可见内容稳在原位、不抖不跳。要求消息是本 ScrollView 内容的直接子节点（已去掉 chatContentWrap）。
-             * minIndexForVisible:1 以首个可见消息的下一条为锚，避开最顶一条在边缘时的抖动。 */
-            maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
-          >
-            <ConversationAttachmentsContext.Provider value={conversationAttachmentsMap}>
-            <FlowDocItemMetaProvider
-              conversationId={conversationId}
-              serverBaseUrl={session.server_base_url}
-              accessToken={session.access_token}
-            >
-            {showEmpty ? (
-              <View style={styles.emptyStage}>
-                <Text style={styles.welcomeTitle}>Hi, {session.user_id}</Text>
-                <Text style={styles.welcomeSubtitle}>输入第一句话开始对话。</Text>
-              </View>
-            ) : (
-              <>
-                {messages.map(renderMessage)}
-                {contextCompressPlacement?.kind === 'afterLastVisible' && messages.length > 0 ? (
-                  <ContextCompressDividerRow
-                    activeSummary={contextCompressPlacement.activeSummary}
-                    rawMessages={serverRawMessages}
-                    anchorRef={contextCompressAnchorRef}
-                  />
-                ) : null}
-                {/* 与 Web Chat.jsx no-assistant-reply-hint：最后一条是 user 且无流式中时，提示未回复并允许重新生成 */}
-                {!conversationHistoryLoading &&
-                messages.length > 0 &&
-                !loading &&
-                !bgPauseRecovering &&
-                (() => {
-                  const lastMsg = messages[messages.length - 1];
-                  if (lastMsg.role !== 'user') return null;
-                  const noReplyAfterUserIndex =
-                    messages.filter((m) => m.role === 'user').length - 1;
-                  if (noReplyAfterUserIndex < 0) return null;
-                  const regenDisabled =
-                    !conversationId || loading || conversationHistoryLoading;
-                  return (
-                    <View
-                      key="no-assistant-reply-hint"
-                      style={[styles.bubbleWrap, styles.assistantBubbleWrap]}
-                    >
-                      <View style={[styles.bubble, styles.assistantBubble]}>
-                        <Text style={styles.bubbleRole}>{composerAgentLabel}</Text>
-                        <View style={styles.assistantTextBlock}>
-                          <MarkdownContent
-                            text="Flops未回复任何内容"
-                            showRegenerateButton
-                            contentWrapperStyle={styles.assistantEmptyReplyMarkdownContent}
-                            onRegenerate={() => handleRegenerate(noReplyAfterUserIndex)}
-                            regenerateDisabled={regenDisabled}
-                          />
-                        </View>
-                      </View>
-                    </View>
-                  );
-                })()}
-              </>
-            )}
-            {/* bgPauseRecovering 也要显示：切后台把流 abort 掉之后，loading 已经落回 false，
-                而回前台要先后跑 getConversationMeta + getConversation 两个来回才轮到
-                resumeV2Stream 把 loading 重新置 true。这中间几百毫秒如果只看 loading，
-                这条还留着内容的流式气泡会整个消失 —— 界面看起来「这轮已经结束了」（露出
-                上一条助手消息的复制按钮行 / 未回复提示），紧接着又冒出来继续长，
-                中间还因为内容忽短忽长跳一次滚动位置。三个现象是同一个原因。
-                bgPauseRecovering 由 AppState 那个 handler 的 .finally 兜底清除，不会漏。 */}
-            {(loading || bgPauseRecovering) && !conversationHistoryLoading ? (
-              <View style={[styles.bubbleWrap, styles.assistantBubbleWrap]}>
-                <View style={[styles.bubble, styles.assistantBubble]}>
-                  <Text style={styles.bubbleRole}>
-                    {composerAgentLabel} ({streamStatusBracketLabel})
-                  </Text>
-                  {currentAssistantBlocks.length > 0 ? (
-                    currentAssistantBlocks.map((block, bi) => {
-                      const prevBlock = currentAssistantBlocks[bi - 1];
-                      const nextBlock = currentAssistantBlocks[bi + 1];
-                      const compactAbove = prevBlock != null && isToolPackageNavBlock(prevBlock);
-                      const tightAfterThinking = prevBlock != null && isClosedThinkingBlock(prevBlock);
-                      if (block.type === 'thinking') {
-                        return (
-                          <ThinkingBlockView
-                            block={block}
-                            key={`stream-think-${bi}`}
-                            prevIsToolPackage={prevBlock != null && isToolPackageNavBlock(prevBlock)}
-                            nextIsToolPackage={nextBlock != null && isToolPackageNavBlock(nextBlock)}
-                          />
-                        );
-                      }
-                      if (block.type === 'task_event') {
-                        return (
-                          <TaskEventCardView
-                            key={`stream-taskevent-${bi}`}
-                            taskEvent={block.task_event}
-                            content={block.content}
-                            variant="injection"
-                          />
-                        );
-                      }
-                      if (block.type === 'user_injection') {
-                        return <UserInjectionInline key={`stream-userinj-${bi}`} content={block.content} />;
-                      }
-                      return block.type === 'text' ? (
-                        <View
-                          key={bi}
-                          style={[
-                        styles.assistantTextBlock,
-                        compactAbove && styles.assistantTextBlockCompactAbove,
-                        tightAfterThinking && styles.assistantTextBlockTightAfterThinking,
-                      ]}
-                        >
-                          <MarkdownContent text={block.content} />
-                        </View>
-                      ) : (
-                        <React.Fragment key={`stream-tool-${bi}`}>
-                          {renderToolBlock(block, `stream-tool-${bi}`)}
-                        </React.Fragment>
-                      );
-                    })
-                  ) : null}
-                  {currentAssistantBlocks.length === 0 ? (
-                    <View style={styles.assistantTextBlock}>
-                      <MarkdownContent text={streamingText || streamBubblePlaceholderText} />
-                    </View>
-                  ) : null}
-                  {liveInjections.length > 0
-                    ? liveInjections.map((inj) => (
-                        <UserInjectionInline key={`live-inj-${inj.id}`} content={inj.text} />
-                      ))
-                    : null}
-                </View>
-              </View>
-            ) : null}
-            </FlowDocItemMetaProvider>
-            </ConversationAttachmentsContext.Provider>
-            {reloadPending ? (
-              <View style={styles.reloadPendingBanner}>
-                <ActivityIndicator size="small" color={colors.textSecondary} />
-                <Text style={styles.reloadPendingText}>服务器热更新中，稍后将继续…</Text>
-              </View>
-            ) : null}
-          </ScrollView>
-          <HistoryLoadingOverlay
-            visible={conversationHistoryLoading}
-            bottomOverflow={insets.bottom + 32}
-            topOffset={headerHeight}
-            overlayStyle={styles.historyLoadingOverlay}
-            spinnerColor={colors.textSecondary}
+          <ChatMessageArea
+            ref={messageAreaRef}
+            session={session}
+            conversationId={conversationId}
+            messages={messages}
+            serverRawMessages={serverRawMessages}
+            currentAssistantBlocks={currentAssistantBlocks}
+            streamingText={streamingText}
+            liveInjections={liveInjections}
+            conversationAttachmentsMap={conversationAttachmentsMap}
+            contextCompressPlacement={contextCompressPlacement}
+            contextCompressAnchorRef={contextCompressAnchorRef}
+            showEmpty={showEmpty}
+            loading={loading}
+            bgPauseRecovering={bgPauseRecovering}
+            conversationHistoryLoading={conversationHistoryLoading}
+            reloadPending={reloadPending}
+            loadingOlder={loadingOlder}
+            hasOlder={Boolean(messageWindowMeta?.hasOlder)}
+            composerAgentLabel={composerAgentLabel}
+            streamStatusBracketLabel={streamStatusBracketLabel}
+            streamBubblePlaceholderText={streamBubblePlaceholderText}
+            renderMessage={renderMessage}
+            renderToolBlock={renderToolBlock}
+            onRegenerate={handleRegenerate}
+            onReachTop={() => void loadOlderMessages()}
+            onDismissComposer={dismissComposer}
+            styles={styles}
+            colors={colors}
+            headerHeight={headerHeight}
+            scrollBottomPadding={scrollBottomPadding}
+            wideChat={wideChat}
+            historyOverlayBottomOverflow={insets.bottom + 32}
           />
-          {/* 加载更旧消息的顶部转圈：绝对定位 overlay（不占内容高度，不影响 prepend 锚定）。 */}
-          {loadingOlder ? (
-            <View
-              style={{
-                position: 'absolute',
-                top: headerHeight + 8,
-                left: 0,
-                right: 0,
-                alignItems: 'center',
-                zIndex: 20,
-              }}
-              pointerEvents="none"
-            >
-              <ActivityIndicator size="small" color={colors.textSecondary} />
-            </View>
-          ) : null}
           {/* 底部整块贴屏底：渐变铺满整块并延伸到底，输入行叠在渐变底部，无单独白底；点渐变区（未点到输入/发送）可滚到底。
               用 Reanimated.View + kbBottomStyle 让 bottom 在键盘动画中逐帧跟随。 */}
           <Reanimated.View style={[styles.bottomOverlay, { height: bottomOverlayHeight }, kbBottomStyle]}>
@@ -5037,7 +4782,7 @@ export function ChatScreen({
               onPress={() => {
                 /* 渐变带 = 非 composer 区域，点这里也应该失焦（语义上跟点消息区一致）。 */
                 dismissComposer();
-                scrollRef.current?.scrollToEnd({ animated: true });
+                messageAreaRef.current?.scrollToBottom(true);
               }}
               accessibilityRole="button"
               accessibilityLabel="滚动到对话底部"
