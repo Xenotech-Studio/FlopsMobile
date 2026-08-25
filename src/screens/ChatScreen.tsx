@@ -4883,7 +4883,10 @@ export function ChatScreen({
         <BlurHeaderBackground
           style={StyleSheet.absoluteFill}
           topSolidHeight={insets.top + 8}
-          gradientBaseHex={colors.chatScreenBackground}
+          /* 渐变基色必须跟顶栏**背后那块画布**同色，否则实色段与画布错开一档、渐变尾巴
+             也会浮出一层灰。普通聊天页背后是消息区（chatScreenBackground）；协同模式下
+             顶栏压的是工作区层，而它已随分层改成了 drawerBackground（见 collabWorkspaceLayer）。 */
+          gradientBaseHex={collabMode ? colors.drawerBackground : colors.chatScreenBackground}
         />
         {/* inDrawer（compact 覆盖式抽屉顶层）= 永远汉堡；否则能返回就显返回箭头（mainPane pop 嵌套栈 /
          *  iPhone pop 根栈），不能返回（mainPane 栈底）兜底汉堡。 */}
