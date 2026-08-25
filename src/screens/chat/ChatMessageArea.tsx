@@ -101,6 +101,8 @@ export type ChatMessageAreaProps = {
    *  流式期间 messages 不变 → 这里拿到的是同一批 element → React 整块跳过。
    *  所以这里收的是**成品**而不是 renderMessage 回调 —— 换成回调就等于每帧重建一遍。 */
   renderedMessages: React.ReactNode;
+  /** 消息流尾部内嵌节点（档 B 对话访问授权 / 批量标题解密授权卡等），跟随滚动、非全屏遮罩 */
+  footerNode?: React.ReactNode;
   renderToolBlock: (block: Extract<StreamBlock, { type: 'tool' }>, key: string) => React.ReactNode;
   onRegenerate: (afterUserIndex: number) => void;
 
@@ -145,6 +147,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
       streamStatusBracketLabel,
       streamBubblePlaceholderText,
       renderedMessages,
+      footerNode,
       renderToolBlock,
       onRegenerate,
       onReachTop,
@@ -477,6 +480,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
               <Text style={styles.reloadPendingText}>服务器热更新中，稍后将继续…</Text>
             </View>
           ) : null}
+          {footerNode}
         </ScrollView>
         <HistoryLoadingOverlay
           visible={conversationHistoryLoading}

@@ -136,6 +136,16 @@ import {
 } from './chat/ChatScreen.styles';
 import { ChatMessageArea, type ChatMessageAreaHandle } from './chat/ChatMessageArea';
 import { createBottomPinState } from '../utils/chatBottomPin';
+import { ConversationAccessRequestCard } from '../components/ConversationAccessRequestOverlay';
+import { ConversationTitlesRequestCard } from '../components/ConversationTitlesRequestOverlay';
+import {
+  subscribeConversationAccessRequest,
+  subscribeConversationTitlesRequest,
+  notifyConversationAccessRequest,
+  notifyConversationTitlesRequest,
+  type ConversationAccessRequestDetail,
+  type ConversationTitlesRequestDetail,
+} from '../utils/conversationAccessBus';
 import { WorkspaceBody } from './chat/WorkspaceBody';
 import {
   applyCollabLayoutPayload,
@@ -584,6 +594,24 @@ export function ChatScreen({
   const [conversationId, setConversationId] = useState(params?.conversationId ?? '');
   const [conversationTitle, setConversationTitle] = useState(params?.conversationTitle ?? '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  /** 档 B 对话访问授权 / 批量标题解密授权：真挂起 → 对话流内嵌卡（ChatMessageArea footerNode）。
+   *  live 走 conversationAccessBus（inbox SSE），刷新/重启走 GET 投影（applyConversationUsageState 里
+   *  notify 同一条总线）；只认领本对话（发起方）的那条，非发起方对话不显示。 */
+  const [accessCardDetail, setAccessCardDetail] = useState<ConversationAccessRequestDetail | null>(null);
+  const [titlesCardDetail, setTitlesCardDetail] = useState<ConversationTitlesRequestDetail | null>(null);
+  useEffect(() => {
+    const cid = String(conversationId || '');
+    const unsubA = subscribeConversationAccessRequest((d) => {
+      if (d && String(d.requesterConversationId || '') === cid) setAccessCardDetail(d);
+    });
+    const unsubT = subscribeConversationTitlesRequest((d) => {
+      if (d && String(d.requesterConversationId || '') === cid) setTitlesCardDetail(d);
+    });
+    return () => {
+      unsubA();
+      unsubT();
+    };
+  }, [conversationId]);
   const [serverRawMessages, setServerRawMessages] = useState<ConversationMessage[]>([]);
   /** 消息窗口元数据（尾窗拉取时由 getConversation/getMessagesBefore 返回）；null = 全量（无窗口）。
    *  contextCompress 坐标变换 / regenerate 全局序号 / 滚到顶加载更旧 都读它。 */
@@ -981,6 +1009,27 @@ export function ChatScreen({
       setMessageWindowMeta(messagesWindow);
     }
     setConvLockedReason(conversation.locked_reason === 'need_parent' ? 'need_parent' : null);
+    /* 档 B 对话访问授权 / 批量标题解密授权（刷新/重启续恢复）：GET 附带 pending_conversation_access
+     * / pending_titles_authorization 投影 → 复用 live 同一条总线 notify，让内嵌授权卡在消息流尾部重现。 */
+    const pca = (conversation as { pending_conversation_access?: Record<string, unknown> }).pending_conversation_access;
+    if (pca && pca.request_id) {
+      notifyConversationAccessRequest({
+        requestId: String(pca.request_id),
+        requesterConversationId: String(pca.requester_conversation_id || conversation.id || ''),
+        targetConversationId: String(pca.target_conversation_id || ''),
+        reason: String(pca.reason || ''),
+      });
+    }
+    const pta = (conversation as { pending_titles_authorization?: Record<string, unknown> }).pending_titles_authorization;
+    if (pta && pta.request_id) {
+      const tids = Array.isArray(pta.target_ids) ? (pta.target_ids as unknown[]).map(String) : [];
+      notifyConversationTitlesRequest({
+        requestId: String(pta.request_id),
+        requesterConversationId: String(pta.requester_conversation_id || conversation.id || ''),
+        count: Number(pta.count || tids.length),
+        targetIds: tids,
+      });
+    }
     /* 协同布局：所有「拉会话 → 应用到 state」的入口都经这里，hydrate 也就只挂这一处。 */
     hydrateCollabLayout(conversation);
     setUsageStats(conversation.usage_stats ?? null);
@@ -4942,6 +4991,22 @@ export function ChatScreen({
       streamStatusBracketLabel={streamStatusBracketLabel}
       streamBubblePlaceholderText={streamBubblePlaceholderText}
       renderedMessages={renderedMessages}
+      footerNode={
+        <>
+          <ConversationAccessRequestCard
+            detail={accessCardDetail}
+            session={session}
+            currentConversationId={conversationId}
+            onResolved={() => setAccessCardDetail(null)}
+          />
+          <ConversationTitlesRequestCard
+            detail={titlesCardDetail}
+            session={session}
+            currentConversationId={conversationId}
+            onResolved={() => setTitlesCardDetail(null)}
+          />
+        </>
+      }
       renderToolBlock={renderToolBlock}
       onRegenerate={handleRegenerate}
       onReachTop={() => void loadOlderMessages()}

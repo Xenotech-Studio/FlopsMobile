@@ -34,8 +34,6 @@ import { EncryptionReloginOverlay } from './src/components/EncryptionReloginOver
 import { BroadcastModeOverlay, BroadcastInsetProvider } from './src/components/BroadcastModeOverlay';
 import { BroadcastStatsReporter } from './src/components/BroadcastStatsReporter';
 import { RemoteMicInviteOverlay } from './src/components/RemoteMicInviteOverlay';
-import { ConversationAccessRequestOverlay } from './src/components/ConversationAccessRequestOverlay';
-import { ConversationTitlesRequestOverlay } from './src/components/ConversationTitlesRequestOverlay';
 import { setPreviewApiImpl } from './src/flowdoc-native-input/previewApi';
 import { getVideoPreviewByUrl, triggerVideoPreview } from './src/api';
 
@@ -148,11 +146,8 @@ export default function App() {
                 <BroadcastStatsReporter />
                 {/* 跨设备语音输入邀请确认卡片（前台经 inbox SSE 到达）：放最后压过播报 overlay。 */}
                 <RemoteMicInviteOverlay />
-                {/* WP3 档 B 授权卡（agent 想读一条它无权解的加密对话）：同样是用户级 inbox 事件，
-                    与当前打开哪条对话无关，所以挂在根级。 */}
-                <ConversationAccessRequestOverlay />
-                {/* 批量标题解密授权卡（list_conversations 想看 N 个加密对话标题）：同为用户级 inbox 事件，挂根级。 */}
-                <ConversationTitlesRequestOverlay />
+                {/* 档 B 对话访问授权 / 批量标题解密授权：已改真挂起 + 对话流内嵌卡（在 ChatScreen 消息流
+                    尾部渲染 ConversationAccessRequestCard / ConversationTitlesRequestCard），不再挂根级全屏 Modal。 */}
               </ConversationProvider>
             </SessionProvider>
           </ThemeProvider>
