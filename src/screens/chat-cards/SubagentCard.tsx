@@ -4,6 +4,7 @@ import Svg, { Path } from 'react-native-svg';
 import LinearGradient from 'react-native-linear-gradient';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import { ToolCardFrame } from './ToolCardFrame';
+import { toolCardPropsEqual } from './toolCardMemo';
 
 /** 子 agent 标识图标（与 Web 一致：lucide Boxes 叠箱图标）。 */
 function SubagentIcon({ size, color }: { size: number; color: string }) {
@@ -85,14 +86,9 @@ function asObj(v: unknown): Record<string, unknown> | null {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
 
-/** 未注册专卡的工具（claude 原生 Read/Grep/Glob/LS…）折叠行的一句话摘要：按工具名取关键字段。 */
-function summarizeToolArgs(toolName: string, argsRaw?: string): string {
-  let o: Record<string, unknown> = {};
-  try {
-    o = argsRaw ? JSON.parse(argsRaw) : {};
-  } catch {
-    o = {};
-  }
+/** 未注册专卡的工具（claude 原生 Read/Grep/Glob/LS…）折叠行的一句话摘要：按工具名取关键字段。
+ *  收**已解析好**的 args —— 调用方（InnerToolStep）上面已经 parseArgs 过一次，别再 parse 一遍。 */
+function summarizeToolArgs(toolName: string, o: Record<string, unknown>): string {
   if (!o || typeof o !== 'object') return '';
   const s = (v: unknown) => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
   switch (toolName) {
@@ -206,7 +202,7 @@ function InnerToolStep({
   } else {
     // 未注册专卡：动作名用原工具名首字母大写，细节(读哪个文件 / grep 什么…)进 tail
     title = name ? name.charAt(0).toUpperCase() + name.slice(1) : name;
-    tail = summarizeToolArgs(name, blk.arguments);
+    tail = summarizeToolArgs(name, args);
     const resultText = blk.result != null ? (typeof blk.result === 'string' ? blk.result : JSON.stringify(blk.result, null, 2)) : '';
     body = resultText ? <Text style={styles.subInnerMono}>{resultText.slice(0, 3000)}</Text> : null;
   }
@@ -228,20 +224,43 @@ function InnerToolStep({
   );
 }
 
+/**
+ * 跑动中最多渲染的**尾部**步数。子 agent 一跑起来这张卡就是 full 态（见下面的 isWorking），
+ * 而执行端每 250ms 重发一次全量累积 agent_blocks —— 长任务攒到几百步时，每次刷新都要把
+ * 全部 InnerToolStep 重建一遍，是 live 段卡顿的大头。跑动中只渲最后这些步、前面折成一行；
+ * 跑完（completed）不设限，结果要能完整回看。
+ */
+const RUNNING_STEP_WINDOW = 20;
+
 function AgentToolBlocks({
   blocks,
   cardKey,
   styles,
   getToolStatusLabel,
+  collapseRunningTail,
 }: {
   blocks: AnyBlock[];
   cardKey: string;
   styles: Record<string, any>;
   getToolStatusLabel: (status: string) => string;
+  /** 是否启用「只渲尾部若干步」（= 子 agent 还在跑）。 */
+  collapseRunningTail: boolean;
 }) {
+  const [showAll, setShowAll] = useState(false);
+  const hiddenCount =
+    collapseRunningTail && !showAll ? Math.max(0, blocks.length - RUNNING_STEP_WINDOW) : 0;
+  const shown = hiddenCount > 0 ? blocks.slice(hiddenCount) : blocks;
   return (
     <View style={styles.subBlocks}>
-      {blocks.map((blk, i) => {
+      {hiddenCount > 0 ? (
+        <TouchableOpacity onPress={() => setShowAll(true)} activeOpacity={0.7}>
+          <Text style={styles.subInnerHint}>已折叠前 {hiddenCount} 步 · 查看全部</Text>
+        </TouchableOpacity>
+      ) : null}
+      {shown.map((blk, si) => {
+        /* key 用**原始下标**（不是 shown 里的位置）：窗口随新步骤滑动、点开「查看全部」时，
+           同一步的 key 不变 → InnerToolStep 的展开态不会被重挂丢掉。 */
+        const i = hiddenCount + si;
         const k = `${cardKey}-ab-${i}`;
         if (blk && blk.type === 'tool') {
           return <InnerToolStep key={k} blk={blk} k={k} styles={styles} getToolStatusLabel={getToolStatusLabel} />;
@@ -271,7 +290,7 @@ function fmtDur(s: number): string {
   return s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}m${String(Math.round(s % 60)).padStart(2, '0')}s`;
 }
 
-export function SubagentCard({
+function SubagentCardImpl({
   block,
   cardKey,
   agentLabel,
@@ -445,7 +464,13 @@ export function SubagentCard({
               {hasError && errorMsg ? (
                 <Text style={styles.cursorAgentReplyError}>{errorMsg}</Text>
               ) : agentBlocks ? (
-                <AgentToolBlocks blocks={agentBlocks} cardKey={cardKey} styles={styles} getToolStatusLabel={getToolStatusLabel} />
+                <AgentToolBlocks
+                  blocks={agentBlocks}
+                  cardKey={cardKey}
+                  styles={styles}
+                  getToolStatusLabel={getToolStatusLabel}
+                  collapseRunningTail={isWorking}
+                />
               ) : replyText ? (
                 <View style={styles.cursorAgentReplyBody}>
                   <MarkdownContent text={replyText} showCopyButton />
@@ -486,3 +511,10 @@ export function SubagentCard({
     </View>
   );
 }
+
+/* memo：只比值 prop，忽略 ChatScreen 每次 render 新建的函数 prop 标识（见 toolCardMemo.ts）。
+   流式期间没变的卡直接短路，不再跟着整棵消息区全量 reconcile。 */
+export const SubagentCard = React.memo(
+  SubagentCardImpl,
+  toolCardPropsEqual<Props>(['block', 'cardKey', 'agentLabel', 'styles', 'colors', 'iconColor', 'isSubmitting'])
+);

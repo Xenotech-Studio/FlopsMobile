@@ -5,6 +5,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { formatFlowDocCardHeaderTitle, parseFlowDocIdFromArgs } from '../../utils/toolCardParsers';
 import { useFlowDocItemTitle } from '../../context/FlowDocItemMetaContext';
 import { ToolCardFrame } from './ToolCardFrame';
+import { toolCardPropsEqual } from './toolCardMemo';
 
 type ToolBlock = {
   type: 'tool';
@@ -33,7 +34,7 @@ type Props = {
   isSubmitting: boolean;
 };
 
-export function FlowDocReadCard({
+function FlowDocReadCardImpl({
   block,
   cardKey,
   conversationId,
@@ -130,3 +131,10 @@ export function FlowDocReadCard({
     </ToolCardFrame>
   );
 }
+
+/* memo：只比值 prop，忽略 ChatScreen 每次 render 新建的函数 prop 标识（见 toolCardMemo.ts）。
+   流式期间没变的卡直接短路，不再跟着整棵消息区全量 reconcile。 */
+export const FlowDocReadCard = React.memo(
+  FlowDocReadCardImpl,
+  toolCardPropsEqual<Props>(['block', 'cardKey', 'viewMode', 'styles', 'isSubmitting', 'conversationId'])
+);

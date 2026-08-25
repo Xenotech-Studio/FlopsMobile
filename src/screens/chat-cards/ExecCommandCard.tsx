@@ -3,6 +3,7 @@ import { Text, View, ScrollView } from 'react-native';
 import { getLocalExecEnvDisplay, parseExecCommandArgs } from '../../utils/toolCardParsers';
 import { normalizeTerminalOutput } from '../../utils/terminalOutputNormalize';
 import { ToolCardFrame } from './ToolCardFrame';
+import { toolCardPropsEqual } from './toolCardMemo';
 
 type ToolBlock = {
   type: 'tool';
@@ -30,7 +31,7 @@ type Props = {
   onExecPreviewScrollRef?: (el: ScrollView | null) => void;
 };
 
-export function ExecCommandCard({
+function ExecCommandCardImpl({
   block,
   cardKey,
   viewMode,
@@ -277,3 +278,10 @@ export function ExecCommandCard({
     </ToolCardFrame>
   );
 }
+
+/* memo：只比值 prop，忽略 ChatScreen 每次 render 新建的函数 prop 标识（见 toolCardMemo.ts）。
+   流式期间没变的卡直接短路，不再跟着整棵消息区全量 reconcile。 */
+export const ExecCommandCard = React.memo(
+  ExecCommandCardImpl,
+  toolCardPropsEqual<Props>(['block', 'cardKey', 'viewMode', 'styles', 'isSubmitting', 'elapsedSec', 'completedSec'])
+);

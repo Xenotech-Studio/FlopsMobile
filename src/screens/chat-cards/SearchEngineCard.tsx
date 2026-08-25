@@ -3,6 +3,7 @@ import { Linking, Pressable, Text, View } from 'react-native';
 import type { StyleProp, TextStyle, ViewStyle } from 'react-native';
 import { parseSearchEngineBlockArgs } from '../../utils/searchEngineParseArgs';
 import { ToolCardFrame } from './ToolCardFrame';
+import { toolCardPropsEqual } from './toolCardMemo';
 
 type ToolBlock = {
   type: 'tool';
@@ -49,7 +50,7 @@ function formatCollapsedTail(queries: string[]): string {
   return `${queries.length} queries: ${joined.slice(0, COLLAPSED_QUERIES_MAX_LEN - 1)}…`;
 }
 
-export function SearchEngineCard({
+function SearchEngineCardImpl({
   block,
   cardKey,
   viewMode,
@@ -227,3 +228,10 @@ export function SearchEngineCard({
     </ToolCardFrame>
   );
 }
+
+/* memo：只比值 prop，忽略 ChatScreen 每次 render 新建的函数 prop 标识（见 toolCardMemo.ts）。
+   流式期间没变的卡直接短路，不再跟着整棵消息区全量 reconcile。 */
+export const SearchEngineCard = React.memo(
+  SearchEngineCardImpl,
+  toolCardPropsEqual<Props>(['block', 'cardKey', 'viewMode', 'styles', 'submittingReviewId'])
+);

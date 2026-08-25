@@ -357,6 +357,44 @@ export type ChatScreenProps = {
   mainPane?: boolean;
 };
 
+/* ── 与组件状态无关的纯函数：提到模块作用域，标识恒定 ──────────────────────────
+ * 它们以前是 ChatScreen 组件体内的裸函数，每次 render 都是新标识，往下传给十几张
+ * 工具卡时会打穿任何按引用做的 memo。提上来之后标识天然恒定，工具卡的比较器不必
+ * 再为它们破例。行为逐字不变。 */
+// 统一子 agent 卡：agent_type → 标签；复用同一张卡渲染 claude / cursor / subagent_start / subagent_continue
+function subagentAgentLabel(block: Extract<StreamBlock, { type: 'tool' }>): string {
+  if (block.tool_name === 'local_claude_agent') return 'Claude Code';
+  if (block.tool_name === 'local_cursor_agent') return 'Cursor';
+  try {
+    const obj = JSON.parse(block.arguments || '{}') as { agent_type?: string };
+    const at = String(obj.agent_type || '').trim().toLowerCase();
+    if (at === 'claude') return 'Claude Code';
+    if (at === 'cursor') return 'Cursor';
+  } catch {
+    /* ignore */
+  }
+  return 'Subagent';
+}
+
+function getToolStatusLabel(status: string): string {
+  return status === 'completed'
+    ? '成功'
+    : status === 'pending'
+      ? '参数生成中'
+      : status === 'waiting'
+        ? '等待执行'
+        : status === 'running'
+          ? '执行中'
+          : status;
+}
+
+function formatSec(sec: number): string {
+  if (!Number.isFinite(sec) || sec < 0) return '0:00';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
 export function ChatScreen({
   inDrawer = false,
   conversationIdOverride,
@@ -3911,20 +3949,6 @@ export function ChatScreen({
     [session, conversationId, patchToolBlocksByReviewId]
   );
 
-  // 统一子 agent 卡：agent_type → 标签；复用同一张卡渲染 claude / cursor / subagent_start / subagent_continue
-  function subagentAgentLabel(block: Extract<StreamBlock, { type: 'tool' }>): string {
-    if (block.tool_name === 'local_claude_agent') return 'Claude Code';
-    if (block.tool_name === 'local_cursor_agent') return 'Cursor';
-    try {
-      const obj = JSON.parse(block.arguments || '{}') as { agent_type?: string };
-      const at = String(obj.agent_type || '').trim().toLowerCase();
-      if (at === 'claude') return 'Claude Code';
-      if (at === 'cursor') return 'Cursor';
-    } catch {
-      /* ignore */
-    }
-    return 'Subagent';
-  }
 
   function renderSubagentBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
     return (
@@ -4086,24 +4110,7 @@ export function ChatScreen({
     );
   }
 
-  function getToolStatusLabel(status: string): string {
-    return status === 'completed'
-      ? '成功'
-      : status === 'pending'
-        ? '参数生成中'
-        : status === 'waiting'
-          ? '等待执行'
-          : status === 'running'
-            ? '执行中'
-            : status;
-  }
 
-  function formatSec(sec: number): string {
-    if (!Number.isFinite(sec) || sec < 0) return '0:00';
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    return `${m}:${s.toString().padStart(2, '0')}`;
-  }
 
   function renderToolCardSafetyActions(reviewId: string, isSubmitting: boolean) {
     return (

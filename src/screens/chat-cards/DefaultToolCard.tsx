@@ -1,6 +1,7 @@
 import React from 'react';
 import { Text } from 'react-native';
 import { ToolCardFrame } from './ToolCardFrame';
+import { COMMON_TOOL_CARD_VALUE_KEYS, toolCardPropsEqual } from './toolCardMemo';
 
 type ToolBlock = {
   type: 'tool';
@@ -89,21 +90,10 @@ function DefaultToolCardImpl({
   );
 }
 
-/**
- * memo 比较：只比影响渲染的 props（block 引用 / cardKey / viewMode / styles 引用 / isSubmitting），
- * 忽略 getToolStatusLabel / setToolCardMode / renderToolCardSafetyActions 的函数标识 —— 它们是
- * ChatScreen 里的稳定行为函数（纯映射 / useCallback / 仅 awaiting 态才用），忽略标识安全。
- * 这样工具卡片展开/折叠时，未变的卡片直接跳过；只有 viewMode 变的那张（或 block/isSubmitting 变的）重渲染。
- */
-function toolCardPropsEqual(a: Props, b: Props): boolean {
-  return (
-    a.block === b.block &&
-    a.cardKey === b.cardKey &&
-    a.viewMode === b.viewMode &&
-    a.styles === b.styles &&
-    a.isSubmitting === b.isSubmitting
-  );
-}
-
-export const DefaultToolCard = React.memo(DefaultToolCardImpl, toolCardPropsEqual);
+/* memo：只比值 prop，忽略 ChatScreen 每次 render 新建的函数 prop 标识（见 toolCardMemo.ts）。
+   这样工具卡片展开/折叠时，未变的卡片直接跳过；只有 viewMode 变的那张（或 block/isSubmitting 变的）重渲染。 */
+export const DefaultToolCard = React.memo(
+  DefaultToolCardImpl,
+  toolCardPropsEqual<Props>([...COMMON_TOOL_CARD_VALUE_KEYS])
+);
 

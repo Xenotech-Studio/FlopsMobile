@@ -14,6 +14,7 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import type { AppColors } from '../../theme/appColors';
+import { toolCardPropsEqual } from './toolCardMemo';
 
 export type VisualWidgetCardProps = {
   /** SVG 源码，或单文件 HTML 的 <body> 内容 */
@@ -116,7 +117,7 @@ function buildHtml(mode: string, code: string, theme: 'light' | 'dark'): string 
   );
 }
 
-export function VisualWidgetCard({
+function VisualWidgetCardImpl({
   code,
   mode,
   title,
@@ -227,5 +228,12 @@ function createStyles(c: AppColors) {
     msgErr: { fontSize: 11, lineHeight: 16, color: c.danger },
   });
 }
+
+/* memo：只比值 prop，忽略 ChatScreen 每次 render 新建的函数 prop 标识（见 toolCardMemo.ts）。
+   流式期间没变的卡直接短路，不再跟着整棵消息区全量 reconcile。 */
+export const VisualWidgetCard = React.memo(
+  VisualWidgetCardImpl,
+  toolCardPropsEqual<VisualWidgetCardProps>(['code', 'mode', 'title', 'isCompleted', 'error', 'colors', 'isDark'])
+);
 
 export default VisualWidgetCard;

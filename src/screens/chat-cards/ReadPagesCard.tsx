@@ -12,6 +12,7 @@ import {
   tryParsePartialReadingStream,
 } from '../../utils/toolCardParsers';
 import { ToolCardFrame } from './ToolCardFrame';
+import { toolCardPropsEqual } from './toolCardMemo';
 
 type ToolBlock = {
   type: 'tool';
@@ -99,7 +100,7 @@ function readPagesCollapsedTail(block: ToolBlock, parsed: { goal: string; urls: 
   return `${head}${g ? ` · ${g}` : ''}${parsed.goal.length > 36 ? '…' : ''}`;
 }
 
-export function ReadPagesCard({
+function ReadPagesCardImpl({
   block,
   cardKey,
   styles,
@@ -267,3 +268,9 @@ export function ReadPagesCard({
   );
 }
 
+/* memo：只比值 prop，忽略 ChatScreen 每次 render 新建的函数 prop 标识（见 toolCardMemo.ts）。
+   流式期间没变的卡直接短路，不再跟着整棵消息区全量 reconcile。 */
+export const ReadPagesCard = React.memo(
+  ReadPagesCardImpl,
+  toolCardPropsEqual<Props>(['block', 'cardKey', 'viewMode', 'styles', 'isSubmitting'])
+);

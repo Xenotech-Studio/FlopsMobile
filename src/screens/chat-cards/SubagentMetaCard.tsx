@@ -1,5 +1,6 @@
 import React from 'react';
 import { Text, View } from 'react-native';
+import { toolCardPropsEqual } from './toolCardMemo';
 
 type AnyBlock = {
   type: string;
@@ -26,7 +27,7 @@ function parseArgs(raw?: string): Record<string, unknown> {
 }
 
 /** subagent_find_sessions / subagent_get_session 的简洁摘要卡：标题 + 参数 + 结果计数。 */
-export function SubagentMetaCard({ block, cardKey, agentLabel, styles }: Props) {
+function SubagentMetaCardImpl({ block, cardKey, agentLabel, styles }: Props) {
   const args = parseArgs(block.arguments);
   const res = block.result && typeof block.result === 'object' ? (block.result as Record<string, unknown>) : null;
   const isFind = block.tool_name === 'subagent_find_sessions';
@@ -76,3 +77,10 @@ export function SubagentMetaCard({ block, cardKey, agentLabel, styles }: Props) 
     </View>
   );
 }
+
+/* memo：只比值 prop，忽略 ChatScreen 每次 render 新建的函数 prop 标识（见 toolCardMemo.ts）。
+   流式期间没变的卡直接短路，不再跟着整棵消息区全量 reconcile。 */
+export const SubagentMetaCard = React.memo(
+  SubagentMetaCardImpl,
+  toolCardPropsEqual<Props>(['block', 'cardKey', 'agentLabel', 'styles'])
+);

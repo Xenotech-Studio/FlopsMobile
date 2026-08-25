@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { toolCardPropsEqual } from './toolCardMemo';
 
 type ToolBlock = {
   type: 'tool';
@@ -45,7 +46,7 @@ function normOptions(q: any): { label: string; description: string }[] {
   return out;
 }
 
-export function AskUserQuestionCard({ block, cardKey, styles, placeholderColor, onSubmit }: Props) {
+function AskUserQuestionCardImpl({ block, cardKey, styles, placeholderColor, onSubmit }: Props) {
   const questions = parseQuestions(block);
   const [sel, setSel] = useState<Record<number, string[]>>({});
   const [other, setOther] = useState<Record<number, string>>({});
@@ -246,3 +247,10 @@ export function AskUserQuestionCard({ block, cardKey, styles, placeholderColor, 
     </View>
   );
 }
+
+/* memo：只比值 prop，忽略 ChatScreen 每次 render 新建的函数 prop 标识（见 toolCardMemo.ts）。
+   流式期间没变的卡直接短路，不再跟着整棵消息区全量 reconcile。 */
+export const AskUserQuestionCard = React.memo(
+  AskUserQuestionCardImpl,
+  toolCardPropsEqual<Props>(['block', 'cardKey', 'styles', 'placeholderColor'])
+);

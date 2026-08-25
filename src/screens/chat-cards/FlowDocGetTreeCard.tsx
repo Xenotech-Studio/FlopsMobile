@@ -4,6 +4,7 @@ import Clipboard from '@react-native-clipboard/clipboard';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { parseGetDocTreeRootIdFromArgs } from '../../utils/toolCardParsers';
 import { ToolCardFrame } from './ToolCardFrame';
+import { toolCardPropsEqual } from './toolCardMemo';
 
 type ToolBlock = {
   type: 'tool';
@@ -31,7 +32,7 @@ type Props = {
   isSubmitting: boolean;
 };
 
-export function FlowDocGetTreeCard({
+function FlowDocGetTreeCardImpl({
   block,
   cardKey,
   viewMode,
@@ -129,3 +130,10 @@ export function FlowDocGetTreeCard({
     </ToolCardFrame>
   );
 }
+
+/* memo：只比值 prop，忽略 ChatScreen 每次 render 新建的函数 prop 标识（见 toolCardMemo.ts）。
+   流式期间没变的卡直接短路，不再跟着整棵消息区全量 reconcile。 */
+export const FlowDocGetTreeCard = React.memo(
+  FlowDocGetTreeCardImpl,
+  toolCardPropsEqual<Props>(['block', 'cardKey', 'viewMode', 'styles', 'isSubmitting'])
+);
