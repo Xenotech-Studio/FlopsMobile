@@ -839,6 +839,51 @@ async function decryptConvListTitles(list: ConversationListItem[]): Promise<void
  * 注：offset 分页的固有语义 —— 翻页途中有会话被更新而上浮时，可能跨页重复/漏一条。
  * 重复由调用方按 id 去重（见 ConversationContext.loadMore）。
  */
+/**
+ * 本次进程里已经尝试过 mint 的子对话 id。会话列表会被反复拉（下拉刷新、分页、
+ * sidebar_refresh 广播、回前台 catchup…），没有这个集合就会对同一批子对话反复打请求。
+ * 失败的会移除允许重试；成功的留着 —— 下一轮列表里它已带自己的 k_conv_blob，不会再被判为 pre-mint。
+ */
+const _autoMintAttempted = new Set<string>();
+
+/**
+ * 列表驱动自动 mint：把列表里所有 pre-mint 的加密子对话就地升级成 direct。
+ *
+ * eager-mint 靠 SSE subagent_child_spawned 触发，手机不在线（或那条事件丢了）时 spawn 出来的
+ * 子对话就一直停在 pre-mint —— 列表里显示「子对话 · 待解锁」，得等用户点进去才自愈。
+ * 这里每次拉完列表顺手扫一遍，用户既不用翻列表也不用打开子对话。
+ *
+ * 父对话是普通加密对话、自带 K_user 包的 k_conv_blob，所以本机有 K_user 就能现场派出父 K_conv
+ * —— 不需要用户「打开过」父对话。真拿不到（父被删）就跳过，保持锁定态。
+ *
+ * 返回真正 mint 成功的条数；调用方 >0 时应重拉一次列表把标题换上来。
+ */
+export async function autoMintPreMintChildren(
+  session: Session,
+  list: ConversationListItem[]
+): Promise<number> {
+  const pending = list
+    .filter((c) => (c as { locked_reason?: string }).locked_reason === 'need_parent')
+    .map((c) => String(c.id || '').trim())
+    .filter((id) => id && !_autoMintAttempted.has(id));
+  if (pending.length === 0) return 0;
+  let minted = 0;
+  let cursor = 0;
+  // 并发封顶 3：一次列表里可能有十几条待 mint，串行太慢、全并发在移动网络上又太冲
+  const worker = async (): Promise<void> => {
+    while (cursor < pending.length) {
+      const id = pending[cursor];
+      cursor += 1;
+      _autoMintAttempted.add(id);
+      const ok = await mintChildKConvDirect(session, id);
+      if (ok) minted += 1;
+      else _autoMintAttempted.delete(id); // 失败 → 下一轮列表允许重试
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(3, pending.length) }, worker));
+  return minted;
+}
+
 export async function listConversations(
   session: Session,
   opts: { limit?: number; offset?: number; flowtaskProjectId?: string } = {}

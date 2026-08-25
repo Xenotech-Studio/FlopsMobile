@@ -48,6 +48,7 @@ import {
   listConversations,
   runInboxStream,
   mintChildKConvDirect,
+  autoMintPreMintChildren,
   type ConversationListItem,
 } from '../api';
 import { useSession } from './SessionContext';
@@ -272,6 +273,13 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
         setRunningMap((prev) => mergeFlag(prev, rows, 'chat_v2_running'));
         setUnreadMap((prev) => mergeFlag(prev, rows, 'chat_v2_unread'));
         setError(null);
+        /* 列表驱动自动 mint：把里面还停在 pre-mint 的加密子对话（显示成「子对话 · 待解锁」）
+         * 就地升级成 direct，用户既不用翻列表也不用打开子对话。eager-mint 靠 SSE 触发，
+         * 手机不在线时 spawn 的那批收不到事件，只能靠这里兜底。
+         * 不 await —— 列表先渲染出去，mint 在后台补做，成了再静默重拉一次把标题换上来。 */
+        void autoMintPreMintChildren(session, rows).then((minted) => {
+          if (minted > 0) void loadConvsRef.current({ silent: true, force: true });
+        });
       } catch (e) {
         setError(e instanceof Error ? e.message : '加载对话列表失败');
         // 失败不清列表：离线/弱网时保留快照 seed 的那份，比空屏有用
