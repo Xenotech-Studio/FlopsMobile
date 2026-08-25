@@ -23,7 +23,7 @@ import {
   wrapKConvBlobForUser,
   wrapKConvForWire,
   decryptMessageLocal,
-  decryptSseChunkLocal,
+  decryptSseCiphertextToText,
   setCachedKConv,
   getCachedKConv,
   deriveKAgentFromBlob,
@@ -2066,16 +2066,20 @@ export async function streamChatV2Loop(
         if (data && data.type === 'encrypted_chunk' && data.ciphertext) {
           const _kc = getCachedKConv(conversationId);
           if (_kc) {
+            /* 直接把已经解析出来的 ciphertext 交给解密，绕开 `data: …\n\n` 信封的拆包/重包
+               和为拿回 ciphertext 而做的第二次 JSON.parse（详见 decryptSseCiphertextToText）。
+               subagent 实时帧每 250ms 重发全量 agent_blocks，这条路上省下的逐字符循环很实在。 */
+            const innerStr = decryptSseCiphertextToText(data.ciphertext, _kc);
+            if (innerStr == null) {
+              // eslint-disable-next-line no-console
+              console.warn('[encrypted_chunk mobile] decrypt failed');
+              continue;
+            }
             try {
-              const innerStr = decryptSseChunkLocal(`data: ${jsonStr}\n\n`, _kc);
-              if (innerStr && innerStr.startsWith('data: ')) {
-                data = JSON.parse(
-                  innerStr.slice('data: '.length).replace(/\n\n$/, '').trim()
-                ) as typeof data;
-              }
+              data = JSON.parse(innerStr) as typeof data;
             } catch (e) {
               // eslint-disable-next-line no-console
-              console.warn('[encrypted_chunk mobile] decrypt failed:', (e as Error)?.message || e);
+              console.warn('[encrypted_chunk mobile] inner JSON parse failed:', (e as Error)?.message || e);
               continue;
             }
           } else {

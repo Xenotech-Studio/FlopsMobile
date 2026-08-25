@@ -477,7 +477,44 @@ export function decryptMessageLocal(
   return out;
 }
 
-/** 单条 SSE chunk 字符串 (data: {...}\n\n)。若 type==='encrypted_chunk' 用 K_conv 解出内层 JSON。 */
+/**
+ * SSE encrypted_chunk 的**快路径**：直接吃调用方已经解析出来的 ciphertext(base64)，
+ * 返回内层明文 JSON 文本；失败返回 null。
+ *
+ * 与下面的 decryptSseChunkLocal 相比省掉三样东西：
+ *  1. `data: …\n\n` 信封的拆包 + 重包（两次字符串拼接 + slice/replace/trim）；
+ *  2. 为了拿回 ciphertext 而对**同一个串**再做一次 JSON.parse；
+ *  3. base64→字节→base64→字节 三趟 JS 逐字符循环 —— 老路先 base64ToBytesLocal 解成字节，
+ *     再被 aesGcmDecrypt 的原生分支 bytesToBase64Local 编回 base64 喂进去，拿到 base64 明文
+ *     后又解一次。这里走 decryptAesGcmUtf8（base64 进 / UTF-8 文本出，与 decryptMessageLocal
+ *     同一条原生路），全程零逐字符循环。
+ *
+ * 动机是 subagent 的实时帧：载荷是全量累积 agent_blocks（几十~几百 KB）、每 250ms 重发一次，
+ * 那三趟循环是实打实压在主线程上的。原生模块缺失时回退 forge（此时才有一次 base64 解码）。
+ */
+export function decryptSseCiphertextToText(
+  ciphertextB64: string,
+  kConvBytes: Uint8Array,
+): string | null {
+  if (!ciphertextB64 || kConvBytes.length !== KEY_LEN) return null;
+  const nativeUtf8 = flopsCryptoNative?.decryptAesGcmUtf8;
+  if (nativeUtf8) {
+    try {
+      const s = nativeUtf8(bytesToBase64Local(kConvBytes), ciphertextB64);
+      if (s != null) return s;
+    } catch {
+      /* 原生失败 → 落到下面的 forge 兜底 */
+    }
+  }
+  try {
+    return new TextDecoder().decode(aesGcmDecrypt(base64ToBytesLocal(ciphertextB64), kConvBytes));
+  } catch {
+    return null;
+  }
+}
+
+/** 单条 SSE chunk 字符串 (data: {...}\n\n)。若 type==='encrypted_chunk' 用 K_conv 解出内层 JSON。
+ *  流式热路径已改走上面的 decryptSseCiphertextToText；这里保留给「手上只有整行原文」的调用方。 */
 export function decryptSseChunkLocal(chunkStr: string, kConvBytes: Uint8Array): string {
   if (typeof chunkStr !== 'string' || !chunkStr.startsWith('data: ')) return chunkStr;
   const body = chunkStr.slice('data: '.length).replace(/\n\n$/, '').trim();
