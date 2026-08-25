@@ -52,7 +52,19 @@ function DefaultToolCardImpl({
 }: Props) {
   const isAwaiting = block.status === 'awaiting_confirmation' && Boolean(block.review_id);
   const isAwaitingAuth = block.status === 'awaiting_authorization' && Boolean(block.auth_request);
-  const isFull = viewMode === 'full';
+  // 挂起等用户决策（安全确认 / 工具授权）时：允许/拒绝按钮只在展开态渲染，卡片默认折叠用户就看不到、
+  // 必须先手动展开——很反直觉。故此类卡强制展开（collapsed→preview），保证按钮直接可见。
+  const effViewMode: 'collapsed' | 'preview' | 'full' =
+    (isAwaiting || isAwaitingAuth) && viewMode === 'collapsed' ? 'preview' : viewMode;
+  // 会话编排类授权工具（子 agent 用 list_conversations / request_conversation_access 定位·访问对话）：
+  // 参数对用户无意义，裸显示 {"limit":50,...} 反而干扰。给友好标题+说明，不显示参数/结果 JSON。
+  const CONVERSATION_TOOL_LABELS: Record<string, { title: string; desc: string }> = {
+    list_conversations: { title: '查看对话列表', desc: '在你的对话中检索定位（加密对话的标题需你授权后才解密）' },
+    request_conversation_access: { title: '请求访问对话', desc: '读取另一条加密对话的内容（需你授权）' },
+  };
+  const friendly = CONVERSATION_TOOL_LABELS[block.tool_name] || null;
+  const displayName = friendly ? friendly.title : block.tool_name;
+  const isFull = effViewMode === 'full';
   const statusLabel =
     block.status === 'completed'
       ? '成功'
@@ -75,18 +87,25 @@ function DefaultToolCardImpl({
   return (
     <ToolCardFrame
       cardKey={cardKey}
-      viewMode={viewMode}
+      viewMode={effViewMode}
       styles={styles}
       status={block.status}
-      collapsedName={block.tool_name}
+      collapsedName={displayName}
       collapsedSuccessStyle="ok"
       getToolStatusLabel={getToolStatusLabel}
       setToolCardMode={setToolCardMode}
     >
         <Text style={styles.toolCardHeader}>
-          {block.tool_name} · {statusLabel}
+          {displayName} · {statusLabel}
         </Text>
-        {block.arguments ? (
+        {friendly ? (
+          // 授权挂起时下方已有完整解释文案+按钮，不重复；否则给一行友好说明，不裸显示参数 JSON。
+          isAwaitingAuth ? null : (
+            <Text style={styles.toolCardBody} numberOfLines={3}>
+              {friendly.desc}
+            </Text>
+          )
+        ) : block.arguments ? (
           <Text style={styles.toolCardBody} numberOfLines={10}>
             args: {String(block.arguments)}
           </Text>
@@ -100,7 +119,7 @@ function DefaultToolCardImpl({
             {block.streaming_content}
           </Text>
         ) : null}
-        {block.result != null ? (
+        {!friendly && block.result != null ? (
           <Text
             style={styles.toolCardBody}
             numberOfLines={isFull ? undefined : 3}
