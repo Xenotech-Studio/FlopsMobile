@@ -91,7 +91,7 @@ export type ChatStreamEvent =
   | { type: 'tool_call_done'; index: number; success?: boolean }
   | { type: 'tool_start'; tool_name: string; arguments?: string; index?: number }
   | { type: 'tool_stream'; tool_name: string; chunk: string }
-  | { type: 'tool_result'; tool_name: string; result: unknown; index?: number }
+  | { type: 'tool_result'; tool_name: string; result: unknown; index?: number; resumed?: boolean; tool_call_id?: string }
   | {
       type: 'tool_result_chunk';
       index: number;

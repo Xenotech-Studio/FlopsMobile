@@ -2034,6 +2034,26 @@ export function ChatScreen({
           }
           if (event.type === 'tool_result') {
             setStreamStatus('tool_result');
+            // 续起完成信号：apply_resume 注入挂起工具结果后发的 tool_result 带 resumed+tool_call_id。据此把
+            // messages 里「那条挂起/提交中的工具卡」按 tool_call_id 精确置 completed（挂起工具卡在 messages 里、
+            // 不在本 stream 的 localBlocks，故直接 setMessages），修「点允许后一直卡在提交中」。
+            if (event.resumed && event.tool_call_id) {
+              const tcid = String(event.tool_call_id);
+              const isSuspended = (s: string) =>
+                s === 'awaiting_authorization' || s === 'awaiting_confirmation' || s === 'confirming';
+              const patchB = (b: ToolBlock): ToolBlock =>
+                b?.type === 'tool' && String(b.tool_call_id || '') === tcid && isSuspended(b.status)
+                  ? { ...b, status: 'completed', result: event.result as ToolBlock['result'], auth_request: undefined }
+                  : b;
+              setCurrentAssistantBlocks((prev) => prev.map((b) => patchB(b as ToolBlock)));
+              setMessages((prev) =>
+                prev.map((msg) => {
+                  const blocks = (msg as { blocks?: ToolBlock[] }).blocks;
+                  if (!Array.isArray(blocks)) return msg;
+                  return { ...msg, blocks: blocks.map(patchB) };
+                }),
+              );
+            }
             const name = event.tool_name;
             const idx = (event as { index?: number }).index;
             if (typeof idx === 'number') {
