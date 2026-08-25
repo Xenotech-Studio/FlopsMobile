@@ -121,6 +121,8 @@ export type ChatStreamEvent =
   | {
       type: 'tool_authorization_required';
       authorization_kind?: 'titles' | 'access';
+      /** send=写授权（subagent_continue 向无钥加密对话发消息）/ read=读授权；仅切卡片文案 */
+      authorization_action?: 'send' | 'read';
       tool_name?: string;
       index?: number;
       request_id?: string;

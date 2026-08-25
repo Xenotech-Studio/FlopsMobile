@@ -1025,6 +1025,8 @@ export function ChatScreen({
         tcid: String(p.tool_call_id),
         authReq: {
           kind: authP.kind,
+          // 重载后从 pending_conversation_access.action 还原 send/read 文案（决策路径不变）。
+          action: ((p as { action?: string }).action === 'send' ? 'send' : 'read') as 'send' | 'read',
           request_id: String(p.request_id),
           requester_conversation_id: String(p.requester_conversation_id || conversation.id || ''),
           count: Number(p.count || tids.length),
@@ -2208,6 +2210,8 @@ export function ChatScreen({
             // request_conversation_access），置 status=awaiting_authorization + auth_request，按钮内嵌进该卡。
             const authReq = {
               kind: (event.authorization_kind === 'access' ? 'access' : 'titles') as 'access' | 'titles',
+              // send=写授权（subagent_continue 向无钥加密对话发消息）/ read=读授权：只切文案，决策仍走 access。
+              action: (event.authorization_action === 'send' ? 'send' : 'read') as 'send' | 'read',
               request_id: String(event.request_id || ''),
               requester_conversation_id: String(event.requester_conversation_id || ''),
               count: Number(event.count || 0),
@@ -4264,9 +4268,13 @@ export function ChatScreen({
   const renderToolCardAuthorizationActions = useCallback(
     (authReq: NonNullable<ToolBlock['auth_request']>, isSubmitting: boolean, error?: string) => {
       const isAccess = authReq?.kind === 'access';
-      const intro = isAccess
-        ? '这个对话里的 agent 想读取另一条加密对话的内容。那条对话的密钥只有你手里有，服务端解不开——你同意后客户端才会把它的密钥交出去（一次性）。'
-        : `这个对话里的 agent 想列出你的对话来定位，其中有 ${authReq?.count || (authReq?.target_ids || []).length} 个是加密对话、标题服务端看不到。你同意后客户端才会用你的密钥把这些标题解出来交给它（只给标题、不含内容）。`;
+      // action=send（subagent_continue 向无钥加密对话发消息）走 access 同款加解密/决策路径，仅文案不同。
+      const isSend = isAccess && (authReq as { action?: string })?.action === 'send';
+      const intro = isSend
+        ? '这个对话里的 agent 想向另一条加密对话发送一条消息。那条对话的密钥只有你手里有，服务端拿不到——你同意后客户端才会把它的密钥交出去（一次性），消息才会真正投递并唤醒那个对话。'
+        : isAccess
+          ? '这个对话里的 agent 想读取另一条加密对话的内容。那条对话的密钥只有你手里有，服务端解不开——你同意后客户端才会把它的密钥交出去（一次性）。'
+          : `这个对话里的 agent 想列出你的对话来定位，其中有 ${authReq?.count || (authReq?.target_ids || []).length} 个是加密对话、标题服务端看不到。你同意后客户端才会用你的密钥把这些标题解出来交给它（只给标题、不含内容）。`;
       return (
         <View>
           <Text style={{ color: colors.textMuted, fontSize: 12, lineHeight: 18, marginBottom: 8 }}>{intro}</Text>
@@ -4291,7 +4299,7 @@ export function ChatScreen({
               disabled={isSubmitting}
             >
               <Text style={styles.safetyBtnPrimaryText}>
-                {isSubmitting ? '提交中...' : isAccess ? '允许本次读取' : '允许解密标题'}
+                {isSubmitting ? '提交中...' : isSend ? '允许发送' : isAccess ? '允许本次读取' : '允许解密标题'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -4377,9 +4385,11 @@ export function ChatScreen({
         getToolStatusLabel={getToolStatusLabel}
         renderToolCardSafetyActions={renderToolCardSafetyActions}
         isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
+        renderToolCardAuthorizationActions={renderToolCardAuthorizationActions}
+        authSubmitting={Boolean(submittingAuthorizationId && submittingAuthorizationId === block.auth_request?.request_id)}
       />
     );
-  }, [colors, renderToolCardSafetyActions, styles, submittingReviewId]);
+  }, [colors, renderToolCardSafetyActions, renderToolCardAuthorizationActions, submittingAuthorizationId, styles, submittingReviewId, getToolStatusLabel]);
 
   const renderSubagentMetaBlock = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
     return (
@@ -4388,9 +4398,11 @@ export function ChatScreen({
         cardKey={key}
         agentLabel={subagentAgentLabel(block)}
         styles={styles as unknown as Record<string, any>}
+        renderToolCardAuthorizationActions={renderToolCardAuthorizationActions}
+        authSubmitting={Boolean(submittingAuthorizationId && submittingAuthorizationId === block.auth_request?.request_id)}
       />
     );
-  }, [styles]);
+  }, [styles, renderToolCardAuthorizationActions, submittingAuthorizationId]);
 
   /* show_visual 图卡回注：图内 sendPrompt(text) → 卡片 onEcho → 这里拼【图卡·title】溯源前缀，
      作为一条新的**用户消息**发出，agent 据前缀认出是自己画的哪张卡（与 Web/Desktop 同一契约）。

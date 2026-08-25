@@ -47,11 +47,24 @@ function withAlpha(hex: string, a: number): string {
   return `rgba(${r},${g},${b},${a})`;
 }
 
+type AuthRequest = {
+  kind?: string;
+  action?: string;
+  request_id?: string;
+  requester_conversation_id?: string;
+  count?: number;
+  target_ids?: string[];
+  target_conversation_id?: string;
+  reason?: string;
+};
+
 type AnyBlock = {
   type: string;
   tool_name?: string;
   status?: string;
   arguments?: string;
+  auth_request?: AuthRequest;
+  authorization_error?: string;
   streaming_content?: string;
   content?: string;
   result?: unknown;
@@ -71,6 +84,8 @@ type Props = {
   getToolStatusLabel: (status: string) => string;
   renderToolCardSafetyActions: (reviewId: string, isSubmitting: boolean) => React.ReactNode;
   isSubmitting: boolean;
+  renderToolCardAuthorizationActions?: (authReq: AuthRequest, isSubmitting: boolean, error?: string) => React.ReactNode;
+  authSubmitting?: boolean;
 };
 
 function parseArgs(raw?: string): Record<string, unknown> {
@@ -300,6 +315,8 @@ function SubagentCardImpl({
   getToolStatusLabel,
   renderToolCardSafetyActions,
   isSubmitting,
+  renderToolCardAuthorizationActions,
+  authSubmitting,
 }: Props) {
   const [viewOverride, setViewOverride] = useState<'collapsed' | 'preview' | 'full' | null>(null);
   const [promptH, setPromptH] = useState(0);
@@ -312,7 +329,20 @@ function SubagentCardImpl({
   const isResumed = Boolean(resumeSid) || block.tool_name === 'subagent_continue';
 
   const isAwaiting = block.status === 'awaiting_confirmation' && Boolean(block.review_id);
+  // 工具授权（flops 型 subagent_continue 向无钥加密对话发消息 / subagent_get_session 读无钥对话）：
+  // 挂起等用户放行，按钮内嵌本卡（复用 ChatScreen.renderToolCardAuthorizationActions）。
+  const isAwaitingAuth =
+    block.status === 'awaiting_authorization' && Boolean(block.auth_request && block.auth_request.request_id);
   const res = asObj(block.result);
+
+  if (isAwaitingAuth && block.auth_request && renderToolCardAuthorizationActions) {
+    return (
+      <View key={cardKey} style={styles.toolCard}>
+        <Text style={styles.toolCardHeader}>{agentLabel} · 待授权</Text>
+        {renderToolCardAuthorizationActions(block.auth_request, Boolean(authSubmitting), block.authorization_error)}
+      </View>
+    );
+  }
 
   if (isAwaiting) {
     const review = block.review as { reason?: string; advice?: string; decision?: string } | undefined;
@@ -516,5 +546,5 @@ function SubagentCardImpl({
    流式期间没变的卡直接短路，不再跟着整棵消息区全量 reconcile。 */
 export const SubagentCard = React.memo(
   SubagentCardImpl,
-  toolCardPropsEqual<Props>(['block', 'cardKey', 'agentLabel', 'styles', 'colors', 'iconColor', 'isSubmitting'])
+  toolCardPropsEqual<Props>(['block', 'cardKey', 'agentLabel', 'styles', 'colors', 'iconColor', 'isSubmitting', 'authSubmitting'])
 );

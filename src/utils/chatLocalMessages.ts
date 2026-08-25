@@ -73,6 +73,8 @@ export type StreamBlock =
       /** 工具授权（批量标题解密 / 档B对话访问）：挂起等用户放行时，按钮内嵌进本工具卡 */
       auth_request?: {
         kind: 'titles' | 'access';
+        /** send=写授权（subagent_continue 向无钥加密对话发消息）/ read=读授权；仅切卡片文案，决策链路同 access */
+        action?: 'send' | 'read';
         request_id: string;
         requester_conversation_id: string;
         count?: number;
