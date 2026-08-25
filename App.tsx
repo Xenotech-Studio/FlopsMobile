@@ -35,6 +35,7 @@ import { BroadcastModeOverlay, BroadcastInsetProvider } from './src/components/B
 import { BroadcastStatsReporter } from './src/components/BroadcastStatsReporter';
 import { RemoteMicInviteOverlay } from './src/components/RemoteMicInviteOverlay';
 import { ConversationAccessRequestOverlay } from './src/components/ConversationAccessRequestOverlay';
+import { ConversationTitlesRequestOverlay } from './src/components/ConversationTitlesRequestOverlay';
 import { setPreviewApiImpl } from './src/flowdoc-native-input/previewApi';
 import { getVideoPreviewByUrl, triggerVideoPreview } from './src/api';
 
@@ -150,6 +151,8 @@ export default function App() {
                 {/* WP3 档 B 授权卡（agent 想读一条它无权解的加密对话）：同样是用户级 inbox 事件，
                     与当前打开哪条对话无关，所以挂在根级。 */}
                 <ConversationAccessRequestOverlay />
+                {/* 批量标题解密授权卡（list_conversations 想看 N 个加密对话标题）：同为用户级 inbox 事件，挂根级。 */}
+                <ConversationTitlesRequestOverlay />
               </ConversationProvider>
             </SessionProvider>
           </ThemeProvider>

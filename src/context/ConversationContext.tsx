@@ -54,7 +54,7 @@ import {
 import { useSession } from './SessionContext';
 import { getOrCreateClientInstanceId } from '../utils/clientInstanceId';
 import { notifyRemoteMicBye, notifyRemoteMicInvite } from '../utils/remoteMicInviteBus';
-import { notifyConversationAccessRequest } from '../utils/conversationAccessBus';
+import { notifyConversationAccessRequest, notifyConversationTitlesRequest } from '../utils/conversationAccessBus';
 import {
   buildSnapshot,
   clearSnapshot,
@@ -568,6 +568,18 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
           targetConversationId:
             typeof msg.target_conversation_id === 'string' ? msg.target_conversation_id : '',
           reason: typeof msg.reason === 'string' ? msg.reason : '',
+        });
+        return;
+      }
+      if (type === 'conversation_titles_request' && typeof msg.request_id === 'string' && msg.request_id) {
+        /* 批量标题解密授权：agent 调 list_conversations 想看 N 个加密对话的标题，服务端来问用户。
+           发总线让根级 ConversationTitlesRequestOverlay 弹卡片。 */
+        notifyConversationTitlesRequest({
+          requestId: msg.request_id,
+          requesterConversationId:
+            typeof msg.requester_conversation_id === 'string' ? msg.requester_conversation_id : '',
+          count: typeof msg.count === 'number' ? msg.count : 0,
+          targetIds: Array.isArray(msg.target_ids) ? msg.target_ids.map(String) : [],
         });
         return;
       }

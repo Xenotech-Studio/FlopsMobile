@@ -1183,6 +1183,7 @@ type ConversationCryptoMeta = {
   k_conv_blob?: string;
   k_conv_parent?: string;
   subagent_children_ciphertext?: string;
+  title_ciphertext?: string;
 };
 
 /**
@@ -1238,6 +1239,64 @@ export async function submitConversationAccessDecision(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail || `提交授权决策失败: ${res.status}`);
+  }
+}
+
+/**
+ * 批量标题解密授权（list_conversations 触发）：用户对「agent 想看你 N 个加密对话的标题」弹窗点
+ * 允许/拒绝。允许时用 K_user 逐个解出这些对话标题明文打包上送 titles_decision；服务端缓存 5min +
+ * 唤醒发起方 agent 再次 list_conversations 即见明文。服务端无 K_user、不解标题，零知识不破。
+ */
+export async function submitConversationTitlesDecision(
+  session: Session,
+  opts: {
+    requestId: string;
+    decision: 'approve' | 'reject';
+    requesterConversationId: string;
+    targetIds: string[];
+  }
+): Promise<void> {
+  const base = session.server_base_url;
+  const body: Record<string, unknown> = { request_id: opts.requestId, decision: opts.decision };
+  if (opts.decision === 'approve') {
+    const { aesGcmDecrypt } = await import('./lib/srp');
+    const titles: Array<{ conversation_id: string; title: string }> = [];
+    for (const raw of Array.isArray(opts.targetIds) ? opts.targetIds : []) {
+      const cid = String(raw || '').trim();
+      if (!cid) continue;
+      try {
+        const meta = await fetchConversationMeta(session, cid);
+        const ct = meta && typeof meta.title_ciphertext === 'string' ? meta.title_ciphertext : '';
+        if (!ct) continue;
+        const k = await resolveKConvForConversation(session, cid);
+        if (!k) continue;
+        const title = JSON.parse(new TextDecoder().decode(aesGcmDecrypt(base64ToBytes(ct), k)));
+        if (typeof title === 'string') titles.push({ conversation_id: cid, title });
+      } catch (e) {
+        console.warn('[conv-titles] 解密标题失败(跳过):', cid, (e as Error)?.message || e);
+      }
+    }
+    body.titles = titles;
+    const requesterK = getCachedKConv(opts.requesterConversationId);
+    if (requesterK) {
+      try {
+        body.requester_k_conv_wire = wrapKConvForWire(requesterK, await getTransportPubkeyMobile(base));
+      } catch {
+        // 包不上不致命：授权照样成立，发起方等下次打开才看到
+      }
+    }
+  }
+  const res = await fetchWithDebugLog(
+    `${base}api/conversations/${encodeURIComponent(opts.requesterConversationId)}/access/titles_decision`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders(session.access_token) },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `提交标题授权决策失败: ${res.status}`);
   }
 }
 

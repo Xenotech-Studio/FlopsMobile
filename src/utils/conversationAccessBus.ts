@@ -58,3 +58,48 @@ export function subscribeConversationAccessRequest(fn: Listener): () => void {
 export function clearConversationAccessRequest(): void {
   lastDetail = null;
 }
+
+// ── 批量标题解密授权（list_conversations 触发）——与上面同款单例总线，独立一套 ──
+export type ConversationTitlesRequestDetail = {
+  requestId: string;
+  requesterConversationId: string;
+  count: number;
+  targetIds: string[];
+};
+
+let lastTitlesDetail: ConversationTitlesRequestDetail | null = null;
+let lastTitlesRequestId: string | null = null;
+const titlesListeners = new Set<(d: ConversationTitlesRequestDetail) => void>();
+
+export function notifyConversationTitlesRequest(detail: ConversationTitlesRequestDetail): void {
+  if (!detail.requestId || detail.requestId === lastTitlesRequestId) return;
+  lastTitlesRequestId = detail.requestId;
+  lastTitlesDetail = detail;
+  titlesListeners.forEach((fn) => {
+    try {
+      fn(detail);
+    } catch {
+      /* noop */
+    }
+  });
+}
+
+export function subscribeConversationTitlesRequest(
+  fn: (d: ConversationTitlesRequestDetail) => void,
+): () => void {
+  titlesListeners.add(fn);
+  if (lastTitlesDetail) {
+    try {
+      fn(lastTitlesDetail);
+    } catch {
+      /* noop */
+    }
+  }
+  return () => {
+    titlesListeners.delete(fn);
+  };
+}
+
+export function clearConversationTitlesRequest(): void {
+  lastTitlesDetail = null;
+}
