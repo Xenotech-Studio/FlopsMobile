@@ -1050,6 +1050,178 @@ async function resolveChildKConvViaParent(
   }
 }
 
+/**
+ * 解出**任意一条自有加密对话**的 K_conv。三条路依次试：
+ *   1. 模块级缓存（打开过就有）
+ *   2. 自己的 k_conv_blob（普通加密对话 / 已 mint 成 direct 的子对话）
+ *   3. 父镜像绕行（尚未 mint 的加密子对话：钥匙在父对话 meta 的 subagent_children 里）
+ *
+ * 三条都不通返回 null —— 调用方据此判「拿不到钥匙」，不要假装拿到了。
+ * 与 flops-chat-ui/crypto/access.js 的 resolveKConvForConversation 同构。
+ */
+async function resolveKConvForConversation(
+  session: Session,
+  conversationId: string
+): Promise<Uint8Array | null> {
+  const cid = String(conversationId || '').trim();
+  if (!cid) return null;
+  const cached = getCachedKConv(cid);
+  if (cached) return cached;
+  const kUserStr = await getStoredKUser();
+  if (!kUserStr) return null;
+  const kUserBytes = base64ToBytes(kUserStr);
+  const meta = await fetchConversationMeta(session, cid);
+  if (!meta) return null;
+  if (meta.k_conv_blob) {
+    try {
+      const k = deriveKConvFromBlob(meta.k_conv_blob, kUserBytes);
+      setCachedKConv(cid, k);
+      return k;
+    } catch {
+      return null;
+    }
+  }
+  // 没有自己的 blob → 未 mint 的加密子对话，钥匙在父对话 meta 里
+  const parentId = String(meta.k_conv_parent || '').trim();
+  if (!parentId) return null;
+  const parentMeta = await fetchConversationMeta(session, parentId);
+  if (!parentMeta) return null;
+  let parentK = getCachedKConv(parentId);
+  if (!parentK && parentMeta.k_conv_blob) {
+    try {
+      parentK = deriveKConvFromBlob(parentMeta.k_conv_blob, kUserBytes);
+      setCachedKConv(parentId, parentK);
+    } catch {
+      return null;
+    }
+  }
+  if (!parentK) return null;
+  decryptSubagentChildrenIntoCache(parentMeta, parentK);
+  return getCachedKConv(cid);
+}
+
+/** 顶层 meta（/meta 轻量端点，不带 messages）。授权与 mint 只要里面那几个加密字段。 */
+async function fetchConversationMeta(
+  session: Session,
+  conversationId: string
+): Promise<ConversationCryptoMeta | null> {
+  try {
+    const res = await fetchWithDebugLog(
+      `${session.server_base_url}api/conversations/${encodeURIComponent(conversationId)}/meta`,
+      { method: 'GET', headers: authHeaders(session.access_token) }
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as ConversationCryptoMeta;
+  } catch {
+    return null;
+  }
+}
+
+/** 解密相关只关心 meta 里这几个字段。 */
+type ConversationCryptoMeta = {
+  id?: string;
+  encrypted?: boolean;
+  k_conv_blob?: string;
+  k_conv_parent?: string;
+  subagent_children_ciphertext?: string;
+};
+
+/**
+ * 档 B 授权解密桥（WP3）：用户对「agent 想读对话 D」的决策回传。
+ *
+ * approve 必须带 D 的 K_conv wire —— 服务端没有 K_user，不给 wire 它永远读不到 D
+ * （这正是零知识要的效果）。所以解不出钥匙时**抛错**给 UI 显示，而不是发一个没 wire
+ * 的 approve 让服务端 400（那样用户以为授权成功了，实际 agent 永远读不到）。
+ *
+ * requester_k_conv_wire 是可选的「顺手」：发起方对话 A 加密时带上，服务端就能立刻唤醒
+ * 它的 agent 去读 D；不带则事件入队，等用户下次打开 A 才看到（不丢，只是不即时）。
+ */
+export async function submitConversationAccessDecision(
+  session: Session,
+  opts: {
+    requestId: string;
+    decision: 'approve' | 'reject';
+    requesterConversationId: string;
+    targetConversationId: string;
+  }
+): Promise<void> {
+  const base = session.server_base_url;
+  const body: Record<string, unknown> = {
+    request_id: opts.requestId,
+    // 服务端契约是 approve / reject（不是 approved / rejected），见 server.py
+    decision: opts.decision,
+    target_conversation_id: opts.targetConversationId,
+  };
+  if (opts.decision === 'approve') {
+    const targetK = await resolveKConvForConversation(session, opts.targetConversationId);
+    if (!targetK) {
+      throw new Error('拿不到目标对话的密钥（可能已被删除，或不在当前账号下）');
+    }
+    const pub = await getTransportPubkeyMobile(base);
+    body.target_k_conv_wire = wrapKConvForWire(targetK, pub);
+    const requesterK = getCachedKConv(opts.requesterConversationId);
+    if (requesterK) {
+      try {
+        body.requester_k_conv_wire = wrapKConvForWire(requesterK, pub);
+      } catch {
+        // 包不上不算致命：授权本身照样成立，只是发起方要等下次打开才看到结果
+      }
+    }
+  }
+  const res = await fetchWithDebugLog(
+    `${base}api/conversations/${encodeURIComponent(opts.requesterConversationId)}/access/decision`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders(session.access_token) },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `提交授权决策失败: ${res.status}`);
+  }
+}
+
+/**
+ * eager-mint（WP3）：服务端刚 spawn 一条加密子对话 → 趁本端此刻手里有父对话的 K_conv，
+ * 立刻把它 mint 成 direct（k_conv_blob = AES-GCM(child_K_conv, K_user)）。
+ *
+ * 全程静默、不抛错：这只是把「用户真正打开该子对话时才会做的自愈」提前到 spawn 瞬间，
+ * 没做成也不影响正确性（打开时还会再做一次），只是少了那点提前量。
+ * 返回是否真的 mint 了，仅供调试。
+ */
+export async function mintChildKConvDirect(
+  session: Session,
+  childConversationId: string
+): Promise<boolean> {
+  try {
+    const cid = String(childConversationId || '').trim();
+    if (!cid) return false;
+    const meta = await fetchConversationMeta(session, cid);
+    if (!meta || !meta.encrypted) return false;
+    // 已有自己的 blob = 已经 direct（端点幂等，但没必要白跑一趟网络）
+    if (meta.k_conv_blob) return false;
+    if (!String(meta.k_conv_parent || '').trim()) return false;
+    const kUserStr = await getStoredKUser();
+    if (!kUserStr) return false;
+    const childK = await resolveKConvForConversation(session, cid);
+    if (!childK) return false;
+    const blobB64 = wrapKConvBlobForUser(childK, base64ToBytes(kUserStr));
+    const res = await fetchWithDebugLog(
+      `${session.server_base_url}api/conversations/${encodeURIComponent(cid)}/upgrade_encrypted_kconv`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders(session.access_token) },
+        body: JSON.stringify({ k_conv_blob: blobB64 }),
+      }
+    );
+    return res.ok;
+  } catch (e) {
+    console.warn('[eager-mint mobile] 升级 direct 失败（不影响功能）:', (e as Error)?.message || e);
+    return false;
+  }
+}
+
 export async function getConversation(
   session: Session,
   conversationId: string,

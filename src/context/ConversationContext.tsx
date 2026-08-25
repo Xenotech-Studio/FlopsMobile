@@ -47,11 +47,13 @@ import {
   CONV_LIST_PAGE_SIZE,
   listConversations,
   runInboxStream,
+  mintChildKConvDirect,
   type ConversationListItem,
 } from '../api';
 import { useSession } from './SessionContext';
 import { getOrCreateClientInstanceId } from '../utils/clientInstanceId';
 import { notifyRemoteMicBye, notifyRemoteMicInvite } from '../utils/remoteMicInviteBus';
+import { notifyConversationAccessRequest } from '../utils/conversationAccessBus';
 import {
   buildSnapshot,
   clearSnapshot,
@@ -226,6 +228,8 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
    *  根因见 conversation_unread 守卫处：「正看着的对话即已读」，收到它的 unread=true 直接吞掉，
    *  修掉「完成瞬间蓝点亮一下又灭」的闪点（对齐 FlopsDesktop 的活动会话守卫）。 */
   const [activeConversationId, setActiveConversationIdState] = useState<string | null>(null);
+  /** WP3 eager-mint 去重：同一条子对话别因 SSE 重连补帧而重复 mint。 */
+  const mintedChildrenRef = useRef<Set<string>>(new Set());
   const activeConversationIdRef = useRef<string | null>(null);
   const setActiveConversation = useCallback((id: string | null) => {
     const norm = id ? String(id) : null;
@@ -544,6 +548,35 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
         const origin = msg.origin_client_instance_id;
         if (origin && localInstanceIdRef.current && origin === localInstanceIdRef.current) return;
         loadConvsRef.current({ silent: true });
+        return;
+      }
+      if (type === 'conversation_access_request' && typeof msg.request_id === 'string' && msg.request_id) {
+        /* WP3 档 B：agent 想读一条它无权解的加密对话，服务端来问用户。发总线让根级
+           ConversationAccessRequestOverlay 弹卡片（发起方对话未必开着，不能挂在 ChatScreen）。 */
+        notifyConversationAccessRequest({
+          requestId: msg.request_id,
+          requesterConversationId:
+            typeof msg.requester_conversation_id === 'string' ? msg.requester_conversation_id : '',
+          targetConversationId:
+            typeof msg.target_conversation_id === 'string' ? msg.target_conversation_id : '',
+          reason: typeof msg.reason === 'string' ? msg.reason : '',
+        });
+        return;
+      }
+      if (
+        type === 'subagent_child_spawned' &&
+        typeof msg.child_conversation_id === 'string' &&
+        msg.child_conversation_id
+      ) {
+        /* WP3 eager-mint：服务端刚 spawn 一条加密子对话，趁本端此刻手里有父对话的 K_conv，
+           立刻把它 mint 成 direct。纯后台、静默，失败不打扰用户（打开子对话时还会再自愈一次）。 */
+        const childId = msg.child_conversation_id;
+        if (!mintedChildrenRef.current.has(childId)) {
+          mintedChildrenRef.current.add(childId);
+          void mintChildKConvDirect(session, childId).then((ok) => {
+            if (!ok) mintedChildrenRef.current.delete(childId); // 允许下次事件重试
+          });
+        }
         return;
       }
       if (type === 'remote_mic_invite' && typeof msg.invite_id === 'string' && msg.invite_id) {
