@@ -61,6 +61,18 @@ export function release(s: BottomPinState): void {
 }
 
 /**
+ * 还在「打开对话」窗口里吗？
+ *
+ * 给**视口高度**变化那条触发路径用（协同模式下 sheet 进场/换档/键盘会连着改视口高，
+ * 而内容高度一动不动，光靠 onContentSizeChange 收不到任何信号）。刻意只看窗口、
+ * 不碰 once：一次性 latch 的语义是「下次内容**变高**时滚」，被一次纯视口变化
+ * （比如发完消息键盘收起）提前消费掉的话，真正的新消息反倒会被落在屏幕外。
+ */
+export function isInOpenWindow(s: BottomPinState, now: number): boolean {
+  return s.until > 0 && now < s.until;
+}
+
+/**
  * 内容尺寸变了：要不要滚到底？
  * 返回 null = 不滚；否则给出这次滚动是否带动画。**会消费**一次性 latch（窗口不消费）。
  */

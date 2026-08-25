@@ -39,6 +39,7 @@ import {
   armOnce,
   consumeScrollIntent,
   createBottomPinState,
+  isInOpenWindow,
   release as releaseBottomPin,
 } from '../../utils/chatBottomPin';
 
@@ -218,9 +219,10 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
             scrollViewportHeightRef.current = h;
             /* 视口高度变化同样是钉底窗口的触发源。协同模式下 sheet 的高度是动画量（进场、
                换档、键盘），而内容高度一动不动 —— 只听 onContentSizeChange 的话，开窗后这
-               一整段收不到任何信号。挂在这里就不必去猜动画什么时候停。 */
-            const intent = consumeScrollIntent(bottomPinRef.current, Date.now());
-            if (intent) {
+               一整段收不到任何信号。挂在这里就不必去猜动画什么时候停。
+               只认窗口、不消费 once：一次性 latch 说的是「下次内容**变高**时滚」，让一次纯
+               视口变化（发完消息键盘收起之类）提前吃掉，真正的新消息反而会落在屏幕外。 */
+            if (isInOpenWindow(bottomPinRef.current, Date.now())) {
               atBottomRef.current = true;
               scrollRef.current?.scrollToEnd({ animated: false });
               return;
