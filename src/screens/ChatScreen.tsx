@@ -252,8 +252,8 @@ const WIDGET_ECHO_QUEUE_SOFT_MAX = 3;
 const IS_ANDROID = Platform.OS === 'android';
 
 /** 协同模式 sheet 的中/高两档（占 sheet 容器高度的比例）。
- *  档位高度与消息区可视高度补偿是同一组数做减法（见 collabSheetSnapHeights /
- *  collabSheetContentPad），所以必须同源；分家一次，补偿就整体偏一截。 */
+ *  聊天区高度就是「当前档高 - 把手高」（见 collabSheetSnapHeights / collabSheetChatHeight），
+ *  所以档位必须是我们自己定的像素、两处同源；分家一次，视口就整体差一截。 */
 const COLLAB_SHEET_MID_RATIO = 0.58;
 const COLLAB_SHEET_MAX_RATIO = 0.92;
 /** sheet 顶部把手那一条的高度。与 gorhom 默认握把等高（padding 10 + 指示条 4 + padding 10），
@@ -944,8 +944,8 @@ export function ChatScreen({
   const collabMode = useMemo(() => mobileCollabMode(collabLayout), [collabLayout]);
   /** 协同模式下装聊天消息区的 sheet，留在这里供程序化展开 / 折叠。 */
   const collabSheetRef = useRef<BottomSheet>(null);
-  /* 键盘开合：协同模式下补偿要跟着让位（见 collabSheetContentPad）。只在协同模式挂监听，
-     普通聊天页不用为此多两个订阅。 */
+  /* 键盘开合：协同模式下聊天区高度要按键盘上沿截断（见 collabSheetChatHeight）。
+     只在协同模式挂监听，普通聊天页不用为此多两个订阅。 */
   useEffect(() => {
     if (!collabMode) {
       setCollabKeyboardShown(false);
@@ -5087,7 +5087,7 @@ export function ChatScreen({
           ref={collabSheetRef}
           snapPoints={collabSheetSnapPoints}
           index={1}
-          /* 档位变化 → 消息区可视高度补偿要跟着变（见 collabSheetContentPad）。
+          /* 档位变化 → 聊天区高度要跟着变（见 collabSheetChatHeight）。
              onAnimate 给的是**目标**档，动画一开始就把 ScrollView 调到位（展开时新露出来的
              那块当场就有内容）；onChange 是收尾确认，兜住拖拽甩到别档的情况。 */
           onAnimate={(_from, to) => {
