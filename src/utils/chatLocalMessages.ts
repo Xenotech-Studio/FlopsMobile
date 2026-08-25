@@ -59,6 +59,7 @@ export type StreamBlock =
   | {
       type: 'tool';
       index?: number;
+      tool_call_id?: string;
       tool_name: string;
       status: string;
       arguments?: string;
@@ -69,6 +70,17 @@ export type StreamBlock =
       review?: Record<string, unknown>;
       command?: string;
       cwd?: string;
+      /** 工具授权（批量标题解密 / 档B对话访问）：挂起等用户放行时，按钮内嵌进本工具卡 */
+      auth_request?: {
+        kind: 'titles' | 'access';
+        request_id: string;
+        requester_conversation_id: string;
+        count?: number;
+        target_ids?: string[];
+        target_conversation_id?: string;
+        reason?: string;
+      };
+      authorization_error?: string;
     };
 
 /** 服务端 TTS 落库的音频元数据（挂在 assistant 消息 metadata.audio）。 */
@@ -204,6 +216,7 @@ export function coalesceAssistantTurn(messages: ConversationMessage[]): ChatMess
           const result = toolMsg && toolMsg.role === 'tool' ? parseToolResult(toolMsg) : null;
           blocks.push({
             type: 'tool',
+            tool_call_id: tc && typeof tc === 'object' && tc.id != null ? String(tc.id) : undefined,
             tool_name: name,
             status: 'completed',
             arguments: args,

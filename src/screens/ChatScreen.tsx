@@ -60,6 +60,8 @@ import {
   deleteSendQueueItem,
   injectSendQueueItem,
   submitSafetyDecision,
+  submitConversationAccessDecision,
+  submitConversationTitlesDecision,
   answerAskUserQuestion,
   getConversation,
   getConversationMeta,
@@ -136,16 +138,6 @@ import {
 } from './chat/ChatScreen.styles';
 import { ChatMessageArea, type ChatMessageAreaHandle } from './chat/ChatMessageArea';
 import { createBottomPinState } from '../utils/chatBottomPin';
-import { ConversationAccessRequestCard } from '../components/ConversationAccessRequestOverlay';
-import { ConversationTitlesRequestCard } from '../components/ConversationTitlesRequestOverlay';
-import {
-  subscribeConversationAccessRequest,
-  subscribeConversationTitlesRequest,
-  notifyConversationAccessRequest,
-  notifyConversationTitlesRequest,
-  type ConversationAccessRequestDetail,
-  type ConversationTitlesRequestDetail,
-} from '../utils/conversationAccessBus';
 import { WorkspaceBody } from './chat/WorkspaceBody';
 import {
   applyCollabLayoutPayload,
@@ -594,24 +586,35 @@ export function ChatScreen({
   const [conversationId, setConversationId] = useState(params?.conversationId ?? '');
   const [conversationTitle, setConversationTitle] = useState(params?.conversationTitle ?? '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  /** 档 B 对话访问授权 / 批量标题解密授权：真挂起 → 对话流内嵌卡（ChatMessageArea footerNode）。
-   *  live 走 conversationAccessBus（inbox SSE），刷新/重启走 GET 投影（applyConversationUsageState 里
-   *  notify 同一条总线）；只认领本对话（发起方）的那条，非发起方对话不显示。 */
-  const [accessCardDetail, setAccessCardDetail] = useState<ConversationAccessRequestDetail | null>(null);
-  const [titlesCardDetail, setTitlesCardDetail] = useState<ConversationTitlesRequestDetail | null>(null);
+  /** 档 B 对话访问 / 批量标题解密授权：授权按钮已内嵌进触发它的工具卡（handleAuthorizationDecision +
+   *  DefaultToolCard 的 awaiting_authorization 分支）。live 走 stream 的 tool_authorization_required 标记
+   *  工具 block；刷新/重启走 GET 投影（applyConversationUsageState 记下 pendingAuthProjection）→ 下面的
+   *  effect 按 tool_call_id 幂等标记该 block。提交决策时清 pendingAuthProjection，避免又把 block 翻回待授权。 */
+  const [submittingAuthorizationId, setSubmittingAuthorizationId] = useState('');
+  const [pendingAuthProjection, setPendingAuthProjection] = useState<{
+    tcid: string;
+    authReq: NonNullable<ToolBlock['auth_request']>;
+  } | null>(null);
   useEffect(() => {
-    const cid = String(conversationId || '');
-    const unsubA = subscribeConversationAccessRequest((d) => {
-      if (d && String(d.requesterConversationId || '') === cid) setAccessCardDetail(d);
+    if (!pendingAuthProjection) return;
+    const { tcid, authReq } = pendingAuthProjection;
+    setMessages((prev) => {
+      let changed = false;
+      const next = prev.map((msg) => {
+        const blocks = (msg as { blocks?: ToolBlock[] }).blocks;
+        if (!Array.isArray(blocks)) return msg;
+        const nb = blocks.map((b) => {
+          if (b?.type === 'tool' && String(b.tool_call_id || '') === tcid && b.status !== 'awaiting_authorization') {
+            changed = true;
+            return { ...b, status: 'awaiting_authorization', auth_request: authReq, authorization_error: '' };
+          }
+          return b;
+        });
+        return changed ? { ...msg, blocks: nb } : msg;
+      });
+      return changed ? next : prev;
     });
-    const unsubT = subscribeConversationTitlesRequest((d) => {
-      if (d && String(d.requesterConversationId || '') === cid) setTitlesCardDetail(d);
-    });
-    return () => {
-      unsubA();
-      unsubT();
-    };
-  }, [conversationId]);
+  }, [pendingAuthProjection, messages]);
   const [serverRawMessages, setServerRawMessages] = useState<ConversationMessage[]>([]);
   /** 消息窗口元数据（尾窗拉取时由 getConversation/getMessagesBefore 返回）；null = 全量（无窗口）。
    *  contextCompress 坐标变换 / regenerate 全局序号 / 滚到顶加载更旧 都读它。 */
@@ -1009,25 +1012,26 @@ export function ChatScreen({
       setMessageWindowMeta(messagesWindow);
     }
     setConvLockedReason(conversation.locked_reason === 'need_parent' ? 'need_parent' : null);
-    /* 档 B 对话访问授权 / 批量标题解密授权（刷新/重启续恢复）：GET 附带 pending_conversation_access
-     * / pending_titles_authorization 投影 → 复用 live 同一条总线 notify，让内嵌授权卡在消息流尾部重现。 */
+    /* 档 B 对话访问 / 批量标题解密授权（刷新/重启续恢复）：GET 附带 pending_conversation_access /
+     * pending_titles_authorization（含 tool_call_id）→ 记下投影，由 effect 按 tool_call_id 把触发它的
+     * list_conversations / request_conversation_access 工具 block 标成 awaiting_authorization（按钮内嵌进该卡）。 */
     const pca = (conversation as { pending_conversation_access?: Record<string, unknown> }).pending_conversation_access;
-    if (pca && pca.request_id) {
-      notifyConversationAccessRequest({
-        requestId: String(pca.request_id),
-        requesterConversationId: String(pca.requester_conversation_id || conversation.id || ''),
-        targetConversationId: String(pca.target_conversation_id || ''),
-        reason: String(pca.reason || ''),
-      });
-    }
     const pta = (conversation as { pending_titles_authorization?: Record<string, unknown> }).pending_titles_authorization;
-    if (pta && pta.request_id) {
-      const tids = Array.isArray(pta.target_ids) ? (pta.target_ids as unknown[]).map(String) : [];
-      notifyConversationTitlesRequest({
-        requestId: String(pta.request_id),
-        requesterConversationId: String(pta.requester_conversation_id || conversation.id || ''),
-        count: Number(pta.count || tids.length),
-        targetIds: tids,
+    const authP = pca && pca.request_id ? { kind: 'access' as const, p: pca } : pta && pta.request_id ? { kind: 'titles' as const, p: pta } : null;
+    if (authP && authP.p.tool_call_id) {
+      const p = authP.p;
+      const tids = Array.isArray(p.target_ids) ? (p.target_ids as unknown[]).map(String) : [];
+      setPendingAuthProjection({
+        tcid: String(p.tool_call_id),
+        authReq: {
+          kind: authP.kind,
+          request_id: String(p.request_id),
+          requester_conversation_id: String(p.requester_conversation_id || conversation.id || ''),
+          count: Number(p.count || tids.length),
+          target_ids: tids,
+          target_conversation_id: String(p.target_conversation_id || ''),
+          reason: String(p.reason || ''),
+        },
       });
     }
     /* 协同布局：所有「拉会话 → 应用到 state」的入口都经这里，hydrate 也就只挂这一处。 */
@@ -2178,6 +2182,42 @@ export function ChatScreen({
             }
             /* immediate：安全确认卡是要用户点的，整轮 run 就阻塞在这儿等，不进合帧队列排队。 */
             syncBlocks(true);
+          }
+          if (event.type === 'tool_authorization_required') {
+            // 批量标题解密 / 档B对话访问授权：把授权请求挂到触发它的工具 block（list_conversations /
+            // request_conversation_access），置 status=awaiting_authorization + auth_request，按钮内嵌进该卡。
+            const authReq = {
+              kind: (event.authorization_kind === 'access' ? 'access' : 'titles') as 'access' | 'titles',
+              request_id: String(event.request_id || ''),
+              requester_conversation_id: String(event.requester_conversation_id || ''),
+              count: Number(event.count || 0),
+              target_ids: Array.isArray(event.target_ids) ? event.target_ids.map(String) : [],
+              target_conversation_id: String(event.target_conversation_id || ''),
+              reason: String(event.reason || ''),
+            };
+            if (authReq.request_id) {
+              let attachedIdx = -1;
+              if (typeof event.index === 'number') {
+                const ix = findLastToolBlockByIndex(event.index);
+                if (ix >= 0) attachedIdx = ix;
+              }
+              if (attachedIdx < 0) {
+                for (let i = localBlocks.length - 1; i >= 0; i--) {
+                  const b = localBlocks[i];
+                  if (b.type === 'tool' && b.tool_name === event.tool_name) {
+                    attachedIdx = i;
+                    break;
+                  }
+                }
+              }
+              if (attachedIdx >= 0) {
+                const b = localBlocks[attachedIdx];
+                if (b.type === 'tool') {
+                  localBlocks[attachedIdx] = { ...b, status: 'awaiting_authorization', auth_request: authReq, authorization_error: '' };
+                  syncBlocks(true);
+                }
+              }
+            }
           }
         }
         /* 兜底「OpenAI 风格无 type 字段的原始 chunk = 正文 text」路径；
@@ -4107,6 +4147,72 @@ export function ChatScreen({
     [session, conversationId, patchToolBlocksByReviewId]
   );
 
+  const patchToolBlocksByAuthRequestId = useCallback(
+    (requestId: string, patch: Partial<ToolBlock>) => {
+      if (!requestId) return;
+      setCurrentAssistantBlocks((prev) =>
+        prev.map((b) =>
+          b?.type === 'tool' && (b as ToolBlock).auth_request?.request_id === requestId ? { ...(b as ToolBlock), ...patch } : b,
+        ),
+      );
+      setMessages((prev) =>
+        prev.map((msg) => {
+          if (!msg?.blocks || !Array.isArray(msg.blocks)) return msg;
+          return {
+            ...msg,
+            blocks: msg.blocks.map((b) =>
+              b?.type === 'tool' && (b as ToolBlock).auth_request?.request_id === requestId ? { ...(b as ToolBlock), ...patch } : b,
+            ),
+          };
+        }),
+      );
+    },
+    []
+  );
+
+  const handleAuthorizationDecision = useCallback(
+    async (payload: NonNullable<ToolBlock['auth_request']> & { decision: 'approve' | 'reject' }) => {
+      if (!session) return;
+      const kind = payload?.kind === 'access' ? 'access' : 'titles';
+      const requestId = String(payload?.request_id || '').trim();
+      const decision = payload?.decision;
+      const requester = String(payload?.requester_conversation_id || conversationId || '').trim();
+      if (!requestId || (decision !== 'approve' && decision !== 'reject') || !requester) return;
+      if (submittingAuthorizationId) return;
+      // 清投影，避免 effect 又把 block 翻回 awaiting_authorization
+      setPendingAuthProjection(null);
+      setSubmittingAuthorizationId(requestId);
+      patchToolBlocksByAuthRequestId(requestId, { authorization_error: '' });
+      try {
+        if (kind === 'access') {
+          await submitConversationAccessDecision(session, {
+            requestId,
+            decision,
+            requesterConversationId: requester,
+            targetConversationId: String(payload?.target_conversation_id || ''),
+          });
+        } else {
+          await submitConversationTitlesDecision(session, {
+            requestId,
+            decision,
+            requesterConversationId: requester,
+            targetIds: Array.isArray(payload?.target_ids) ? payload.target_ids : [],
+          });
+        }
+        patchToolBlocksByAuthRequestId(requestId, {
+          status: decision === 'approve' ? 'confirming' : 'rejected_by_user',
+        });
+      } catch (e) {
+        patchToolBlocksByAuthRequestId(requestId, {
+          authorization_error: e instanceof Error ? e.message : '提交授权失败',
+        });
+      } finally {
+        setSubmittingAuthorizationId('');
+      }
+    },
+    [session, conversationId, submittingAuthorizationId, patchToolBlocksByAuthRequestId]
+  );
+
 
   /* ── 渲染链的叶子 helper ────────────────────────────────────────────────
      统一上移到卡片渲染器之前：下面每个渲染器都被包成 useCallback，这几个会出现在
@@ -4131,6 +4237,48 @@ export function ChatScreen({
       </View>
     );
   }, [handleSafetyDecision, styles.safetyActions, styles.safetyBtn, styles.safetyBtnPrimary, styles.safetyBtnPrimaryText, styles.safetyBtnText]);
+
+  // 工具授权（批量标题解密 / 档B对话访问）：按钮内嵌进 list_conversations / request_conversation_access
+  // 工具卡（DefaultToolCard 的 awaiting_authorization 分支），与安全确认按钮同款。
+  const renderToolCardAuthorizationActions = useCallback(
+    (authReq: NonNullable<ToolBlock['auth_request']>, isSubmitting: boolean, error?: string) => {
+      const isAccess = authReq?.kind === 'access';
+      const intro = isAccess
+        ? '这个对话里的 agent 想读取另一条加密对话的内容。那条对话的密钥只有你手里有，服务端解不开——你同意后客户端才会把它的密钥交出去（一次性）。'
+        : `这个对话里的 agent 想列出你的对话来定位，其中有 ${authReq?.count || (authReq?.target_ids || []).length} 个是加密对话、标题服务端看不到。你同意后客户端才会用你的密钥把这些标题解出来交给它（只给标题、不含内容）。`;
+      return (
+        <View>
+          <Text style={{ color: colors.textMuted, fontSize: 12, lineHeight: 18, marginBottom: 8 }}>{intro}</Text>
+          {isAccess ? (
+            <Text style={{ color: colors.textMuted, fontSize: 11, lineHeight: 16, marginBottom: 8 }}>
+              {authReq?.reason && String(authReq.reason).trim() ? `理由：${String(authReq.reason).trim()}` : '（agent 没有说明理由）'}
+              {authReq?.target_conversation_id ? `\n目标对话 id：${authReq.target_conversation_id}` : ''}
+            </Text>
+          ) : null}
+          {error ? <Text style={{ color: '#ff8f8a', fontSize: 12, lineHeight: 17, marginBottom: 8 }}>{error}</Text> : null}
+          <View style={styles.safetyActions}>
+            <TouchableOpacity
+              style={styles.safetyBtn}
+              onPress={() => handleAuthorizationDecision({ ...authReq, decision: 'reject' })}
+              disabled={isSubmitting}
+            >
+              <Text style={styles.safetyBtnText}>拒绝</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.safetyBtn, styles.safetyBtnPrimary]}
+              onPress={() => handleAuthorizationDecision({ ...authReq, decision: 'approve' })}
+              disabled={isSubmitting}
+            >
+              <Text style={styles.safetyBtnPrimaryText}>
+                {isSubmitting ? '提交中...' : isAccess ? '允许本次读取' : '允许解密标题'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      );
+    },
+    [handleAuthorizationDecision, colors.textMuted, styles.safetyActions, styles.safetyBtn, styles.safetyBtnPrimary, styles.safetyBtnPrimaryText, styles.safetyBtnText],
+  );
 
   const renderAnsiText = useCallback((text: string, maxLen: number) => {
     const raw = String(text ?? '');
@@ -4580,9 +4728,11 @@ export function ChatScreen({
         setToolCardMode={setToolCardMode}
         renderToolCardSafetyActions={renderToolCardSafetyActions}
         isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
+        renderToolCardAuthorizationActions={renderToolCardAuthorizationActions}
+        authSubmitting={Boolean(submittingAuthorizationId && submittingAuthorizationId === block.auth_request?.request_id)}
       />
     );
-  }, [colors.textMuted, renderAskUserQuestionBlock, renderExecCommandToolCard, renderFileEditToolCard, renderFileWriteToolCard, renderFlowDocEditToolCard, renderFlowDocGetTreeToolCard, renderFlowDocPatchToolCard, renderFlowDocReadToolCard, renderFlowDocWriteToolCard, renderReadPagesToolCard, renderSearchEngineToolCard, renderSubagentBlock, renderSubagentMetaBlock, renderToolCardSafetyActions, renderVisualWidgetBlock, setToolCardMode, styles, submittingReviewId, toolCardViewMode]);
+  }, [colors.textMuted, renderAskUserQuestionBlock, renderExecCommandToolCard, renderFileEditToolCard, renderFileWriteToolCard, renderFlowDocEditToolCard, renderFlowDocGetTreeToolCard, renderFlowDocPatchToolCard, renderFlowDocReadToolCard, renderFlowDocWriteToolCard, renderReadPagesToolCard, renderSearchEngineToolCard, renderSubagentBlock, renderSubagentMetaBlock, renderToolCardSafetyActions, renderToolCardAuthorizationActions, submittingAuthorizationId, renderVisualWidgetBlock, setToolCardMode, styles, submittingReviewId, toolCardViewMode]);
 
   const lastAssistantIdx = (() => {
     let last = -1;
@@ -4991,22 +5141,6 @@ export function ChatScreen({
       streamStatusBracketLabel={streamStatusBracketLabel}
       streamBubblePlaceholderText={streamBubblePlaceholderText}
       renderedMessages={renderedMessages}
-      footerNode={
-        <>
-          <ConversationAccessRequestCard
-            detail={accessCardDetail}
-            session={session}
-            currentConversationId={conversationId}
-            onResolved={() => setAccessCardDetail(null)}
-          />
-          <ConversationTitlesRequestCard
-            detail={titlesCardDetail}
-            session={session}
-            currentConversationId={conversationId}
-            onResolved={() => setTitlesCardDetail(null)}
-          />
-        </>
-      }
       renderToolBlock={renderToolBlock}
       onRegenerate={handleRegenerate}
       onReachTop={() => void loadOlderMessages()}

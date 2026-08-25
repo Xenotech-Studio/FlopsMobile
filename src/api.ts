@@ -118,6 +118,18 @@ export type ChatStreamEvent =
       };
     }
   | { type: 'safety_review'; tool_name: string; index?: number; review: Record<string, unknown> }
+  | {
+      type: 'tool_authorization_required';
+      authorization_kind?: 'titles' | 'access';
+      tool_name?: string;
+      index?: number;
+      request_id?: string;
+      requester_conversation_id?: string;
+      count?: number;
+      target_ids?: string[];
+      target_conversation_id?: string;
+      reason?: string;
+    }
   | { type: 'step_complete' }
   | {
       type: 'history_revision';
