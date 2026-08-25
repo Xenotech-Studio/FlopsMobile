@@ -200,7 +200,15 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
           ref={scrollRef}
           style={styles.scroll}
           onLayout={(e) => {
-            scrollViewportHeightRef.current = e.nativeEvent.layout.height;
+            const h = e.nativeEvent.layout.height;
+            const prev = scrollViewportHeightRef.current;
+            scrollViewportHeightRef.current = h;
+            /* 视口变矮（协同模式收 sheet 档位、键盘弹起）时 maxOffset 跟着变大，原本贴底的
+               视图会被留在半空 —— 「刚还在底部，收个档就掉进历史中间」。贴底态下补一次。
+               收档动画期间这里每帧都会 fire，等于全程钉着底收下去，不会跳。 */
+            if (prev > 0 && h < prev && atBottomRef.current) {
+              scrollRef.current?.scrollToEnd({ animated: false });
+            }
           }}
           contentContainerStyle={[
             styles.scrollContent,
