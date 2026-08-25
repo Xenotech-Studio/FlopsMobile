@@ -92,7 +92,10 @@ export type ChatMessageAreaProps = {
   streamBubblePlaceholderText: string;
 
   /* ---- 渲染委托（闭包留在 ChatScreen，别搬） ---- */
-  renderMessage: (msg: ChatMessage, idx: number) => React.ReactNode;
+  /** 已经渲染好的历史消息行。ChatScreen 侧用 useMemo 按引用缓存整棵子树（见那处注释）：
+   *  流式期间 messages 不变 → 这里拿到的是同一批 element → React 整块跳过。
+   *  所以这里收的是**成品**而不是 renderMessage 回调 —— 换成回调就等于每帧重建一遍。 */
+  renderedMessages: React.ReactNode;
   renderToolBlock: (block: Extract<StreamBlock, { type: 'tool' }>, key: string) => React.ReactNode;
   onRegenerate: (afterUserIndex: number) => void;
 
@@ -135,7 +138,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
       composerAgentLabel,
       streamStatusBracketLabel,
       streamBubblePlaceholderText,
-      renderMessage,
+      renderedMessages,
       renderToolBlock,
       onRegenerate,
       onReachTop,
@@ -298,7 +301,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
                 </View>
               ) : (
                 <>
-                  {messages.map(renderMessage)}
+                  {renderedMessages}
                   {contextCompressPlacement?.kind === 'afterLastVisible' && messages.length > 0 ? (
                     <ContextCompressDividerRow
                       activeSummary={contextCompressPlacement.activeSummary}

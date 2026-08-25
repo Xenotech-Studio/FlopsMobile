@@ -395,6 +395,26 @@ function formatSec(sec: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+/** 与 Web/Desktop 一致：read_page_subagent、文件卡片、exec、FlowDoc 写/编/树 默认半展开；doc_read、search_engine 等默认折叠 */
+function getDefaultToolCardViewMode(toolName: string): 'collapsed' | 'preview' {
+  if (
+    toolName === 'read_page_subagent' ||
+    toolName === 'read_page_raw' ||
+    toolName === 'local_write_file' ||
+    toolName === 'local_edit_file' ||
+    toolName === 'local_exec_command' ||
+    toolName === 'local_delete' ||
+    toolName === 'doc_get_tree' ||
+    toolName === 'doc_edit_as_md' ||
+    toolName === 'doc_patch_as_md' ||
+    toolName === 'doc_write_as_md'
+  )
+    return 'preview';
+  if (toolName === 'doc_read') return 'collapsed';
+  /* search_engine 等与 Desktop getDefaultToolCardViewMode 一致，默认 collapsed */
+  return 'collapsed';
+}
+
 export function ChatScreen({
   inDrawer = false,
   conversationIdOverride,
@@ -3950,127 +3970,55 @@ export function ChatScreen({
   );
 
 
-  function renderSubagentBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+  /* ── 渲染链的叶子 helper ────────────────────────────────────────────────
+     统一上移到卡片渲染器之前：下面每个渲染器都被包成 useCallback，这几个会出现在
+     它们的依赖数组里，声明必须在前，否则依赖数组求值时踩 TDZ。 */
+  const renderToolCardSafetyActions = useCallback((reviewId: string, isSubmitting: boolean) => {
     return (
-      <SubagentCard
-        block={block as unknown as Record<string, unknown> as never}
-        cardKey={key}
-        agentLabel={subagentAgentLabel(block)}
-        styles={styles as unknown as Record<string, any>}
-        colors={colors as unknown as Record<string, any>}
-        iconColor={colors.textSecondary}
-        getToolStatusLabel={getToolStatusLabel}
-        renderToolCardSafetyActions={renderToolCardSafetyActions}
-        isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
-      />
+      <View style={styles.safetyActions}>
+        <TouchableOpacity
+          style={styles.safetyBtn}
+          onPress={() => handleSafetyDecision(reviewId, 'reject')}
+          disabled={isSubmitting}
+        >
+          <Text style={styles.safetyBtnText}>拒绝</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.safetyBtn, styles.safetyBtnPrimary]}
+          onPress={() => handleSafetyDecision(reviewId, 'approve')}
+          disabled={isSubmitting}
+        >
+          <Text style={styles.safetyBtnPrimaryText}>{isSubmitting ? '提交中...' : '确认执行'}</Text>
+        </TouchableOpacity>
+      </View>
     );
-  }
+  }, [handleSafetyDecision, styles.safetyActions, styles.safetyBtn, styles.safetyBtnPrimary, styles.safetyBtnPrimaryText, styles.safetyBtnText]);
 
-  function renderSubagentMetaBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+  const renderAnsiText = useCallback((text: string, maxLen: number) => {
+    const raw = String(text ?? '');
+    const sliced = raw.length > maxLen ? raw.slice(raw.length - maxLen) : raw;
+    const segments = ansiToSegments(sliced);
     return (
-      <SubagentMetaCard
-        block={block as unknown as Record<string, unknown> as never}
-        cardKey={key}
-        agentLabel={subagentAgentLabel(block)}
-        styles={styles as unknown as Record<string, any>}
-      />
+      <Text selectable style={styles.toolCardCodeText}>
+        {segments.map((seg, i) => (
+          <Text key={i} style={seg.style}>
+            {seg.text}
+          </Text>
+        ))}
+      </Text>
     );
-  }
-
-  /* show_visual 图卡回注：图内 sendPrompt(text) → 卡片 onEcho → 这里拼【图卡·title】溯源前缀，
-     作为一条新的**用户消息**发出，agent 据前缀认出是自己画的哪张卡（与 Web/Desktop 同一契约）。
-     忙态入待发队列、空闲直发，对齐 Web；软上限挡住"狂点把队列灌满"，回合结束（loading 落定）归零。 */
-  const widgetEchoQueuedRef = useRef(0);
-  useEffect(() => {
-    if (!loading) widgetEchoQueuedRef.current = 0;
-  }, [loading]);
-  const handleWidgetEcho = useCallback(
-    (title: string, text: string) => {
-      if (!session) return;
-      const outbound = formatWidgetEcho(title, text);
-      if (loading && conversationIdRef.current) {
-        if (widgetEchoQueuedRef.current >= WIDGET_ECHO_QUEUE_SOFT_MAX) return;
-        widgetEchoQueuedRef.current += 1;
-        void enqueueCurrentComposer({ overrideText: outbound });
-        return;
-      }
-      void handleSendMessage({ overrideText: outbound });
-    },
-    [session, loading, enqueueCurrentComposer, handleSendMessage],
-  );
-
-  function renderVisualWidgetBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
-    const { error: widgetError, title, mode, code } = parseVisualWidget(block);
-    return (
-      <VisualWidgetCard
-        key={key}
-        code={code}
-        mode={mode}
-        title={title}
-        isCompleted={block.status === 'completed'}
-        error={widgetError}
-        colors={colors}
-        isDark={isDark}
-        onEcho={(text) => handleWidgetEcho(title, text)}
-      />
-    );
-  }
-
-  // ask_user_question：用户点选 → POST /ask/answer 解阻塞正在等待的本轮 run（卡片自管 submitted 乐观态）
-  const handleAskUserAnswer = useCallback(
-    async (answers: { header?: string; question?: string; answer: string }[]) => {
-      if (!session || !conversationId) return;
-      await answerAskUserQuestion(session, conversationId, answers);
-    },
-    [session, conversationId]
-  );
-
-  function renderAskUserQuestionBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
-    return (
-      <AskUserQuestionCard
-        block={block}
-        cardKey={key}
-        styles={styles as unknown as Record<string, object>}
-        placeholderColor={colors.textMuted}
-        onSubmit={handleAskUserAnswer}
-      />
-    );
-  }
-
-  const setToolCardMode = useCallback((cardKey: string, mode: 'collapsed' | 'preview' | 'full') => {
-    setToolCardViewMode((prev) => ({ ...prev, [cardKey]: mode }));
-  }, []);
-
-  /** 与 Web/Desktop 一致：read_page_subagent、文件卡片、exec、FlowDoc 写/编/树 默认半展开；doc_read、search_engine 等默认折叠 */
-  function getDefaultToolCardViewMode(toolName: string): 'collapsed' | 'preview' {
-    if (
-      toolName === 'read_page_subagent' ||
-      toolName === 'read_page_raw' ||
-      toolName === 'local_write_file' ||
-      toolName === 'local_edit_file' ||
-      toolName === 'local_exec_command' ||
-      toolName === 'local_delete' ||
-      toolName === 'doc_get_tree' ||
-      toolName === 'doc_edit_as_md' ||
-      toolName === 'doc_patch_as_md' ||
-      toolName === 'doc_write_as_md'
-    )
-      return 'preview';
-    if (toolName === 'doc_read') return 'collapsed';
-    /* search_engine 等与 Desktop getDefaultToolCardViewMode 一致，默认 collapsed */
-    return 'collapsed';
-  }
+  }, [styles.toolCardCodeText]);
 
   /**
    * 与 Web `.tool-card-write-preview` / `.tool-card-diff` 一致：半折叠(preview)时 max-height 120px；
    * 流式(pending/running)时内部可滚动；非流式时底部渐变 + 「…」。
    */
-  function wrapFileToolPreviewBody(
+  const wrapFileToolPreviewBody = useCallback((
     isFull: boolean,
     isStreaming: boolean,
     cardKey: string,
     children: React.ReactNode
-  ): React.ReactNode {
+  ): React.ReactNode => {
     if (isFull) {
       return <View style={styles.fileToolPreviewFullWrap}>{children}</View>;
     }
@@ -4108,47 +4056,106 @@ export function ChatScreen({
         </Text>
       </View>
     );
-  }
+  }, [colors, isDark, styles.fileToolPreviewClip, styles.fileToolPreviewEllipsis, styles.fileToolPreviewFade, styles.fileToolPreviewFullWrap, styles.fileToolPreviewScroll, styles.fileToolPreviewScrollContent]);
 
-
-
-  function renderToolCardSafetyActions(reviewId: string, isSubmitting: boolean) {
+  const renderSubagentBlock = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
     return (
-      <View style={styles.safetyActions}>
-        <TouchableOpacity
-          style={styles.safetyBtn}
-          onPress={() => handleSafetyDecision(reviewId, 'reject')}
-          disabled={isSubmitting}
-        >
-          <Text style={styles.safetyBtnText}>拒绝</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.safetyBtn, styles.safetyBtnPrimary]}
-          onPress={() => handleSafetyDecision(reviewId, 'approve')}
-          disabled={isSubmitting}
-        >
-          <Text style={styles.safetyBtnPrimaryText}>{isSubmitting ? '提交中...' : '确认执行'}</Text>
-        </TouchableOpacity>
-      </View>
+      <SubagentCard
+        block={block as unknown as Record<string, unknown> as never}
+        cardKey={key}
+        agentLabel={subagentAgentLabel(block)}
+        styles={styles as unknown as Record<string, any>}
+        colors={colors as unknown as Record<string, any>}
+        iconColor={colors.textSecondary}
+        getToolStatusLabel={getToolStatusLabel}
+        renderToolCardSafetyActions={renderToolCardSafetyActions}
+        isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
+      />
     );
-  }
+  }, [colors, renderToolCardSafetyActions, styles, submittingReviewId]);
 
-  function renderAnsiText(text: string, maxLen: number) {
-    const raw = String(text ?? '');
-    const sliced = raw.length > maxLen ? raw.slice(raw.length - maxLen) : raw;
-    const segments = ansiToSegments(sliced);
+  const renderSubagentMetaBlock = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
     return (
-      <Text selectable style={styles.toolCardCodeText}>
-        {segments.map((seg, i) => (
-          <Text key={i} style={seg.style}>
-            {seg.text}
-          </Text>
-        ))}
-      </Text>
+      <SubagentMetaCard
+        block={block as unknown as Record<string, unknown> as never}
+        cardKey={key}
+        agentLabel={subagentAgentLabel(block)}
+        styles={styles as unknown as Record<string, any>}
+      />
     );
-  }
+  }, [styles]);
 
-  function renderReadPagesToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+  /* show_visual 图卡回注：图内 sendPrompt(text) → 卡片 onEcho → 这里拼【图卡·title】溯源前缀，
+     作为一条新的**用户消息**发出，agent 据前缀认出是自己画的哪张卡（与 Web/Desktop 同一契约）。
+     忙态入待发队列、空闲直发，对齐 Web；软上限挡住"狂点把队列灌满"，回合结束（loading 落定）归零。 */
+  const widgetEchoQueuedRef = useRef(0);
+  useEffect(() => {
+    if (!loading) widgetEchoQueuedRef.current = 0;
+  }, [loading]);
+  const handleWidgetEcho = useCallback(
+    (title: string, text: string) => {
+      if (!session) return;
+      const outbound = formatWidgetEcho(title, text);
+      if (loading && conversationIdRef.current) {
+        if (widgetEchoQueuedRef.current >= WIDGET_ECHO_QUEUE_SOFT_MAX) return;
+        widgetEchoQueuedRef.current += 1;
+        void enqueueCurrentComposer({ overrideText: outbound });
+        return;
+      }
+      void handleSendMessage({ overrideText: outbound });
+    },
+    [session, loading, enqueueCurrentComposer, handleSendMessage],
+  );
+
+  const renderVisualWidgetBlock = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
+    const { error: widgetError, title, mode, code } = parseVisualWidget(block);
+    return (
+      <VisualWidgetCard
+        key={key}
+        code={code}
+        mode={mode}
+        title={title}
+        isCompleted={block.status === 'completed'}
+        error={widgetError}
+        colors={colors}
+        isDark={isDark}
+        onEcho={(text) => handleWidgetEcho(title, text)}
+      />
+    );
+  }, [colors, handleWidgetEcho, isDark]);
+
+  // ask_user_question：用户点选 → POST /ask/answer 解阻塞正在等待的本轮 run（卡片自管 submitted 乐观态）
+  const handleAskUserAnswer = useCallback(
+    async (answers: { header?: string; question?: string; answer: string }[]) => {
+      if (!session || !conversationId) return;
+      await answerAskUserQuestion(session, conversationId, answers);
+    },
+    [session, conversationId]
+  );
+
+  const renderAskUserQuestionBlock = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
+    return (
+      <AskUserQuestionCard
+        block={block}
+        cardKey={key}
+        styles={styles as unknown as Record<string, object>}
+        placeholderColor={colors.textMuted}
+        onSubmit={handleAskUserAnswer}
+      />
+    );
+  }, [colors.textMuted, handleAskUserAnswer, styles]);
+
+  const setToolCardMode = useCallback((cardKey: string, mode: 'collapsed' | 'preview' | 'full') => {
+    setToolCardViewMode((prev) => ({ ...prev, [cardKey]: mode }));
+  }, []);
+
+
+
+
+
+
+
+  const renderReadPagesToolCard = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
     const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
     return (
       <ReadPagesCard
@@ -4169,9 +4176,9 @@ export function ChatScreen({
         )}
       />
     );
-  }
+  }, [renderToolCardSafetyActions, setToolCardMode, styles, submittingReviewId, toolCardViewMode]);
 
-  function renderFileWriteToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+  const renderFileWriteToolCard = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
     const fileArgs = parseFileToolArgs(block);
     const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
     return (
@@ -4188,9 +4195,9 @@ export function ChatScreen({
         isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
       />
     );
-  }
+  }, [renderToolCardSafetyActions, setToolCardMode, styles, submittingReviewId, toolCardViewMode, wrapFileToolPreviewBody]);
 
-  function renderFileEditToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+  const renderFileEditToolCard = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
     const fileArgs = parseFileToolArgs(block);
     const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
     return (
@@ -4207,9 +4214,16 @@ export function ChatScreen({
         isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
       />
     );
-  }
+  }, [renderToolCardSafetyActions, setToolCardMode, styles, submittingReviewId, toolCardViewMode, wrapFileToolPreviewBody]);
 
-  function renderExecCommandToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+  const renderExecCommandToolCard = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
+    /* 秒表的数据源是 execCardTimeRef（ref）+ Date.now()，两者都不是 state —— 真正把秒数推着走的
+       是每秒自增的 runningExecTick。这里显式读一下，让它成为本 useCallback 的真实依赖，从而沿
+       renderToolBlock → renderMessage → renderedMessages 一路把缓存按秒打穿。
+       必须这么做而不是把 tick 手工塞进上层依赖数组：那样 eslint 会判定「多余依赖」，
+       而且一旦哪天链路变了也没人能机检出来。
+       跑动中的 exec 卡确实可能落在历史消息里（见 hasRunningExec 对 messages 的扫描）。 */
+    void runningExecTick;
     const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
     const timeInfo = execCardTimeRef.current[key];
     const isRunning = block.status === 'running' || block.status === 'pending';
@@ -4231,10 +4245,10 @@ export function ChatScreen({
         isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
       />
     );
-  }
+  }, [renderAnsiText, renderToolCardSafetyActions, runningExecTick, setToolCardMode, styles, submittingReviewId, toolCardViewMode]);
 
   /** 与 FlopsDesktop SearchEngineCard.jsx 1:1（无「完全展开」行，默认折叠） */
-  function renderSearchEngineToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+  const renderSearchEngineToolCard = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
     const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
     return (
       <SearchEngineCard
@@ -4248,9 +4262,9 @@ export function ChatScreen({
         submittingReviewId={submittingReviewId}
       />
     );
-  }
+  }, [handleSafetyDecision, setToolCardMode, styles, submittingReviewId, toolCardViewMode]);
 
-  function renderFlowDocEditToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+  const renderFlowDocEditToolCard = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
     const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
     return (
       <FlowDocEditCard
@@ -4266,9 +4280,9 @@ export function ChatScreen({
         isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
       />
     );
-  }
+  }, [conversationId, renderToolCardSafetyActions, setToolCardMode, styles, submittingReviewId, toolCardViewMode, wrapFileToolPreviewBody]);
 
-  function renderFlowDocPatchToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+  const renderFlowDocPatchToolCard = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
     const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
     return (
       <FlowDocPatchCard
@@ -4284,9 +4298,9 @@ export function ChatScreen({
         isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
       />
     );
-  }
+  }, [conversationId, renderToolCardSafetyActions, setToolCardMode, styles, submittingReviewId, toolCardViewMode, wrapFileToolPreviewBody]);
 
-  function renderFlowDocWriteToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+  const renderFlowDocWriteToolCard = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
     const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
     return (
       <FlowDocWriteCard
@@ -4302,9 +4316,9 @@ export function ChatScreen({
         isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
       />
     );
-  }
+  }, [conversationId, renderToolCardSafetyActions, setToolCardMode, styles, submittingReviewId, toolCardViewMode, wrapFileToolPreviewBody]);
 
-  function renderFlowDocReadToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+  const renderFlowDocReadToolCard = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
     const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
     return (
       <FlowDocReadCard
@@ -4320,9 +4334,9 @@ export function ChatScreen({
         isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
       />
     );
-  }
+  }, [conversationId, renderToolCardSafetyActions, setToolCardMode, styles, submittingReviewId, toolCardViewMode, wrapFileToolPreviewBody]);
 
-  function renderFlowDocGetTreeToolCard(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+  const renderFlowDocGetTreeToolCard = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
     const viewMode = toolCardViewMode[key] ?? getDefaultToolCardViewMode(block.tool_name);
     return (
       <FlowDocGetTreeCard
@@ -4337,7 +4351,7 @@ export function ChatScreen({
         isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
       />
     );
-  }
+  }, [renderToolCardSafetyActions, setToolCardMode, styles, submittingReviewId, toolCardViewMode, wrapFileToolPreviewBody]);
 
   /** drawer 模式下不渲染返回，由 HamburgerButton 顶替；同时左缘 PanResponder 不挂，避免与 DrawerShell 左缘手势重叠。
    *  mainPane（iPad 主区嵌套栈）：能否返回看 nested navigation.canGoBack()，但左缘手势交给嵌套 stack 自带的
@@ -4357,7 +4371,7 @@ export function ChatScreen({
     })
   ).current;
 
-  function renderToolBlock(block: Extract<StreamBlock, { type: 'tool' }>, key: string) {
+  const renderToolBlock = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
     if (
       block.tool_name === 'local_cursor_agent' ||
       block.tool_name === 'local_claude_agent' ||
@@ -4430,9 +4444,7 @@ export function ChatScreen({
         isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
       />
     );
-  }
-
-  if (!session) return null;
+  }, [colors.textMuted, renderAskUserQuestionBlock, renderExecCommandToolCard, renderFileEditToolCard, renderFileWriteToolCard, renderFlowDocEditToolCard, renderFlowDocGetTreeToolCard, renderFlowDocPatchToolCard, renderFlowDocReadToolCard, renderFlowDocWriteToolCard, renderReadPagesToolCard, renderSearchEngineToolCard, renderSubagentBlock, renderSubagentMetaBlock, renderToolCardSafetyActions, renderVisualWidgetBlock, setToolCardMode, styles, submittingReviewId, toolCardViewMode]);
 
   const lastAssistantIdx = (() => {
     let last = -1;
@@ -4459,7 +4471,7 @@ export function ChatScreen({
     });
   }, [messages]);
 
-  const renderMessage = (msg: ChatMessage, idx: number) => {
+  const renderMessage = useCallback((msg: ChatMessage, idx: number) => {
     /* 稳定全局 key：viewStart + 该消息窗口内起始 raw 下标 = 不随 prepend/append 漂移的全局位置。
      * 让 maintainVisibleContentPosition 能跨「加载更旧」认出同一条视图、把它钉在原位。
      * （无 _key 的流式/乐观消息退回下标 key —— 它们在最底部，不参与顶部锚定。） */
@@ -4754,7 +4766,26 @@ export function ChatScreen({
     }
 
     return bubble;
-  };
+  }, [composerAgentLabel, contextCompressMessagePercent, contextCompressPlacement, conversationHistoryLoading, conversationId, effectiveSelectedModel, handleRegenerate, lastAssistantIdx, loading, messageWindowMeta?.viewStart, modelPriceReference, ordinalInfo, presentUserMessageActions, renderToolBlock, scrollToContextCompressAnchor, serverRawMessages, showTokenUsageInChat, styles.assistantBubble, styles.assistantBubbleWrap, styles.assistantTextBlock, styles.assistantTextBlockCompactAbove, styles.assistantTextBlockTightAfterThinking, styles.bubble, styles.bubbleRole, styles.bubbleWrap, styles.errorText, styles.errorWrap, styles.userBubble, styles.userBubbleWrap, styles.userText, ttsPlayback.key, ttsPlayback.state, usageByAssistantIdx, usageCurrencyDisplay]);
+
+  /* ── 历史消息整棵子树按引用缓存 ────────────────────────────────────────────
+   * live 段最贵的一笔开销：**messages 根本没变**，变的只有流式气泡，但每一帧都要把
+   * 几十条历史消息重新 map 一遍 —— 每行的 formatUsageTiny / formatUsageHoverDetail、
+   * 找 lastTextBlockIdx 的 blocks 扫描、以及整棵 host View 子树的 reconcile 全部重跑。
+   *
+   * 这里缓存的是**元素数组本身**：依赖没变时返回同一批 element 引用，React 认出引用相同
+   * 会直接跳过整个子树 —— 比逐行 React.memo 更彻底（连 memo 比较器都不用跑），
+   * 代价只是一个依赖数组。
+   *
+   * 依赖完整性由 eslint react-hooks/exhaustive-deps 机检：renderMessage 及它调用的
+   * renderToolBlock → 各 render*Card 链全部包成了 useCallback，规则能一路追进去，
+   * 所以这里只需要列 messages + renderMessage，深层依赖由链上每一环各自申报。
+   * exec 卡的秒表是唯一一个 eslint 看不见的驱动源，已在 renderExecCommandToolCard 里
+   * 用一次显式读取（void runningExecTick）把它接回依赖链，不在这儿手工补。 */
+  const renderedMessages = useMemo(
+    () => messages.map(renderMessage),
+    [messages, renderMessage]
+  );
 
   const showEmpty =
     messages.length === 0 && !loading && !conversationHistoryLoading;
@@ -4785,6 +4816,14 @@ export function ChatScreen({
     ? 'Resuming...'
     : streamStatusLabel;
 
+  /* 未登录早退。**位置很重要**：必须在本组件所有 Hook 之后 —— 原来它在 ordinalInfo 那个
+     useMemo 上面，属于「条件调用 Hook」（eslint react-hooks/rules-of-hooks 一直在报），
+     session 一旦从 null 变成非 null，Hook 数量就会对不上而崩。下面新增的 renderedMessages
+     也是 useMemo，一并挪到早退之上。
+     搬下来是安全的：从原位置到这里之间只有纯计算，没有副作用，且没有一处读 session
+     （第一个用到的就是紧跟着的 <ChatMessageArea session={session}>）。 */
+  if (!session) return null;
+
   /* 消息区元素只造一份，两种布局（平铺 / 落进 sheet）复用同一份 props。
    * **它在任何分支下都要挂着**：ChatScreen 里 20+ 处钉底/滚动命令全走 messageAreaRef 的可选链，
    * 某个分支不挂载的话钉底会静默失效（见 ChatMessageArea 头注）。所以下面两处是
@@ -4812,7 +4851,7 @@ export function ChatScreen({
       composerAgentLabel={composerAgentLabel}
       streamStatusBracketLabel={streamStatusBracketLabel}
       streamBubblePlaceholderText={streamBubblePlaceholderText}
-      renderMessage={renderMessage}
+      renderedMessages={renderedMessages}
       renderToolBlock={renderToolBlock}
       onRegenerate={handleRegenerate}
       onReachTop={() => void loadOlderMessages()}
