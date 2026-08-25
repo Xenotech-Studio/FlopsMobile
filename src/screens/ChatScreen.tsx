@@ -4833,6 +4833,10 @@ export function ChatScreen({
           b?.type === 'tool' &&
           (b?.status === 'awaiting_confirmation' ||
             b?.status === 'awaiting_authorization' ||
+            // 点「允许/拒绝」后乐观置态（confirming=提交中 / rejected_by_user=已拒绝）：仍在
+            // 「提交中→续跑完成」途中，本轮未结束，操作栏须继续隐藏，否则提交瞬间闪出操作行。
+            b?.status === 'confirming' ||
+            b?.status === 'rejected_by_user' ||
             String((b as ToolBlock)?.tool_name || '') === 'ask_user_question')
       );
     // TTS 语音播放（本条 assistant 消息服务端已合成的 metadata.audio）。
