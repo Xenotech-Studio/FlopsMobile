@@ -143,7 +143,15 @@ export function createChatStyles(c: AppColors) {
     ...shadowSheet,
   },
   collabSheetHandle: { backgroundColor: c.borderD4, width: 36 },
-  collabSheetContent: { flex: 1 },
+  /** 把手条本体：高度钉死成 COLLAB_SHEET_HANDLE_H（= gorhom 默认的 10+4+10），
+   *  聊天区高度按「当前档高 - 这个数」算，浮动一下就会差一截。 */
+  collabSheetHandleBar: { height: 24, paddingVertical: 10, justifyContent: 'center' },
+  /** sheet 里聊天区的容器。**刻意不用 flex:1** —— 高度由 ChatScreen 按当前档位算好后
+   *  显式下发（见 collabSheetChatHeight）。flex 会让它去跟父级的高度传递链纠缠，而那条链
+   *  正是「视口比 sheet 高、滚不到底」的根子。 */
+  collabSheetContent: { width: '100%' },
+  /** 容器高度还没量出来那一帧的兜底：先撑满，别塌成 0 高。 */
+  collabSheetContentFill: { flex: 1 },
   /** 与主画布同色：避免暗色下 overlayScrim（近黑半透明）比 #101010 更暗一块 */
   historyLoadingOverlay: {
     ...StyleSheet.absoluteFillObject,

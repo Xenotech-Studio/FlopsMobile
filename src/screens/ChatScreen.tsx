@@ -256,6 +256,9 @@ const IS_ANDROID = Platform.OS === 'android';
  *  collabSheetContentPad），所以必须同源；分家一次，补偿就整体偏一截。 */
 const COLLAB_SHEET_MID_RATIO = 0.58;
 const COLLAB_SHEET_MAX_RATIO = 0.92;
+/** sheet 顶部把手那一条的高度。与 gorhom 默认握把等高（padding 10 + 指示条 4 + padding 10），
+ *  同时用 handleStyle 把它钉死 —— 聊天区高度要拿「当前档高 - 把手高」算，这个数不能是猜的。 */
+const COLLAB_SHEET_HANDLE_H = 24;
 
 /** High-resolution time when available (e.g. Hermes), else `Date.now()`. Avoids bare `performance` (not in RN TS libs). */
 function perfNowMs(): number {
@@ -451,8 +454,9 @@ export function ChatScreen({
   const [collabHostHeight, setCollabHostHeight] = useState(0);
   /** sheet 当前停在第几档（onAnimate 给目标档、onChange 收尾确认）。 */
   const [collabSheetIndex, setCollabSheetIndex] = useState(1);
-  /** 键盘是否弹起：弹起时 gorhom 会自己把内容盒收到键盘上沿，我们的补偿要让位（见下）。 */
+  /** 键盘是否弹起 + 弹起高度：协同模式下聊天区高度要按键盘上沿截断（见 collabSheetChatHeight）。 */
   const [collabKeyboardShown, setCollabKeyboardShown] = useState(false);
+  const [collabKeyboardHeight, setCollabKeyboardHeight] = useState(0);
   /** 底部渐变条高度（叠在滚动内容上，透明→白） */
   const gradientStripHeight = 48;
   /** 输入行高度（输入框+发送+底部留白，模型/助手条绝对叠在留白内，不把整块顶上去） */
@@ -509,24 +513,38 @@ export function ChatScreen({
     return [collabSheetPeekHeight, mid, max];
   }, [collabSheetPeekHeight, collabSheetContainerHeight]);
   const collabSheetSnapPoints = collabSheetSnapHeights;
-  /* 【消息区可视高度补偿】gorhom 恒按**最高档**给 sheet body 布局（BottomSheetContent 的高度
-   * = animatedSheetHeight = 容器高 - 最高档顶沿，与当前停在哪档无关），停在更低档时整个 body
-   * 连同里面 flex:1 的 ScrollView 一起被 translateY 推下去 —— 垂到屏幕外那一截照样是可滚动
-   * 视口。于是视口恒为「最高档」那么高，而实际能看见的只有当前档：滚到 offset 尽头时，屏幕上
-   * 露出的是内容里更靠上的一段，底下还压着「最高档 - 当前档」那么多内容，再也滚不下去。
+  /* 【聊天区高度】直接给死像素高，不再靠「flex:1 撑满 + paddingBottom 补掉多余」那套。
    *
-   * 补法：把这个差值当 paddingBottom 压在内容容器上，ScrollView 就被压回可视区。
-   * 两个数都由我们自己定（collabSheetSnapHeights），不经 lib 的坐标系，也不走 Reanimated
-   * 的布局属性 —— 之前那版靠 animatedPosition 逐帧算，坐标系和生效与否都不好验证。
+   * 起因：gorhom 恒按**最高档**给 sheet body 布局（BottomSheetContent 的高度 =
+   * animatedSheetHeight = 容器高 - 最高档顶沿，与当前停在哪档无关），停在低档时整个 body
+   * 连同里面的 ScrollView 一起被 translateY 推下去，垂到屏幕外那截照样是可滚动视口。
+   * 前两版都想把这个差值补成 paddingBottom 压回去，实测都没生效 —— 补偿值本身算得没错
+   * （见 collabSheetSnapHeights），问题出在它依赖「BottomSheetContent 的动画高度 → 我们
+   * flex:1 的包装层 → ScrollView」这条高度传递链，链子上任一环没把高度定下来，flex:1 就
+   * 退化成「按内容撑开」，ScrollView 视口直接变成内容高 —— 于是 offset 尽头 ≈ 0，
+   * 「一打开就在底部、底下的内容却露不出来、稍微上滑就触顶拉更旧」三个现象同时成立。
    *
-   * 键盘态要归零：keyboardBehavior=interactive 会把 sheet 顶到临时位，并由 lib 自己把内容盒
-   * 收成「容器高 - 键盘高 - handle」，已经正好贴合可视区，这时再叠我们的补偿就会矮一大截。 */
+   * 所以这版不再参与那条链：包装层不用 flex，直接写死 height = 当前档高 - 把手高。
+   * 父级怎么布局都不影响 ScrollView 拿到确定高度，视口恒等于 sheet 此刻真正露出来的那块。
+   * 档高是我们自己定的像素（collabSheetSnapHeights），把手高用 handleStyle 钉死。 */
   const collabSheetVisibleHeight =
     collabSheetSnapHeights[collabSheetIndex] ?? collabSheetSnapHeights[collabSheetSnapHeights.length - 1];
-  const collabSheetContentPad =
-    collabKeyboardShown || collabSheetContainerHeight <= 0
-      ? 0
-      : Math.max(0, collabSheetSnapHeights[collabSheetSnapHeights.length - 1] - collabSheetVisibleHeight);
+  const collabSheetChatHeight = useMemo(() => {
+    if (collabSheetContainerHeight <= 0) return 0;
+    const maxH = collabSheetSnapHeights[collabSheetSnapHeights.length - 1];
+    /* 键盘弹起时 interactive 会把 sheet 顶到「最高档 - 键盘高」：可视区涨到最高档，
+       再被键盘上沿截断。没弹键盘就是当前档。 */
+    const visible = collabKeyboardShown
+      ? Math.min(maxH, collabSheetContainerHeight - collabKeyboardHeight)
+      : collabSheetVisibleHeight;
+    return Math.max(0, visible - COLLAB_SHEET_HANDLE_H);
+  }, [
+    collabSheetContainerHeight,
+    collabSheetSnapHeights,
+    collabSheetVisibleHeight,
+    collabKeyboardShown,
+    collabKeyboardHeight,
+  ]);
   /* bottomOverlay 的 bottom 偏移：iOS 完全由 lib KAV 缩 scrollAndGradientWrap (flex:1) 自动上浮
    * (base=0)；Android lib KAV 同样接管几何，base=0 即可（之前 RN KAV 在 Android adjustResize
    * 下 absolute children 飘忽，那条手挂 h offset 是兜底）。lib 两端统一 native 接管。 */
@@ -935,7 +953,10 @@ export function ChatScreen({
     }
     const showEvt = IS_ANDROID ? 'keyboardDidShow' : 'keyboardWillShow';
     const hideEvt = IS_ANDROID ? 'keyboardDidHide' : 'keyboardWillHide';
-    const subShow = Keyboard.addListener(showEvt, () => setCollabKeyboardShown(true));
+    const subShow = Keyboard.addListener(showEvt, (e) => {
+      setCollabKeyboardHeight(Math.round(e?.endCoordinates?.height ?? 0));
+      setCollabKeyboardShown(true);
+    });
     const subHide = Keyboard.addListener(hideEvt, () => setCollabKeyboardShown(false));
     return () => {
       subShow.remove();
@@ -5091,13 +5112,22 @@ export function ChatScreen({
           keyboardBehavior="interactive"
           keyboardBlurBehavior="restore"
           backgroundStyle={styles.collabSheetBackground}
+          /* 把手高度钉死：聊天区高度是「当前档高 - 把手高」算出来的，这个数不能随内容浮动。 */
+          handleStyle={styles.collabSheetHandleBar}
           handleIndicatorStyle={styles.collabSheetHandle}
         >
           {/* 用普通 View 而非 BottomSheetView：后者是给「内容自己量高」的动态尺寸场景用的
               （position:absolute + 无 bottom → 高度由内容决定），塞一个 flex:1 的 ScrollView
-              进去会量成 0 高。sheet 的内容容器本身已有确定高度，这里 flex:1 撑满，
-              paddingBottom 再把「垂到屏幕外」的那一截压掉（见 collabSheetContentPad）。 */}
-          <View style={[styles.collabSheetContent, { paddingBottom: collabSheetContentPad }]}>
+              进去会量成 0 高。这里也不用 flex:1 —— 高度按当前档位显式给死
+              （见 collabSheetChatHeight），彻底不参与父级那条高度传递链。 */}
+          <View
+            style={[
+              styles.collabSheetContent,
+              collabSheetChatHeight > 0
+                ? { height: collabSheetChatHeight }
+                : styles.collabSheetContentFill,
+            ]}
+          >
             {chatMessageArea}
           </View>
         </BottomSheet>
