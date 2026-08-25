@@ -133,6 +133,16 @@ export type ChatStreamEvent =
       usage_run?: UsageRun;
       conversation_id?: string;
     }
+  /** 协同工作模式布局帧（CoWriter / CoPlanner 等）。
+   *  注：两种 mode 的 delta 在线上**都**是 `type: 'cowriter_layout'`（服务端 ProductEvent 的
+   *  kind 叫 coplanner_layout，但 SSE 上的 JSON 用 payload 自带的 type）；具体是哪个 mode
+   *  看 `layout.layout_mode`。这里把 coplanner_layout 也列上纯属兼容，不依赖它出现。 */
+  | {
+      type: 'cowriter_layout' | 'coplanner_layout';
+      conversation_id?: string;
+      seq?: number;
+      layout?: Record<string, unknown>;
+    }
   | { content?: string; error?: string; done?: boolean; conversation_id?: string };
 
 function ensureSlash(url: string): string {
@@ -751,6 +761,10 @@ export type Conversation = {
    * 置位时 messages 仍是密文哨兵形态，UI 该说清楚原因而不是假装内容为空。
    */
   locked_reason?: 'need_parent' | null;
+  /** 协同工作模式（CoWriter/CoPlanner/CoCoder/CoBrowser）布局桶 + 其单调 seq。
+   *  结构与归一化见 utils/collabLayout；服务端权威在会话根 meta 的同名字段。 */
+  cowriter_layout?: Record<string, unknown> | null;
+  cowriter_layout_seq?: number;
 };
 
 /** 会话列表页大小（服务端分页）：首屏 + 每次滚到底加载的条数。

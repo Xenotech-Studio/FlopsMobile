@@ -21,6 +21,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { AudioManager } from 'react-native-audio-api';
+import BottomSheet from '@gorhom/bottom-sheet';
 import {
   KeyboardAvoidingView,
   useReanimatedKeyboardAnimation,
@@ -134,6 +135,15 @@ import {
   COMPOSER_TEXT_INSET_TALL,
 } from './chat/ChatScreen.styles';
 import { ChatMessageArea, type ChatMessageAreaHandle } from './chat/ChatMessageArea';
+import { WorkspaceBody } from './chat/WorkspaceBody';
+import {
+  applyCollabLayoutPayload,
+  collabLayoutEqual,
+  collabLayoutFromConversationMeta,
+  mobileCollabMode,
+  EMPTY_COLLAB_LAYOUT,
+  type CollabLayoutState,
+} from '../utils/collabLayout';
 import { ThinkingBlockView } from './chat/ThinkingBlockView';
 import { TaskEventCardView, UserInjectionInline } from './chat/TaskEventCardView';
 import { ComposerContextRing } from './chat/ComposerContextRing';
@@ -405,6 +415,14 @@ export function ChatScreen({
   const bottomOverlayHeight = gradientStripHeight + inputRowHeight + restingNavInset;
   /** 列表底部留白，让内容可滚入渐变下方 */
   const scrollBottomPadding = bottomOverlayHeight + 12;
+  /* 协同模式 sheet 的三档高度。sheet 容器是整页高（bottom 贴屏底），composer 那一簇
+   * 正好压在它最下面 bottomOverlayHeight 那段上，所以最矮一档 = composer 高度 + 一点 handle
+   * 余量 —— 折叠后 sheet 只在 composer 上方露出一条把手，文档区几乎整屏可读。 */
+  const collabSheetPeekHeight = bottomOverlayHeight + 56;
+  const collabSheetSnapPoints = useMemo(
+    () => [collabSheetPeekHeight, '58%', '92%'],
+    [collabSheetPeekHeight],
+  );
   /* bottomOverlay 的 bottom 偏移：iOS 完全由 lib KAV 缩 scrollAndGradientWrap (flex:1) 自动上浮
    * (base=0)；Android lib KAV 同样接管几何，base=0 即可（之前 RN KAV 在 Android adjustResize
    * 下 absolute children 飘忽，那条手挂 h offset 是兜底）。lib 两端统一 native 接管。 */
@@ -756,6 +774,55 @@ export function ChatScreen({
     sessionRef.current = session;
   }, [session]);
 
+  /* ───────────── 协同工作模式（CoWriter / CoPlanner）布局感知 ─────────────
+   * 服务端把「这个会话此刻开着哪篇文档 / 哪个项目」存在会话 meta 的 cowriter_layout 桶里，
+   * 两条到达路径：初始 GET 带整桶快照、run 内工具驱动经 SSE 下发单槽 delta（见 utils/collabLayout）。
+   * 这里只做感知 + 归一化；要不要分叉成 sheet 布局由下面的 collabMode 决定。 */
+  const [collabLayout, setCollabLayout] = useState<CollabLayoutState>(EMPTY_COLLAB_LAYOUT);
+  /** 布局态镜像：seq 守卫要在 setState 之外先算完（updater 必须是纯函数），
+   *  且流式期间每秒几十帧都要读最新值，进不了 onEvent 那个长寿闭包的依赖。 */
+  const collabLayoutRef = useRef<CollabLayoutState>(EMPTY_COLLAB_LAYOUT);
+  /** SSE 布局帧 → 归一化 → 只有「可见形状真的变了」才写 state。
+   *  seq 光往前走（同一篇文档被连改十次）不该把这棵 5000 行的聊天页推着重渲染。 */
+  const applyCollabLayoutEvent = useCallback((payload: unknown) => {
+    const prev = collabLayoutRef.current;
+    const next = applyCollabLayoutPayload(prev, payload);
+    if (!next) return;
+    collabLayoutRef.current = next;
+    if (!collabLayoutEqual(prev, next)) setCollabLayout(next);
+  }, []);
+  /** 会话 meta 里的整桶快照 → 布局态。会话没有该字段 = 非协同，归零。 */
+  const hydrateCollabLayout = useCallback((conversation: Conversation) => {
+    const seq = Math.floor(Number(conversation.cowriter_layout_seq)) || 0;
+    const prev = collabLayoutRef.current;
+    /* 同一会话内会反复 hydrate（history_revision、回前台 resync 都走同一个 funnel），
+       快照可能比已应用的 SSE delta 旧：seq 落后就丢，别把 agent 刚打开的文档抹回去。 */
+    if (seq < prev.seq) return;
+    const next = collabLayoutFromConversationMeta(conversation.cowriter_layout, seq);
+    collabLayoutRef.current = next;
+    if (!collabLayoutEqual(prev, next)) setCollabLayout(next);
+  }, []);
+  /** 换会话 → 布局归零，等新会话自己 hydrate。 */
+  const prevCollabConvIdRef = useRef(conversationId);
+  useEffect(() => {
+    const prev = prevCollabConvIdRef.current;
+    prevCollabConvIdRef.current = conversationId;
+    /* 「空 → 有 id」是本次发送刚把会话建出来，不是换会话：这一轮 run 里已经到达的布局帧要留着。 */
+    if (prev === conversationId || !prev) return;
+    collabLayoutRef.current = EMPTY_COLLAB_LAYOUT;
+    setCollabLayout(EMPTY_COLLAB_LAYOUT);
+  }, [conversationId]);
+  /** 手机端此刻要不要进协同布局；null = 普通聊天页原样（含桌面端专属的 cocoder/cobrowser）。 */
+  const collabMode = useMemo(() => mobileCollabMode(collabLayout), [collabLayout]);
+  /** 协同模式下装聊天消息区的 sheet，留在这里供程序化展开 / 折叠。 */
+  const collabSheetRef = useRef<BottomSheet>(null);
+  /* 进/出协同模式时消息区换了容器 → React 必然重挂一次（跨父节点没法保留实例），
+     滚动位置随之回到顶部。重新武装钉底窗口，让内容量完高度后自己贴回底部
+     （armForOpen 是时间窗口式的，图片/附件慢慢量出高度也能跟上）。 */
+  useEffect(() => {
+    messageAreaRef.current?.armForOpen();
+  }, [collabMode]);
+
   const applyConversationUsageState = useCallback(
     (conversation: Conversation, messagesWindow?: MessageWindow | null) => {
     const raw =
@@ -767,6 +834,8 @@ export function ChatScreen({
       setMessageWindowMeta(messagesWindow);
     }
     setConvLockedReason(conversation.locked_reason === 'need_parent' ? 'need_parent' : null);
+    /* 协同布局：所有「拉会话 → 应用到 state」的入口都经这里，hydrate 也就只挂这一处。 */
+    hydrateCollabLayout(conversation);
     setUsageStats(conversation.usage_stats ?? null);
     setUsageRuns(Array.isArray(conversation.usage_runs) ? conversation.usage_runs : []);
     setConversationAttachments(
@@ -788,7 +857,7 @@ export function ChatScreen({
        的 chat_v2 POST 缺 k_agent_wire，server 返 400。 */
     conversationMetaRef.current = nextMeta;
     setConversationMeta(nextMeta);
-  }, []);
+  }, [hydrateCollabLayout]);
 
   const rawToLocalAssistantIndex = useMemo(
     () => rawMessagesToLocalWithUsageMap(serverRawMessages).rawToLocalAssistantIndex,
@@ -1535,6 +1604,12 @@ export function ChatScreen({
             });
           }
         }
+        /* 协同布局帧（agent 刚读/写了文档或任务 → 服务端开对应工作区）。
+           线上两种 mode 的 delta **都**是 type='cowriter_layout'，具体看 layout.layout_mode；
+           coplanner_layout 一并认，是为防服务端哪天按 ProductEvent 的 kind 命名下发。 */
+        if (e.type === 'cowriter_layout' || e.type === 'coplanner_layout') {
+          applyCollabLayoutEvent(event);
+        }
         if ('error' in event && event.error) throw new Error(String(event.error));
         if ('type' in event) {
           /* Phase 4 reload-pending：server SIGTERM 时主动通知；UI 显示「服务器热更新中」banner，
@@ -1882,7 +1957,7 @@ export function ChatScreen({
 
       return { streamDone, finalText, localBlocks, lastConvId: streamTargetRef.current };
     },
-    [session, applyConversationUsageState]
+    [session, applyConversationUsageState, applyCollabLayoutEvent]
   );
 
   // ---- P2 待发队列：agent 在跑时回车发消息 → 排队（不打断当前 run）/ 立刻穿插 ----
@@ -4614,6 +4689,48 @@ export function ChatScreen({
     ? 'Resuming...'
     : streamStatusLabel;
 
+  /* 消息区元素只造一份，两种布局（平铺 / 落进 sheet）复用同一份 props。
+   * **它在任何分支下都要挂着**：ChatScreen 里 20+ 处钉底/滚动命令全走 messageAreaRef 的可选链，
+   * 某个分支不挂载的话钉底会静默失效（见 ChatMessageArea 头注）。所以下面两处是
+   * 严格二选一，绝不会同时为空。 */
+  const chatMessageArea = (
+    <ChatMessageArea
+      ref={messageAreaRef}
+      session={session}
+      conversationId={conversationId}
+      messages={messages}
+      serverRawMessages={serverRawMessages}
+      currentAssistantBlocks={currentAssistantBlocks}
+      streamingText={streamingText}
+      liveInjections={liveInjections}
+      conversationAttachmentsMap={conversationAttachmentsMap}
+      contextCompressPlacement={contextCompressPlacement}
+      contextCompressAnchorRef={contextCompressAnchorRef}
+      showEmpty={showEmpty}
+      loading={loading}
+      bgPauseRecovering={bgPauseRecovering}
+      conversationHistoryLoading={conversationHistoryLoading}
+      reloadPending={reloadPending}
+      loadingOlder={loadingOlder}
+      hasOlder={Boolean(messageWindowMeta?.hasOlder)}
+      composerAgentLabel={composerAgentLabel}
+      streamStatusBracketLabel={streamStatusBracketLabel}
+      streamBubblePlaceholderText={streamBubblePlaceholderText}
+      renderMessage={renderMessage}
+      renderToolBlock={renderToolBlock}
+      onRegenerate={handleRegenerate}
+      onReachTop={() => void loadOlderMessages()}
+      onDismissComposer={dismissComposer}
+      styles={styles}
+      colors={colors}
+      /* 协同模式下消息区在 sheet 里：顶上没有 header 要让位，只留 sheet handle 的余量。 */
+      headerHeight={collabMode ? 0 : headerHeight}
+      scrollBottomPadding={scrollBottomPadding}
+      wideChat={wideChat}
+      historyOverlayBottomOverflow={insets.bottom + 32}
+    />
+  );
+
   return (
     <>
     {/* edges 不含 'bottom'：bottom inset 交给 bottomOverlay 处理（见 navInset），
@@ -4712,6 +4829,53 @@ export function ChatScreen({
         )}
       </View>
 
+      {/* ── 协同工作模式：工作区主体（最底层，被 sheet 与 composer 盖住的部分靠 inset 让位）── */}
+      {collabMode ? (
+        <View style={styles.collabWorkspaceLayer}>
+          <WorkspaceBody
+            mode={collabMode}
+            layout={collabLayout}
+            topInset={headerHeight}
+            bottomInset={collabSheetPeekHeight}
+          />
+        </View>
+      ) : null}
+      {/* ── 协同工作模式：聊天消息区落进 bottom sheet ──
+       * 位置在 KeyboardAvoidingView **之前** = 画在 composer 之下：折叠 sheet 也能边看文档边输入。
+       * 键盘避让在这里由 sheet 自己做（keyboardBehavior='interactive'，容器是整页高、
+       * 量到的 containerOffset.bottom=0，偏移量正好是键盘高）；composer 那侧仍归 KAV 管。
+       * 两者各自避让同一个键盘、互不叠加 —— 把 sheet 塞进 KAV 里才会双重避让（KAV 先缩容器、
+       * sheet 再按整个键盘高往上顶）。 */}
+      {collabMode ? (
+        <BottomSheet
+          ref={collabSheetRef}
+          snapPoints={collabSheetSnapPoints}
+          index={1}
+          /* 顶到 header 下沿为止：百分比档位按「header 以下」这块算，
+             最高档也不会把 handle 藏到顶栏毛玻璃后面。 */
+          topInset={headerHeight}
+          enableDynamicSizing={false}
+          enablePanDownToClose={false}
+          /* 消息区是自带滚动的普通 ScrollView（Phase 0 抽出来时原样保留），不是
+             BottomSheetScrollView：关掉内容区拖拽手势，免得跟列表滚动抢 responder。
+             sheet 靠顶部 handle 拖，或由 collabSheetRef 程序化展开/折叠。 */
+          enableContentPanningGesture={false}
+          /* interactive 的实际语义（lib 内 getEvaluatedPosition）：键盘一弹就把 sheet 顶到
+             「最高档 - 键盘高」，收键盘再由 blurBehavior='restore' 回到原来那档。于是
+             「点输入框 → 聊天升起来看得见上下文 → 收键盘 → 回到刚才那档继续看文档」，
+             折叠态也不会被永久顶开。 */
+          keyboardBehavior="interactive"
+          keyboardBlurBehavior="restore"
+          backgroundStyle={styles.collabSheetBackground}
+          handleIndicatorStyle={styles.collabSheetHandle}
+        >
+          {/* 用普通 View 而非 BottomSheetView：后者是给「内容自己量高」的动态尺寸场景用的
+              （position:absolute + 无 bottom → 高度由内容决定），塞一个 flex:1 的 ScrollView
+              进去会量成 0 高。sheet 的内容容器本身已有确定高度，这里 flex:1 撑满即可。 */}
+          <View style={styles.collabSheetContent}>{chatMessageArea}</View>
+        </BottomSheet>
+      ) : null}
+
       <KeyboardAvoidingView
         style={styles.keyboardView}
         /* lib KAV 两端都用 'padding'：lib 内部用 WindowInsets.ime / UIKeyboardLayoutGuide 拿
@@ -4720,6 +4884,8 @@ export function ChatScreen({
          *  edge-to-edge 模式下 adjustResize 行为已被 fitsSystemWindows=false 改变。 */
         behavior="padding"
         keyboardVerticalOffset={0}
+        /* 协同模式：本层只有底部 composer 是实体，其余让位给 sheet（见下面 scrollAndGradientWrap）。 */
+        pointerEvents={collabMode ? 'box-none' : 'auto'}
       >
         {error ? (
           <Text style={[styles.globalError, { marginTop: headerHeight + 8 }]}>{error}</Text>
@@ -4731,41 +4897,12 @@ export function ChatScreen({
           </Text>
         ) : null}
 
-        <View style={styles.scrollAndGradientWrap}>
-          <ChatMessageArea
-            ref={messageAreaRef}
-            session={session}
-            conversationId={conversationId}
-            messages={messages}
-            serverRawMessages={serverRawMessages}
-            currentAssistantBlocks={currentAssistantBlocks}
-            streamingText={streamingText}
-            liveInjections={liveInjections}
-            conversationAttachmentsMap={conversationAttachmentsMap}
-            contextCompressPlacement={contextCompressPlacement}
-            contextCompressAnchorRef={contextCompressAnchorRef}
-            showEmpty={showEmpty}
-            loading={loading}
-            bgPauseRecovering={bgPauseRecovering}
-            conversationHistoryLoading={conversationHistoryLoading}
-            reloadPending={reloadPending}
-            loadingOlder={loadingOlder}
-            hasOlder={Boolean(messageWindowMeta?.hasOlder)}
-            composerAgentLabel={composerAgentLabel}
-            streamStatusBracketLabel={streamStatusBracketLabel}
-            streamBubblePlaceholderText={streamBubblePlaceholderText}
-            renderMessage={renderMessage}
-            renderToolBlock={renderToolBlock}
-            onRegenerate={handleRegenerate}
-            onReachTop={() => void loadOlderMessages()}
-            onDismissComposer={dismissComposer}
-            styles={styles}
-            colors={colors}
-            headerHeight={headerHeight}
-            scrollBottomPadding={scrollBottomPadding}
-            wideChat={wideChat}
-            historyOverlayBottomOverflow={insets.bottom + 32}
-          />
+        {/* 协同模式下这层只剩 composer 有内容：其余区域一律让位，触摸落到底下的 sheet / 工作区。 */}
+        <View
+          style={styles.scrollAndGradientWrap}
+          pointerEvents={collabMode ? 'box-none' : 'auto'}
+        >
+          {collabMode ? null : chatMessageArea}
           {/* 底部整块贴屏底：渐变铺满整块并延伸到底，输入行叠在渐变底部，无单独白底；点渐变区（未点到输入/发送）可滚到底。
               用 Reanimated.View + kbBottomStyle 让 bottom 在键盘动画中逐帧跟随。 */}
           <Reanimated.View style={[styles.bottomOverlay, { height: bottomOverlayHeight }, kbBottomStyle]}>

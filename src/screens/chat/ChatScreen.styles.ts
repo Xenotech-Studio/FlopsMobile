@@ -118,6 +118,22 @@ export function createChatStyles(c: AppColors) {
   containerInner: { flex: 1 },
   keyboardView: { flex: 1 },
   scrollAndGradientWrap: { flex: 1, position: 'relative' },
+  /* ── 协同工作模式（见 ChatScreen 的 collabMode 分叉）──
+   * 层序（containerInner 内的兄弟顺序即 z 序，topBar 靠 zIndex:30 恒在最上）：
+   *   工作区层 → sheet（聊天消息区）→ KeyboardAvoidingView（composer）。
+   * 于是 composer 永远浮在 sheet 之上、折叠 sheet 也能边看文档边输入。 */
+  /** 工作区层：铺满整页垫在最底下。header / composer 都是绝对浮层，正文靠 inset 自己让位。 */
+  collabWorkspaceLayer: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: c.chatScreenBackground,
+  },
+  collabSheetBackground: {
+    backgroundColor: c.chatScreenBackground,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+  },
+  collabSheetHandle: { backgroundColor: c.borderD4, width: 36 },
+  collabSheetContent: { flex: 1 },
   /** 与主画布同色：避免暗色下 overlayScrim（近黑半透明）比 #101010 更暗一块 */
   historyLoadingOverlay: {
     ...StyleSheet.absoluteFillObject,
