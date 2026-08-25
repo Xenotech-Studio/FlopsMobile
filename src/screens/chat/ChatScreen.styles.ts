@@ -1,5 +1,5 @@
 import { Platform, StyleSheet } from 'react-native';
-import { shadowCircleButtonThemed, shadowMenu } from '../../theme/shadows';
+import { shadowCircleButtonThemed, shadowMenu, shadowSheet } from '../../theme/shadows';
 import {
   HEADER_CIRCLE_BTN_SIZE,
   CHAT_COMPOSER_SEND_BTN_SIZE,
@@ -122,15 +122,25 @@ export function createChatStyles(c: AppColors) {
    * 层序（containerInner 内的兄弟顺序即 z 序，topBar 靠 zIndex:30 恒在最上）：
    *   工作区层 → sheet（聊天消息区）→ KeyboardAvoidingView（composer）。
    * 于是 composer 永远浮在 sheet 之上、折叠 sheet 也能边看文档边输入。 */
-  /** 工作区层：铺满整页垫在最底下。header / composer 都是绝对浮层，正文靠 inset 自己让位。 */
+  /** 工作区层：铺满整页垫在最底下。header / composer 都是绝对浮层，正文靠 inset 自己让位。
+   *  底色刻意比 sheet 暗一档（drawerBackground，跟抽屉外壳同一套「底层压暗 → 上层浮起来」的做法）：
+   *  这块 sheet 是常驻的、**没有 backdrop dim**，两块画布同色时圆角和阴影都无从显形 ——
+   *  暗色下尤其明显，SHADOW_COLOR 是半透明黑，落在 #101010 上等于没画。 */
   collabWorkspaceLayer: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: c.chatScreenBackground,
+    backgroundColor: c.drawerBackground,
   },
+  /** sheet 面：保持聊天页主画布色（消息气泡/工具卡都是照这个底调的，不能动），
+   *  层次交给「底层更暗 + 上缘 hairline + 向上投影」三件套。 */
   collabSheetBackground: {
     backgroundColor: c.chatScreenBackground,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
+    /** 上缘 hairline：阴影在暗色下几乎不可见，靠这条边把 sheet 顶沿钉出来（亮色下它很淡，只作收边）。 */
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: c.border,
+    /** 项目通用 sheet 投影（向上，height:-4）—— 与 ProfileSheet / ModelSelectSheet 同一预设。 */
+    ...shadowSheet,
   },
   collabSheetHandle: { backgroundColor: c.borderD4, width: 36 },
   collabSheetContent: { flex: 1 },
