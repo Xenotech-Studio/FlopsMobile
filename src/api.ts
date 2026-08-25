@@ -1208,6 +1208,29 @@ type ConversationCryptoMeta = {
  * requester_k_conv_wire 是可选的「顺手」：发起方对话 A 加密时带上，服务端就能立刻唤醒
  * 它的 agent 去读 D；不带则事件入队，等用户下次打开 A 才看到（不丢，只是不即时）。
  */
+/** 发起方对话若绑定加密 agent，续起 run 的 server 入口 unwrap_request_keys 会要求 k_agent_wire，缺则
+ *  400 被 spawner 吞掉、续起 run 永不执行（点允许后卡「提交中」、agent 不继续的根因）。这里解出发起方
+ *  bound agent 的 K_agent 包成 wire；明文 agent / 未解锁则返回 null（无需带）。 */
+async function resolveRequesterAgentWire(
+  session: Session,
+  requesterConversationId: string,
+  pub: string
+): Promise<string | null> {
+  try {
+    const meta = await fetchConversationMeta(session, String(requesterConversationId || '').trim());
+    const agentId =
+      meta && typeof (meta as { bound_agent_id?: unknown }).bound_agent_id === 'string'
+        ? String((meta as { bound_agent_id?: string }).bound_agent_id).trim()
+        : '';
+    if (!agentId) return null;
+    const kAgent = getCachedKAgent(agentId);
+    if (!kAgent) return null;
+    return wrapKAgentForWire(kAgent, pub);
+  } catch {
+    return null;
+  }
+}
+
 export async function submitConversationAccessDecision(
   session: Session,
   opts: {
@@ -1239,6 +1262,9 @@ export async function submitConversationAccessDecision(
         // 包不上不算致命：授权本身照样成立，只是发起方要等下次打开才看到结果
       }
     }
+    // 发起方绑定加密 agent → 续起 run 入口要 k_agent_wire，一并带上（缺则 400 被吞、续起不执行）
+    const reqAgentWire = await resolveRequesterAgentWire(session, opts.requesterConversationId, pub);
+    if (reqAgentWire) body.requester_k_agent_wire = reqAgentWire;
   }
   const res = await fetchWithDebugLog(
     `${base}api/conversations/${encodeURIComponent(opts.requesterConversationId)}/access/decision`,
@@ -1289,14 +1315,18 @@ export async function submitConversationTitlesDecision(
       }
     }
     body.titles = titles;
+    const pub = await getTransportPubkeyMobile(base);
     const requesterK = getCachedKConv(opts.requesterConversationId);
     if (requesterK) {
       try {
-        body.requester_k_conv_wire = wrapKConvForWire(requesterK, await getTransportPubkeyMobile(base));
+        body.requester_k_conv_wire = wrapKConvForWire(requesterK, pub);
       } catch {
         // 包不上不致命：授权照样成立，发起方等下次打开才看到
       }
     }
+    // 发起方绑定加密 agent → 续起 run 入口要 k_agent_wire，一并带上（缺则 400 被吞、续起不执行）
+    const reqAgentWire = await resolveRequesterAgentWire(session, opts.requesterConversationId, pub);
+    if (reqAgentWire) body.requester_k_agent_wire = reqAgentWire;
   }
   const res = await fetchWithDebugLog(
     `${base}api/conversations/${encodeURIComponent(opts.requesterConversationId)}/access/titles_decision`,
