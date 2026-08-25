@@ -183,6 +183,19 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
         },
         armForOpen: () => {
           armForOpen(bottomPinRef.current, Date.now());
+          /* 光武装窗口不够 —— 窗口的唯一触发源是 onContentSizeChange（内容**变高**）。
+             平铺路径下成立：ScrollView 先空着挂出来，armForOpen 又排在 setMessages 之前，
+             内容 0 → N 必然 fire 一次，窗口顺势被消费。
+             协同模式不成立：布局分叉是在「灌 messages 的同一次提交」里把消息区换了父节点，
+             新实例第一帧内容高度就是终值 —— 那唯一一次 onContentSizeChange 跟这里的武装是
+             竞态，且此后高度再不变化，窗口就永远等不到触发源，列表停在 offset 0（远古历史）。
+             所以主动补几发：立即 + rAF + 200ms，跟 Web snapChatThreadToEnd 同款三连，
+             熬过「刚 mount 还没量完 / sheet 高度还在动画」这段。 */
+          atBottomRef.current = true;
+          const snap = () => scrollRef.current?.scrollToEnd({ animated: false });
+          snap();
+          requestAnimationFrame(snap);
+          setTimeout(snap, 200);
         },
         isAtBottom: () => atBottomRef.current,
         scrollToPosition: (y: number, animated = true) => {
@@ -203,6 +216,15 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
             const h = e.nativeEvent.layout.height;
             const prev = scrollViewportHeightRef.current;
             scrollViewportHeightRef.current = h;
+            /* 视口高度变化同样是钉底窗口的触发源。协同模式下 sheet 的高度是动画量（进场、
+               换档、键盘），而内容高度一动不动 —— 只听 onContentSizeChange 的话，开窗后这
+               一整段收不到任何信号。挂在这里就不必去猜动画什么时候停。 */
+            const intent = consumeScrollIntent(bottomPinRef.current, Date.now());
+            if (intent) {
+              atBottomRef.current = true;
+              scrollRef.current?.scrollToEnd({ animated: false });
+              return;
+            }
             /* 视口变矮（协同模式收 sheet 档位、键盘弹起）时 maxOffset 跟着变大，原本贴底的
                视图会被留在半空 —— 「刚还在底部，收个档就掉进历史中间」。贴底态下补一次。
                收档动画期间这里每帧都会 fire，等于全程钉着底收下去，不会跳。 */
