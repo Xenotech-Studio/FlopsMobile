@@ -1471,14 +1471,85 @@ export function ChatScreen({
        */
       const REPLAY_QUIET_MS = 1000;
 
-      const applyBlocksToState = () => {
-        setCurrentAssistantBlocks([...localBlocks]);
+      /* ── 实时段合帧 ────────────────────────────────────────────────────────
+       * 回放段（上面）攒的是「几百帧一次性出来」，实时段攒的是另一回事：**限制绘制频率**。
+       * subagent 是唯一一个每 250ms 重发全量累积 agent_blocks 的工具，叠上 20ms 一批的文本流，
+       * 实时帧能到每秒几十次；而每帧一次 paintBlocks = 一次整棵消息区重渲染（几十条历史消息
+       * 连同全部工具卡一起 reconcile），于是 live 段直接卡死。
+       * 这里把**绘制**合到 100ms 一次，**记账（captureBlocks）仍然逐帧** —— 见 captureBlocks 注释。
+       * 首帧走 leading edge（空闲后第一帧立刻画），不给第一个 token 添延迟。 */
+      const LIVE_PAINT_MS = 100;
+      let livePaintTimer: ReturnType<typeof setTimeout> | null = null;
+      let livePaintPending = false; // 冷却窗口内有攒着没画的实时内容
+
+      /**
+       * 每帧都要跑的记账：重算 finalText + 刷新中断/续流快照。
+       *
+       * **不能跟着绘制一起节流**：streamCaptureRef 是「点停止 / 切后台 / 卸载」时定格已有内容的
+       * 唯一来源（见 handleStop、AppState handler、takeResumeSnapshot 的读取点），落后一个合帧
+       * 窗口就会按「少一截」的版本落库；finalText 同理，它是本轮 run 的返回值。
+       * 逐帧成本只有一次 filter/map/join + 一次数组浅拷贝，不碰 React。
+       */
+      const captureBlocks = () => {
         finalText = localBlocks
           .filter((b): b is { type: 'text'; content: string } => b.type === 'text')
           .map((b) => b.content)
           .join('');
-        setStreamingText(finalText);
         streamCaptureRef.current = { text: finalText, blocks: [...localBlocks] };
+      };
+
+      /** 真正推给 React 的那两个 setState（React 19 自动合批 → 一次重渲染）。 */
+      const paintBlocks = () => {
+        setCurrentAssistantBlocks([...localBlocks]);
+        setStreamingText(finalText);
+      };
+
+      const clearLivePaintTimer = () => {
+        if (livePaintTimer) {
+          clearTimeout(livePaintTimer);
+          livePaintTimer = null;
+        }
+      };
+
+      /** 立刻画 + 重置合帧窗口。用于「不能等」的帧（见 syncBlocks(immediate) 的调用点）。 */
+      const paintNow = () => {
+        clearLivePaintTimer();
+        livePaintPending = false;
+        paintBlocks();
+      };
+
+      /** 把合帧窗口里攒着没画的内容补画出来（没攒东西 = 空操作）。出口兜底用。 */
+      const flushLivePending = () => {
+        clearLivePaintTimer();
+        if (!livePaintPending) return;
+        livePaintPending = false;
+        paintBlocks();
+      };
+
+      /** 实时帧的绘制调度：冷却窗口内只记账，窗口到点再画。 */
+      const scheduleLivePaint = () => {
+        if (livePaintTimer) {
+          livePaintPending = true;
+          return;
+        }
+        // leading edge：空闲后的第一帧立刻出，随后进入 100ms 冷却
+        livePaintPending = false;
+        paintBlocks();
+        const tick = () => {
+          if (!livePaintPending) {
+            livePaintTimer = null; // 窗口内没有新帧 → 回到空闲，下一帧又走 leading edge
+            return;
+          }
+          livePaintPending = false;
+          paintBlocks();
+          livePaintTimer = setTimeout(tick, LIVE_PAINT_MS);
+        };
+        livePaintTimer = setTimeout(tick, LIVE_PAINT_MS);
+      };
+
+      const applyBlocksToState = () => {
+        captureBlocks();
+        paintNow();
       };
 
       const clearReplayQuietTimer = () => {
@@ -1497,14 +1568,21 @@ export function ChatScreen({
         applyBlocksToState();
       };
 
-      /** 事件处理器统一调它。回放帧只记账不渲染，实时帧照旧立即渲染。 */
-      const syncBlocks = () => {
+      /**
+       * 事件处理器统一调它。回放帧只记账不渲染；实时帧逐帧记账、绘制按 100ms 合帧。
+       *
+       * `immediate`：绕过合帧窗口立刻画。只给「等不了」的帧用 —— 判据是**这一帧改的不是内容
+       * 而是结构或用户可操作性**（定格当前回合、弹安全确认、整轮结束）。纯内容增长一律走合帧。
+       */
+      const syncBlocks = (immediate = false) => {
         if (!currentFrameIsReplay) {
-          // 实时帧：直接画（攒着的回放内容已在 localBlocks 里，这一次就一起出来了）
+          // 实时帧：记账逐帧，绘制合帧（攒着的回放内容已在 localBlocks 里，这一次就一起出来了）
           clearReplayQuietTimer();
           replayPending = false;
           replayPendingCount = 0;
-          applyBlocksToState();
+          captureBlocks();
+          if (immediate) paintNow();
+          else scheduleLivePaint();
           return;
         }
         replayPending = true;
@@ -1823,7 +1901,9 @@ export function ChatScreen({
               _refs && _refs.length ? { role: 'user', content: tc, flops_refs: _refs } : { role: 'user', content: tc },
             ]);
             localBlocks.length = 0;
-            syncBlocks();
+            /* immediate：这一帧把当前回合定格成一条 assistant 消息 + 清空流式气泡。两件事必须
+               同一次提交里生效，否则合帧窗口内会出现「消息里一份、气泡里还留着一份」的重影。 */
+            syncBlocks(true);
             setSendQueue((q) => q.filter((it) => it.text !== tc));
           }
           if (event.type === 'history_revision') {
@@ -1900,7 +1980,8 @@ export function ChatScreen({
                 cwd: event.cwd,
               });
             }
-            syncBlocks();
+            /* immediate：安全确认卡是要用户点的，整轮 run 就阻塞在这儿等，不进合帧队列排队。 */
+            syncBlocks(true);
           }
         }
         /* 兜底「OpenAI 风格无 type 字段的原始 chunk = 正文 text」路径；
@@ -1921,6 +2002,11 @@ export function ChatScreen({
         if ('done' in event && event.done === true) {
           streamDone = true;
           closeOpenThinking();
+          /* 整轮结束：把合帧窗口里最后那点内容立刻落地。等 100ms 到点也能出来，但 done 之后
+             紧跟着就是 setMessages 定格 + setLoading(false)，晚一拍会让气泡先短一截再补上。
+             回放段的 done 不在这儿画 —— 那是「整轮都是回放」的情形，照旧由 finally 里的
+             flushReplayPending 一次性出，免得把攒好的回放拆成两次绘制。 */
+          if (!currentFrameIsReplay) paintNow();
         }
       };
 
@@ -1953,6 +2039,9 @@ export function ChatScreen({
            交界，攒着的内容就画不出来。done / cancelled / reader 结束 / abort / 抛错 —— 所有
            出口都会走到这里，统一补一次。没攒东西时是空操作。 */
         flushReplayPending();
+        /* 实时段合帧窗口同理：abort / 抛错 / reader 断开都可能停在「攒了没画」的一刻，
+           而且必须在这里把 timer 清掉 —— 否则组件已经走人了还留一发 setState 定时器。 */
+        flushLivePending();
       }
 
       return { streamDone, finalText, localBlocks, lastConvId: streamTargetRef.current };
