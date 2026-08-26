@@ -2241,6 +2241,15 @@ export async function streamChatV2Loop(
           streamCompleted = true;
           return;
         }
+        if ('type' in data && data.type === 'suspended_awaiting_user') {
+          // 本轮挂起等用户确认/回答（授权 / 安全确认 / 选择题）：这是**正常的流结束**（服务端随后关闭
+          // 连接、marker 不带 done），不是异常中断。必须与 done/cancelled 一样收尾——否则会被误判成
+          // "流中断"→ 徒劳 subscribe_only 重连到已挂起的 run → 20 次耗尽 → 弹「流式连接中断」红横幅
+          // 并从此停流（用户反复遇到的红横幅根因，ask_user_question 早就存在故"之前就有"）。
+          // 与 Desktop createAssistantChatStreamSession 的 suspended_awaiting_user 处理一致。
+          streamCompleted = true;
+          return;
+        }
         /* 每帧让路只为**实时**流畅（让 UI 有机会画一帧）。回放段不能让：那会把
            「瞬间追平」拆成几百次渲染，正是「稀里哗啦重放一遍」的直接来源。 */
         if (!isReplayFrame && 'type' in data && data.type === 'tool_result_chunk') {
