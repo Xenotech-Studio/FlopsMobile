@@ -4150,6 +4150,44 @@ export function ChatScreen({
     []
   );
 
+  /* 挂起决策（授权 / 安全确认 / 选择题）提交成功后：服务端会自主起一个**新的**续起 run（新 run_id），
+     其流式续跑内容不会自动推到本端——原挂起 run 的流早在挂起时就以 suspended_awaiting_user 收束了。
+     这里轮询对话 lite meta 直到新 active_chat_v2_run_id 出现，再 subscribe_only 接上它的流（replay+实时）。
+     不做的话：服务端续起成功、内容已生成，但 Mobile 不实时展示，用户以为卡死、刷新才看到（本 bug）。
+     对齐 Web/Desktop 的 pollResumeRunAfterDecision。25×600ms≈15s 超时兜底，切走对话/已在流即停。 */
+  const pollResumeRunAfterDecision = useCallback(
+    (cid: string) => {
+      const id = String(cid || '').trim();
+      if (!id || !session) return;
+      let tries = 0;
+      const timer = setInterval(async () => {
+        tries += 1;
+        if (
+          id !== String(conversationIdRef.current || '').trim() ||
+          streamInFlightRef.current ||
+          tries >= 25
+        ) {
+          clearInterval(timer);
+          return;
+        }
+        try {
+          const { conversation } = await getConversationMeta(session, id);
+          const rid =
+            typeof conversation?.active_chat_v2_run_id === 'string'
+              ? conversation.active_chat_v2_run_id.trim()
+              : '';
+          if (rid) {
+            clearInterval(timer);
+            void resumeV2Stream(rid, id); // subscribe_only + replay 接上续起 run
+          }
+        } catch {
+          /* 网络抖动等：忽略，下次重试 */
+        }
+      }, 600);
+    },
+    [session, resumeV2Stream]
+  );
+
   const handleSafetyDecision = useCallback(
     async (reviewId: string, decision: 'approve' | 'reject') => {
       if (!session || !conversationId) return;
@@ -4160,6 +4198,9 @@ export function ChatScreen({
       try {
         await submitSafetyDecision(session, conversationId, reviewId, decision);
         if (decision === 'approve') setStreamStatus('tool_running');
+        // 决策成功 → 服务端起新续起 run（approve/reject 都续跑，reject 也要把结果喂回 agent 收尾），
+        // 主动轮询接上它的流（否则续跑内容不实时展示、用户以为卡死）。
+        pollResumeRunAfterDecision(conversationId);
       } catch (e) {
         // 回滚乐观更新，让安全卡片再出现一次让用户重试
         patchToolBlocksByReviewId(reviewId, { status: 'awaiting_confirmation' });
@@ -4168,7 +4209,7 @@ export function ChatScreen({
         setSubmittingReviewId('');
       }
     },
-    [session, conversationId, patchToolBlocksByReviewId]
+    [session, conversationId, patchToolBlocksByReviewId, pollResumeRunAfterDecision]
   );
 
   const patchToolBlocksByAuthRequestId = useCallback(
@@ -4226,6 +4267,8 @@ export function ChatScreen({
             targetIds: Array.isArray(payload?.target_ids) ? payload.target_ids : [],
           });
         }
+        // 决策成功 → 服务端起新续起 run，主动轮询接上它的流（否则续跑内容不实时展示、用户以为卡死）。
+        pollResumeRunAfterDecision(requester);
       } catch (e) {
         patchToolBlocksByAuthRequestId(requestId, {
           status: 'awaiting_authorization',
@@ -4235,7 +4278,7 @@ export function ChatScreen({
         setSubmittingAuthorizationId('');
       }
     },
-    [session, conversationId, submittingAuthorizationId, patchToolBlocksByAuthRequestId]
+    [session, conversationId, submittingAuthorizationId, patchToolBlocksByAuthRequestId, pollResumeRunAfterDecision]
   );
 
 
@@ -4448,8 +4491,10 @@ export function ChatScreen({
     async (answers: { header?: string; question?: string; answer: string }[]) => {
       if (!session || !conversationId) return;
       await answerAskUserQuestion(session, conversationId, answers);
+      // 回答成功 → 服务端起新续起 run，主动轮询接上它的流（否则续跑内容不实时展示、用户以为卡死）。
+      pollResumeRunAfterDecision(conversationId);
     },
-    [session, conversationId]
+    [session, conversationId, pollResumeRunAfterDecision]
   );
 
   const renderAskUserQuestionBlock = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
