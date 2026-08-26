@@ -5003,26 +5003,31 @@ export function ChatScreen({
                     >
                       <MarkdownContent
                         text={block.content}
-                        showCopyButton={isLastAssistant && bi === lastTextBlockIdx && !msgHasAwaitingTool}
-                        showRegenerateButton={bi === lastTextBlockIdx && !msgHasAwaitingTool}
+                        // 回复结束操作栏（含右侧 token 用量）：挂起(awaiting/confirming 等 msgHasAwaitingTool)
+                        // 或流式进行中(loading，含续起 run 流式恢复)都**整行隐藏**（左按钮 + 右 token 一起），
+                        // 等流结束才显示——与 Desktop hideStreamToolbar 对齐。
+                        showCopyButton={isLastAssistant && bi === lastTextBlockIdx && !msgHasAwaitingTool && !loading}
+                        showRegenerateButton={bi === lastTextBlockIdx && !msgHasAwaitingTool && !loading}
                         showPlayButton={hasAudio && bi === lastTextBlockIdx}
                         isPlaying={audioIsPlaying}
                         isPlayLoading={audioIsLoading}
                         onPlay={hasAudio && bi === lastTextBlockIdx ? onPlayAudio : undefined}
                         onRegenerate={afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined}
                         regenerateDisabled={!conversationId || loading || conversationHistoryLoading}
-                        usageHint={bi === lastTextBlockIdx ? segmentUsage : undefined}
-                        usageDetail={bi === lastTextBlockIdx ? segmentDetail : undefined}
+                        usageHint={bi === lastTextBlockIdx && !msgHasAwaitingTool && !loading ? segmentUsage : undefined}
+                        usageDetail={bi === lastTextBlockIdx && !msgHasAwaitingTool && !loading ? segmentDetail : undefined}
                         compressHint={
-                          bi === lastTextBlockIdx && showCompressOnThisAssistant ? compressUsagePart : undefined
+                          bi === lastTextBlockIdx && showCompressOnThisAssistant && !msgHasAwaitingTool && !loading
+                            ? compressUsagePart
+                            : undefined
                         }
                         onCompressClick={
-                          showCompressOnThisAssistant && bi === lastTextBlockIdx
+                          showCompressOnThisAssistant && bi === lastTextBlockIdx && !msgHasAwaitingTool && !loading
                             ? scrollToContextCompressAnchor
                             : undefined
                         }
                         compressAriaLabel={
-                          showCompressOnThisAssistant && bi === lastTextBlockIdx
+                          showCompressOnThisAssistant && bi === lastTextBlockIdx && !msgHasAwaitingTool && !loading
                             ? contextCompressScrollToAnchorTitle
                             : undefined
                         }
@@ -5051,10 +5056,12 @@ export function ChatScreen({
                   anchorRef={contextCompressAnchorRef}
                 />
               ) : null}
-              {/* 仅有工具块、无 assistant 文本时：与 Web ChatMessageList renderBlocks 一致（有重新生成和/或用量、压缩条） */}
+              {/* 仅有工具块、无 assistant 文本时：与 Web ChatMessageList renderBlocks 一致（有重新生成和/或用量、压缩条）。
+                  同上：挂起(msgHasAwaitingTool)或流式中(loading，含续起恢复)整行隐藏，等流结束才显示。 */}
               {lastTextBlockIdx < 0 &&
               msg.role === 'assistant' &&
               !msgHasAwaitingTool &&
+              !loading &&
               (afterUserIndex >= 0 ||
                 hasAudio ||
                 (showTokenUsageInChat && Boolean(segmentUsage)) ||
@@ -5114,16 +5121,16 @@ export function ChatScreen({
                 ) : null}
                 <MarkdownContent
                   text={msg.content}
-                  showCopyButton={isLastAssistant}
-                  showRegenerateButton
+                  showCopyButton={isLastAssistant && !loading}
+                  showRegenerateButton={!loading}
                   onRegenerate={afterUserIndex >= 0 ? () => handleRegenerate(afterUserIndex) : undefined}
                   regenerateDisabled={!conversationId || loading || conversationHistoryLoading}
-                  usageHint={segmentUsage}
-                  usageDetail={segmentDetail}
-                  compressHint={showCompressOnThisAssistant ? compressUsagePart : undefined}
-                  onCompressClick={showCompressOnThisAssistant ? scrollToContextCompressAnchor : undefined}
+                  usageHint={!loading ? segmentUsage : undefined}
+                  usageDetail={!loading ? segmentDetail : undefined}
+                  compressHint={showCompressOnThisAssistant && !loading ? compressUsagePart : undefined}
+                  onCompressClick={showCompressOnThisAssistant && !loading ? scrollToContextCompressAnchor : undefined}
                   compressAriaLabel={
-                    showCompressOnThisAssistant ? contextCompressScrollToAnchorTitle : undefined
+                    showCompressOnThisAssistant && !loading ? contextCompressScrollToAnchorTitle : undefined
                   }
                 />
               </>
@@ -5178,7 +5185,7 @@ export function ChatScreen({
     currentAssistantBlocks.length === 0 &&
     !(streamingText && streamingText.trim());
   const streamStatusBracketLabel = streamEmptyPlaceholderResume
-    ? 'resuming'
+    ? 'thinking' // 续起 run 占位与 Desktop 一致用 thinking，不显示 resuming
     : streamStatus === 'thinking'
       ? 'thinking'
       : streamStatus === 'checking_tools'
@@ -5197,7 +5204,7 @@ export function ChatScreen({
           ? '等待安全确认'
           : 'Thinking...';
   const streamBubblePlaceholderText = streamEmptyPlaceholderResume
-    ? 'Resuming...'
+    ? 'Thinking...' // 续起首 token 前占位与 Desktop 一致用 Thinking…，不显示 Resuming…
     : streamStatusLabel;
 
   /* 未登录早退。**位置很重要**：必须在本组件所有 Hook 之后 —— 原来它在 ordinalInfo 那个
