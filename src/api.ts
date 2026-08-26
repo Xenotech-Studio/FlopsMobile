@@ -2414,14 +2414,22 @@ export async function cancelConversation(
 async function buildResumeKeyWire(
   session: Session,
   conversationId: string
-): Promise<{ k_conv_wire?: string }> {
+): Promise<{ k_conv_wire?: string; k_agent_wire?: string }> {
   const kConv = getCachedKConv(conversationId);
   if (!kConv) return {};
   try {
     const pub = await getTransportPubkeyMobile(session.server_base_url);
-    return { k_conv_wire: wrapKConvForWire(kConv, pub) };
+    const out: { k_conv_wire?: string; k_agent_wire?: string } = {
+      k_conv_wire: wrapKConvForWire(kConv, pub),
+    };
+    // 绑定加密 agent 的对话：续起 run 入口还需 k_agent_wire 才能解 agent 绑定，缺则 server unwrap 400、
+    // 续起 run 静默不执行 —— 正是 Mobile 点选择题(ask_user_question)/安全确认提交后对话不继续的根因
+    // （Web Chat.jsx 提交 ask/safety 都带 k_agent_wire，Mobile 这条 resume-wire 漏了）。与授权决策同款解析。
+    const agentWire = await resolveRequesterAgentWire(session, conversationId, pub);
+    if (agentWire) out.k_agent_wire = agentWire;
+    return out;
   } catch (e) {
-    console.warn('[resume-key-wire] wrap K_conv failed:', (e as Error)?.message || e);
+    console.warn('[resume-key-wire] wrap K_conv/K_agent failed:', (e as Error)?.message || e);
     return {};
   }
 }
