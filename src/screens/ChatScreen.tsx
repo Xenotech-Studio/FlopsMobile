@@ -5184,6 +5184,19 @@ export function ChatScreen({
     v2ResumeUiActive &&
     currentAssistantBlocks.length === 0 &&
     !(streamingText && streamingText.trim());
+  // 续起 run 续接的是已存在的那条 assistant 气泡（挂起轮）→ 流式气泡不该再顶一条「Agent 名 (状态)」
+  // 角色条（会重复/突兀）。与 Desktop VirtualMessageList.streamIsResumeContinuation 同款：
+  // 正在 resume 且 messages 末条(跳过 tool / isMeta user)是 assistant 时隐藏该角色条。
+  const streamIsResumeContinuation = (() => {
+    if (!v2ResumeUiActive) return false;
+    for (let j = messages.length - 1; j >= 0; j -= 1) {
+      const r = String(messages[j]?.role || '');
+      if (r === 'tool') continue;
+      if (r === 'user' && (messages[j] as { isMeta?: boolean })?.isMeta) continue;
+      return r === 'assistant';
+    }
+    return false;
+  })();
   const streamStatusBracketLabel = streamEmptyPlaceholderResume
     ? 'thinking' // 续起 run 占位与 Desktop 一致用 thinking，不显示 resuming
     : streamStatus === 'thinking'
@@ -5243,6 +5256,7 @@ export function ChatScreen({
       composerAgentLabel={composerAgentLabel}
       streamStatusBracketLabel={streamStatusBracketLabel}
       streamBubblePlaceholderText={streamBubblePlaceholderText}
+      streamIsResumeContinuation={streamIsResumeContinuation}
       renderedMessages={renderedMessages}
       renderToolBlock={renderToolBlock}
       onRegenerate={handleRegenerate}

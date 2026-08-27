@@ -95,6 +95,8 @@ export type ChatMessageAreaProps = {
   composerAgentLabel: string;
   streamStatusBracketLabel: string;
   streamBubblePlaceholderText: string;
+  /** 续起续接已有 assistant 气泡时为 true：隐藏流式气泡的「Agent 名 (状态)」角色条（对齐 Desktop） */
+  streamIsResumeContinuation?: boolean;
 
   /* ---- 渲染委托（闭包留在 ChatScreen，别搬） ---- */
   /** 已经渲染好的历史消息行。ChatScreen 侧用 useMemo 按引用缓存整棵子树（见那处注释）：
@@ -146,6 +148,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
       composerAgentLabel,
       streamStatusBracketLabel,
       streamBubblePlaceholderText,
+      streamIsResumeContinuation,
       renderedMessages,
       footerNode,
       renderToolBlock,
@@ -409,9 +412,11 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
               {(loading || bgPauseRecovering) && !conversationHistoryLoading ? (
                 <View style={[styles.bubbleWrap, styles.assistantBubbleWrap]}>
                   <View style={[styles.bubble, styles.assistantBubble]}>
-                    <Text style={styles.bubbleRole}>
-                      {composerAgentLabel} ({streamStatusBracketLabel})
-                    </Text>
+                    {!streamIsResumeContinuation ? (
+                      <Text style={styles.bubbleRole}>
+                        {composerAgentLabel} ({streamStatusBracketLabel})
+                      </Text>
+                    ) : null}
                     {currentAssistantBlocks.length > 0 ? (
                       currentAssistantBlocks.map((block, bi) => {
                         const prevBlock = currentAssistantBlocks[bi - 1];

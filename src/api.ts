@@ -1301,19 +1301,61 @@ export async function submitConversationTitlesDecision(
   if (opts.decision === 'approve') {
     const { aesGcmDecrypt } = await import('./lib/srp');
     const titles: Array<{ conversation_id: string; title: string }> = [];
-    for (const raw of Array.isArray(opts.targetIds) ? opts.targetIds : []) {
-      const cid = String(raw || '').trim();
-      if (!cid) continue;
-      try {
-        const meta = await fetchConversationMeta(session, cid);
-        const ct = meta && typeof meta.title_ciphertext === 'string' ? meta.title_ciphertext : '';
-        if (!ct) continue;
-        const k = await resolveKConvForConversation(session, cid);
-        if (!k) continue;
-        const title = JSON.parse(new TextDecoder().decode(aesGcmDecrypt(base64ToBytes(ct), k)));
-        if (typeof title === 'string') titles.push({ conversation_id: cid, title });
-      } catch (e) {
-        console.warn('[conv-titles] 解密标题失败(跳过):', cid, (e as Error)?.message || e);
+    // 批量下发：一次取回全部隐藏对话 {id,title_ciphertext,k_conv_blob}，本地用 K_user 批量解密，
+    // 避免逐条 fetch meta（50 条 = 50~100 次网络往返 → 1 次）。缺批量/缺 K_user → 回落逐条。
+    let batch: Array<{ id?: string; title_ciphertext?: string; k_conv_blob?: string }> | null = null;
+    try {
+      const r = await fetchWithDebugLog(
+        `${base}api/conversations/${encodeURIComponent(opts.requesterConversationId)}/access/titles_request_targets?request_id=${encodeURIComponent(opts.requestId)}`,
+        { headers: authHeaders(session.access_token) }
+      );
+      if (r.ok) {
+        const j = await r.json();
+        if (j && Array.isArray(j.targets)) batch = j.targets;
+      }
+    } catch (e) {
+      console.warn('[conv-titles] 批量 targets 拉取失败,回落逐条:', (e as Error)?.message || e);
+    }
+    const kUserStr = await getStoredKUser();
+    const kUserBytes = kUserStr ? base64ToBytes(kUserStr) : null;
+    if (batch && kUserBytes) {
+      for (const t of batch) {
+        const cid = String(t?.id || '').trim();
+        const ct = typeof t?.title_ciphertext === 'string' ? t.title_ciphertext : '';
+        if (!cid || !ct) continue;
+        try {
+          let k: Uint8Array | null = getCachedKConv(cid) || null;
+          if (!k && typeof t?.k_conv_blob === 'string' && t.k_conv_blob) {
+            try {
+              k = deriveKConvFromBlob(t.k_conv_blob, kUserBytes);
+              if (k) setCachedKConv(cid, k);
+            } catch { /* blob 坏 → 下面回落 */ }
+          }
+          // 未 mint 的加密子对话没自带 blob，钥匙在父链里 → 仅这些回落逐条（罕见）。
+          if (!k) k = await resolveKConvForConversation(session, cid);
+          if (!k) continue;
+          const title = JSON.parse(new TextDecoder().decode(aesGcmDecrypt(base64ToBytes(ct), k)));
+          if (typeof title === 'string') titles.push({ conversation_id: cid, title });
+        } catch (e) {
+          console.warn('[conv-titles] 批量解密标题失败(跳过):', cid, (e as Error)?.message || e);
+        }
+      }
+    } else {
+      // 回落：逐条 fetch meta + 解密（老路径，慢；无批量下发时兜底，保证不回归）。
+      for (const raw of Array.isArray(opts.targetIds) ? opts.targetIds : []) {
+        const cid = String(raw || '').trim();
+        if (!cid) continue;
+        try {
+          const meta = await fetchConversationMeta(session, cid);
+          const ct = meta && typeof meta.title_ciphertext === 'string' ? meta.title_ciphertext : '';
+          if (!ct) continue;
+          const k = await resolveKConvForConversation(session, cid);
+          if (!k) continue;
+          const title = JSON.parse(new TextDecoder().decode(aesGcmDecrypt(base64ToBytes(ct), k)));
+          if (typeof title === 'string') titles.push({ conversation_id: cid, title });
+        } catch (e) {
+          console.warn('[conv-titles] 解密标题失败(跳过):', cid, (e as Error)?.message || e);
+        }
       }
     }
     body.titles = titles;
