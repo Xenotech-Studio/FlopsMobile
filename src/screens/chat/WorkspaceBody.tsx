@@ -25,12 +25,13 @@ import {
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import PagerView from 'react-native-pager-view';
 import Reanimated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
+import LinearGradient from 'react-native-linear-gradient';
 import { getFlowDocItemName, getFlowDocTree, type FlowDocTreeItem } from '../../api';
 import { fetchTasks, type TaskItem } from '../../taskApi';
 import { useSession } from '../../context/SessionContext';
 import { useTask } from '../../context/TaskContext';
 import { useAppTheme } from '../../context/ThemeContext';
-import type { AppColors } from '../../theme/appColors';
+import { collabWorkspaceFadeGradient, type AppColors } from '../../theme/appColors';
 import { shadowSoft, shadowToggleThumb } from '../../theme/shadows';
 import { docsTreeStore } from '../docs/docsTreeStore';
 import { DocBodyView } from '../docs/DocBodyView';
@@ -82,6 +83,7 @@ export function WorkspaceBody({
 }: WorkspaceBodyProps) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const fadeColors = useMemo(() => collabWorkspaceFadeGradient(colors), [colors]);
   const { session } = useSession();
   const { projects } = useTask();
 
@@ -212,6 +214,12 @@ export function WorkspaceBody({
       transform: [{ translateY: Math.max(minTop, wanted) }],
     };
   });
+  /** 底部渐变遮罩：下沿压在 sheet 顶沿上，同一个位置信号驱动，任何档位都对得上。
+   *  不做钳制 —— 它只是一层洗白，跟着 sheet 滑出画面（或滑到 header 后面）都无所谓。 */
+  const fadeAnimStyle = useAnimatedStyle(() => {
+    const sheetY = Math.min(sheetTopY.value, sheetTopYMax);
+    return { transform: [{ translateY: sheetY - WORKSPACE_FADE_HEIGHT }] };
+  });
 
   return (
     <View style={styles.body}>
@@ -271,6 +279,18 @@ export function WorkspaceBody({
           );
         })}
       </PagerView>
+      {/* 工作区底部的渐变遮罩：在正文之上、走马灯之下（zIndex 4 vs 5）。 */}
+      <Reanimated.View style={[styles.bottomFade, fadeAnimStyle]} pointerEvents="none">
+        <LinearGradient
+          colors={fadeColors}
+          /* 末档落在 WORKSPACE_FADE_HEIGHT / 总高 处：那以下（压在 sheet 顶沿及其圆角缺口里
+             的那几 pt）恒为实色，不会漏出一条没洗白的正文。 */
+          locations={[0, 0.4, 0.65, WORKSPACE_FADE_HEIGHT / WORKSPACE_FADE_TOTAL]}
+          style={StyleSheet.absoluteFill}
+          start={{ x: 0.5, y: 0 }}
+          end={{ x: 0.5, y: 1 }}
+        />
+      </Reanimated.View>
       <TabIndicator
         tabs={tabs}
         selectedKey={selectedKey}
@@ -514,6 +534,10 @@ const INDICATOR_PAD = 8;
 const INDICATOR_STRIP_HEIGHT = PILL_HEIGHT + INDICATOR_PAD * 2;
 /** 胶囊底沿与 sheet 顶沿之间留的空。 */
 const INDICATOR_SHEET_GAP = 10;
+/** 底部渐变遮罩：从 sheet 顶沿往上这么高（比整条指示器 44+10 再高一截，胶囊上方还有余量继续淡）。 */
+const WORKSPACE_FADE_HEIGHT = 72;
+/** 再往 sheet 里多铺一截实色，兜住 sheet 圆角缺口那几 pt 与亚像素缝。 */
+const WORKSPACE_FADE_TOTAL = WORKSPACE_FADE_HEIGHT + 8;
 const HIT_SLOP = { top: 10, bottom: 10, left: 6, right: 6 };
 
 function createStyles(c: AppColors) {
@@ -521,6 +545,15 @@ function createStyles(c: AppColors) {
     body: { flex: 1 },
     pager: { flex: 1 },
     page: { flex: 1 },
+    /** 底部渐变遮罩：同样贴原点 + translateY 跟随 sheet；在正文之上、指示器之下。 */
+    bottomFade: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      height: WORKSPACE_FADE_TOTAL,
+      zIndex: 4,
+    },
     /** 走马灯指示器的定位壳：贴在页面坐标原点，靠 translateY 跟着 sheet 顶沿走。 */
     tabStripWrap: {
       position: 'absolute',

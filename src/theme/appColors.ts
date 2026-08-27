@@ -330,6 +330,16 @@ export function chatInputOverlayGradient(c: AppColors): string[] {
   ];
 }
 
+/**
+ * 协同工作区底部渐变遮罩（与 drawerBackground 同色阶融合 —— 工作区层底色就是它）。
+ * 铺在聊天 sheet 上沿之上那一段：正文滚到这儿被柔和盖住，走马灯胶囊也不跟文字打架。
+ * 末档给足实色（不像输入区那条留 0.98）：它的下沿正好压在 sheet 顶沿上，留缝会漏出一条正文。
+ */
+export function collabWorkspaceFadeGradient(c: AppColors): string[] {
+  const bg = c.drawerBackground;
+  return [rgbaFromHex(bg, 0), rgbaFromHex(bg, 0.5), rgbaFromHex(bg, 0.9), bg];
+}
+
 /** 工具卡片半折叠底部淡出 */
 export function toolPreviewFadeGradient(isDark: boolean, c: AppColors): string[] {
   if (isDark) return ['rgba(0,0,0,0)', c.toolCardBg];
