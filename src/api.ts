@@ -2691,6 +2691,7 @@ export function getAllowlistProviderKeyFromModelId(modelId: string): string {
   if (market.startsWith('boundlessai/')) return 'boundlessai';
   if (market.startsWith('aiprimetech/')) return 'aiprimetech';
   if (market.startsWith('bailianplan/')) return 'bailianplan';
+  if (market.startsWith('zhipu/')) return 'zhipu';
   return 'other';
 }
 

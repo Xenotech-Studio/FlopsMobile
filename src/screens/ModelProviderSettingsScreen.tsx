@@ -38,7 +38,7 @@ import {
 } from '../api';
 
 // 可 BYOK 配置 key 的供应商（official=官方套餐 / flops=资源节点 / other 不在此列）
-const BYOK_PROVIDER_KEYS = ['openrouter', 'minimax', 'dashscope', 'deepseek', 'aiprimetech', 'bailianplan'];
+const BYOK_PROVIDER_KEYS = ['openrouter', 'minimax', 'dashscope', 'deepseek', 'aiprimetech', 'bailianplan', 'zhipu'];
 
 // 表单弹窗步骤：'' 关闭 / 'pick' 选供应商 / 'new' 新建 / 'manage' 管理
 type AddProviderStep = '' | 'pick' | 'new' | 'manage';
