@@ -118,7 +118,7 @@ export function createChatStyles(c: AppColors) {
   containerInner: { flex: 1 },
   keyboardView: { flex: 1 },
   scrollAndGradientWrap: { flex: 1, position: 'relative' },
-  /* ── 协同工作模式（见 ChatScreen 的 collabMode 分叉）──
+  /* ── 协同工作模式（见 ChatScreen 的 collabActive 分叉）──
    * 层序（containerInner 内的兄弟顺序即 z 序，topBar 靠 zIndex:30 恒在最上）：
    *   工作区层 → sheet（聊天消息区）→ KeyboardAvoidingView（composer）。
    * 于是 composer 永远浮在 sheet 之上、折叠 sheet 也能边看文档边输入。 */

@@ -2,13 +2,16 @@
  * WorkspaceBody —— 协同工作模式下的**页面主体**（工作区）。
  *
  * 协同模式的形态是「工作区占页面主体 + 聊天消息区落进底部 sheet」，所以这里画的是
- * agent 正在操作的那个东西本身，不是聊天：
- *  - cowriter：当前会话打开着的 FlowDoc 文档（多篇时顶部一排 tab），走 DocBodyView 只读渲染；
- *  - coplanner：当前会话打开着的 FlowTask 项目任务树（只读大纲）。
+ * agent 正在操作的那个东西本身，不是聊天。四个 mode 铺成**一条走马灯**：
+ *  - cowriter：每篇打开着的 FlowDoc 一页，走 DocBodyView 只读渲染；
+ *  - coplanner：每个打开着的 FlowTask 项目一页（任务树只读大纲）；
+ *  - cocoder / cobrowser：各一页占位（服务端 layout 只给 active_mode，没有对象数据），
+ *    内容显示暂不支持，但页面在序列里 —— 桌面端切过去时手机端跟着停到占位页，滑一下能滑回文档。
+ * 顶部的胶囊指示器 = 当前页展开成「图标 + 名字」，其余收成小圆点（可点直达）。
  *
- * Phase 1 的边界：**只读**。不落库、不改 layout —— 用户在手机上切 tab 只是本地看看，
- * 不会 POST /cowriter_layout 抢桌面端的焦点（那是后续 Phase 的事）。服务端换焦点时
- * （agent 又改了另一篇），本地跟随 layout.activeDocId 走。
+ * 边界：**只读 + 纯本地切换**。用户横滑/点圆点只改本地选中，不 POST /cowriter_layout
+ * 抢桌面端的焦点。服务端换焦点时（agent 又改了另一篇 / 桌面端切了 mode），本地跟随
+ * (activeMode, activeId) 二元组跳过去。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -20,7 +23,8 @@ import {
   View,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import { getFlowDocItemName, getFlowDocTree } from '../../api';
+import PagerView from 'react-native-pager-view';
+import { getFlowDocItemName, getFlowDocTree, type FlowDocTreeItem } from '../../api';
 import { fetchTasks, type TaskItem } from '../../taskApi';
 import { useSession } from '../../context/SessionContext';
 import { useTask } from '../../context/TaskContext';
@@ -28,10 +32,15 @@ import { useAppTheme } from '../../context/ThemeContext';
 import type { AppColors } from '../../theme/appColors';
 import { docsTreeStore } from '../docs/docsTreeStore';
 import { DocBodyView } from '../docs/DocBodyView';
-import type { CollabLayoutState, MobileCollabMode } from '../../utils/collabLayout';
+import {
+  activeCollabTabKey,
+  collabTabs,
+  type CollabLayoutState,
+  type CollabTabRef,
+  type MobileCollabMode,
+} from '../../utils/collabLayout';
 
 export type WorkspaceBodyProps = {
-  mode: MobileCollabMode;
   layout: CollabLayoutState;
   /** 顶部 header 高度：内容从它下方开始（header 是绝对定位浮层）。 */
   topInset: number;
@@ -39,62 +48,43 @@ export type WorkspaceBodyProps = {
   bottomInset: number;
 };
 
-export function WorkspaceBody({ mode, layout, topInset, bottomInset }: WorkspaceBodyProps) {
-  const { colors } = useAppTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
-  return mode === 'cowriter' ? (
-    <CowriterBody
-      layout={layout}
-      topInset={topInset}
-      bottomInset={bottomInset}
-      styles={styles}
-      colors={colors}
-    />
-  ) : (
-    <CoplannerBody
-      layout={layout}
-      topInset={topInset}
-      bottomInset={bottomInset}
-      styles={styles}
-      colors={colors}
-    />
-  );
-}
+type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
-type Styles = ReturnType<typeof createStyles>;
-type BodyProps = {
-  layout: CollabLayoutState;
-  topInset: number;
-  bottomInset: number;
-  styles: Styles;
-  colors: AppColors;
+/** 走马灯里的 mode 视觉身份：胶囊图标 + 没有名字时的兜底标签。 */
+const MODE_ICON: Record<MobileCollabMode, IoniconName> = {
+  cowriter: 'document-text-outline',
+  coplanner: 'git-branch-outline',
+  cocoder: 'terminal-outline',
+  cobrowser: 'globe-outline',
+};
+const MODE_LABEL: Record<MobileCollabMode, string> = {
+  cowriter: '文档',
+  coplanner: '项目',
+  cocoder: '代码',
+  cobrowser: '浏览器',
 };
 
-/**
- * 本地选中项：默认跟着服务端 activeId 走，用户手动切过之后仍以「服务端换了 active」为准
- * （activeId 一变就重新跟随）——agent 刚改的那篇理应顶到眼前。
- * 渲染期同步纠正（React 官方「props 变了调整 state」模式），不用 effect：
- * 免得先用旧选中渲染一帧、再跳到新的。
- */
-function useFollowedSelection(activeId: string, ids: string[]): [string, (id: string) => void] {
-  const [local, setLocal] = useState(activeId);
-  const lastActiveRef = useRef(activeId);
-  if (lastActiveRef.current !== activeId) {
-    lastActiveRef.current = activeId;
-    if (local !== activeId) setLocal(activeId);
-  }
-  return [ids.includes(local) ? local : activeId, setLocal];
-}
-
-/* ───────────────────────── CoWriter：FlowDoc 只读 ───────────────────────── */
-
-function CowriterBody({ layout, topInset, bottomInset, styles, colors }: BodyProps) {
+export function WorkspaceBody({ layout, topInset, bottomInset }: WorkspaceBodyProps) {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const { session } = useSession();
-  const slot = layout.cowriter;
-  const docIds = useMemo(() => slot?.docIds ?? [], [slot]);
-  const [selectedDocId, setSelectedDocId] = useFollowedSelection(slot?.activeDocId ?? '', docIds);
+  const { projects } = useTask();
 
-  /** 文档树缓存命中计数：拉到新树后 +1，逼 useMemo 重新解析 item。 */
+  const tabs = useMemo(() => collabTabs(layout), [layout]);
+  const tabKeys = useMemo(() => tabs.map((t) => t.key), [tabs]);
+  /** 服务端此刻的焦点（mode + id 二元组压成的 key）。 */
+  const activeKey = useMemo(() => activeCollabTabKey(layout), [layout]);
+  const [selectedKey, setSelectedKey] = useFollowedSelection(activeKey, tabKeys);
+  const selectedIndex = Math.max(
+    0,
+    tabs.findIndex((t) => t.key === selectedKey),
+  );
+
+  /* ── 文档名解析：胶囊标签与正文大标题共用一份 ──
+     树缓存（DocsScreen 加载后写进去的进程级单例）优先；缺项拉一次全树；仍拿不到的
+     （内嵌 subdoc 等不在侧栏树上的项）逐个问服务端要名字。 */
+  const docIds = useMemo(() => layout.cowriter?.docIds ?? [], [layout.cowriter]);
+  /** 文档树缓存命中计数：拉到新树后 +1，逼下面的 useMemo 重新解析 item。 */
   const [treeVersion, setTreeVersion] = useState(0);
   /** 「树里找不到」时只拉一次全树，避免解析不到的 id 反复打网络。 */
   const treeFetchedRef = useRef(false);
@@ -112,18 +102,20 @@ function CowriterBody({ layout, topInset, bottomInset, styles, colors }: BodyPro
     [],
   );
 
-  const item = useMemo(
-    () => (selectedDocId ? docsTreeStore.get(selectedDocId) : null),
+  const docItems = useMemo(() => {
+    const map: Record<string, FlowDocTreeItem | null> = {};
+    for (const id of docIds) map[id] = docsTreeStore.get(id);
+    return map;
     /* treeVersion 是缓存失效信号：docsTreeStore 是模块级单例，不把它列进依赖，
        拉到新树后这里永远还读着「查不到」的旧结果。 */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedDocId, treeVersion],
-  );
+  }, [docIds, treeVersion]);
 
-  /* 树缓存是 DocsScreen 加载后写进去的进程级单例；从聊天页直接进协同模式时它可能还是空的。
-     缺项就拉一次全树补上（一次网络，之后所有 tab 都命中）。 */
+  /* 树缓存可能还是空的（从聊天页直接进协同模式，没去过文档页）：缺项就拉一次全树补上
+     （一次网络，之后所有 tab 都命中）。 */
   useEffect(() => {
-    if (!session || !selectedDocId || item || treeFetchedRef.current) return;
+    if (!session || treeFetchedRef.current) return;
+    if (docIds.length === 0 || docIds.every((id) => docItems[id])) return;
     treeFetchedRef.current = true;
     getFlowDocTree(session)
       .then((tree) => {
@@ -133,10 +125,8 @@ function CowriterBody({ layout, topInset, bottomInset, styles, colors }: BodyPro
       .catch(() => {
         /* 拉不到树不致命：下面按 document 类型 + 单项名字兜底渲染 */
       });
-  }, [session, selectedDocId, item]);
+  }, [session, docIds, docItems]);
 
-  /* tab 标签 / 标题：树里有就用树里的名字；树里没有（内嵌 subdoc 等不在侧栏树上的项）
-     再逐个问服务端要名字。 */
   useEffect(() => {
     if (!session) return;
     for (const id of docIds) {
@@ -157,52 +147,185 @@ function CowriterBody({ layout, topInset, bottomInset, styles, colors }: BodyPro
     }
   }, [session, docIds, names, treeVersion]);
 
-  if (!slot || !selectedDocId) {
-    return <EmptyState styles={styles} colors={colors} icon="document-text-outline" title="没有打开的文档" />;
-  }
+  /** 项目名走 TaskContext 现成的列表，不用另外拉。 */
+  const projectNameOf = useCallback(
+    (id: string) => projects.find((p) => p.id === id)?.name?.trim() || '未命名项目',
+    [projects],
+  );
+  const labelOf = useCallback(
+    (tab: CollabTabRef) => {
+      if (tab.mode === 'cowriter') {
+        return names[tab.id] || docItems[tab.id]?.name?.trim() || MODE_LABEL.cowriter;
+      }
+      if (tab.mode === 'coplanner') return projectNameOf(tab.id);
+      return MODE_LABEL[tab.mode];
+    },
+    [names, docItems, projectNameOf],
+  );
 
-  const title = names[selectedDocId] || item?.name?.trim() || '未命名文档';
-  /* 树里查不到就按 document 渲染：cowriter 的 doc_ids 绝大多数就是富文本文档，
-     真是别的类型（paper/flowbase）DocBodyView 自己会给出「暂不支持」占位，不会画错。 */
-  const docType = item?.type || 'document';
-  const showTabs = docIds.length > 1;
+  /* ── 翻页器 ↔ 选中项双向同步（ref 比对避免回环） ── */
+  const pagerRef = useRef<PagerView | null>(null);
+  const pagerPageRef = useRef(selectedIndex);
+  /** tab 集合指纹：增删文档会让索引整体错位，此时要重新把翻页器摆到选中项上。 */
+  const tabsSig = tabKeys.join('|');
+  const lastSigRef = useRef(tabsSig);
+  useEffect(() => {
+    const sigChanged = lastSigRef.current !== tabsSig;
+    lastSigRef.current = tabsSig;
+    if (!sigChanged && pagerPageRef.current === selectedIndex) return;
+    pagerPageRef.current = selectedIndex;
+    /* 集合变了是「重新摆位」不是「用户翻页」：直接落位，别播一段无中生有的滑动动画。 */
+    if (sigChanged) pagerRef.current?.setPageWithoutAnimation(selectedIndex);
+    else pagerRef.current?.setPage(selectedIndex);
+  }, [selectedIndex, tabsSig]);
+
+  const contentTopInset = topInset + INDICATOR_STRIP_HEIGHT;
 
   return (
     <View style={styles.body}>
-      {showTabs ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={[styles.tabStrip, { top: topInset }]}
-          contentContainerStyle={styles.tabStripContent}
-        >
-          {docIds.map((id) => {
-            const active = id === selectedDocId;
-            return (
-              <TouchableOpacity
-                key={id}
-                onPress={() => setSelectedDocId(id)}
-                activeOpacity={0.7}
-                style={[styles.tab, active && styles.tabActive]}
-              >
-                <Text numberOfLines={1} style={[styles.tabText, active && styles.tabTextActive]}>
-                  {names[id] || '文档'}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      ) : null}
-      <DocBodyView
-        key={selectedDocId}
-        docId={selectedDocId}
-        docType={docType}
-        title={title}
-        meta={item?.meta}
-        contentTopInset={topInset + (showTabs ? TAB_STRIP_HEIGHT : 0)}
-        contentBottomInset={bottomInset}
+      <PagerView
+        ref={pagerRef}
+        style={styles.pager}
+        initialPage={selectedIndex}
+        /* offscreenPageLimit 刻意不设：Android 侧透传给 ViewPager2，0 会直接抛
+           IllegalArgumentException（只收 >0 或 -1）。真正的省法在下面 —— 只有当前页
+           挂真内容，其余页留空壳，免得一次挂起好几个 DocBodyView（WebView / 富文本重物）。 */
+        onPageSelected={(e) => {
+          const i = e.nativeEvent.position;
+          pagerPageRef.current = i;
+          const key = tabs[i]?.key;
+          if (key) setSelectedKey(key);
+        }}
+      >
+        {tabs.map((tab) => {
+          /* 占位页是纯静态的，常驻着（横滑过去当场就有东西看）；文档 / 项目页要拉网络、
+             还带 WebView，只在选中时才挂 —— 未选中的留空壳。 */
+          const isPlaceholder = tab.mode === 'cocoder' || tab.mode === 'cobrowser';
+          const mounted = isPlaceholder || tab.key === selectedKey;
+          return (
+            <View key={tab.key} style={styles.page} collapsable={false}>
+              {!mounted ? null : isPlaceholder ? (
+                <PlaceholderPage
+                  icon={MODE_ICON[tab.mode]}
+                  title={MODE_LABEL[tab.mode]}
+                  hint="手机端暂不支持，请在桌面端查看"
+                  topInset={contentTopInset}
+                  bottomInset={bottomInset}
+                  styles={styles}
+                  colors={colors}
+                />
+              ) : tab.mode === 'cowriter' ? (
+                <DocBodyView
+                  docId={tab.id}
+                  /* 树里查不到就按 document 渲染：cowriter 的 doc_ids 绝大多数就是富文本文档，
+                     真是别的类型（paper/flowbase）DocBodyView 自己会给出「暂不支持」占位。 */
+                  docType={docItems[tab.id]?.type || 'document'}
+                  title={labelOf(tab)}
+                  meta={docItems[tab.id]?.meta}
+                  contentTopInset={contentTopInset}
+                  contentBottomInset={bottomInset}
+                />
+              ) : (
+                <CoplannerPage
+                  projectId={tab.id}
+                  title={labelOf(tab)}
+                  topInset={contentTopInset}
+                  bottomInset={bottomInset}
+                  styles={styles}
+                  colors={colors}
+                />
+              )}
+            </View>
+          );
+        })}
+      </PagerView>
+      <TabIndicator
+        tabs={tabs}
+        selectedKey={selectedKey}
+        labelOf={labelOf}
+        onSelect={setSelectedKey}
+        top={topInset}
+        styles={styles}
+        colors={colors}
       />
     </View>
+  );
+}
+
+type Styles = ReturnType<typeof createStyles>;
+
+/**
+ * 本地选中项：默认跟着服务端焦点（activeKey）走，用户手动切过之后仍以「服务端换了焦点」为准
+ * （activeKey 一变就重新跟随）——agent 刚改的那篇理应顶到眼前。选中项被关掉（不在序列里了）
+ * 时同样落回 activeKey。
+ * 渲染期同步纠正（React 官方「props 变了调整 state」模式），不用 effect：
+ * 免得先用旧选中渲染一帧、再跳到新的。
+ */
+function useFollowedSelection(activeKey: string, keys: string[]): [string, (key: string) => void] {
+  const [local, setLocal] = useState(activeKey);
+  const lastActiveRef = useRef(activeKey);
+  if (lastActiveRef.current !== activeKey) {
+    lastActiveRef.current = activeKey;
+    if (local !== activeKey) setLocal(activeKey);
+  }
+  return [keys.includes(local) ? local : activeKey, setLocal];
+}
+
+/* ───────────────────── 指示器：当前页胶囊 + 其余小圆点 ───────────────────── */
+
+/** 超过这么多项，圆点条就可能顶到边：改成可横滚（同文档 tab 条的老做法）。 */
+const MAX_STATIC_TABS = 8;
+
+function TabIndicator({
+  tabs,
+  selectedKey,
+  labelOf,
+  onSelect,
+  top,
+  styles,
+  colors,
+}: {
+  tabs: CollabTabRef[];
+  selectedKey: string;
+  labelOf: (tab: CollabTabRef) => string;
+  onSelect: (key: string) => void;
+  top: number;
+  styles: Styles;
+  colors: AppColors;
+}) {
+  /** 项少到不用滚时让整条 strip 透传触摸：它是横跨整幅的浮层，否则胶囊两侧的空白
+   *  会白白吃掉正文那 40px 的滑动。要滚的时候（项多）才收回触摸。 */
+  const scrollable = tabs.length > MAX_STATIC_TABS;
+  return (
+    <ScrollView
+      horizontal
+      scrollEnabled={scrollable}
+      pointerEvents={scrollable ? 'auto' : 'box-none'}
+      showsHorizontalScrollIndicator={false}
+      style={[styles.tabStrip, { top }]}
+      contentContainerStyle={styles.tabStripContent}
+    >
+      {tabs.map((tab) =>
+        tab.key === selectedKey ? (
+          <View key={tab.key} style={styles.pill}>
+            <Ionicons name={MODE_ICON[tab.mode]} size={14} color={colors.textPrimary} />
+            <Text numberOfLines={1} style={styles.pillText}>
+              {labelOf(tab)}
+            </Text>
+          </View>
+        ) : (
+          <TouchableOpacity
+            key={tab.key}
+            onPress={() => onSelect(tab.key)}
+            activeOpacity={0.6}
+            hitSlop={HIT_SLOP}
+            style={styles.dotHit}
+          >
+            <View style={styles.dot} />
+          </TouchableOpacity>
+        ),
+      )}
+    </ScrollView>
   );
 }
 
@@ -235,15 +358,22 @@ function buildOutline(tasks: TaskItem[]): OutlineRow[] {
   return out;
 }
 
-function CoplannerBody({ layout, topInset, bottomInset, styles, colors }: BodyProps) {
-  const { getAuth, projects } = useTask();
-  const slot = layout.coplanner;
-  const projectIds = useMemo(() => slot?.projectIds ?? [], [slot]);
-  const [selectedProjectId, setSelectedProjectId] = useFollowedSelection(
-    slot?.activeProjectId ?? '',
-    projectIds,
-  );
-
+function CoplannerPage({
+  projectId,
+  title,
+  topInset,
+  bottomInset,
+  styles,
+  colors,
+}: {
+  projectId: string;
+  title: string;
+  topInset: number;
+  bottomInset: number;
+  styles: Styles;
+  colors: AppColors;
+}) {
+  const { getAuth } = useTask();
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -252,22 +382,22 @@ function CoplannerBody({ layout, topInset, bottomInset, styles, colors }: BodyPr
   const loadGenRef = useRef(0);
   const load = useCallback(async () => {
     const auth = getAuth();
-    if (!selectedProjectId) return;
+    if (!projectId) return;
     const gen = ++loadGenRef.current;
     setLoading(true);
     setError(null);
     try {
       /* onlyMine:false：任务树要连别人的节点一起拿，否则父子链断开、缩进全乱（同 ProjectScreen）。 */
-      const list = await fetchTasks(auth, { projectId: selectedProjectId, onlyMine: false });
+      const list = await fetchTasks(auth, { projectId, onlyMine: false });
       if (gen !== loadGenRef.current) return;
-      setTasks(list.filter((t) => t.project_id === selectedProjectId));
+      setTasks(list.filter((t) => t.project_id === projectId));
     } catch (e) {
       if (gen !== loadGenRef.current) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       if (gen === loadGenRef.current) setLoading(false);
     }
-  }, [getAuth, selectedProjectId]);
+  }, [getAuth, projectId]);
 
   useEffect(() => {
     setTasks([]);
@@ -275,143 +405,115 @@ function CoplannerBody({ layout, topInset, bottomInset, styles, colors }: BodyPr
   }, [load]);
 
   const outline = useMemo(() => buildOutline(tasks), [tasks]);
-  const nameOf = useCallback(
-    (id: string) => projects.find((p) => p.id === id)?.name?.trim() || '未命名项目',
-    [projects],
-  );
 
-  if (!slot || !selectedProjectId) {
-    return <EmptyState styles={styles} colors={colors} icon="git-branch-outline" title="没有打开的项目" />;
-  }
-
-  const showTabs = projectIds.length > 1;
   return (
-    <View style={styles.body}>
-      {showTabs ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={[styles.tabStrip, { top: topInset }]}
-          contentContainerStyle={styles.tabStripContent}
-        >
-          {projectIds.map((id) => {
-            const active = id === selectedProjectId;
-            return (
-              <TouchableOpacity
-                key={id}
-                onPress={() => setSelectedProjectId(id)}
-                activeOpacity={0.7}
-                style={[styles.tab, active && styles.tabActive]}
-              >
-                <Text numberOfLines={1} style={[styles.tabText, active && styles.tabTextActive]}>
-                  {nameOf(id)}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+    <ScrollView
+      style={styles.body}
+      contentContainerStyle={[
+        styles.outlineContent,
+        { paddingTop: topInset + 24, paddingBottom: bottomInset },
+      ]}
+    >
+      <Text style={styles.projectTitle}>{title}</Text>
+      {loading && outline.length === 0 ? (
+        <ActivityIndicator color={colors.textMuted} style={styles.inlineSpinner} />
       ) : null}
-      <ScrollView
-        style={styles.body}
-        contentContainerStyle={[
-          styles.outlineContent,
-          {
-            paddingTop: topInset + (showTabs ? TAB_STRIP_HEIGHT : 0) + 24,
-            paddingBottom: bottomInset,
-          },
-        ]}
-      >
-        <Text style={styles.projectTitle}>{nameOf(selectedProjectId)}</Text>
-        {loading && outline.length === 0 ? (
-          <ActivityIndicator color={colors.textMuted} style={styles.inlineSpinner} />
-        ) : null}
-        {error ? (
-          <TouchableOpacity onPress={() => void load()} activeOpacity={0.7}>
-            <Text style={styles.errorText}>{error}（点这里重试）</Text>
-          </TouchableOpacity>
-        ) : null}
-        {!loading && !error && outline.length === 0 ? (
-          <Text style={styles.emptyHint}>这个项目还没有任务</Text>
-        ) : null}
-        {outline.map(({ task, depth }) => (
-          <View key={task.id} style={[styles.taskRow, { paddingLeft: depth * 16 }]}>
-            <View
-              style={[
-                styles.taskDot,
-                task.done
-                  ? styles.taskDotDone
-                  : task.doing
-                    ? styles.taskDotDoing
-                    : null,
-              ]}
-            />
-            <Text
-              numberOfLines={2}
-              style={[styles.taskTitle, task.done && styles.taskTitleDone]}
-            >
-              {task.title?.trim() || '未命名任务'}
-            </Text>
-          </View>
-        ))}
-      </ScrollView>
-    </View>
+      {error ? (
+        <TouchableOpacity onPress={() => void load()} activeOpacity={0.7}>
+          <Text style={styles.errorText}>{error}（点这里重试）</Text>
+        </TouchableOpacity>
+      ) : null}
+      {!loading && !error && outline.length === 0 ? (
+        <Text style={styles.emptyHint}>这个项目还没有任务</Text>
+      ) : null}
+      {outline.map(({ task, depth }) => (
+        <View key={task.id} style={[styles.taskRow, { paddingLeft: depth * 16 }]}>
+          <View
+            style={[
+              styles.taskDot,
+              task.done ? styles.taskDotDone : task.doing ? styles.taskDotDoing : null,
+            ]}
+          />
+          <Text numberOfLines={2} style={[styles.taskTitle, task.done && styles.taskTitleDone]}>
+            {task.title?.trim() || '未命名任务'}
+          </Text>
+        </View>
+      ))}
+    </ScrollView>
   );
 }
 
 /* ───────────────────────────── 共用 ───────────────────────────── */
 
-function EmptyState({
-  styles,
-  colors,
+/** 内容显示暂不支持的 mode（cocoder / cobrowser）那一页。 */
+function PlaceholderPage({
   icon,
   title,
+  hint,
+  topInset,
+  bottomInset,
+  styles,
+  colors,
 }: {
+  icon: IoniconName;
+  title: string;
+  hint: string;
+  topInset: number;
+  bottomInset: number;
   styles: Styles;
   colors: AppColors;
-  icon: string;
-  title: string;
 }) {
   return (
-    <View style={styles.centered}>
-      <Ionicons
-        name={icon as React.ComponentProps<typeof Ionicons>['name']}
-        size={44}
-        color={colors.placeholder}
-        style={styles.emptyIcon}
-      />
+    <View style={[styles.centered, { paddingTop: topInset, paddingBottom: bottomInset }]}>
+      <Ionicons name={icon} size={44} color={colors.placeholder} style={styles.emptyIcon} />
       <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptyHint}>{hint}</Text>
     </View>
   );
 }
 
-const TAB_STRIP_HEIGHT = 44;
+/** 指示器条整体高度（胶囊 28 + 上下留白）：正文用它 + header 高让位。 */
+const INDICATOR_STRIP_HEIGHT = 40;
+const PILL_HEIGHT = 28;
+const HIT_SLOP = { top: 10, bottom: 10, left: 6, right: 6 };
 
 function createStyles(c: AppColors) {
   return StyleSheet.create({
     body: { flex: 1 },
-    /** 文档 / 项目 tab 条：绝对浮在正文之上（正文用 contentTopInset 让位），随 header 高度下移。 */
+    pager: { flex: 1 },
+    page: { flex: 1 },
+    /** 走马灯指示器：绝对浮在正文之上（正文用 contentTopInset 让位），随 header 高度下移。 */
     tabStrip: {
       position: 'absolute',
       left: 0,
       right: 0,
-      height: TAB_STRIP_HEIGHT,
+      height: INDICATOR_STRIP_HEIGHT,
       zIndex: 5,
     },
     tabStripContent: {
+      flexGrow: 1,
       paddingHorizontal: 12,
       alignItems: 'center',
+      justifyContent: 'center',
       gap: 8,
     },
-    tab: {
+    /** 当前页：展开成带图标的名字胶囊。 */
+    pill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      height: PILL_HEIGHT,
       paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderRadius: 14,
-      backgroundColor: c.surfaceMuted,
-      maxWidth: 160,
+      borderRadius: PILL_HEIGHT / 2,
+      maxWidth: 180,
+      backgroundColor: c.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: c.border,
     },
-    tabActive: { backgroundColor: c.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
-    tabText: { fontSize: 13, color: c.textSecondary },
-    tabTextActive: { color: c.textPrimary, fontWeight: '600' },
+    pillText: { flexShrink: 1, fontSize: 13, fontWeight: '600', color: c.textPrimary },
+    /** 其余页：收成小圆点，点一下直达（触区放到胶囊同高，免得难点）。 */
+    dotHit: { height: PILL_HEIGHT, justifyContent: 'center', paddingHorizontal: 3 },
+    dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: c.placeholder },
     outlineContent: { paddingHorizontal: 16 },
     projectTitle: {
       fontSize: 22,
@@ -440,7 +542,7 @@ function createStyles(c: AppColors) {
     errorText: { fontSize: 13, color: c.placeholder, marginVertical: 12 },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
     emptyIcon: { marginBottom: 12, opacity: 0.5 },
-    emptyTitle: { fontSize: 15, fontWeight: '600', color: c.textMuted },
+    emptyTitle: { fontSize: 15, fontWeight: '600', color: c.textMuted, marginBottom: 6 },
     emptyHint: { fontSize: 13, color: c.placeholder },
   });
 }

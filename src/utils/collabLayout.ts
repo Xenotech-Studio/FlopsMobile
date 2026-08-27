@@ -24,11 +24,12 @@ export const COLLAB_LAYOUT_MODES = ['cowriter', 'coplanner', 'cocoder', 'cobrows
 export type CollabLayoutMode = 'default' | (typeof COLLAB_LAYOUT_MODES)[number];
 
 /**
- * 手机端能画的 mode。cocoder（终端 / 文件树）与 cobrowser（浏览器分栏）是桌面端形态，
- * 手机端不接管布局 —— 桌面那边切到这些 mode 时，手机端保持普通聊天页原样，
- * 而不是摆一块「暂不支持」的空占位再把聊天挤进 sheet。
+ * 手机端协同工作区的 **tab 顺序**：四个 mode 一视同仁地铺进同一条走马灯。
+ * cocoder（终端 / 文件树）与 cobrowser（浏览器分栏）目前只有页面没有内容 —— 服务端 layout
+ * 对它们只给 active_mode、不给对象 id（见 applyCollabLayoutPayload），所以各占一项 mode 级
+ * 占位，UI 画「请在桌面端查看」；等四模态对齐后再换成真内容。
  */
-export const MOBILE_COLLAB_MODES = ['cowriter', 'coplanner'] as const;
+export const MOBILE_COLLAB_MODES = ['cowriter', 'coplanner', 'cocoder', 'cobrowser'] as const;
 export type MobileCollabMode = (typeof MOBILE_COLLAB_MODES)[number];
 
 export type CowriterSlot = {
@@ -148,8 +149,8 @@ export function applyCollabLayoutPayload(
       next.activeMode = next.coplanner ? 'coplanner' : activeAfterClear(next);
       return next;
     }
-    /* cocoder / cobrowser：手机端不画，但 active_mode 要如实记下 —— 桌面端切过去时
-       手机端应退回普通聊天页（见 mobileCollabMode），而不是继续显示上一个 mode 的分栏。 */
+    /* cocoder / cobrowser：手机端画不出内容，但 active_mode 要如实记下 —— 走马灯要停到
+       对应那页占位（见 activeCollabTabKey），而不是继续显示上一个 mode 的内容。 */
     next.activeMode = rawMode as CollabLayoutMode;
     return next;
   }
@@ -179,13 +180,63 @@ export function collabLayoutFromConversationMeta(
 }
 
 /**
- * 手机端此刻该进哪种协同布局；null = 不进（普通聊天页原样）。
- * 判据是「active_mode 命中 **且** 该桶真有内容」—— 只有 mode 没有打开项时没什么可画。
+ * 手机端此刻要不要分叉成协同布局（工作区占页面主体 + 聊天落进 sheet）。
+ *
+ * 判据是「任一桶有内容 **或** active_mode 命中任一协同 mode」，比早期「active_mode 命中且
+ * 该桶非空」宽：走马灯把四个 mode 铺成一条 tab 序列后，桌面端切到 cocoder 不该把手机端
+ * 整个踢回普通聊天页（连刚才那几篇文档的 tab 一起消失），滑一下还应能滑回文档。
+ * 具体停在哪个 tab 由 activeCollabTabKey + 本地跟随决定，不由这里挑。
  */
-export function mobileCollabMode(state: CollabLayoutState): MobileCollabMode | null {
-  if (state.activeMode === 'cowriter' && state.cowriter) return 'cowriter';
-  if (state.activeMode === 'coplanner' && state.coplanner) return 'coplanner';
-  return null;
+export function collabLayoutActive(state: CollabLayoutState): boolean {
+  return !!state.cowriter || !!state.coplanner || state.activeMode !== 'default';
+}
+
+/** 走马灯里的一项：桶里有对象数据的铺 id，cocoder/cobrowser 只有 mode（id 为空串）。 */
+export type CollabTabRef = { mode: MobileCollabMode; id: string; key: string };
+
+/** tab 身份 = (mode, id) 二元组压成的串；跨帧比对选中项、做 React key 都用它。 */
+export function collabTabKey(mode: MobileCollabMode, id: string): string {
+  return `${mode}:${id}`;
+}
+
+/**
+ * 布局态 → 扁平 tab 序列（顺序即 MOBILE_COLLAB_MODES）：
+ * cowriter 铺开 docIds、coplanner 铺开 projectIds、cocoder/cobrowser 各一项占位。
+ */
+export function collabTabs(state: CollabLayoutState): CollabTabRef[] {
+  const out: CollabTabRef[] = [];
+  const push = (mode: MobileCollabMode, id: string) =>
+    out.push({ mode, id, key: collabTabKey(mode, id) });
+  for (const mode of MOBILE_COLLAB_MODES) {
+    if (mode === 'cowriter') {
+      for (const id of state.cowriter?.docIds ?? []) push(mode, id);
+    } else if (mode === 'coplanner') {
+      for (const id of state.coplanner?.projectIds ?? []) push(mode, id);
+    } else {
+      push(mode, '');
+    }
+  }
+  return out;
+}
+
+/**
+ * 服务端此刻聚焦的那一项在序列里的 key —— 本地跟随的目标是 **(activeMode, activeId) 二元组**：
+ * 桌面端换 mode、或同一 mode 内换焦点文档，手机端都要跟着跳到对应 tab。
+ * 恒返回 collabTabs 里存在的一项（前提是 collabLayoutActive 为真）。
+ */
+export function activeCollabTabKey(state: CollabLayoutState): string {
+  const mode = state.activeMode;
+  if (mode === 'cowriter' && state.cowriter) {
+    return collabTabKey('cowriter', state.cowriter.activeDocId);
+  }
+  if (mode === 'coplanner' && state.coplanner) {
+    return collabTabKey('coplanner', state.coplanner.activeProjectId);
+  }
+  if (mode === 'cocoder' || mode === 'cobrowser') return collabTabKey(mode, '');
+  /* default，或 active_mode 指着一个空桶：落到首个有内容的项（同 activeAfterClear 的优先级）。 */
+  if (state.cowriter) return collabTabKey('cowriter', state.cowriter.activeDocId);
+  if (state.coplanner) return collabTabKey('coplanner', state.coplanner.activeProjectId);
+  return collabTabKey('cocoder', '');
 }
 
 /** 结构相等（seq 不算）：新帧没带来任何可见变化时跳过 setState，避免白重渲染整棵聊天页。 */

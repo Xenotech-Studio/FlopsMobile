@@ -5,10 +5,12 @@
  */
 import {
   EMPTY_COLLAB_LAYOUT,
+  activeCollabTabKey,
   applyCollabLayoutPayload,
+  collabLayoutActive,
   collabLayoutEqual,
   collabLayoutFromConversationMeta,
-  mobileCollabMode,
+  collabTabs,
   type CollabLayoutState,
 } from '../src/utils/collabLayout';
 
@@ -24,7 +26,8 @@ test('分桶快照：active_mode + 桶内容 → cowriter', () => {
   expect(s!.activeMode).toBe('cowriter');
   expect(s!.cowriter).toEqual({ docIds: ['d1', 'd2'], activeDocId: 'd2' });
   expect(s!.seq).toBe(3);
-  expect(mobileCollabMode(s!)).toBe('cowriter');
+  expect(collabLayoutActive(s!)).toBe(true);
+  expect(activeCollabTabKey(s!)).toBe('cowriter:d2');
 });
 
 test('分桶快照：active 不在列表里 → 退回首个', () => {
@@ -45,7 +48,7 @@ test('分桶快照：active_mode 命中但该桶是空的 → 落到有内容的
     },
   });
   expect(s!.activeMode).toBe('coplanner');
-  expect(mobileCollabMode(s!)).toBe('coplanner');
+  expect(activeCollabTabKey(s!)).toBe('coplanner:p1');
 });
 
 test('分桶快照：全空 → default（不分叉）', () => {
@@ -54,7 +57,7 @@ test('分桶快照：全空 → default（不分叉）', () => {
     layout: { active_mode: 'default' },
   });
   expect(s!.activeMode).toBe('default');
-  expect(mobileCollabMode(s!)).toBeNull();
+  expect(collabLayoutActive(s!)).toBe(false);
 });
 
 test('单槽 delta：只动自己那个 mode，别的桶原样留着', () => {
@@ -121,16 +124,66 @@ test('未知 layout_mode：整帧丢弃，不动本地布局', () => {
   ).toBeNull();
 });
 
-test('桌面端专属 mode：状态如实记下，但手机端不分叉', () => {
+test('内容暂不支持的 mode：仍留在协同布局里，走马灯停到它那页占位', () => {
   const base = applyCollabLayoutPayload(EMPTY_COLLAB_LAYOUT, { seq: 1, layout: bucket() })!;
   const next = applyCollabLayoutPayload(base, {
     seq: 2,
     layout: { layout_mode: 'cocoder' },
   })!;
   expect(next.activeMode).toBe('cocoder');
-  expect(mobileCollabMode(next)).toBeNull();
+  // 闸门放宽后不再退回普通聊天页：滑一下还能滑回刚才那两篇文档
+  expect(collabLayoutActive(next)).toBe(true);
+  expect(activeCollabTabKey(next)).toBe('cocoder:');
   // 桶还留着：桌面端切回 cowriter 时不用重新拉
   expect(next.cowriter?.docIds).toEqual(['d1', 'd2']);
+});
+
+test('闸门：桶全空但 active_mode 命中协同 mode → 照样分叉（只有占位页）', () => {
+  const s = applyCollabLayoutPayload(EMPTY_COLLAB_LAYOUT, {
+    seq: 1,
+    layout: { active_mode: 'cobrowser' },
+  })!;
+  expect(collabLayoutActive(s)).toBe(true);
+  expect(activeCollabTabKey(s)).toBe('cobrowser:');
+  expect(collabTabs(s).map((t) => t.key)).toEqual(['cocoder:', 'cobrowser:']);
+});
+
+test('走马灯序列：两桶铺开 + cocoder/cobrowser 各一项占位，顺序固定', () => {
+  const s = applyCollabLayoutPayload(EMPTY_COLLAB_LAYOUT, {
+    seq: 1,
+    layout: bucket({ coplanner: { project_ids: ['p1', 'p2'], active_project_id: 'p2' } }),
+  })!;
+  expect(collabTabs(s)).toEqual([
+    { mode: 'cowriter', id: 'd1', key: 'cowriter:d1' },
+    { mode: 'cowriter', id: 'd2', key: 'cowriter:d2' },
+    { mode: 'coplanner', id: 'p1', key: 'coplanner:p1' },
+    { mode: 'coplanner', id: 'p2', key: 'coplanner:p2' },
+    { mode: 'cocoder', id: '', key: 'cocoder:' },
+    { mode: 'cobrowser', id: '', key: 'cobrowser:' },
+  ]);
+});
+
+test('跟随目标是 (mode, id) 二元组：同 mode 内换焦点文档也要跳', () => {
+  const base = applyCollabLayoutPayload(EMPTY_COLLAB_LAYOUT, { seq: 1, layout: bucket() })!;
+  expect(activeCollabTabKey(base)).toBe('cowriter:d2');
+  const next = applyCollabLayoutPayload(base, {
+    seq: 2,
+    layout: { layout_mode: 'cowriter', doc_ids: ['d1', 'd2'], active_doc_id: 'd1' },
+  })!;
+  expect(activeCollabTabKey(next)).toBe('cowriter:d1');
+});
+
+test('桶清空：该 mode 的 tab 全消失，焦点落到仍存在的项', () => {
+  const base = applyCollabLayoutPayload(EMPTY_COLLAB_LAYOUT, {
+    seq: 1,
+    layout: bucket({ coplanner: { project_ids: ['p1'], active_project_id: 'p1' } }),
+  })!;
+  const next = applyCollabLayoutPayload(base, {
+    seq: 2,
+    layout: { layout_mode: 'cowriter', doc_ids: [] },
+  })!;
+  expect(collabTabs(next).map((t) => t.key)).toEqual(['coplanner:p1', 'cocoder:', 'cobrowser:']);
+  expect(activeCollabTabKey(next)).toBe('coplanner:p1');
 });
 
 test('会话 meta 没有布局字段 → 归零（换到普通会话不该留着上一个的文档）', () => {

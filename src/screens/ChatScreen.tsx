@@ -141,9 +141,9 @@ import { createBottomPinState } from '../utils/chatBottomPin';
 import { WorkspaceBody } from './chat/WorkspaceBody';
 import {
   applyCollabLayoutPayload,
+  collabLayoutActive,
   collabLayoutEqual,
   collabLayoutFromConversationMeta,
-  mobileCollabMode,
   EMPTY_COLLAB_LAYOUT,
   type CollabLayoutState,
 } from '../utils/collabLayout';
@@ -933,10 +933,10 @@ export function ChatScreen({
     sessionRef.current = session;
   }, [session]);
 
-  /* ───────────── 协同工作模式（CoWriter / CoPlanner）布局感知 ─────────────
+  /* ───────────── 协同工作模式（四模态走马灯）布局感知 ─────────────
    * 服务端把「这个会话此刻开着哪篇文档 / 哪个项目」存在会话 meta 的 cowriter_layout 桶里，
    * 两条到达路径：初始 GET 带整桶快照、run 内工具驱动经 SSE 下发单槽 delta（见 utils/collabLayout）。
-   * 这里只做感知 + 归一化；要不要分叉成 sheet 布局由下面的 collabMode 决定。 */
+   * 这里只做感知 + 归一化；要不要分叉成 sheet 布局由下面的 collabActive 决定。 */
   const [collabLayout, setCollabLayout] = useState<CollabLayoutState>(EMPTY_COLLAB_LAYOUT);
   /** 布局态镜像：seq 守卫要在 setState 之外先算完（updater 必须是纯函数），
    *  且流式期间每秒几十帧都要读最新值，进不了 onEvent 那个长寿闭包的依赖。 */
@@ -971,14 +971,14 @@ export function ChatScreen({
     collabLayoutRef.current = EMPTY_COLLAB_LAYOUT;
     setCollabLayout(EMPTY_COLLAB_LAYOUT);
   }, [conversationId]);
-  /** 手机端此刻要不要进协同布局；null = 普通聊天页原样（含桌面端专属的 cocoder/cobrowser）。 */
-  const collabMode = useMemo(() => mobileCollabMode(collabLayout), [collabLayout]);
+  /** 手机端此刻要不要进协同布局；false = 普通聊天页原样。停在哪个 tab 归 WorkspaceBody 管。 */
+  const collabActive = useMemo(() => collabLayoutActive(collabLayout), [collabLayout]);
   /** 协同模式下装聊天消息区的 sheet，留在这里供程序化展开 / 折叠。 */
   const collabSheetRef = useRef<BottomSheet>(null);
   /* 键盘开合：协同模式下聊天区高度要按键盘上沿截断（见 collabSheetChatHeight）。
      只在协同模式挂监听，普通聊天页不用为此多两个订阅。 */
   useEffect(() => {
-    if (!collabMode) {
+    if (!collabActive) {
       setCollabKeyboardShown(false);
       return;
     }
@@ -993,13 +993,13 @@ export function ChatScreen({
       subShow.remove();
       subHide.remove();
     };
-  }, [collabMode]);
+  }, [collabActive]);
   /* 进/出协同模式时消息区换了容器 → React 必然重挂一次（跨父节点没法保留实例），
      滚动位置随之回到顶部。重新武装钉底窗口，让内容量完高度后自己贴回底部
      （armForOpen 是时间窗口式的，图片/附件慢慢量出高度也能跟上）。 */
   useEffect(() => {
     messageAreaRef.current?.armForOpen();
-  }, [collabMode]);
+  }, [collabActive]);
 
   const applyConversationUsageState = useCallback(
     (conversation: Conversation, messagesWindow?: MessageWindow | null) => {
@@ -5265,7 +5265,7 @@ export function ChatScreen({
       styles={styles}
       colors={colors}
       /* 协同模式下消息区在 sheet 里：顶上没有 header 要让位，只留 sheet handle 的余量。 */
-      headerHeight={collabMode ? 0 : headerHeight}
+      headerHeight={collabActive ? 0 : headerHeight}
       scrollBottomPadding={scrollBottomPadding}
       wideChat={wideChat}
       historyOverlayBottomOverflow={insets.bottom + 32}
@@ -5300,7 +5300,7 @@ export function ChatScreen({
           /* 渐变基色必须跟顶栏**背后那块画布**同色，否则实色段与画布错开一档、渐变尾巴
              也会浮出一层灰。普通聊天页背后是消息区（chatScreenBackground）；协同模式下
              顶栏压的是工作区层，而它已随分层改成了 drawerBackground（见 collabWorkspaceLayer）。 */
-          gradientBaseHex={collabMode ? colors.drawerBackground : colors.chatScreenBackground}
+          gradientBaseHex={collabActive ? colors.drawerBackground : colors.chatScreenBackground}
         />
         {/* inDrawer（compact 覆盖式抽屉顶层）= 永远汉堡；否则能返回就显返回箭头（mainPane pop 嵌套栈 /
          *  iPhone pop 根栈），不能返回（mainPane 栈底）兜底汉堡。 */}
@@ -5382,10 +5382,9 @@ export function ChatScreen({
       </View>
 
       {/* ── 协同工作模式：工作区主体（最底层，被 sheet 与 composer 盖住的部分靠 inset 让位）── */}
-      {collabMode ? (
+      {collabActive ? (
         <View style={styles.collabWorkspaceLayer}>
           <WorkspaceBody
-            mode={collabMode}
             layout={collabLayout}
             topInset={headerHeight}
             bottomInset={collabSheetPeekHeight}
@@ -5398,7 +5397,7 @@ export function ChatScreen({
        * 量到的 containerOffset.bottom=0，偏移量正好是键盘高）；composer 那侧仍归 KAV 管。
        * 两者各自避让同一个键盘、互不叠加 —— 把 sheet 塞进 KAV 里才会双重避让（KAV 先缩容器、
        * sheet 再按整个键盘高往上顶）。 */}
-      {collabMode ? (
+      {collabActive ? (
         <BottomSheet
           ref={collabSheetRef}
           snapPoints={collabSheetSnapPoints}
@@ -5458,7 +5457,7 @@ export function ChatScreen({
         behavior="padding"
         keyboardVerticalOffset={0}
         /* 协同模式：本层只有底部 composer 是实体，其余让位给 sheet（见下面 scrollAndGradientWrap）。 */
-        pointerEvents={collabMode ? 'box-none' : 'auto'}
+        pointerEvents={collabActive ? 'box-none' : 'auto'}
       >
         {error ? (
           <Text style={[styles.globalError, { marginTop: headerHeight + 8 }]}>{error}</Text>
@@ -5473,9 +5472,9 @@ export function ChatScreen({
         {/* 协同模式下这层只剩 composer 有内容：其余区域一律让位，触摸落到底下的 sheet / 工作区。 */}
         <View
           style={styles.scrollAndGradientWrap}
-          pointerEvents={collabMode ? 'box-none' : 'auto'}
+          pointerEvents={collabActive ? 'box-none' : 'auto'}
         >
-          {collabMode ? null : chatMessageArea}
+          {collabActive ? null : chatMessageArea}
           {/* 底部整块贴屏底：渐变铺满整块并延伸到底，输入行叠在渐变底部，无单独白底；点渐变区（未点到输入/发送）可滚到底。
               用 Reanimated.View + kbBottomStyle 让 bottom 在键盘动画中逐帧跟随。 */}
           <Reanimated.View style={[styles.bottomOverlay, { height: bottomOverlayHeight }, kbBottomStyle]}>
