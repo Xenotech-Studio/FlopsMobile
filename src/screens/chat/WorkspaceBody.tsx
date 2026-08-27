@@ -24,12 +24,14 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import PagerView from 'react-native-pager-view';
+import Reanimated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { getFlowDocItemName, getFlowDocTree, type FlowDocTreeItem } from '../../api';
 import { fetchTasks, type TaskItem } from '../../taskApi';
 import { useSession } from '../../context/SessionContext';
 import { useTask } from '../../context/TaskContext';
 import { useAppTheme } from '../../context/ThemeContext';
 import type { AppColors } from '../../theme/appColors';
+import { shadowSoft, shadowToggleThumb } from '../../theme/shadows';
 import { docsTreeStore } from '../docs/docsTreeStore';
 import { DocBodyView } from '../docs/DocBodyView';
 import {
@@ -46,6 +48,13 @@ export type WorkspaceBodyProps = {
   topInset: number;
   /** 底部被 sheet + composer 盖住的高度：正文垫这么多，最后一段才滚得出来。 */
   bottomInset: number;
+  /**
+   * 聊天 sheet 顶沿此刻的 y（gorhom animatedPosition，抛出时已含 topInset，与本层同坐标系）。
+   * 指示器就浮在它上方一点 —— sheet 拖到哪档 tabs 跟到哪，逐帧走 UI 线程。
+   */
+  sheetTopY: SharedValue<number>;
+  /** sheet 最低档时顶沿的 y：指示器不跟着哨兵值（首帧 / 入场动画）飘到屏幕外。 */
+  sheetTopYMax: number;
 };
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
@@ -64,7 +73,13 @@ const MODE_LABEL: Record<MobileCollabMode, string> = {
   cobrowser: '浏览器',
 };
 
-export function WorkspaceBody({ layout, topInset, bottomInset }: WorkspaceBodyProps) {
+export function WorkspaceBody({
+  layout,
+  topInset,
+  bottomInset,
+  sheetTopY,
+  sheetTopYMax,
+}: WorkspaceBodyProps) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { session } = useSession();
@@ -179,7 +194,24 @@ export function WorkspaceBody({ layout, topInset, bottomInset }: WorkspaceBodyPr
     else pagerRef.current?.setPage(selectedIndex);
   }, [selectedIndex, tabsSig]);
 
-  const contentTopInset = topInset + INDICATOR_STRIP_HEIGHT;
+  /* 指示器不再占正文顶部那一条（它浮到 sheet 上沿去了），正文直接从 header 下沿开始。 */
+  const contentTopInset = topInset;
+  /** 指示器位移：贴在 sheet 顶沿上方 INDICATOR_SHEET_GAP 处，两端钳住 ——
+   *  下不跟着「位置还没报上来」的哨兵飘出屏幕；上不钻进 header。
+   *  顶到 header 还放不下（最高档 + 键盘把 sheet 顶过头）就顺势淡出：那会儿工作区已经被
+   *  sheet 吃掉，硬钉在 header 下沿只会被 sheet 盖住半截。 */
+  const indicatorAnimStyle = useAnimatedStyle(() => {
+    const sheetY = Math.min(sheetTopY.value, sheetTopYMax);
+    /* strip 顶沿：往回倒推「胶囊底沿离 sheet 顶沿 GAP」（胶囊在 strip 里居中，上下各 PAD）。 */
+    const wanted = sheetY - INDICATOR_SHEET_GAP - INDICATOR_PAD - PILL_HEIGHT;
+    /** 顶格位：胶囊上沿正好贴 header 下沿。 */
+    const minTop = topInset - INDICATOR_PAD;
+    const overflow = Math.max(0, minTop - wanted);
+    return {
+      opacity: Math.max(0, 1 - overflow / PILL_HEIGHT),
+      transform: [{ translateY: Math.max(minTop, wanted) }],
+    };
+  });
 
   return (
     <View style={styles.body}>
@@ -244,7 +276,7 @@ export function WorkspaceBody({ layout, topInset, bottomInset }: WorkspaceBodyPr
         selectedKey={selectedKey}
         labelOf={labelOf}
         onSelect={setSelectedKey}
-        top={topInset}
+        animStyle={indicatorAnimStyle}
         styles={styles}
         colors={colors}
       />
@@ -281,7 +313,7 @@ function TabIndicator({
   selectedKey,
   labelOf,
   onSelect,
-  top,
+  animStyle,
   styles,
   colors,
 }: {
@@ -289,43 +321,47 @@ function TabIndicator({
   selectedKey: string;
   labelOf: (tab: CollabTabRef) => string;
   onSelect: (key: string) => void;
-  top: number;
+  animStyle: ReturnType<typeof useAnimatedStyle>;
   styles: Styles;
   colors: AppColors;
 }) {
   /** 项少到不用滚时让整条 strip 透传触摸：它是横跨整幅的浮层，否则胶囊两侧的空白
-   *  会白白吃掉正文那 40px 的滑动。要滚的时候（项多）才收回触摸。 */
+   *  会白白吃掉正文那一条的滑动。要滚的时候（项多）才收回触摸。 */
   const scrollable = tabs.length > MAX_STATIC_TABS;
   return (
-    <ScrollView
-      horizontal
-      scrollEnabled={scrollable}
-      pointerEvents={scrollable ? 'auto' : 'box-none'}
-      showsHorizontalScrollIndicator={false}
-      style={[styles.tabStrip, { top }]}
-      contentContainerStyle={styles.tabStripContent}
-    >
-      {tabs.map((tab) =>
-        tab.key === selectedKey ? (
-          <View key={tab.key} style={styles.pill}>
-            <Ionicons name={MODE_ICON[tab.mode]} size={14} color={colors.textPrimary} />
-            <Text numberOfLines={1} style={styles.pillText}>
-              {labelOf(tab)}
-            </Text>
-          </View>
-        ) : (
-          <TouchableOpacity
-            key={tab.key}
-            onPress={() => onSelect(tab.key)}
-            activeOpacity={0.6}
-            hitSlop={HIT_SLOP}
-            style={styles.dotHit}
-          >
-            <View style={styles.dot} />
-          </TouchableOpacity>
-        ),
-      )}
-    </ScrollView>
+    /* 外层只负责跟着 sheet 平移（transform 走 UI 线程，比逐帧改 top 省一次布局），
+       触摸一律 box-none 透传给里面的胶囊 / 圆点。 */
+    <Reanimated.View style={[styles.tabStripWrap, animStyle]} pointerEvents="box-none">
+      <ScrollView
+        horizontal
+        scrollEnabled={scrollable}
+        pointerEvents={scrollable ? 'auto' : 'box-none'}
+        showsHorizontalScrollIndicator={false}
+        style={styles.tabStrip}
+        contentContainerStyle={styles.tabStripContent}
+      >
+        {tabs.map((tab) =>
+          tab.key === selectedKey ? (
+            <View key={tab.key} style={styles.pill}>
+              <Ionicons name={MODE_ICON[tab.mode]} size={14} color={colors.textPrimary} />
+              <Text numberOfLines={1} style={styles.pillText}>
+                {labelOf(tab)}
+              </Text>
+            </View>
+          ) : (
+            <TouchableOpacity
+              key={tab.key}
+              onPress={() => onSelect(tab.key)}
+              activeOpacity={0.6}
+              hitSlop={HIT_SLOP}
+              style={styles.dotHit}
+            >
+              <View style={styles.dot} />
+            </TouchableOpacity>
+          ),
+        )}
+      </ScrollView>
+    </Reanimated.View>
   );
 }
 
@@ -472,9 +508,12 @@ function PlaceholderPage({
   );
 }
 
-/** 指示器条整体高度（胶囊 28 + 上下留白）：正文用它 + header 高让位。 */
-const INDICATOR_STRIP_HEIGHT = 40;
 const PILL_HEIGHT = 28;
+/** strip 比胶囊高一圈：阴影要有地方落 —— ScrollView 会把超出自己边界的那部分裁掉。 */
+const INDICATOR_PAD = 8;
+const INDICATOR_STRIP_HEIGHT = PILL_HEIGHT + INDICATOR_PAD * 2;
+/** 胶囊底沿与 sheet 顶沿之间留的空。 */
+const INDICATOR_SHEET_GAP = 10;
 const HIT_SLOP = { top: 10, bottom: 10, left: 6, right: 6 };
 
 function createStyles(c: AppColors) {
@@ -482,14 +521,17 @@ function createStyles(c: AppColors) {
     body: { flex: 1 },
     pager: { flex: 1 },
     page: { flex: 1 },
-    /** 走马灯指示器：绝对浮在正文之上（正文用 contentTopInset 让位），随 header 高度下移。 */
-    tabStrip: {
+    /** 走马灯指示器的定位壳：贴在页面坐标原点，靠 translateY 跟着 sheet 顶沿走。 */
+    tabStripWrap: {
       position: 'absolute',
+      top: 0,
       left: 0,
       right: 0,
       height: INDICATOR_STRIP_HEIGHT,
       zIndex: 5,
     },
+    /** 浮在正文之上，不占正文的位（正文只给 header 让位）。 */
+    tabStrip: { flex: 1 },
     tabStripContent: {
       flexGrow: 1,
       paddingHorizontal: 12,
@@ -497,7 +539,8 @@ function createStyles(c: AppColors) {
       justifyContent: 'center',
       gap: 8,
     },
-    /** 当前页：展开成带图标的名字胶囊。 */
+    /** 当前页：展开成带图标的名字胶囊。浮在正文上（不再压在 header 下沿），
+     *  所以给一层轻阴影把它从文字里托起来。 */
     pill: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -509,11 +552,19 @@ function createStyles(c: AppColors) {
       backgroundColor: c.surface,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: c.border,
+      ...shadowSoft,
     },
     pillText: { flexShrink: 1, fontSize: 13, fontWeight: '600', color: c.textPrimary },
     /** 其余页：收成小圆点，点一下直达（触区放到胶囊同高，免得难点）。 */
     dotHit: { height: PILL_HEIGHT, justifyContent: 'center', paddingHorizontal: 3 },
-    dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: c.placeholder },
+    /** 小圆点同样浮在正文上：给一层 thumb 级的小阴影，压在文字行上也分得清。 */
+    dot: {
+      width: 7,
+      height: 7,
+      borderRadius: 4,
+      backgroundColor: c.placeholder,
+      ...shadowToggleThumb,
+    },
     outlineContent: { paddingHorizontal: 16 },
     projectTitle: {
       fontSize: 22,

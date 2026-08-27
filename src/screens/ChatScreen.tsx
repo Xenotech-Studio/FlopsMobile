@@ -261,6 +261,8 @@ const COLLAB_SHEET_MAX_RATIO = 0.92;
 /** sheet 顶部把手那一条的高度。与 gorhom 默认握把等高（padding 10 + 指示条 4 + padding 10），
  *  同时用 handleStyle 把它钉死 —— 聊天区高度要拿「当前档高 - 把手高」算，这个数不能是猜的。 */
 const COLLAB_SHEET_HANDLE_H = 24;
+/** 「sheet 位置还没报上来」的哨兵：任何真实屏高都够不着，钳制会把它按到最低档那一端。 */
+const COLLAB_SHEET_POSITION_UNSET = 1e6;
 
 /** High-resolution time when available (e.g. Hermes), else `Date.now()`. Avoids bare `performance` (not in RN TS libs). */
 function perfNowMs(): number {
@@ -975,6 +977,15 @@ export function ChatScreen({
   const collabActive = useMemo(() => collabLayoutActive(collabLayout), [collabLayout]);
   /** 协同模式下装聊天消息区的 sheet，留在这里供程序化展开 / 折叠。 */
   const collabSheetRef = useRef<BottomSheet>(null);
+  /** sheet 顶沿此刻的 y —— 走马灯指示器贴着它上方浮动（见 WorkspaceBody 的 sheetTopY）。
+   *  gorhom 往外抛这个值时已经加过 topInset（lib 内 useAnimatedReaction: `内部位置 + topInset`），
+   *  于是它与 collabWorkspaceLayer（containerInner 里的 absoluteFill）同一套坐标，可以直接用。
+   *  起手给个远大于屏高的哨兵：lib 的 INITIAL_POSITION 就是 SCREEN_HEIGHT（sheet 从屏底升起），
+   *  钳制会把指示器按在最低档上方，随 sheet 入场一起升上来，而不是先在 header 底下闪一帧。 */
+  const collabSheetPosition = useSharedValue(COLLAB_SHEET_POSITION_UNSET);
+  /** sheet 停在最低档（peek）时顶沿的 y = 指示器能落到的最低处。首帧还没量到高度时退化成
+   *  header 下沿，onLayout 一到就回到真实值。 */
+  const collabSheetLowestTopY = Math.max(headerHeight, collabHostHeight - collabSheetPeekHeight);
   /* 键盘开合：协同模式下聊天区高度要按键盘上沿截断（见 collabSheetChatHeight）。
      只在协同模式挂监听，普通聊天页不用为此多两个订阅。 */
   useEffect(() => {
@@ -5388,6 +5399,9 @@ export function ChatScreen({
             layout={collabLayout}
             topInset={headerHeight}
             bottomInset={collabSheetPeekHeight}
+            /* 走马灯指示器贴着 sheet 上沿走：sheet 拖到哪档，tabs 就跟到哪 */
+            sheetTopY={collabSheetPosition}
+            sheetTopYMax={collabSheetLowestTopY}
           />
         </View>
       ) : null}
@@ -5411,6 +5425,9 @@ export function ChatScreen({
           onChange={(index) => {
             if (index >= 0) setCollabSheetIndex(index);
           }}
+          /* 顶沿位置逐帧抛给工作区层（指示器跟着它走）。拖拽 / 键盘顶起都在 UI 线程更新，
+             不经 React —— 所以 tabs 跟随是跟手的，不是等档位 state 落定才跳一下。 */
+          animatedPosition={collabSheetPosition}
           /* 顶到 header 下沿为止：百分比档位按「header 以下」这块算，
              最高档也不会把 handle 藏到顶栏毛玻璃后面。 */
           topInset={headerHeight}
