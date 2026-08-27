@@ -283,8 +283,8 @@ export function WorkspaceBody({
       <Reanimated.View style={[styles.bottomFade, fadeAnimStyle]} pointerEvents="none">
         <LinearGradient
           colors={fadeColors}
-          /* 末档落在 WORKSPACE_FADE_HEIGHT / 总高 处：那以下（压在 sheet 顶沿及其圆角缺口里
-             的那几 pt）恒为实色，不会漏出一条没洗白的正文。 */
+          /* 末档落在 WORKSPACE_FADE_HEIGHT / 总高 处：那以下（压在 sheet 顶沿底下的那几 pt）
+             恒为实色，交界处不会漏出一条没洗白的正文。 */
           locations={[0, 0.4, 0.65, WORKSPACE_FADE_HEIGHT / WORKSPACE_FADE_TOTAL]}
           style={StyleSheet.absoluteFill}
           start={{ x: 0.5, y: 0 }}
@@ -536,7 +536,8 @@ const INDICATOR_STRIP_HEIGHT = PILL_HEIGHT + INDICATOR_PAD * 2;
 const INDICATOR_SHEET_GAP = 10;
 /** 底部渐变遮罩：从 sheet 顶沿往上这么高（比整条指示器 44+10 再高一截，胶囊上方还有余量继续淡）。 */
 const WORKSPACE_FADE_HEIGHT = 72;
-/** 再往 sheet 里多铺一截实色，兜住 sheet 圆角缺口那几 pt 与亚像素缝。 */
+/** 再往 sheet 里多铺一截实色，兜住渐变末端与 sheet 顶沿之间的亚像素缝。
+ *  （sheet 那两个圆角缺口露的本来就是工作区底色 —— 圆角正是靠它才看得出来，不该盖。） */
 const WORKSPACE_FADE_TOTAL = WORKSPACE_FADE_HEIGHT + 8;
 const HIT_SLOP = { top: 10, bottom: 10, left: 6, right: 6 };
 

@@ -134,10 +134,18 @@ export function createChatStyles(c: AppColors) {
    *  层次交给「底层更暗 + 上缘 hairline + 向上投影」三件套。 */
   collabSheetBackground: {
     backgroundColor: c.chatScreenBackground,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    /** 上缘 hairline：阴影在暗色下几乎不可见，靠这条边把 sheet 顶沿钉出来（亮色下它很淡，只作收边）。 */
-    borderTopWidth: StyleSheet.hairlineWidth,
+    /** 32 = 项目里所有 sheet 的统一圆角（ProfileSheet / ModelSelectSheet / DocsTreeSheet…）。 */
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    /**
+     * 收边 hairline：阴影在暗色下几乎不可见（sheet 面 #101010 与工作区 #070708 只差一档），
+     * 靠这条边把 sheet 顶沿连同圆角一起钉出来；亮色下它很淡，只作收边。
+     *
+     * **四边都给**，不能只写 borderTopWidth：单边 border + 圆角会让两端走各自的渲染路径，
+     * 圆角处那段弧描不出来 —— 表现就是「顶边是直的、左右上角看着是直角」。左右两条落在
+     * 屏幕最外侧那列像素上、下边在屏幕外，实际只看得见顶上这一条。
+     */
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: c.border,
     /** 项目通用 sheet 投影（向上，height:-4）—— 与 ProfileSheet / ModelSelectSheet 同一预设。 */
     ...shadowSheet,
