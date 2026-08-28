@@ -88,6 +88,8 @@ type Props = {
   authSubmitting?: boolean;
   /** flops 型子agent：点「查看对话」时用子对话 id 打开 SubagentViewOverlay（由 ChatScreen 注入）。 */
   onOpenSubagentView?: (args: { sessionId: string; title?: string }) => void;
+  /** 查看弹窗里以完全展开态复用本卡（宿主把子对话读取结果适配成 subagent block 传入）。 */
+  defaultExpanded?: boolean;
 };
 
 function parseArgs(raw?: string): Record<string, unknown> {
@@ -320,8 +322,11 @@ function SubagentCardImpl({
   renderToolCardAuthorizationActions,
   authSubmitting,
   onOpenSubagentView,
+  defaultExpanded,
 }: Props) {
-  const [viewOverride, setViewOverride] = useState<'collapsed' | 'preview' | 'full' | null>(null);
+  const [viewOverride, setViewOverride] = useState<'collapsed' | 'preview' | 'full' | null>(
+    defaultExpanded ? 'full' : null,
+  );
   const [promptH, setPromptH] = useState(0);
   const [previewH, setPreviewH] = useState(0);
 

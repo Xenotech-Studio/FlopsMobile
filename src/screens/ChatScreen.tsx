@@ -6261,6 +6261,9 @@ export function ChatScreen({
         targetSessionId={subagentViewTarget}
         title={subagentViewTitle}
         onClose={() => setSubagentViewVisible(false)}
+        cardStyles={styles as unknown as Record<string, any>}
+        cardColors={colors as unknown as Record<string, any>}
+        getToolStatusLabel={getToolStatusLabel}
       />
     ) : null}
 
