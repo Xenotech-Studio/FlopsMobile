@@ -86,6 +86,8 @@ type Props = {
   isSubmitting: boolean;
   renderToolCardAuthorizationActions?: (authReq: AuthRequest, isSubmitting: boolean, error?: string) => React.ReactNode;
   authSubmitting?: boolean;
+  /** flops 型子agent：点「查看对话」时用子对话 id 打开 SubagentViewOverlay（由 ChatScreen 注入）。 */
+  onOpenSubagentView?: (args: { sessionId: string; title?: string }) => void;
 };
 
 function parseArgs(raw?: string): Record<string, unknown> {
@@ -317,6 +319,7 @@ function SubagentCardImpl({
   isSubmitting,
   renderToolCardAuthorizationActions,
   authSubmitting,
+  onOpenSubagentView,
 }: Props) {
   const [viewOverride, setViewOverride] = useState<'collapsed' | 'preview' | 'full' | null>(null);
   const [promptH, setPromptH] = useState(0);
@@ -363,6 +366,18 @@ function SubagentCardImpl({
 
   const sid = isResumed ? resumeSid : String((res?.session_id as string) || '').trim();
   const sidShort = sid ? sid.slice(0, 8) : '';
+
+  // flops 型子agent（agent_type 缺省即 flops；claude/cursor 有专属 tool_name / agent_type）→ 可查看其子对话。
+  const agentType = String((args.agent_type ?? '') as string).trim().toLowerCase();
+  const isFlopsAgent =
+    block.tool_name !== 'local_claude_agent' &&
+    block.tool_name !== 'local_cursor_agent' &&
+    agentType !== 'claude' &&
+    agentType !== 'cursor';
+  const childSessionId = String(
+    (res?.session_id as string) || (res?.child_conversation_id as string) || sid || ''
+  ).trim();
+  const canViewChild = Boolean(isFlopsAgent && childSessionId && onOpenSubagentView);
   const verb = isResumed ? '继续会话' : '新建会话';
   const deviceName = String((res?.device_name as string) || (res?.device_id as string) || '').trim();
 
@@ -526,6 +541,18 @@ function SubagentCardImpl({
                 ) : null}
               </View>
             </View>
+          ) : null}
+
+          {/* flops 子agent：查看其子对话内容（打开 SubagentViewOverlay） */}
+          {canViewChild ? (
+            <TouchableOpacity
+              style={styles.subSteps}
+              onPress={() => onOpenSubagentView?.({ sessionId: childSessionId, title: agentLabel })}
+              activeOpacity={0.7}
+            >
+              <View style={{ flex: 1 }} />
+              <Text style={styles.subStepsAction}>查看对话 ›</Text>
+            </TouchableOpacity>
           ) : null}
 
           {/* 底部展开/收起 bar */}

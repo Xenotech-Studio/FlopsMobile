@@ -1283,6 +1283,56 @@ export async function submitConversationAccessDecision(
 }
 
 /**
+ * 查看 flops 子agent 的子对话内容（POST /api/conversations/{parent}/subagent_view）。
+ *
+ * 加密子对话：服务端没有 K_conv，必须带上**父对话**自身的 K_conv wire 才能解开子对话
+ * （子对话钥匙由父对话 meta 派生）。这里复用 submitConversationAccessDecision 构造
+ * target_k_conv_wire 的同一套机制：resolveKConvForConversation 解出 K_conv →
+ * getTransportPubkeyMobile 取传输公钥 → wrapKConvForWire 包成 wire，只是这里作用于
+ * **父对话**（当前对话）而非授权目标。拿不到（明文父对话 / 未解锁）则省略 k_conv_wire：
+ * 明文子对话照常返回，加密子对话服务端回 needs_authorization（locked）。
+ */
+export async function getSubagentView(
+  session: Session,
+  opts: { parentConversationId: string; targetSessionId: string; limit?: number }
+): Promise<any> {
+  const base = session.server_base_url;
+  const parentId = String(opts.parentConversationId || '').trim();
+  const target = String(opts.targetSessionId || '').trim();
+  const body: Record<string, unknown> = {
+    target,
+    limit: opts.limit ?? 30,
+  };
+  // 尽力派生父对话 K_conv wire（缺则省略，加密子对话会 locked，明文照常）。
+  try {
+    const parentK = await resolveKConvForConversation(session, parentId);
+    if (parentK) {
+      const pub = await getTransportPubkeyMobile(base);
+      body.k_conv_wire = wrapKConvForWire(parentK, pub);
+    }
+  } catch {
+    // 派生失败不致命：不带 wire，交由服务端按明文/locked 处理。
+  }
+  const res = await fetchWithDebugLog(
+    `${base}api/conversations/${encodeURIComponent(parentId)}/subagent_view`,
+    {
+      method: 'POST',
+      headers: { ...authHeaders(session.access_token) },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(
+      (err as { detail?: string; error?: string }).detail ||
+        (err as { error?: string }).error ||
+        `查看子对话失败: ${res.status}`
+    );
+  }
+  return res.json();
+}
+
+/**
  * 批量标题解密授权（list_conversations 触发）：用户对「agent 想看你 N 个加密对话的标题」弹窗点
  * 允许/拒绝。允许时用 K_user 逐个解出这些对话标题明文打包上送 titles_decision；服务端缓存 5min +
  * 唤醒发起方 agent 再次 list_conversations 即见明文。服务端无 K_user、不解标题，零知识不破。

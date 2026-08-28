@@ -181,6 +181,7 @@ import { IOSStyleSwitch } from '../components/IOSStyleSwitch';
 import { resolveAgentDisplayLabel } from '../utils/agentDisplay';
 import { VoiceDictationSession } from '../utils/voiceDictationMobile';
 import { UsageDetailModal } from '../components/UsageDetailModal';
+import { SubagentViewOverlay } from '../components/SubagentViewOverlay';
 import { ContextCompressDividerRow } from '../components/ContextCompressDividerRow';
 import { SearchEngineCard } from './chat-cards/SearchEngineCard';
 import { FileWriteCard } from './chat-cards/FileWriteCard';
@@ -683,6 +684,17 @@ export function ChatScreen({
     actionLabel?: string;
     onAction?: () => void;
   } | null>(null);
+  /** flops 子agent「查看对话」→ 打开子对话内容 Overlay（target = 子对话 id）。 */
+  const [subagentViewVisible, setSubagentViewVisible] = useState(false);
+  const [subagentViewTarget, setSubagentViewTarget] = useState('');
+  const [subagentViewTitle, setSubagentViewTitle] = useState<string | undefined>(undefined);
+  const openSubagentView = useCallback((args: { sessionId: string; title?: string }) => {
+    const sid = String(args?.sessionId || '').trim();
+    if (!sid) return;
+    setSubagentViewTarget(sid);
+    setSubagentViewTitle(args?.title);
+    setSubagentViewVisible(true);
+  }, []);
   /** 编辑用户消息后重新生成（与 Web/Desktop 一致） */
   const [userMessageEdit, setUserMessageEdit] = useState<{
     afterIndex: number;
@@ -4441,9 +4453,10 @@ export function ChatScreen({
         isSubmitting={Boolean(submittingReviewId && submittingReviewId === block.review_id)}
         renderToolCardAuthorizationActions={renderToolCardAuthorizationActions}
         authSubmitting={Boolean(submittingAuthorizationId && submittingAuthorizationId === block.auth_request?.request_id)}
+        onOpenSubagentView={openSubagentView}
       />
     );
-  }, [colors, renderToolCardSafetyActions, renderToolCardAuthorizationActions, submittingAuthorizationId, styles, submittingReviewId, getToolStatusLabel]);
+  }, [colors, renderToolCardSafetyActions, renderToolCardAuthorizationActions, submittingAuthorizationId, styles, submittingReviewId, getToolStatusLabel, openSubagentView]);
 
   const renderSubagentMetaBlock = useCallback((block: Extract<StreamBlock, { type: 'tool' }>, key: string) => {
     return (
@@ -6240,6 +6253,16 @@ export function ChatScreen({
         }
       }}
     />
+    {session && subagentViewTarget ? (
+      <SubagentViewOverlay
+        visible={subagentViewVisible}
+        session={session}
+        parentConversationId={String(conversationId || '')}
+        targetSessionId={subagentViewTarget}
+        title={subagentViewTitle}
+        onClose={() => setSubagentViewVisible(false)}
+      />
+    ) : null}
 
     {/* composer「+」附件菜单的全屏透明 backdrop（两平台共用）：
      *  - Android：自绘 popover 的关闭层，点空白关菜单。
