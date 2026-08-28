@@ -688,13 +688,22 @@ export function ChatScreen({
   const [subagentViewVisible, setSubagentViewVisible] = useState(false);
   const [subagentViewTarget, setSubagentViewTarget] = useState('');
   const [subagentViewTitle, setSubagentViewTitle] = useState<string | undefined>(undefined);
-  const openSubagentView = useCallback((args: { sessionId: string; title?: string }) => {
-    const sid = String(args?.sessionId || '').trim();
-    if (!sid) return;
-    setSubagentViewTarget(sid);
-    setSubagentViewTitle(args?.title);
-    setSubagentViewVisible(true);
-  }, []);
+  const [subagentViewAgentType, setSubagentViewAgentType] = useState<'flops' | 'claude' | 'cursor'>('flops');
+  const [subagentViewDeviceId, setSubagentViewDeviceId] = useState('');
+  const [subagentViewCwd, setSubagentViewCwd] = useState('');
+  const openSubagentView = useCallback(
+    (args: { sessionId: string; title?: string; agentType?: 'flops' | 'claude' | 'cursor'; deviceId?: string; cwd?: string }) => {
+      const sid = String(args?.sessionId || '').trim();
+      if (!sid) return;
+      setSubagentViewTarget(sid);
+      setSubagentViewTitle(args?.title);
+      setSubagentViewAgentType(args?.agentType || 'flops');
+      setSubagentViewDeviceId(String(args?.deviceId || ''));
+      setSubagentViewCwd(String(args?.cwd || ''));
+      setSubagentViewVisible(true);
+    },
+    []
+  );
   /** 编辑用户消息后重新生成（与 Web/Desktop 一致） */
   const [userMessageEdit, setUserMessageEdit] = useState<{
     afterIndex: number;
@@ -6260,6 +6269,9 @@ export function ChatScreen({
         parentConversationId={String(conversationId || '')}
         targetSessionId={subagentViewTarget}
         title={subagentViewTitle}
+        agentType={subagentViewAgentType}
+        deviceId={subagentViewDeviceId}
+        cwd={subagentViewCwd}
         onClose={() => setSubagentViewVisible(false)}
         cardStyles={styles as unknown as Record<string, any>}
         cardColors={colors as unknown as Record<string, any>}

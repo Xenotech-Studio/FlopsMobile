@@ -86,8 +86,14 @@ type Props = {
   isSubmitting: boolean;
   renderToolCardAuthorizationActions?: (authReq: AuthRequest, isSubmitting: boolean, error?: string) => React.ReactNode;
   authSubmitting?: boolean;
-  /** flops 型子agent：点「查看对话」时用子对话 id 打开 SubagentViewOverlay（由 ChatScreen 注入）。 */
-  onOpenSubagentView?: (args: { sessionId: string; title?: string }) => void;
+  /** flops/claude/cursor 型子agent：点「查看对话」时用子会话 id 打开 SubagentViewOverlay（由 ChatScreen 注入）。 */
+  onOpenSubagentView?: (args: {
+    sessionId: string;
+    title?: string;
+    agentType?: 'flops' | 'claude' | 'cursor';
+    deviceId?: string;
+    cwd?: string;
+  }) => void;
   /** 查看弹窗里以完全展开态复用本卡（宿主把子对话读取结果适配成 subagent block 传入）。 */
   defaultExpanded?: boolean;
 };
@@ -372,17 +378,23 @@ function SubagentCardImpl({
   const sid = isResumed ? resumeSid : String((res?.session_id as string) || '').trim();
   const sidShort = sid ? sid.slice(0, 8) : '';
 
-  // flops 型子agent（agent_type 缺省即 flops；claude/cursor 有专属 tool_name / agent_type）→ 可查看其子对话。
-  const agentType = String((args.agent_type ?? '') as string).trim().toLowerCase();
-  const isFlopsAgent =
-    block.tool_name !== 'local_claude_agent' &&
-    block.tool_name !== 'local_cursor_agent' &&
-    agentType !== 'claude' &&
-    agentType !== 'cursor';
+  // 有效 agent 类型：local_claude/cursor_agent → claude/cursor；否则取 agent_type 参数，缺省 flops。
+  // flops / claude / cursor 三种均可查看其子对话（各走不同后端端点）。
+  const agentTypeArg = String((args.agent_type ?? '') as string).trim().toLowerCase();
+  const effectiveType: 'flops' | 'claude' | 'cursor' =
+    block.tool_name === 'local_claude_agent'
+      ? 'claude'
+      : block.tool_name === 'local_cursor_agent'
+        ? 'cursor'
+        : agentTypeArg === 'claude'
+          ? 'claude'
+          : agentTypeArg === 'cursor'
+            ? 'cursor'
+            : 'flops';
   const childSessionId = String(
     (res?.session_id as string) || (res?.child_conversation_id as string) || sid || ''
   ).trim();
-  const canViewChild = Boolean(isFlopsAgent && childSessionId && onOpenSubagentView);
+  const canViewChild = Boolean(childSessionId && onOpenSubagentView);
   const verb = isResumed ? '继续会话' : '新建会话';
   const deviceName = String((res?.device_name as string) || (res?.device_id as string) || '').trim();
 
@@ -552,7 +564,15 @@ function SubagentCardImpl({
           {canViewChild ? (
             <TouchableOpacity
               style={styles.subSteps}
-              onPress={() => onOpenSubagentView?.({ sessionId: childSessionId, title: agentLabel })}
+              onPress={() =>
+                onOpenSubagentView?.({
+                  sessionId: childSessionId,
+                  title: agentLabel,
+                  agentType: effectiveType,
+                  deviceId: String(res?.device_id || ''),
+                  cwd: String((args.cwd as string) || res?.cwd || ''),
+                })
+              }
               activeOpacity={0.7}
             >
               <View style={{ flex: 1 }} />

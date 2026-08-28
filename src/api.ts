@@ -1333,6 +1333,41 @@ export async function getSubagentView(
 }
 
 /**
+ * 查看 claude/cursor CLI 子agent 的子对话内容（executor_subagent_view）。执行端本地会话，
+ * 服务端无 K_conv（不加密），故不需 k_conv_wire。返回 {ok, agent_blocks, title, running, ...}。
+ */
+export async function getExecutorSubagentView(
+  session: Session,
+  opts: { parentConversationId: string; sessionId: string; agentType: 'claude' | 'cursor'; deviceId?: string; cwd?: string }
+): Promise<any> {
+  const base = session.server_base_url;
+  const parentId = String(opts.parentConversationId || '').trim();
+  const body: Record<string, unknown> = {
+    session_id: opts.sessionId,
+    agent_type: opts.agentType,
+    device_id: opts.deviceId || undefined,
+    cwd: opts.cwd || undefined,
+  };
+  const res = await fetchWithDebugLog(
+    `${base}api/conversations/${encodeURIComponent(parentId)}/executor_subagent_view`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders(session.access_token) },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(
+      (err as { detail?: string; error?: string }).detail ||
+        (err as { error?: string }).error ||
+        `查看子对话失败: ${res.status}`
+    );
+  }
+  return res.json();
+}
+
+/**
  * 批量标题解密授权（list_conversations 触发）：用户对「agent 想看你 N 个加密对话的标题」弹窗点
  * 允许/拒绝。允许时用 K_user 逐个解出这些对话标题明文打包上送 titles_decision；服务端缓存 5min +
  * 唤醒发起方 agent 再次 list_conversations 即见明文。服务端无 K_user、不解标题，零知识不破。

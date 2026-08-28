@@ -20,7 +20,7 @@ import {
   View,
 } from 'react-native';
 import { SubagentCard } from '../screens/chat-cards/SubagentCard';
-import { getSubagentView } from '../api';
+import { getSubagentView, getExecutorSubagentView } from '../api';
 import type { Session } from '../api';
 
 type Msg = { role?: string; content?: string };
@@ -44,6 +44,10 @@ type Props = {
   parentConversationId: string;
   targetSessionId: string;
   title?: string;
+  /** 子agent 类型：flops 走 subagent_view；claude/cursor 走 executor_subagent_view。 */
+  agentType?: 'flops' | 'claude' | 'cursor';
+  deviceId?: string;
+  cwd?: string;
   onClose: () => void;
   /** ChatScreen 的样式/配色/工具状态文案——传给复用的 SubagentCard，令其渲染与主对话一致。 */
   cardStyles: Record<string, any>;
@@ -84,6 +88,9 @@ export function SubagentViewOverlay({
   session,
   parentConversationId,
   targetSessionId,
+  agentType = 'flops',
+  deviceId,
+  cwd,
   onClose,
   cardStyles,
   cardColors,
@@ -92,6 +99,8 @@ export function SubagentViewOverlay({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [data, setData] = useState<ViewData | null>(null);
+  // claude/cursor 分支：直接从 agent_blocks 建好的假 block（不经消息→block 转换）。
+  const [blockOverride, setBlockOverride] = useState<Record<string, unknown> | null>(null);
 
   const load = useCallback(() => {
     if (!targetSessionId || !parentConversationId) return;
@@ -99,32 +108,67 @@ export function SubagentViewOverlay({
     setError('');
     void (async () => {
       try {
-        const res = await getSubagentView(session, {
-          parentConversationId,
-          targetSessionId,
-          limit: 30,
-        });
-        setData(res as ViewData);
+        if (agentType === 'claude' || agentType === 'cursor') {
+          const result = await getExecutorSubagentView(session, {
+            parentConversationId,
+            sessionId: targetSessionId,
+            agentType,
+            deviceId,
+            cwd,
+          });
+          if (result && result.ok === false) {
+            throw new Error(String(result.error || '查看子对话失败'));
+          }
+          setBlockOverride({
+            type: 'tool',
+            tool_name: 'subagent_start',
+            index: 0,
+            status: result?.running ? 'running' : 'completed',
+            arguments: JSON.stringify({
+              agent_type: agentType,
+              prompt: String(result?.prompt_preview || ''),
+              session_id: targetSessionId,
+            }),
+            result: {
+              session_id: targetSessionId,
+              agent_blocks: result?.agent_blocks || [],
+              ...(result?.model ? { model: result.model } : {}),
+            },
+          });
+        } else {
+          const res = await getSubagentView(session, {
+            parentConversationId,
+            targetSessionId,
+            limit: 30,
+          });
+          setData(res as ViewData);
+        }
       } catch (e) {
         setError((e as Error)?.message || String(e));
       } finally {
         setLoading(false);
       }
     })();
-  }, [session, parentConversationId, targetSessionId]);
+  }, [session, parentConversationId, targetSessionId, agentType, deviceId, cwd]);
 
   useEffect(() => {
     if (visible) load();
     else {
       setData(null);
+      setBlockOverride(null);
       setError('');
     }
   }, [visible, load]);
 
   if (!visible) return null;
 
-  const locked = data?.status === 'needs_authorization';
-  const hasContent = Boolean(data && data.success !== false && !locked);
+  const isExecutor = agentType === 'claude' || agentType === 'cursor';
+  const locked = !isExecutor && data?.status === 'needs_authorization';
+  const hasContent = isExecutor
+    ? Boolean(blockOverride)
+    : Boolean(data && data.success !== false && !locked);
+  const cardBlock = isExecutor ? blockOverride : buildSubagentBlock(data, targetSessionId);
+  const cardAgentLabel = agentType === 'claude' ? 'Claude 对话' : agentType === 'cursor' ? 'Cursor 对话' : 'Flops 对话';
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -149,9 +193,9 @@ export function SubagentViewOverlay({
               <ScrollView style={styles.scroll} contentContainerStyle={styles.cardScrollContent}>
                 {/* 复用真正的工具卡组件：完全展开态，视觉与主对话里展开的子 agent 卡一致。 */}
                 <SubagentCard
-                  block={buildSubagentBlock(data, targetSessionId) as unknown as never}
+                  block={cardBlock as unknown as never}
                   cardKey={`subagent-view-${targetSessionId}`}
-                  agentLabel="Flops 对话"
+                  agentLabel={cardAgentLabel}
                   styles={cardStyles}
                   colors={cardColors}
                   iconColor={cardColors?.textSecondary || '#8ab4ff'}
