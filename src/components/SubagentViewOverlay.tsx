@@ -18,6 +18,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { MarkdownContent } from './MarkdownContent';
 import { getSubagentView } from '../api';
 import type { Session } from '../api';
 
@@ -138,12 +139,16 @@ export function SubagentViewOverlay({
                 ) : (
                   messages.map((m, i) => {
                     const isUser = String(m?.role || '') === 'user';
+                    // 复用工具卡展开态的呈现：提问/回答 label（同卡片语汇）+ 内容走与卡片同一个
+                    // MarkdownContent（代码块/列表/字体一致），而非纯文本。
                     return (
                       <View key={i} style={styles.msgRow}>
                         <Text style={[styles.roleLabel, isUser ? styles.roleUser : styles.roleAgent]}>
-                          {isUser ? '用户' : '子agent'}
+                          {isUser ? '提问' : '回答'}
                         </Text>
-                        <Text style={styles.msgContent}>{String(m?.content || '').trim()}</Text>
+                        <View style={styles.msgBody}>
+                          <MarkdownContent text={String(m?.content || '').trim()} showCopyButton={false} />
+                        </View>
                       </View>
                     );
                   })
@@ -231,6 +236,8 @@ const styles = StyleSheet.create({
   roleLabel: { fontSize: 11, fontWeight: '600' },
   roleUser: { color: 'rgba(255,255,255,0.55)' },
   roleAgent: { color: '#7cbcff' },
+  // 内容容器：对齐工具卡回答区（reply body）的轻缩进；正文交给 MarkdownContent 渲染。
+  msgBody: { marginTop: 2 },
   msgContent: { color: 'rgba(255,255,255,0.88)', fontSize: 13, lineHeight: 20 },
   thinkingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 4 },
   lockedPanel: {
