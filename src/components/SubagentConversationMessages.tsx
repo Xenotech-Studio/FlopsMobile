@@ -11,6 +11,7 @@ import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { InnerToolStep } from '../screens/chat-cards/SubagentCard';
 import { ThinkingBlockView } from '../screens/chat/ThinkingBlockView';
+import { isClosedThinkingBlock, isToolPackageNavBlock } from '../utils/chatStreamBlockKinds';
 import { MarkdownContent } from './MarkdownContent';
 
 type Props = {
@@ -50,27 +51,48 @@ export function SubagentConversationMessages({
 
         if (role === 'assistant') {
           const blocks = Array.isArray(msg.blocks) ? msg.blocks : [];
+          // 纵向间距完全对齐主对话（ChatScreen）：容器不用 gap，各块自带 margin——
+          // thinking 走 ThinkingBlockView.container(3/3) + 与工具包行相邻时的 ±1 nudge；
+          // 文本走 assistantTextBlock(7)，紧跟闭合思考时收成 0、紧跟工具包行收成 6；
+          // 工具卡走 toolCard(4/4)。若这里改回 gap 会叠加到各块 margin 上，令 thinking 与
+          // 上/下内容间距偏大且与主对话不一致。
           return (
             <View key={`a-${mi}`} style={local.assistantWrap}>
               {blocks.map((block: any, bi: number) => {
                 if (!block || typeof block !== 'object') return null;
                 const bt = String(block.type || '');
+                const prevBlock = blocks[bi - 1];
+                const nextBlock = blocks[bi + 1];
+                const compactAbove = prevBlock != null && isToolPackageNavBlock(prevBlock);
+                const tightAfterThinking = prevBlock != null && isClosedThinkingBlock(prevBlock);
                 if (bt === 'text') {
                   const text = typeof block.content === 'string' ? block.content : '';
                   if (!text) return null;
                   return (
-                    <MarkdownContent
+                    <View
                       key={`t-${mi}-${bi}`}
-                      text={text}
-                      showCopyButton={false}
-                    />
+                      style={[
+                        styles.assistantTextBlock,
+                        compactAbove && styles.assistantTextBlockCompactAbove,
+                        tightAfterThinking && styles.assistantTextBlockTightAfterThinking,
+                      ]}
+                    >
+                      <MarkdownContent text={text} showCopyButton={false} />
+                    </View>
                   );
                 }
                 if (bt === 'thinking') {
                   const text = typeof block.content === 'string' ? block.content : '';
                   if (!text.trim()) return null;
                   // 主对话同款思考块（Brain 图标 + 标签 + 可折叠正文），视觉/交互与主对话一致。
-                  return <ThinkingBlockView key={`th-${mi}-${bi}`} block={block} />;
+                  return (
+                    <ThinkingBlockView
+                      key={`th-${mi}-${bi}`}
+                      block={block}
+                      prevIsToolPackage={prevBlock != null && isToolPackageNavBlock(prevBlock)}
+                      nextIsToolPackage={nextBlock != null && isToolPackageNavBlock(nextBlock)}
+                    />
+                  );
                 }
                 if (bt === 'tool') {
                   return (
@@ -121,7 +143,8 @@ function createLocalStyles(colors: Record<string, any>) {
       borderRadius: 14,
       backgroundColor: bubbleBg,
     },
-    assistantWrap: { marginBottom: 14, gap: 6 },
+    // 不用 gap：各块自带 margin（对齐主对话 ChatScreen 的按块 margin 模型），避免叠加致间距偏大。
+    assistantWrap: { marginBottom: 14 },
     thinking: {
       color: muted,
       fontStyle: 'italic',
