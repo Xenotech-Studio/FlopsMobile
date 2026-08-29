@@ -10,6 +10,7 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { InnerToolStep } from '../screens/chat-cards/SubagentCard';
+import { ThinkingBlockView } from '../screens/chat/ThinkingBlockView';
 import { MarkdownContent } from './MarkdownContent';
 
 type Props = {
@@ -68,11 +69,8 @@ export function SubagentConversationMessages({
                 if (bt === 'thinking') {
                   const text = typeof block.content === 'string' ? block.content : '';
                   if (!text.trim()) return null;
-                  return (
-                    <Text key={`th-${mi}-${bi}`} style={local.thinking}>
-                      {text}
-                    </Text>
-                  );
+                  // 主对话同款思考块（Brain 图标 + 标签 + 可折叠正文），视觉/交互与主对话一致。
+                  return <ThinkingBlockView key={`th-${mi}-${bi}`} block={block} />;
                 }
                 if (bt === 'tool') {
                   return (
