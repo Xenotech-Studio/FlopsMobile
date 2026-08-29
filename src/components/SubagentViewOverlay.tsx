@@ -8,7 +8,7 @@
  * 加密子对话需带父对话 K_conv wire（api.getSubagentView 内部处理）；拿不到钥匙时服务端回
  * needs_authorization，本层显示 locked 面板提示先在对话中授权。
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -19,11 +19,13 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import { SubagentCard } from '../screens/chat-cards/SubagentCard';
 import { SubagentConversationMessages } from './SubagentConversationMessages';
 import { rawMessagesToLocal } from '../utils/chatLocalMessages';
 import { getSubagentView, getExecutorSubagentView } from '../api';
 import type { Session } from '../api';
+import { shadowSheet } from '../theme/shadows';
 
 type Msg = { role?: string; content?: string };
 
@@ -136,6 +138,8 @@ export function SubagentViewOverlay({
     }
   }, [visible, load]);
 
+  const styles = useMemo(() => createStyles(cardColors), [cardColors]);
+
   if (!visible) return null;
 
   const isExecutor = agentType === 'claude' || agentType === 'cursor';
@@ -145,14 +149,59 @@ export function SubagentViewOverlay({
     : Boolean(data && data.success !== false && !locked);
   const cardAgentLabel = agentType === 'claude' ? 'Claude 对话' : agentType === 'cursor' ? 'Cursor 对话' : 'Flops 对话';
 
+  // 标题：${agentLabel} 子对话；副标题：会话 ${8位} · 运行中/已完成（有数据时才带状态）。
+  const agentLabel = agentType === 'claude' ? 'Claude' : agentType === 'cursor' ? 'Cursor' : 'Flops';
+  const running = isExecutor
+    ? Boolean((blockOverride as any)?.status === 'running')
+    : Boolean(data?.is_running);
+  const sessionShort = (targetSessionId || '').slice(0, 8);
+  const statusText = hasContent ? (running ? '运行中' : '已完成') : '';
+  const subtitle = statusText ? `会话 ${sessionShort} · ${statusText}` : `会话 ${sessionShort}`;
+
+  const spinnerColor = (cardColors?.textSecondary as string) || (cardColors?.textPrimary as string) || '#888';
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.shell} onPress={(e) => e.stopPropagation()}>
+        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()}>
+          <View style={styles.header}>
+            <View style={styles.headerTextCol}>
+              <Text style={styles.title} numberOfLines={1}>
+                {`${agentLabel} 子对话`}
+              </Text>
+              <Text style={styles.subtitle} numberOfLines={1}>
+                {subtitle}
+              </Text>
+            </View>
+            <View style={styles.headerActions}>
+              <TouchableOpacity
+                style={[styles.iconBtn, loading && styles.iconBtnDisabled]}
+                onPress={load}
+                disabled={loading}
+                activeOpacity={0.7}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                {loading && (data || blockOverride) ? (
+                  <ActivityIndicator size="small" color={spinnerColor} />
+                ) : (
+                  <Ionicons name="refresh" size={20} color={cardColors?.textSecondary || '#888'} />
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.iconBtn}
+                onPress={onClose}
+                activeOpacity={0.7}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={22} color={cardColors?.textSecondary || '#888'} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
           <View style={styles.body}>
-            {loading && !data ? (
+            {loading && !data && !blockOverride ? (
               <View style={styles.centerRow}>
-                <ActivityIndicator size="small" color="#fff" />
+                <ActivityIndicator size="small" color={spinnerColor} />
                 <Text style={styles.dimText}>加载中…</Text>
               </View>
             ) : error ? (
@@ -198,77 +247,82 @@ export function SubagentViewOverlay({
               </View>
             )}
           </View>
-
-          <View style={styles.footer}>
-            <TouchableOpacity
-              style={[styles.btn, styles.btnGhost, loading && styles.btnDisabled]}
-              onPress={load}
-              disabled={loading}
-              activeOpacity={0.7}
-            >
-              {loading && data ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text style={styles.btnGhostText}>刷新</Text>
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.btn} onPress={onClose} activeOpacity={0.7}>
-              <Text style={styles.btnText}>关闭</Text>
-            </TouchableOpacity>
-          </View>
         </Pressable>
       </Pressable>
     </Modal>
   );
 }
 
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-  },
-  // 纯容器：无边框/背景，工具卡自身边框即弹窗边框。
-  shell: { maxHeight: '82%' },
-  body: { flexShrink: 1 },
-  // flexShrink 让 ScrollView 在 shell 的 maxHeight 内收缩并内部滚动，长对话不被裁切。
-  scroll: { flexShrink: 1 },
-  cardScrollContent: { paddingBottom: 4 },
-  centerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    padding: 24,
-    justifyContent: 'center',
-  },
-  centerCol: { padding: 24, alignItems: 'center', gap: 8 },
-  dimText: { color: 'rgba(255,255,255,0.5)', fontSize: 13, lineHeight: 19 },
-  errorText: { color: '#ff8f8a', fontSize: 13, lineHeight: 19, textAlign: 'center' },
-  lockedPanel: {
-    padding: 16,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    gap: 8,
-  },
-  lockedText: { color: 'rgba(255,255,255,0.82)', fontSize: 13, lineHeight: 20 },
-  footer: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 10,
-    paddingTop: 12,
-  },
-  btn: {
-    minWidth: 88,
-    paddingVertical: 9,
-    paddingHorizontal: 18,
-    borderRadius: 9999,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  btnDisabled: { opacity: 0.6 },
-  btnText: { color: '#111', fontSize: 14, fontWeight: '600' },
-  btnGhost: { backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' },
-  btnGhostText: { color: '#fff', fontSize: 14, fontWeight: '500' },
-});
+function createStyles(c: Record<string, any>) {
+  const surface = (c?.surface as string) || '#1f1f1f';
+  const border = (c?.border as string) || 'rgba(255,255,255,0.14)';
+  const textPrimary = (c?.textPrimary as string) || '#f3f4f6';
+  const textSecondary = (c?.textSecondary as string) || '#d1d5db';
+  const textMuted = (c?.textMuted as string) || '#9ca3af';
+  const backdrop = (c?.modalBackdrop as string) || 'rgba(0,0,0,0.55)';
+  const surfaceMuted = (c?.surfaceMuted as string) || 'rgba(255,255,255,0.06)';
+  const danger = (c?.danger as string) || '#ff8f8a';
+
+  return StyleSheet.create({
+    backdrop: {
+      flex: 1,
+      backgroundColor: backdrop,
+      justifyContent: 'center',
+      paddingHorizontal: 16,
+    },
+    card: {
+      maxHeight: '82%',
+      backgroundColor: surface,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: border,
+      overflow: 'hidden',
+      ...(shadowSheet as object),
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingTop: 14,
+      paddingBottom: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: border,
+      gap: 12,
+    },
+    headerTextCol: { flex: 1, minWidth: 0 },
+    title: { color: textPrimary, fontSize: 16, fontWeight: '600' },
+    subtitle: { color: textMuted, fontSize: 12, marginTop: 2 },
+    headerActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    iconBtn: {
+      width: 32,
+      height: 32,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 8,
+    },
+    iconBtnDisabled: { opacity: 0.5 },
+    body: { flexShrink: 1 },
+    // flexShrink 让 ScrollView 在 card 的 maxHeight 内收缩并内部滚动，长对话不被裁切。
+    scroll: { flexShrink: 1 },
+    cardScrollContent: { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 12 },
+    centerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      padding: 24,
+      justifyContent: 'center',
+    },
+    centerCol: { padding: 24, alignItems: 'center', gap: 8 },
+    dimText: { color: textMuted, fontSize: 13, lineHeight: 19 },
+    errorText: { color: danger, fontSize: 13, lineHeight: 19, textAlign: 'center' },
+    lockedPanel: {
+      margin: 16,
+      padding: 16,
+      borderRadius: 12,
+      backgroundColor: surfaceMuted,
+      gap: 8,
+    },
+    lockedText: { color: textSecondary, fontSize: 13, lineHeight: 20 },
+  });
+}

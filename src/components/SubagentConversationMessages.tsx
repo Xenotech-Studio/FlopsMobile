@@ -7,7 +7,7 @@
  * 传入的 messages 已由 rawMessagesToLocal 转换：assistant 消息带 blocks（text/thinking/tool/…）；
  * 独立的 role:'tool' 消息在转换阶段已折叠进 assistant 的 tool block，这里不会再出现。
  */
-import React from 'react';
+import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { InnerToolStep } from '../screens/chat-cards/SubagentCard';
 import { MarkdownContent } from './MarkdownContent';
@@ -26,6 +26,7 @@ export function SubagentConversationMessages({
   getToolStatusLabel,
 }: Props): React.ReactElement {
   const list = Array.isArray(messages) ? messages : [];
+  const local = useMemo(() => createLocalStyles(colors), [colors]);
   return (
     <View>
       {list.map((msg, mi) => {
@@ -104,26 +105,30 @@ export function SubagentConversationMessages({
   );
 }
 
-const local = StyleSheet.create({
-  userWrap: { marginBottom: 14, alignItems: 'flex-end' },
-  roleLabel: {
-    color: 'rgba(255,255,255,0.4)',
-    fontSize: 11,
-    marginBottom: 4,
-    marginRight: 2,
-  },
-  userBubble: {
-    maxWidth: '92%',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-  },
-  assistantWrap: { marginBottom: 14, gap: 6 },
-  thinking: {
-    color: 'rgba(255,255,255,0.45)',
-    fontStyle: 'italic',
-    fontSize: 13,
-    lineHeight: 19,
-  },
-});
+function createLocalStyles(colors: Record<string, any>) {
+  const bubbleBg = (colors?.surfaceMuted as string) || (colors?.surface as string) || 'rgba(255,255,255,0.08)';
+  const muted = (colors?.textMuted as string) || 'rgba(255,255,255,0.45)';
+  return StyleSheet.create({
+    userWrap: { marginBottom: 14, alignItems: 'flex-end' },
+    roleLabel: {
+      color: muted,
+      fontSize: 11,
+      marginBottom: 4,
+      marginRight: 2,
+    },
+    userBubble: {
+      maxWidth: '92%',
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: 14,
+      backgroundColor: bubbleBg,
+    },
+    assistantWrap: { marginBottom: 14, gap: 6 },
+    thinking: {
+      color: muted,
+      fontStyle: 'italic',
+      fontSize: 13,
+      lineHeight: 19,
+    },
+  });
+}
