@@ -151,7 +151,7 @@ function summarizeToolArgs(toolName: string, o: Record<string, unknown>): string
 }
 
 /** 子 agent 内部一步工具的折叠卡（默认折叠成单行，点开看命令/输出/diff）。 */
-function InnerToolStep({
+export function InnerToolStep({
   blk,
   k,
   styles,

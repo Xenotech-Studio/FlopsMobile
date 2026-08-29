@@ -20,6 +20,8 @@ import {
   View,
 } from 'react-native';
 import { SubagentCard } from '../screens/chat-cards/SubagentCard';
+import { SubagentConversationMessages } from './SubagentConversationMessages';
+import { rawMessagesToLocal } from '../utils/chatLocalMessages';
 import { getSubagentView, getExecutorSubagentView } from '../api';
 import type { Session } from '../api';
 
@@ -32,6 +34,8 @@ type ViewData = {
   message_count?: number;
   returned?: number;
   messages?: Msg[];
+  /** 原始 OpenAI 消息（含 tool_calls / tool_call_id / metadata），供普通对话列表形态渲染。 */
+  messages_full?: any[];
   subagent_status?: string;
   is_running?: boolean;
   prompt_preview?: string;
@@ -54,34 +58,6 @@ type Props = {
   cardColors: Record<string, any>;
   getToolStatusLabel: (status: string) => string;
 };
-
-/** 子对话消息列表 → subagent_start 工具调用 block（供 SubagentCard 完全展开态渲染）。 */
-function buildSubagentBlock(data: ViewData | null, sessionId: string): Record<string, unknown> {
-  const messages: Msg[] = Array.isArray(data?.messages) ? (data?.messages as Msg[]) : [];
-  let prompt = '';
-  let rest = messages;
-  if (messages.length && messages[0]?.role === 'user') {
-    prompt = String(messages[0]?.content || '');
-    rest = messages.slice(1);
-  } else {
-    prompt = String(data?.prompt_preview || '');
-  }
-  const agentBlocks = rest.map((m) => ({
-    type: 'text',
-    content:
-      m?.role === 'user'
-        ? `\n\n**· 追问 ·**\n\n${String(m?.content || '')}`
-        : String(m?.content || ''),
-  }));
-  return {
-    type: 'tool',
-    tool_name: 'subagent_start',
-    index: 0,
-    status: data?.is_running ? 'running' : 'completed',
-    arguments: JSON.stringify({ agent_type: 'flops', prompt, session_id: sessionId }),
-    result: { session_id: sessionId, agent_blocks: agentBlocks },
-  };
-}
 
 export function SubagentViewOverlay({
   visible,
@@ -167,7 +143,6 @@ export function SubagentViewOverlay({
   const hasContent = isExecutor
     ? Boolean(blockOverride)
     : Boolean(data && data.success !== false && !locked);
-  const cardBlock = isExecutor ? blockOverride : buildSubagentBlock(data, targetSessionId);
   const cardAgentLabel = agentType === 'claude' ? 'Claude 对话' : agentType === 'cursor' ? 'Cursor 对话' : 'Flops 对话';
 
   return (
@@ -191,19 +166,31 @@ export function SubagentViewOverlay({
               </View>
             ) : hasContent ? (
               <ScrollView style={styles.scroll} contentContainerStyle={styles.cardScrollContent}>
-                {/* 复用真正的工具卡组件：完全展开态，视觉与主对话里展开的子 agent 卡一致。 */}
-                <SubagentCard
-                  block={cardBlock as unknown as never}
-                  cardKey={`subagent-view-${targetSessionId}`}
-                  agentLabel={cardAgentLabel}
-                  styles={cardStyles}
-                  colors={cardColors}
-                  iconColor={cardColors?.textSecondary || '#8ab4ff'}
-                  getToolStatusLabel={getToolStatusLabel}
-                  renderToolCardSafetyActions={() => null}
-                  isSubmitting={false}
-                  defaultExpanded
-                />
+                {isExecutor ? (
+                  /* claude/cursor：仍复用工具卡组件，完全展开态，与主对话里展开的子 agent 卡一致。 */
+                  <SubagentCard
+                    block={blockOverride as unknown as never}
+                    cardKey={`subagent-view-${targetSessionId}`}
+                    agentLabel={cardAgentLabel}
+                    styles={cardStyles}
+                    colors={cardColors}
+                    iconColor={cardColors?.textSecondary || '#8ab4ff'}
+                    getToolStatusLabel={getToolStatusLabel}
+                    renderToolCardSafetyActions={() => null}
+                    isSubmitting={false}
+                    defaultExpanded
+                  />
+                ) : (
+                  /* flops：铺开成普通对话消息列表（用户气泡 + assistant 正文/思考/工具块）。 */
+                  <SubagentConversationMessages
+                    messages={rawMessagesToLocal(
+                      ((data as any)?.messages_full || (data as any)?.messages || []) as any[]
+                    )}
+                    styles={cardStyles}
+                    colors={cardColors}
+                    getToolStatusLabel={getToolStatusLabel}
+                  />
+                )}
               </ScrollView>
             ) : (
               <View style={styles.centerCol}>
