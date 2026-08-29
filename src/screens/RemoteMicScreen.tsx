@@ -26,6 +26,10 @@
  * bye 没送达就被杀 / 直接从前台强杀）。
  *
  * 沉浸 UI 固定深色调色板（不跟随主题）；录音中的屏幕常亮由 VoiceDictationSession 按次持有。
+ *
+ * 音频侧走 captureOnly（纯采集）档：本页只收音、不放音，故不申请任何输出路由，输入锁死内置麦。
+ * 普通听写那套 playAndRecord + allowBluetoothA2DP 会把 AirPods 从电脑抢过来（电脑输出设备消失
+ * → 系统按「耳机被拔」暂停正在播的视频），详见 voiceDictationMobile 的 captureOnly 说明。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -220,6 +224,9 @@ export function RemoteMicScreen() {
       serverBaseUrl: session.server_base_url,
       token: session.access_token,
       forwardTo: desktopDeviceId, // 不带 inviteId：免邀请直转，识别结果实时转发到电脑
+      // 本页只采集不放音：不申请任何输出路由（否则 iPhone 会把 AirPods 从电脑抢过来，
+      // 电脑那边输出设备消失、正在播的视频被系统按「耳机被拔」暂停），输入锁死内置麦。
+      captureOnly: true,
       onAmplitude: (rms) => {
         amp.value = withTiming(rms, { duration: 80, easing: Easing.linear });
       },

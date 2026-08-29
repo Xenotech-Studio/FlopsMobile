@@ -16,6 +16,10 @@ const TARGET_SAMPLE_RATE = 16000;
 const CHUNK_BYTES = 6400; // 200ms @ 16k/16bit/mono
 const CALLBACK_BUFFER_LENGTH = 1600; // ~100ms @ 16k，单声道
 
+/** AVAudioSessionPortBuiltInMic 的 rawValue —— getDevicesInfo 的 category 就是 portType 原样透传
+ *  （见 react-native-audio-api 的 AudioSessionManager.mm parseDeviceList）。 */
+const IOS_BUILTIN_MIC_PORT = 'MicrophoneBuiltIn';
+
 type SessionState = 'idle' | 'starting' | 'recording' | 'finalizing' | 'closed';
 
 interface VoiceDictationOptions {
@@ -31,6 +35,20 @@ interface VoiceDictationOptions {
   /** 用户长按 mic 选的麦克风源。auto=按连接自动、builtin=手机内置麦、headset=耳机麦。
    *  iOS 靠 audio session options + setPreferredInput；Android 靠 FlopsAudio 开/关蓝牙 SCO。 */
   preferredMicSource?: 'auto' | 'builtin' | 'headset';
+  /** 纯采集模式（远程麦克风）：手机只当采集端，自己不放任何声音。
+   *
+   *  **不申请任何输出路由**：iOS 用 category=record + 空 options。默认那套
+   *  playAndRecord + allowBluetoothA2DP 会把 AirPods 列为本次会话的合法输出候选，而同账号
+   *  AirPods 一次只能挂在一台设备上 —— iPhone 一激活系统就把耳机从 Mac 抢过来，Mac 那边
+   *  输出设备消失、按「耳机被拔」暂停正在播的视频（用户实测现象）。远程麦克风全程不出声，
+   *  这条输出路由纯属白要，去掉即根治。
+   *
+   *  **输入锁死内置麦**：不带 allowBluetoothHFP（蓝牙不作为输入），再显式 setPreferredInput
+   *  到 MicrophoneBuiltIn 顶掉有线/USB 耳机麦。本模式下 preferredMicSource 被忽略。
+   *
+   *  仍保留「非混音激活打断本机其他 App」—— record 同样是非混音类别，手机上在放的音频照旧
+   *  被打断，不让它串进麦克风。 */
+  captureOnly?: boolean;
   /** 跨设备语音输入（电脑邀请手机当麦克风）：邀请 id。与 forwardTo 一起拼进 WS URL，
    *  服务端据此把识别结果实时转发到电脑端。 */
   inviteId?: string;
@@ -414,6 +432,7 @@ export class VoiceDictationSession {
   private readonly onAmplitude: ((rms: number) => void) | null;
   private readonly onRemoteStop: () => void;
   private readonly preferredMicSource: 'auto' | 'builtin' | 'headset';
+  private readonly captureOnly: boolean;
   private readonly inviteId: string;
   private readonly forwardTo: string;
   private readonly _duckDuringRecord: boolean;
@@ -445,6 +464,7 @@ export class VoiceDictationSession {
     this.onAmplitude = opts.onAmplitude || null;
     this.onRemoteStop = opts.onRemoteStop || (() => {});
     this.preferredMicSource = opts.preferredMicSource || 'auto';
+    this.captureOnly = opts.captureOnly === true;
     this.inviteId = opts.inviteId || '';
     this.forwardTo = opts.forwardTo || '';
     // Android：录音时自动申请 duck 焦点降低其他 app 音量；iOS 走非混音 session 的打断（见 start()）
@@ -461,9 +481,10 @@ export class VoiceDictationSession {
 
     // 麦克风权限 + 音频会话
     try {
-      // 按用户长按 mic 选的源动态配 options：headset → HFP（耳机麦）、builtin/auto → A2DP 分离（iPhone 内置麦+蓝牙高音质）
-      const wantHeadsetMic = this.preferredMicSource === 'headset';
-      console.log('[dictation] wantHeadsetMic=', wantHeadsetMic);
+      // 按用户长按 mic 选的源动态配 options：headset → HFP（耳机麦）、builtin/auto → A2DP 分离（iPhone 内置麦+蓝牙高音质）。
+      // 纯采集模式（远程麦克风）例外：忽略 preferredMicSource，走下面的 record + 空 options。
+      const wantHeadsetMic = !this.captureOnly && this.preferredMicSource === 'headset';
+      console.log('[dictation] captureOnly=', this.captureOnly, 'wantHeadsetMic=', wantHeadsetMic);
       // 不带任何 mix / duck 选项 = 纯非混音 playAndRecord：激活时系统向其它 App 发打断
       // 请求，对方遵守就暂停、音量归零。曾短暂改用 duckOthers，但实测只压到约 -20dB，
       // 画中画视频的声音照样进麦克风；打断是唯一能真正归零的路子（代价是对方 App 可以
@@ -477,9 +498,19 @@ export class VoiceDictationSession {
       // 两条路径都只在 setActive(true) 的仲裁时刻生效，所以下面那次真跃迁
       // （beginExternalRecording 让路 → deactivate → activate）是前提——修复前那种
       // 「视频顿一下就续播」是激活空操作下的伪打断，跟现在的真打断不是一回事。
-      const iosOpts = (wantHeadsetMic
-        ? ['allowBluetoothHFP']
-        : ['allowBluetoothA2DP', 'defaultToSpeaker']) as any;
+      //
+      // 纯采集模式（远程麦克风）不走上面这套：category=record 压根没有输出路由可占，options 留空
+      // —— 不带 A2DP 就不会把 AirPods 列为输出候选（那正是耳机被从 Mac 抢走的起点），不带 HFP
+      // 就不会把蓝牙当输入。record 同样是非混音类别，「打断本机其他 App」的效果原样保留。
+      // 详见 VoiceDictationOptions.captureOnly。
+      const iosCategory = this.captureOnly ? 'record' : 'playAndRecord';
+      const iosOpts = (
+        this.captureOnly
+          ? []
+          : wantHeadsetMic
+            ? ['allowBluetoothHFP']
+            : ['allowBluetoothA2DP', 'defaultToSpeaker']
+      ) as any;
       // 让 FlopsAudio 先交出 session（实时朗读保活会长期占着），否则下面这次 deactivate
       // 拿到 busy 失败、activate 退化成空操作，打断请求压根不会发出。
       this._externalRecordingHeld = await beginExternalRecording();
@@ -490,7 +521,7 @@ export class VoiceDictationSession {
       // deactivate 把缓存归位，保证下面 activate 必然重配 category/options 并重新仲裁。
       await AudioManager.setAudioSessionActivity(false).catch(() => {});
       AudioManager.setAudioSessionOptions({
-        iosCategory: 'playAndRecord',
+        iosCategory,
         iosMode: 'default',
         iosOptions: iosOpts,
       });
@@ -506,6 +537,8 @@ export class VoiceDictationSession {
         // Android：库的 setInputDevice 是 noop、Oboe 流跟随系统默认路由，只能系统级切。
         // 必须在 _startRecorder() 前切好；SCO 慢半拍时靠 Oboe 断流自动重连迁移到耳机麦。
         await this._configureAndroidMicSource(wantHeadsetMic);
+      } else if (this.captureOnly) {
+        await this._pinBuiltInInput();
       } else if (wantHeadsetMic) {
         await this._pinHeadsetInput();
       } else {
@@ -566,7 +599,35 @@ export class VoiceDictationSession {
     this.onNotice('耳机麦克风不可用，已使用 iPhone 麦克风');
   }
 
-  /** Android 版输入源配置。headset：仅蓝牙（availableInputs 有 "Bluetooth SCO"）需要开 SCO；
+  /** 纯采集模式：把输入钉死在内置麦。category=record + 无 allowBluetoothHFP 已经把蓝牙排除在
+   *  输入之外，但**有线 / USB 耳机麦插着时系统仍会默认选它**（那是内建路由决策，与蓝牙选项无关）
+   *  —— 这里显式 setPreferredInput 到 MicrophoneBuiltIn 顶掉。
+   *  内置麦恒在 availableInputs 里（不像蓝牙 SCO 要等链路建立），单次即可，无需 _pinHeadsetInput
+   *  那样轮询。找不到 / 设置失败就沿用系统默认路由，录音照常不中断。 */
+  private async _pinBuiltInInput(): Promise<void> {
+    const info: any = await AudioManager.getDevicesInfo().catch(() => null);
+    const available: any[] = info?.availableInputs || [];
+    const current: any[] = info?.currentInputs || [];
+    console.log('[dictation] pin builtin mic:', JSON.stringify({
+      available: available.map((d) => ({ name: d.name, category: d.category })),
+      current: current.map((d) => ({ name: d.name, category: d.category })),
+    }));
+    if (current.some((d) => d.category === IOS_BUILTIN_MIC_PORT)) return; // 已经是内置麦
+    const target = available.find((d) => d.category === IOS_BUILTIN_MIC_PORT);
+    if (!target) return; // 理论上不会发生；真没有就用系统默认
+    try {
+      await AudioManager.setInputDevice(target.id);
+      console.log('[dictation] pinned builtin input:', target.name);
+    } catch (e: any) {
+      console.log('[dictation] pin builtin failed:', e?.message || e);
+    }
+  }
+
+  /** Android 版输入源配置。纯采集模式（远程麦克风）下 wantHeadsetMic 恒为 false，走 builtin
+   *  分支关掉 SCO —— 蓝牙耳机因此不会被拿去当输入，输出也不进通话音质。注意 Android 只能做到
+   *  这一步：库的 setInputDevice 是 noop（见下），有线耳机插着时系统仍走耳机麦，没有对应
+   *  iOS setPreferredInput 的手段。
+   *  headset：仅蓝牙（availableInputs 有 "Bluetooth SCO"）需要开 SCO；
    *  有线/USB 插上系统本来就默认走耳机麦，无需动作（也别 startBluetoothSco 空等 3s 超时）。
    *  builtin：关 SCO 即回内置麦（蓝牙输出保持 A2DP 高音质，对齐 iOS A2DP 分离模式）。
    *  注意 Android 端 getDevicesInfo 的 currentInputs/currentOutputs 恒为空数组，只能看
