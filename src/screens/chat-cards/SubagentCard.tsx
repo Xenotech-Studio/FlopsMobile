@@ -166,7 +166,14 @@ export function InnerToolStep({
   const name = String(blk.tool_name || 'tool');
   const args = parseArgs(blk.arguments);
   const res = asObj(blk.result);
-  const stdout = res && typeof res.stdout === 'string' ? res.stdout : '';
+  // 工具结果可能是对象({stdout,...})或纯字符串(如 flops 子对话里 tool 消息 content 非 JSON)：
+  // 两种都要能显示终端输出，否则字符串结果会被 asObj 判空 → 输出丢失。
+  const stdout =
+    res && typeof res.stdout === 'string'
+      ? res.stdout
+      : typeof blk.result === 'string'
+        ? blk.result
+        : '';
   const status = blk.status || 'completed';
 
   let title = name;

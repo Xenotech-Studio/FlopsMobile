@@ -232,7 +232,8 @@ const styles = StyleSheet.create({
   // 纯容器：无边框/背景，工具卡自身边框即弹窗边框。
   shell: { maxHeight: '82%' },
   body: { flexShrink: 1 },
-  scroll: { flexGrow: 0 },
+  // flexShrink 让 ScrollView 在 shell 的 maxHeight 内收缩并内部滚动，长对话不被裁切。
+  scroll: { flexShrink: 1 },
   cardScrollContent: { paddingBottom: 4 },
   centerRow: {
     flexDirection: 'row',
