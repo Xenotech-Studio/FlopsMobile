@@ -8,7 +8,7 @@
  * 加密子对话需带父对话 K_conv wire（api.getSubagentView 内部处理）；拿不到钥匙时服务端回
  * needs_authorization，本层显示 locked 面板提示先在对话中授权。
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -84,6 +84,11 @@ export function SubagentViewOverlay({
   const [oldestRound, setOldestRound] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  // 滚动锚定：加载更早时记录「距底距离」，内容变高后（onContentSizeChange）还原滚动位置，视口不跳。
+  const scrollRef = useRef<ScrollView>(null);
+  const contentHeightRef = useRef(0);
+  const scrollYRef = useRef(0);
+  const pendingAnchorRef = useRef<number | null>(null);
 
   const load = useCallback(() => {
     if (!targetSessionId || !parentConversationId) return;
@@ -162,7 +167,11 @@ export function SubagentViewOverlay({
           : Array.isArray(res?.messages)
             ? res.messages
             : [];
-        if (older.length) setRawAccum((prev) => [...older, ...prev]);
+        if (older.length) {
+          // prepend 前记录距底距离；onContentSizeChange 在内容变高后据此 scrollTo 还原。
+          pendingAnchorRef.current = contentHeightRef.current - scrollYRef.current;
+          setRawAccum((prev) => [...older, ...prev]);
+        }
         setOldestRound(
           typeof (res as any)?.round_start_index === 'number' ? (res as any).round_start_index : 0,
         );
@@ -264,7 +273,24 @@ export function SubagentViewOverlay({
                 {data?.note ? <Text style={styles.dimText}>{data.note}</Text> : null}
               </View>
             ) : hasContent ? (
-              <ScrollView style={styles.scroll} contentContainerStyle={styles.cardScrollContent}>
+              <ScrollView
+                ref={scrollRef}
+                style={styles.scroll}
+                contentContainerStyle={styles.cardScrollContent}
+                scrollEventThrottle={16}
+                onScroll={(e) => {
+                  scrollYRef.current = e.nativeEvent.contentOffset.y;
+                }}
+                onContentSizeChange={(_w, h) => {
+                  contentHeightRef.current = h;
+                  // 仅加载更早后有 pending：按新内容高度还原滚动位置，保持视口不动。
+                  if (pendingAnchorRef.current != null) {
+                    const y = Math.max(0, h - pendingAnchorRef.current);
+                    pendingAnchorRef.current = null;
+                    scrollRef.current?.scrollTo({ y, animated: false });
+                  }
+                }}
+              >
                 {isExecutor ? (
                   /* claude/cursor：仍复用工具卡组件，完全展开态，与主对话里展开的子 agent 卡一致。 */
                   <SubagentCard
