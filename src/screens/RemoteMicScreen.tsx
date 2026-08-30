@@ -8,7 +8,8 @@
  * done 后电脑 commit 灰字、chip 回已连接态。
  *
  *   checking    进页 POST /api/remote_mic/invite/{id}/accept：标记已连接，电脑 chip 亮起
- *   idle        就绪：按住大圆钮说话；每次按住时并发 GET /invite/{id} 查电脑是否已断开
+ *   idle        就绪：按住大圆钮说话；每次按住时并发 GET /invite/{id} 查电脑是否已断开。
+ *               说过话之后右侧发送键点亮（见下）
  *   recording   按住中：振幅脉冲 + 实时灰字
  *   finalizing  松手后等本次识别定稿（onDone），期间按钮禁用；定稿淡化留在屏上到下一次
  *               按住（只显示当前这句，不累计历史 —— 电脑 composer 才是唯一真实内容源）
@@ -16,6 +17,17 @@
  *   done        「已发送到 xx」1.5s 后自动退出
  *   bye         电脑端主动断开（非异常）：显示已断开 + 1.5s 自动退出
  *   invalid     邀请失效 / 意外出错：显示原因 + 手动关闭
+ *
+ * 发送键（PTT 右侧）：POST /invite/{id}/send → SSE(event=send) → 电脑把 composer 里已落的
+ * 听写文字真正发出去（等同用户在电脑上点发送按钮）。**不结束会话** —— 发完停在 idle，可以接着
+ * 说下一条；结束连接仍走左上角关闭。
+ *
+ * idle / recording / finalizing 三个相位都可发，**在录时点了即打断**：不等火山最后一帧，此刻
+ * 已识别的文字立即在电脑上转正并发出（与手机聊天页本机听写、电脑端发送键同一取舍，代价是丢掉
+ * 最后一帧的标点/同音字修正，换即时性）。可用判据见 canSend —— 手机看不见电脑 composer，只能
+ * 用「本次连接说过话 / 这一段已识别出字」近似「有内容可发」；电脑侧真正的空内容/附件/排队门槛
+ * 在 handleSendMessage 里，手机不重复判断，故提示语只说「已发送」而非「已发出消息」。
+ * 打断路径的顺序要点（先 POST 再 cancel）与迟到帧处理见 handleSend 注释。
  *
  * 结束方式：本页左上角关闭（POST bye 清电脑 chip）、电脑断开（服务端广播 SSE bye 经
  * remoteMicInviteBus 即时结束本页；在录时另有 remote_stop 打断在录的一次；按住前的
@@ -83,6 +95,11 @@ export function RemoteMicScreen() {
   const [lastText, setLastText] = useState(''); // 上一句定稿（淡化显示）
   const [segmentText, setSegmentText] = useState('');
   const [notice, setNotice] = useState(''); // 单次按住出错等非致命提示，短暂显示
+  const [noticeTone, setNoticeTone] = useState<'warn' | 'ok'>('warn');
+  // 本次连接内是否已经说出过内容 —— 即电脑 composer 里大概率有我们落下的字，发送键据此启用。
+  // 跨多次按住累计（每次按住的文字都追加进同一个 composer），发送成功后归零。
+  const [dictatedAny, setDictatedAny] = useState(false);
+  const [sending, setSending] = useState(false);
 
   const dictationRef = useRef<VoiceDictationSession | null>(null);
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -90,6 +107,7 @@ export function RemoteMicScreen() {
   const leftRef = useRef(false); // goBack 只走一次（自动退出定时器 vs 手势返回竞态）
   const acceptedRef = useRef(false); // accept 成功过才需要 bye
   const byeSentRef = useRef(false); // bye 只发一次（关闭按钮与卸载清理竞态）
+  const sendingRef = useRef(false); // 发送请求在途（防连点：state 更新是异步的，按钮 disabled 慢半拍）
   const phaseRef = useRef<Phase>('checking');
   phaseRef.current = phase;
   const scrollRef = useRef<ScrollView>(null);
@@ -124,8 +142,9 @@ export function RemoteMicScreen() {
   const sendByeRef = useRef(sendBye);
   sendByeRef.current = sendBye;
 
-  const flashNotice = useCallback((msg: string) => {
+  const flashNotice = useCallback((msg: string, tone: 'warn' | 'ok' = 'warn') => {
     setNotice(msg);
+    setNoticeTone(tone);
     if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
     noticeTimerRef.current = setTimeout(() => setNotice(''), 4000);
   }, []);
@@ -184,6 +203,67 @@ export function RemoteMicScreen() {
     }
   }, [session, inviteId, endAsInvalid, endDisconnected]);
 
+  /** 「发送」：让电脑把 composer 里已落的听写文字真正发出去（等同在电脑上点发送按钮）。
+   *
+   *  不结束会话 —— 发完停在 idle，可以接着说下一条。这与左上角关闭（结束连接）是两回事。
+   *
+   *  **在录/定稿中也放行，点了即打断**：与手机聊天页本机听写、以及电脑端发送键同一取舍
+   *  （见 localDictationStore 的 stopLocalDictation(false)）—— 不等火山最后一帧，此刻已识别
+   *  的文字立即在电脑上转正并发出。代价是丢掉最后一帧的标点/同音字修正，换即时性。
+   *
+   *  **顺序关键：先 POST，成功后才 cancel 本次会话，两步不能反。**
+   *  反过来的话服务端会先发出 cancelled 帧，而电脑端收到 cancelled 会把在途灰字丢弃
+   *  （remoteMicStore 的 cancelled 分支），等 send 到达时 composer 已空、什么都发不出去。
+   *  先 POST 就能保证同一条 SSE 流上 send 一定排在 cancelled 前面，顺序确定。
+   *  被打断那次的迟到 result / 终态帧由电脑端 abortedSessionRef 按 sessionId 丢弃。
+   *
+   *  失败天然无损：只在成功后才动会话，网络失败时录音照常继续，用户可正常松手或重试。
+   *
+   *  电脑真正的发送门槛（composer 是否为空、附件是否传完、agent 在跑时入待发队列）全在电脑侧，
+   *  手机看不见 composer 内容 —— 所以 ok=true 只代表指令已送达电脑，提示语也只说「已发送」。
+   *  非 accepted 的返回顺带当一次探活，走与 checkDesktopAlive 相同的失效路径。 */
+  const handleSend = useCallback(async () => {
+    if (!session || sendingRef.current) return;
+    const p0 = phaseRef.current;
+    if (p0 !== 'idle' && p0 !== 'recording' && p0 !== 'finalizing') return;
+    sendingRef.current = true;
+    setSending(true); // 只驱动按钮转圈 / caption，phase 不动 —— 失败时无需回滚
+    try {
+      const base = session.server_base_url.replace(/\/+$/, '');
+      const res = await fetch(
+        `${base}/api/remote_mic/invite/${encodeURIComponent(inviteId)}/send`,
+        { method: 'POST', headers: { Authorization: `Bearer ${session.access_token}` } },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: any = await res.json();
+      if (data?.ok === true) {
+        // 电脑已收下并已提交。此刻才杀在录的这一次（若有）：cancel() 不回调 onDone/onError
+        // （内部先 _teardown 摘掉 handler），不会有野回调把状态机带回 idle 之外。
+        const s = dictationRef.current;
+        dictationRef.current = null;
+        if (s) s.cancel();
+        amp.value = withTiming(0, { duration: 200 });
+        setSegmentText('');
+        setLastText('');
+        setDictatedAny(false);
+        setPhase('idle');
+        flashNotice(`已发送到 ${deviceLabel}`, 'ok');
+        return;
+      }
+      const status = String(data?.status || '');
+      const p = phaseRef.current;
+      if (p !== 'idle' && p !== 'recording' && p !== 'finalizing') return;
+      if (status === 'disconnected') endDisconnected('电脑端已断开连接');
+      else endAsInvalid('连接已失效，请在电脑上重新发起');
+    } catch {
+      flashNotice('发送失败，请重试'); // 会话未动，继续录/继续等定稿
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
+    // 内容门槛（说过话 / 这一段已识别出字）在 canSend 里，不在此重复；这里只守相位与并发
+  }, [session, inviteId, deviceLabel, amp, flashNotice, endDisconnected, endAsInvalid]);
+
   /** 结束整个会话（左上角关闭或电脑端 remote_stop）：等在途的一次收尾后 bye + done。 */
   const handleStop = useCallback(() => {
     const p = phaseRef.current;
@@ -235,6 +315,8 @@ export function RemoteMicScreen() {
         if (dictationRef.current === s) dictationRef.current = null;
         setLastText(finalText);
         setSegmentText('');
+        // 这一句已经落到电脑 composer 了 → 发送键可用（跨多次按住累计，发送成功后才归零）
+        if (finalText.trim()) setDictatedAny(true);
         const p = phaseRef.current;
         if (p === 'ending') {
           sendBye();
@@ -448,6 +530,16 @@ export function RemoteMicScreen() {
     phase === 'idle' || phase === 'recording' || phase === 'finalizing' || phase === 'ending';
   const showPtt = phase === 'idle' || phase === 'recording' || phase === 'finalizing';
   const recording = phase === 'recording';
+  // 发送键可用：没有在途请求，且「有东西可发」——
+  //   idle：本次连接说过话（电脑 composer 里有我们落下的字）
+  //   recording / finalizing：这一段已经识别出字（点了即打断并发出），或之前几段已落过字
+  // 手机看不到电脑 composer，这两个信号是这边能拿到的最接近「有内容可发」的判据。
+  const canSend =
+    !sending &&
+    (phase === 'idle'
+      ? dictatedAny
+      : (phase === 'recording' || phase === 'finalizing') &&
+        (Boolean(segmentText.trim()) || dictatedAny));
 
   return (
     <View style={styles.root}>
@@ -500,7 +592,11 @@ export function RemoteMicScreen() {
                 {displayText || '按住下方按钮说话，文字会实时出现在电脑上'}
               </Text>
             </ScrollView>
-            {notice ? <Text style={styles.noticeText}>{notice}</Text> : null}
+            {notice ? (
+              <Text style={noticeTone === 'ok' ? styles.noticeTextOk : styles.noticeText}>
+                {notice}
+              </Text>
+            ) : null}
             {phase === 'ending' ? <Text style={styles.stateCaption}>正在完成…</Text> : null}
           </>
         ) : null}
@@ -532,24 +628,64 @@ export function RemoteMicScreen() {
       <View style={styles.footer}>
         {showPtt ? (
           <>
-            <Pressable
-              onPressIn={handlePressIn}
-              onPressOut={handlePressOut}
-              disabled={phase === 'finalizing'}
-              style={[
-                styles.pttButton,
-                recording && styles.pttButtonActive,
-                phase === 'finalizing' && styles.dimmed,
-              ]}
-            >
-              <Ionicons
-                name="mic"
-                size={34}
-                color={recording ? '#fff' : 'rgba(255,255,255,0.85)'}
-              />
-            </Pressable>
+            <View style={styles.pttRow}>
+              {/* 左侧等宽占位：右边挂了发送键，靠它让 PTT 在整行里仍然视觉居中 */}
+              <View style={styles.pttSideSlot} />
+              <Pressable
+                onPressIn={handlePressIn}
+                onPressOut={handlePressOut}
+                disabled={phase === 'finalizing'}
+                style={[
+                  styles.pttButton,
+                  recording && styles.pttButtonActive,
+                  phase === 'finalizing' && styles.dimmed,
+                ]}
+              >
+                <Ionicons
+                  name="mic"
+                  size={34}
+                  color={recording ? '#fff' : 'rgba(255,255,255,0.85)'}
+                />
+              </Pressable>
+              <View style={styles.pttSideSlot}>
+                {/* 常驻渲染（不可用时置灰）：藏起来会让按钮忽隐忽现、也少了「还能发送」的提示 */}
+                <Pressable
+                  onPress={handleSend}
+                  disabled={!canSend}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`发送到 ${deviceLabel}`}
+                  style={({ pressed }) => [
+                    styles.sendButton,
+                    canSend && styles.sendButtonActive,
+                    (!canSend || pressed) && styles.dimmed,
+                  ]}
+                >
+                  {sending ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons
+                      name="arrow-up"
+                      size={24}
+                      color={canSend ? '#fff' : 'rgba(255,255,255,0.4)'}
+                    />
+                  )}
+                </Pressable>
+              </View>
+            </View>
             <Text style={styles.pttCaption}>
-              {recording ? '松开结束' : phase === 'finalizing' ? '正在识别…' : '按住说话'}
+              {sending
+                ? '正在发送…'
+                : recording
+                  ? '松开结束'
+                  : phase === 'finalizing'
+                    ? // 定稿等待期也能发（点了即打断），这里明说，别让用户以为还得等
+                      canSend
+                      ? '正在识别 · 可直接发送'
+                      : '正在识别…'
+                    : canSend
+                      ? '按住继续说 · 或点右侧发送'
+                      : '按住说话'}
             </Text>
           </>
         ) : null}
@@ -668,6 +804,13 @@ function createStyles(insets: EdgeInsets) {
       fontSize: 13,
       textAlign: 'center',
     },
+    // 成功提示（已发送）：与 done 态勾号同一支绿，跟橙色的告警区分开
+    noticeTextOk: {
+      marginTop: 10,
+      color: 'rgba(48,209,88,0.9)',
+      fontSize: 13,
+      textAlign: 'center',
+    },
     doneText: {
       marginTop: 18,
       color: 'rgba(255,255,255,0.9)',
@@ -694,6 +837,32 @@ function createStyles(insets: EdgeInsets) {
     footer: {
       alignItems: 'center',
       paddingBottom: insets.bottom + 28,
+    },
+    pttRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    // 两侧等宽槽位（右侧放发送键、左侧空着配平），PTT 因此仍落在屏幕水平中线上
+    pttSideSlot: {
+      width: 88,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    sendButton: {
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      backgroundColor: 'rgba(255,255,255,0.08)',
+      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.18)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    // 可发送时点亮成系统蓝：与录音红分出主次，一眼能分清「说」和「发」
+    sendButtonActive: {
+      backgroundColor: '#0a84ff',
+      borderColor: '#0a84ff',
     },
     pttButton: {
       width: 96,
