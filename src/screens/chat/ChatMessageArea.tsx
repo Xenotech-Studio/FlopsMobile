@@ -106,6 +106,14 @@ export type ChatMessageAreaProps = {
   /** 消息流尾部内嵌节点（档 B 对话访问授权 / 批量标题解密授权卡等），跟随滚动、非全屏遮罩 */
   footerNode?: React.ReactNode;
   renderToolBlock: (block: Extract<StreamBlock, { type: 'tool' }>, key: string) => React.ReactNode;
+  /** 子 agent 完成通知的「查看对话」入口（透传给流式内联 TaskEventCardView）。 */
+  onOpenSubagentView?: (args: {
+    sessionId: string;
+    title?: string;
+    agentType?: 'flops' | 'claude' | 'cursor';
+    deviceId?: string;
+    cwd?: string;
+  }) => void;
   onRegenerate: (afterUserIndex: number) => void;
 
   /* ---- 回调 ---- */
@@ -152,6 +160,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
       renderedMessages,
       footerNode,
       renderToolBlock,
+      onOpenSubagentView,
       onRegenerate,
       onReachTop,
       onDismissComposer,
@@ -440,6 +449,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
                               taskEvent={block.task_event}
                               content={block.content}
                               variant="injection"
+                              onOpenSubagentView={onOpenSubagentView}
                             />
                           );
                         }

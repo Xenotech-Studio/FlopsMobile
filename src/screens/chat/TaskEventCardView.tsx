@@ -9,10 +9,18 @@
  */
 import React, { useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import Clipboard from '@react-native-clipboard/clipboard';
 import { useAppTheme } from '../../context/ThemeContext';
 import type { AppColors } from '../../theme/appColors';
 import type { TaskEventPayload } from '../../utils/chatLocalMessages';
+
+/** subagent_kind → 人读标签（与 Web/Desktop TaskEventCard 同款）。 */
+const SUBAGENT_KIND_LABEL: Record<string, string> = {
+  flops: 'Flops 对话',
+  claude: 'Claude Code',
+  cursor: 'Cursor',
+};
 
 function formatRuntime(sec?: number): string | null {
   const n = typeof sec === 'number' ? sec : Number(sec);
@@ -52,12 +60,21 @@ function TaskEventCardViewImpl({
   onReprocess,
   reprocessDisabled,
   variant = 'injection',
+  onOpenSubagentView,
 }: {
   taskEvent: TaskEventPayload | null;
   content?: string;
   onReprocess?: () => void;
   reprocessDisabled?: boolean;
   variant?: 'trigger' | 'injection';
+  /** 子 agent 完成通知的「查看对话」入口：打开子会话内容弹窗（同 spawn 卡机制）。 */
+  onOpenSubagentView?: (args: {
+    sessionId: string;
+    title?: string;
+    agentType?: 'flops' | 'claude' | 'cursor';
+    deviceId?: string;
+    cwd?: string;
+  }) => void;
 }) {
   const { colors } = useAppTheme();
   const styles = createStyles(colors);
@@ -69,7 +86,13 @@ function TaskEventCardViewImpl({
   /** 事件种类。空 = 后台命令（历史唯一种类，旧执行端也不带这个字段）。 */
   const kind = String(ev.kind || '').trim();
   const isDownload = kind === 'browser_download';
+  /** 子 agent 一轮跑完（异步档 track=notify）。三种执行体共用一张卡，靠 subagent_kind 分标签。 */
+  const isSubagentDone = kind === 'subagent_done';
   const phase = String(ev.phase || '').trim();
+  // 子 agent 完成字段（flops=云端对话，claude/cursor=执行端 CLI）
+  const saKind = String(ev.subagent_kind || '').trim().toLowerCase();
+  const saLabel = SUBAGENT_KIND_LABEL[saKind] || '子 agent';
+  const saSession = String(ev.session_id || ev.child_conversation_id || '').trim();
 
   /** **只有明确的失败信号才算失败**，其余（含进行中、未知）一律中性。
    *
@@ -78,7 +101,9 @@ function TaskEventCardViewImpl({
    *  反过来写之后，将来再加事件种类也不会被误伤。 */
   const failed =
     ['interrupted', 'cancelled', 'canceled', 'failed', 'error'].includes(status.toLowerCase()) ||
-    (typeof exitCode === 'number' && exitCode !== 0);
+    (typeof exitCode === 'number' && exitCode !== 0) ||
+    // CLI 型子 agent 完成事件带 agent_ok（false = 没跑成，含被超时/打断掐掉）
+    (isSubagentDone && ev.agent_ok === false);
 
   const dlFilename = typeof ev.download_filename === 'string' ? ev.download_filename.trim() : '';
   const dlSavePath = typeof ev.download_save_path === 'string' ? ev.download_save_path.trim() : '';
@@ -93,15 +118,19 @@ function TaskEventCardViewImpl({
       : failed
         ? '浏览器下载未完成'
         : '浏览器下载完成'
-    : '后台任务完成';
+    : isSubagentDone
+      ? `子 agent ${failed ? '未完成' : '完成'} · ${saLabel}`
+      : '后台任务完成';
 
   // 中间那行「desc」槽位：后台命令显示 description，下载显示文件名——那是这类事件里
   // 最该一眼看到的东西。
   const desc = isDownload
     ? dlFilename
-    : typeof ev.description === 'string'
-      ? ev.description.trim()
-      : '';
+    : isSubagentDone
+      ? String(ev.title || ev.prompt_preview || ev.description || '').trim()
+      : typeof ev.description === 'string'
+        ? ev.description.trim()
+        : '';
   const runtime = formatRuntime(ev.runtime_seconds);
   const tail = typeof ev.log_tail === 'string' ? ev.log_tail.trim() : '';
   // 右侧摘要：下载看字节数（exit_code / runtime 对它没有意义），其余保持原样。
@@ -111,9 +140,11 @@ function TaskEventCardViewImpl({
       : dlReceived && dlTotal
         ? `${dlReceived} / ${dlTotal}`
         : dlReceived || dlTotal || status
-    : [exitCode != null ? `${status} (exit_code=${exitCode})` : status, runtime]
-        .filter(Boolean)
-        .join(' · ');
+    : isSubagentDone
+      ? [saSession ? `会话 ${saSession.slice(0, 8)}` : '', runtime].filter(Boolean).join(' · ')
+      : [exitCode != null ? `${status} (exit_code=${exitCode})` : status, runtime]
+          .filter(Boolean)
+          .join(' · ');
   const logVal = ev.log_path
     ? `${ev.log_path}${typeof ev.log_size_bytes === 'number' ? ` (${ev.log_size_bytes} bytes)` : ''}`
     : '';
@@ -198,6 +229,40 @@ function TaskEventCardViewImpl({
       </View>
     ) : null;
 
+  // 子 agent 完成通知也能「查看对话」：完成事件带 session_id + agent_type，够打开同一个弹窗
+  // （flops 加密 child 的结论不随事件明文带出，点开弹窗由父对话解密补足查看体验）。
+  const canOpenView =
+    isSubagentDone && !!saSession && !!SUBAGENT_KIND_LABEL[saKind] && typeof onOpenSubagentView === 'function';
+  const viewBtn = canOpenView ? (
+    <TouchableOpacity
+      onPress={() =>
+        onOpenSubagentView!({
+          sessionId: saSession,
+          title: saLabel,
+          // canOpenView 已保证 saKind ∈ SUBAGENT_KIND_LABEL（flops/claude/cursor）
+          agentType: saKind as 'flops' | 'claude' | 'cursor',
+          deviceId: String(ev.device_id || ''),
+          cwd: String(ev.agent_cwd || ev.cwd || ''),
+        })
+      }
+      activeOpacity={0.6}
+      accessibilityLabel="查看对话"
+      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      style={{ paddingHorizontal: 10, justifyContent: 'center' }}
+    >
+      <Ionicons name="expand-outline" size={16} color={fgMuted} />
+    </TouchableOpacity>
+  ) : null;
+  // 有查看入口时，头部（占满余宽）与图标按钮并排（按钮靠右）；否则头部原样。
+  const headWithView = viewBtn ? (
+    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      <View style={{ flex: 1, minWidth: 0 }}>{renderHead()}</View>
+      {viewBtn}
+    </View>
+  ) : (
+    renderHead()
+  );
+
   if (trigger) {
     const timeStr = formatClock(ev.ended_at);
     const copyText =
@@ -208,7 +273,7 @@ function TaskEventCardViewImpl({
       <View style={styles.triggerWrap}>
         {timeStr ? <Text style={styles.triggerTime}>{timeStr}</Text> : null}
         <View style={[styles.triggerBubble, { backgroundColor: colors.userBubble }]}>
-          {renderHead()}
+          {headWithView}
           {renderBody()}
         </View>
         <View style={styles.triggerToolbar}>
@@ -232,7 +297,7 @@ function TaskEventCardViewImpl({
   // 穿插：灰色全宽 inline
   return (
     <View style={styles.row}>
-      <View style={[styles.headWrap, failed && styles.headFailed]}>{renderHead()}</View>
+      <View style={[styles.headWrap, failed && styles.headFailed]}>{headWithView}</View>
       {renderBody()}
     </View>
   );

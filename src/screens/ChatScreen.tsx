@@ -4894,6 +4894,7 @@ export function ChatScreen({
           taskEvent={msg.task_event}
           content={msg.content}
           variant="trigger"
+          onOpenSubagentView={openSubagentView}
           onReprocess={
             tEvTid ? () => handleRegenerate(null, undefined, undefined, tEvTid) : undefined
           }
@@ -5012,6 +5013,7 @@ export function ChatScreen({
                       taskEvent={block.task_event}
                       content={block.content}
                       variant="injection"
+                      onOpenSubagentView={openSubagentView}
                     />
                   );
                 }
@@ -5292,6 +5294,7 @@ export function ChatScreen({
       streamIsResumeContinuation={streamIsResumeContinuation}
       renderedMessages={renderedMessages}
       renderToolBlock={renderToolBlock}
+      onOpenSubagentView={openSubagentView}
       onRegenerate={handleRegenerate}
       onReachTop={() => void loadOlderMessages()}
       onDismissComposer={dismissComposer}

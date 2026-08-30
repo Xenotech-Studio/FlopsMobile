@@ -35,6 +35,18 @@ export type TaskEventPayload = {
   download_save_path?: string;
   download_total_bytes?: number;
   download_received_bytes?: number;
+  /** 子 agent 一轮完成（kind='subagent_done'）：三种执行体同构（flops 云端对话 / claude·cursor CLI）。 */
+  subagent_kind?: string;
+  session_id?: string;
+  child_conversation_id?: string;
+  agent_ok?: boolean;
+  summary?: string;
+  result_text?: string;
+  agent_cwd?: string;
+  observed_at?: string;
+  title?: string;
+  prompt_preview?: string;
+  model?: string;
 };
 
 export type StreamBlock =
