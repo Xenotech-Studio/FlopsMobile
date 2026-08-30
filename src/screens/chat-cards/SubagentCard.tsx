@@ -401,7 +401,13 @@ function SubagentCardImpl({
   const childSessionId = String(
     (res?.session_id as string) || (res?.child_conversation_id as string) || sid || ''
   ).trim();
-  const canViewChild = Boolean(childSessionId && onOpenSubagentView);
+  // 仅后台型(track=notify/none)需要弹窗：sync 在本对话内同步执行、工具卡展开即全过程可见，弹窗多余。
+  // track 取自 arguments（subagent_start 必填），回落 result.track（继续会话 / local CLI 型）。
+  const trackArg = String((args.track ?? '') as string).trim().toLowerCase();
+  const resTrack = String((res?.track as string) || '').trim().toLowerCase();
+  const isBackgroundTrack =
+    trackArg === 'notify' || trackArg === 'none' || resTrack === 'notify' || resTrack === 'none';
+  const canViewChild = Boolean(childSessionId && onOpenSubagentView && isBackgroundTrack);
   const verb = isResumed ? '继续会话' : '新建会话';
   const deviceName = String((res?.device_name as string) || (res?.device_id as string) || '').trim();
 
