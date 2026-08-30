@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Dimensions, LayoutAnimation, Text, TouchableOpacity, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import LinearGradient from 'react-native-linear-gradient';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import { ToolCardFrame } from './ToolCardFrame';
@@ -573,7 +574,7 @@ function SubagentCardImpl({
             </View>
           ) : null}
 
-          {/* flops 子agent：查看其子对话内容（打开 SubagentViewOverlay） */}
+          {/* flops 子agent：查看其子对话内容（打开 SubagentViewOverlay）——全屏/展开 icon 按钮 */}
           {canViewChild ? (
             <TouchableOpacity
               style={styles.subSteps}
@@ -587,9 +588,15 @@ function SubagentCardImpl({
                 })
               }
               activeOpacity={0.7}
+              accessibilityLabel="查看对话"
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
             >
               <View style={{ flex: 1 }} />
-              <Text style={styles.subStepsAction}>查看对话 ›</Text>
+              <Ionicons
+                name="expand-outline"
+                size={16}
+                color={iconColor || (colors?.textSecondary as string) || '#8ab4ff'}
+              />
             </TouchableOpacity>
           ) : null}
 
