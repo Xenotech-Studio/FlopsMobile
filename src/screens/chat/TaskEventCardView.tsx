@@ -155,7 +155,8 @@ function TaskEventCardViewImpl({
   const fg = trigger ? colors.onUserBubble : colors.textBody;
   const fgMuted = trigger ? colors.onUserBubble : colors.textMuted;
 
-  const renderHead = () => (
+  // showCaret=false：有按钮时箭头移出 head、放到按钮右边（保证箭头永远最右）。
+  const renderHead = (showCaret = true) => (
     <TouchableOpacity onPress={() => setOpen((v) => !v)} activeOpacity={0.6} style={styles.head}>
       <View style={[styles.dot, { backgroundColor: failed ? colors.danger : colors.success }]} />
       <Text style={[styles.title, { color: fg }]}>{title}</Text>
@@ -167,7 +168,9 @@ function TaskEventCardViewImpl({
         <View style={styles.descSpacer} />
       )}
       <Text style={[styles.status, { color: failed ? colors.danger : fgMuted }]}>{summary}</Text>
-      <Text style={[styles.caret, { color: fgMuted }]}>{open ? '▲' : '▼'}</Text>
+      {showCaret ? (
+        <Text style={[styles.caret, { color: fgMuted }]}>{open ? '▲' : '▼'}</Text>
+      ) : null}
     </TouchableOpacity>
   );
 
@@ -270,13 +273,21 @@ function TaskEventCardViewImpl({
       <Ionicons name="open-outline" size={16} color={fgMuted} />
     </TouchableOpacity>
   ) : null;
-  // 有入口按钮时，头部（占满余宽）与图标按钮并排（查看在前、打开在后，靠右）；否则头部原样。
+  // 有入口按钮时：head(标题…摘要,占满余宽) + 打开原对话 + 查看对话 + 箭头（箭头永远最右）；否则头部原样。
   const headWithView =
     viewBtn || openBtn ? (
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <View style={{ flex: 1, minWidth: 0 }}>{renderHead()}</View>
-        {viewBtn}
+        <View style={{ flex: 1, minWidth: 0 }}>{renderHead(false)}</View>
         {openBtn}
+        {viewBtn}
+        <TouchableOpacity
+          onPress={() => setOpen((v) => !v)}
+          activeOpacity={0.6}
+          hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+          style={{ paddingHorizontal: 2 }}
+        >
+          <Text style={[styles.caret, { color: fgMuted }]}>{open ? '▲' : '▼'}</Text>
+        </TouchableOpacity>
       </View>
     ) : (
       renderHead()
