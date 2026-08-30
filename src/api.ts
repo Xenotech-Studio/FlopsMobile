@@ -1294,15 +1294,23 @@ export async function submitConversationAccessDecision(
  */
 export async function getSubagentView(
   session: Session,
-  opts: { parentConversationId: string; targetSessionId: string; limit?: number }
+  opts: {
+    parentConversationId: string;
+    targetSessionId: string;
+    limit?: number;
+    // 轮次分页：limitRounds 取最近 N 轮；beforeRoundIndex 取该下标之前一轮（向前翻）。
+    limitRounds?: number;
+    beforeRoundIndex?: number | null;
+  }
 ): Promise<any> {
   const base = session.server_base_url;
   const parentId = String(opts.parentConversationId || '').trim();
   const target = String(opts.targetSessionId || '').trim();
   const body: Record<string, unknown> = {
     target,
-    limit: opts.limit ?? 30,
+    limit_rounds: opts.limitRounds ?? 1,
   };
+  if (opts.beforeRoundIndex != null) body.before_round_index = opts.beforeRoundIndex;
   // 尽力派生父对话 K_conv wire（缺则省略，加密子对话会 locked，明文照常）。
   try {
     const parentK = await resolveKConvForConversation(session, parentId);

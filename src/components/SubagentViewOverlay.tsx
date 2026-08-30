@@ -79,6 +79,11 @@ export function SubagentViewOverlay({
   const [data, setData] = useState<ViewData | null>(null);
   // claude/cursor 分支：直接从 agent_blocks 建好的假 block（不经消息→block 转换）。
   const [blockOverride, setBlockOverride] = useState<Record<string, unknown> | null>(null);
+  // 轮次分页（flops）：累积已加载的原始消息（最旧在前），配 oldestRound/hasMore 向前翻。
+  const [rawAccum, setRawAccum] = useState<any[]>([]);
+  const [oldestRound, setOldestRound] = useState<number | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const load = useCallback(() => {
     if (!targetSessionId || !parentConversationId) return;
@@ -114,12 +119,23 @@ export function SubagentViewOverlay({
             },
           });
         } else {
-          const res = await getSubagentView(session, {
+          // flops：轮次分页——初始/刷新拉最近一轮，重置累积。
+          const res = (await getSubagentView(session, {
             parentConversationId,
             targetSessionId,
-            limit: 30,
-          });
-          setData(res as ViewData);
+            limitRounds: 1,
+          })) as ViewData;
+          setData(res);
+          const raw = Array.isArray(res?.messages_full)
+            ? res.messages_full
+            : Array.isArray(res?.messages)
+              ? res.messages
+              : [];
+          setRawAccum(raw);
+          setOldestRound(
+            typeof (res as any)?.round_start_index === 'number' ? (res as any).round_start_index : null,
+          );
+          setHasMore(Boolean((res as any)?.has_more));
         }
       } catch (e) {
         setError((e as Error)?.message || String(e));
@@ -129,12 +145,46 @@ export function SubagentViewOverlay({
     })();
   }, [session, parentConversationId, targetSessionId, agentType, deviceId, cwd]);
 
+  // 加载更早一轮：取 oldestRound 之前一轮，PREPEND 到累积消息头部（保持最旧在前）。
+  const loadMore = useCallback(() => {
+    if (loadingMore || oldestRound == null || oldestRound <= 0) return;
+    setLoadingMore(true);
+    void (async () => {
+      try {
+        const res = (await getSubagentView(session, {
+          parentConversationId,
+          targetSessionId,
+          limitRounds: 1,
+          beforeRoundIndex: oldestRound,
+        })) as ViewData;
+        const older = Array.isArray(res?.messages_full)
+          ? res.messages_full
+          : Array.isArray(res?.messages)
+            ? res.messages
+            : [];
+        if (older.length) setRawAccum((prev) => [...older, ...prev]);
+        setOldestRound(
+          typeof (res as any)?.round_start_index === 'number' ? (res as any).round_start_index : 0,
+        );
+        setHasMore(Boolean((res as any)?.has_more));
+      } catch (e) {
+        setError((e as Error)?.message || String(e));
+      } finally {
+        setLoadingMore(false);
+      }
+    })();
+  }, [loadingMore, oldestRound, session, parentConversationId, targetSessionId]);
+
   useEffect(() => {
     if (visible) load();
     else {
       setData(null);
       setBlockOverride(null);
       setError('');
+      setRawAccum([]);
+      setOldestRound(null);
+      setHasMore(false);
+      setLoadingMore(false);
     }
   }, [visible, load]);
 
@@ -230,15 +280,30 @@ export function SubagentViewOverlay({
                     defaultExpanded
                   />
                 ) : (
-                  /* flops：铺开成普通对话消息列表（用户气泡 + assistant 正文/思考/工具块）。 */
-                  <SubagentConversationMessages
-                    messages={rawMessagesToLocal(
-                      ((data as any)?.messages_full || (data as any)?.messages || []) as any[]
-                    )}
-                    styles={cardStyles}
-                    colors={cardColors}
-                    getToolStatusLabel={getToolStatusLabel}
-                  />
+                  /* flops：铺开成普通对话消息列表（用户气泡 + assistant 正文/思考/工具块）。
+                     更早的轮次在上方：顶部「加载更早」按钮向前翻一轮。 */
+                  <>
+                    {hasMore ? (
+                      <TouchableOpacity
+                        style={styles.loadMoreBtn}
+                        onPress={loadMore}
+                        disabled={loadingMore}
+                        activeOpacity={0.7}
+                      >
+                        {loadingMore ? (
+                          <ActivityIndicator size="small" color={spinnerColor} />
+                        ) : (
+                          <Text style={styles.loadMoreText}>加载更早对话</Text>
+                        )}
+                      </TouchableOpacity>
+                    ) : null}
+                    <SubagentConversationMessages
+                      messages={rawMessagesToLocal(rawAccum)}
+                      styles={cardStyles}
+                      colors={cardColors}
+                      getToolStatusLabel={getToolStatusLabel}
+                    />
+                  </>
                 )}
               </ScrollView>
             ) : (
@@ -324,5 +389,18 @@ function createStyles(c: Record<string, any>) {
       gap: 8,
     },
     lockedText: { color: textSecondary, fontSize: 13, lineHeight: 20 },
+    // 顶部「加载更早对话」：居中胶囊按钮
+    loadMoreBtn: {
+      alignSelf: 'center',
+      marginBottom: 12,
+      paddingVertical: 6,
+      paddingHorizontal: 16,
+      borderRadius: 999,
+      borderWidth: 1,
+      borderColor: border,
+      minHeight: 30,
+      justifyContent: 'center',
+    },
+    loadMoreText: { color: textMuted, fontSize: 13 },
   });
 }
