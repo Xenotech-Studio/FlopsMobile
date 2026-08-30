@@ -7,8 +7,8 @@
  *   顶部时间、底部小操作（复制 / 重新处理）。
  * - variant='injection'（工作期间穿插）：灰色全宽 inline 条。
  */
-import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Animated, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import Clipboard from '@react-native-clipboard/clipboard';
 import { useAppTheme } from '../../context/ThemeContext';
@@ -82,6 +82,16 @@ function TaskEventCardViewImpl({
   const { colors } = useAppTheme();
   const styles = createStyles(colors);
   const [open, setOpen] = useState(false);
+  // 箭头展开/收起 180° 旋转过渡（有按钮的卡才用外置箭头按钮，见 headWithView）。
+  const caretSpin = useRef(new Animated.Value(open ? 1 : 0)).current;
+  useEffect(() => {
+    Animated.timing(caretSpin, {
+      toValue: open ? 1 : 0,
+      duration: 180,
+      useNativeDriver: true,
+    }).start();
+  }, [open, caretSpin]);
+  const caretRotate = caretSpin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] });
 
   const ev: TaskEventPayload = taskEvent || {};
   const status = String(ev.status || 'exited').trim();
@@ -254,7 +264,7 @@ function TaskEventCardViewImpl({
       activeOpacity={0.6}
       accessibilityLabel="查看对话"
       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-      style={{ paddingHorizontal: 10, justifyContent: 'center' }}
+      style={{ width: 28, height: 28, alignItems: 'center', justifyContent: 'center' }}
     >
       <Ionicons name="expand-outline" size={16} color={fgMuted} />
     </TouchableOpacity>
@@ -268,7 +278,7 @@ function TaskEventCardViewImpl({
       activeOpacity={0.6}
       accessibilityLabel="打开原对话"
       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-      style={{ paddingHorizontal: 8, justifyContent: 'center' }}
+      style={{ width: 28, height: 28, alignItems: 'center', justifyContent: 'center' }}
     >
       <Ionicons name="open-outline" size={16} color={fgMuted} />
     </TouchableOpacity>
@@ -280,13 +290,17 @@ function TaskEventCardViewImpl({
         <View style={{ flex: 1, minWidth: 0 }}>{renderHead(false)}</View>
         {openBtn}
         {viewBtn}
+        {/* 箭头独立按钮（与查看/打开同尺寸命中区）：chevron-down 展开旋转 180°，黑底气泡里走 fgMuted 白色。 */}
         <TouchableOpacity
           onPress={() => setOpen((v) => !v)}
           activeOpacity={0.6}
-          hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-          style={{ paddingHorizontal: 2 }}
+          accessibilityLabel={open ? '收起' : '展开'}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          style={{ width: 28, height: 28, alignItems: 'center', justifyContent: 'center' }}
         >
-          <Text style={[styles.caret, { color: fgMuted }]}>{open ? '▲' : '▼'}</Text>
+          <Animated.View style={{ transform: [{ rotate: caretRotate }] }}>
+            <Ionicons name="chevron-down" size={16} color={fgMuted} />
+          </Animated.View>
         </TouchableOpacity>
       </View>
     ) : (
