@@ -61,6 +61,7 @@ function TaskEventCardViewImpl({
   reprocessDisabled,
   variant = 'injection',
   onOpenSubagentView,
+  onOpenConversation,
 }: {
   taskEvent: TaskEventPayload | null;
   content?: string;
@@ -75,6 +76,8 @@ function TaskEventCardViewImpl({
     deviceId?: string;
     cwd?: string;
   }) => void;
+  /** 「打开原对话」（仅 flops）：导航到该子对话作为独立会话。 */
+  onOpenConversation?: (conversationId: string) => void;
 }) {
   const { colors } = useAppTheme();
   const styles = createStyles(colors);
@@ -253,15 +256,31 @@ function TaskEventCardViewImpl({
       <Ionicons name="expand-outline" size={16} color={fgMuted} />
     </TouchableOpacity>
   ) : null;
-  // 有查看入口时，头部（占满余宽）与图标按钮并排（按钮靠右）；否则头部原样。
-  const headWithView = viewBtn ? (
-    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-      <View style={{ flex: 1, minWidth: 0 }}>{renderHead()}</View>
-      {viewBtn}
-    </View>
-  ) : (
-    renderHead()
-  );
+  // 「打开原对话」：仅 flops（claude/cursor 会话不是 Flops 对话，无处可跳）+ 有 session_id。
+  const canOpenConv =
+    isSubagentDone && !!saSession && saKind === 'flops' && typeof onOpenConversation === 'function';
+  const openBtn = canOpenConv ? (
+    <TouchableOpacity
+      onPress={() => onOpenConversation!(saSession)}
+      activeOpacity={0.6}
+      accessibilityLabel="打开原对话"
+      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      style={{ paddingHorizontal: 8, justifyContent: 'center' }}
+    >
+      <Ionicons name="open-outline" size={16} color={fgMuted} />
+    </TouchableOpacity>
+  ) : null;
+  // 有入口按钮时，头部（占满余宽）与图标按钮并排（查看在前、打开在后，靠右）；否则头部原样。
+  const headWithView =
+    viewBtn || openBtn ? (
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <View style={{ flex: 1, minWidth: 0 }}>{renderHead()}</View>
+        {viewBtn}
+        {openBtn}
+      </View>
+    ) : (
+      renderHead()
+    );
 
   if (trigger) {
     const timeStr = formatClock(ev.ended_at);

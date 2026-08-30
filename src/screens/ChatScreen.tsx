@@ -704,6 +704,15 @@ export function ChatScreen({
     },
     []
   );
+  /** flops 子对话「打开原对话」：导航到该对话（作为独立会话打开）。 */
+  const openConversationById = useCallback(
+    (cid: string) => {
+      const id = String(cid || '').trim();
+      if (!id) return;
+      navigation.navigate('Chat', { conversationId: id });
+    },
+    [navigation]
+  );
   /** 编辑用户消息后重新生成（与 Web/Desktop 一致） */
   const [userMessageEdit, setUserMessageEdit] = useState<{
     afterIndex: number;
@@ -4463,6 +4472,7 @@ export function ChatScreen({
         renderToolCardAuthorizationActions={renderToolCardAuthorizationActions}
         authSubmitting={Boolean(submittingAuthorizationId && submittingAuthorizationId === block.auth_request?.request_id)}
         onOpenSubagentView={openSubagentView}
+        onOpenConversation={openConversationById}
       />
     );
   }, [colors, renderToolCardSafetyActions, renderToolCardAuthorizationActions, submittingAuthorizationId, styles, submittingReviewId, getToolStatusLabel, openSubagentView]);
@@ -4895,6 +4905,7 @@ export function ChatScreen({
           content={msg.content}
           variant="trigger"
           onOpenSubagentView={openSubagentView}
+        onOpenConversation={openConversationById}
           onReprocess={
             tEvTid ? () => handleRegenerate(null, undefined, undefined, tEvTid) : undefined
           }
@@ -5014,6 +5025,7 @@ export function ChatScreen({
                       content={block.content}
                       variant="injection"
                       onOpenSubagentView={openSubagentView}
+        onOpenConversation={openConversationById}
                     />
                   );
                 }
@@ -5295,6 +5307,7 @@ export function ChatScreen({
       renderedMessages={renderedMessages}
       renderToolBlock={renderToolBlock}
       onOpenSubagentView={openSubagentView}
+        onOpenConversation={openConversationById}
       onRegenerate={handleRegenerate}
       onReachTop={() => void loadOlderMessages()}
       onDismissComposer={dismissComposer}
@@ -6276,6 +6289,7 @@ export function ChatScreen({
         deviceId={subagentViewDeviceId}
         cwd={subagentViewCwd}
         onClose={() => setSubagentViewVisible(false)}
+        onOpenConversation={openConversationById}
         cardStyles={styles as unknown as Record<string, any>}
         cardColors={colors as unknown as Record<string, any>}
         getToolStatusLabel={getToolStatusLabel}

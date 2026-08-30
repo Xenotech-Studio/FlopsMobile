@@ -114,6 +114,8 @@ export type ChatMessageAreaProps = {
     deviceId?: string;
     cwd?: string;
   }) => void;
+  /** 「打开原对话」（透传给流式内联 TaskEventCardView）。 */
+  onOpenConversation?: (conversationId: string) => void;
   onRegenerate: (afterUserIndex: number) => void;
 
   /* ---- 回调 ---- */
@@ -161,6 +163,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
       footerNode,
       renderToolBlock,
       onOpenSubagentView,
+      onOpenConversation,
       onRegenerate,
       onReachTop,
       onDismissComposer,
@@ -450,6 +453,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
                               content={block.content}
                               variant="injection"
                               onOpenSubagentView={onOpenSubagentView}
+                              onOpenConversation={onOpenConversation}
                             />
                           );
                         }

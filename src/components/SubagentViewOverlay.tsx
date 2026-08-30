@@ -56,6 +56,8 @@ type Props = {
   deviceId?: string;
   cwd?: string;
   onClose: () => void;
+  /** 「打开原对话」（仅 flops）：导航到该子对话作为独立会话（由 ChatScreen 注入）。 */
+  onOpenConversation?: (conversationId: string) => void;
   /** ChatScreen 的样式/配色/工具状态文案——传给复用的 SubagentCard，令其渲染与主对话一致。 */
   cardStyles: Record<string, any>;
   cardColors: Record<string, any>;
@@ -107,6 +109,7 @@ export function SubagentViewOverlay({
   deviceId,
   cwd,
   onClose,
+  onOpenConversation,
   cardStyles,
   cardColors,
   getToolStatusLabel,
@@ -270,6 +273,18 @@ export function SubagentViewOverlay({
               </Text>
             </View>
             <View style={styles.headerActions}>
+              {!isExecutor && targetSessionId && typeof onOpenConversation === 'function' ? (
+                // 「打开原对话」（仅 flops）：导航到该子对话作为独立会话。
+                <TouchableOpacity
+                  style={styles.iconBtn}
+                  onPress={() => onOpenConversation(targetSessionId)}
+                  activeOpacity={0.7}
+                  accessibilityLabel="打开原对话"
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="open-outline" size={20} color={cardColors?.textSecondary || '#888'} />
+                </TouchableOpacity>
+              ) : null}
               <TouchableOpacity
                 style={[styles.iconBtn, loading && styles.iconBtnDisabled]}
                 onPress={load}

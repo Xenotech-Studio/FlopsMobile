@@ -95,6 +95,8 @@ type Props = {
     deviceId?: string;
     cwd?: string;
   }) => void;
+  /** 「打开原对话」（仅 flops）：导航到该子对话作为独立会话（由 ChatScreen 注入）。 */
+  onOpenConversation?: (conversationId: string) => void;
   /** 查看弹窗里以完全展开态复用本卡（宿主把子对话读取结果适配成 subagent block 传入）。 */
   defaultExpanded?: boolean;
 };
@@ -336,6 +338,7 @@ function SubagentCardImpl({
   renderToolCardAuthorizationActions,
   authSubmitting,
   onOpenSubagentView,
+  onOpenConversation,
   defaultExpanded,
 }: Props) {
   const [viewOverride, setViewOverride] = useState<'collapsed' | 'preview' | 'full' | null>(
@@ -574,36 +577,59 @@ function SubagentCardImpl({
             </View>
           ) : null}
 
-          {/* flops 子agent：查看其子对话内容（打开 SubagentViewOverlay）——全屏/展开 icon 按钮：
-              无边框/无底、靠右、灰色（与卡片其他次级图标一致），不复用带边框底的 subSteps。 */}
-          {canViewChild ? (
-            <TouchableOpacity
+          {/* flops 子agent 卡右下角 icon 按钮组（无边框/无底、靠右、灰色）：查看对话（全屏）在前，
+              打开原对话（跳转，仅 flops）在后。 */}
+          {canViewChild || (childSessionId && effectiveType === 'flops' && onOpenConversation) ? (
+            <View
               style={{
                 flexDirection: 'row',
                 justifyContent: 'flex-end',
+                alignItems: 'center',
                 marginHorizontal: 12,
                 marginTop: 6,
                 paddingVertical: 4,
+                gap: 4,
               }}
-              onPress={() =>
-                onOpenSubagentView?.({
-                  sessionId: childSessionId,
-                  title: agentLabel,
-                  agentType: effectiveType,
-                  deviceId: String(res?.device_id || ''),
-                  cwd: String((args.cwd as string) || res?.cwd || ''),
-                })
-              }
-              activeOpacity={0.6}
-              accessibilityLabel="查看对话"
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Ionicons
-                name="expand-outline"
-                size={16}
-                color={(colors?.textMuted as string) || (colors?.textSecondary as string) || '#9ca3af'}
-              />
-            </TouchableOpacity>
+              {canViewChild ? (
+                <TouchableOpacity
+                  onPress={() =>
+                    onOpenSubagentView?.({
+                      sessionId: childSessionId,
+                      title: agentLabel,
+                      agentType: effectiveType,
+                      deviceId: String(res?.device_id || ''),
+                      cwd: String((args.cwd as string) || res?.cwd || ''),
+                    })
+                  }
+                  activeOpacity={0.6}
+                  accessibilityLabel="查看对话"
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={{ paddingHorizontal: 2 }}
+                >
+                  <Ionicons
+                    name="expand-outline"
+                    size={16}
+                    color={(colors?.textMuted as string) || (colors?.textSecondary as string) || '#9ca3af'}
+                  />
+                </TouchableOpacity>
+              ) : null}
+              {childSessionId && effectiveType === 'flops' && onOpenConversation ? (
+                <TouchableOpacity
+                  onPress={() => onOpenConversation(childSessionId)}
+                  activeOpacity={0.6}
+                  accessibilityLabel="打开原对话"
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={{ paddingHorizontal: 2 }}
+                >
+                  <Ionicons
+                    name="open-outline"
+                    size={16}
+                    color={(colors?.textMuted as string) || (colors?.textSecondary as string) || '#9ca3af'}
+                  />
+                </TouchableOpacity>
+              ) : null}
+            </View>
           ) : null}
 
           {/* 底部展开/收起 bar */}
