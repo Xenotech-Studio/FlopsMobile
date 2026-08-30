@@ -574,10 +574,17 @@ function SubagentCardImpl({
             </View>
           ) : null}
 
-          {/* flops 子agent：查看其子对话内容（打开 SubagentViewOverlay）——全屏/展开 icon 按钮 */}
+          {/* flops 子agent：查看其子对话内容（打开 SubagentViewOverlay）——全屏/展开 icon 按钮：
+              无边框/无底、靠右、灰色（与卡片其他次级图标一致），不复用带边框底的 subSteps。 */}
           {canViewChild ? (
             <TouchableOpacity
-              style={styles.subSteps}
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'flex-end',
+                marginHorizontal: 12,
+                marginTop: 6,
+                paddingVertical: 4,
+              }}
               onPress={() =>
                 onOpenSubagentView?.({
                   sessionId: childSessionId,
@@ -587,15 +594,14 @@ function SubagentCardImpl({
                   cwd: String((args.cwd as string) || res?.cwd || ''),
                 })
               }
-              activeOpacity={0.7}
+              activeOpacity={0.6}
               accessibilityLabel="查看对话"
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <View style={{ flex: 1 }} />
               <Ionicons
                 name="expand-outline"
                 size={16}
-                color={iconColor || (colors?.textSecondary as string) || '#8ab4ff'}
+                color={(colors?.textMuted as string) || (colors?.textSecondary as string) || '#9ca3af'}
               />
             </TouchableOpacity>
           ) : null}

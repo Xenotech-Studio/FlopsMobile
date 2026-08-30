@@ -11,6 +11,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Modal,
   Pressable,
   ScrollView,
@@ -60,6 +61,42 @@ type Props = {
   cardColors: Record<string, any>;
   getToolStatusLabel: (status: string) => string;
 };
+
+/** 初始加载骨架屏：撑起正常高度（不塌陷），脉动占位；数据到了替换成真实内容。 */
+function LoadingSkeleton({ colors }: { colors: Record<string, any> }): React.ReactElement {
+  const pulse = useRef(new Animated.Value(0.4)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.4, duration: 700, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+  const base =
+    (colors?.surfaceMuted as string) || (colors?.border as string) || 'rgba(255,255,255,0.10)';
+  const Bar = ({ w, h = 12, extra }: { w: number | string; h?: number; extra?: object }) => (
+    <Animated.View
+      style={[{ height: h, width: w as any, borderRadius: 6, backgroundColor: base, opacity: pulse }, extra]}
+    />
+  );
+  return (
+    <View style={{ minHeight: 280, paddingHorizontal: 14, paddingTop: 12, gap: 22 }}>
+      {[0, 1].map((t) => (
+        <View key={t} style={{ gap: 8 }}>
+          <Bar w={'42%'} h={16} extra={{ alignSelf: 'flex-end' }} />
+          <Bar w={'30%'} />
+          <Bar w={'95%'} />
+          <Bar w={'85%'} />
+          <Bar w={'70%'} />
+          <Bar w={'100%'} h={56} extra={{ borderRadius: 10 }} />
+        </View>
+      ))}
+    </View>
+  );
+}
 
 export function SubagentViewOverlay({
   visible,
@@ -259,10 +296,7 @@ export function SubagentViewOverlay({
 
           <View style={styles.body}>
             {loading && !data && !blockOverride ? (
-              <View style={styles.centerRow}>
-                <ActivityIndicator size="small" color={spinnerColor} />
-                <Text style={styles.dimText}>加载中…</Text>
-              </View>
+              <LoadingSkeleton colors={cardColors} />
             ) : error ? (
               <View style={styles.centerCol}>
                 <Text style={styles.errorText}>{error}</Text>
