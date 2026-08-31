@@ -17,7 +17,7 @@ export type ToolResult = {
  *  - `[N]名字` → 群成员序号前缀，剥掉（可能多处）
  *  - `[You were mentioned]` → "@了你" 标记，抽成 mentioned 布尔后剥掉（含换行）
  *  - 纯名字 → 原样
- * 返回 { name, mentioned }：name 可能为空（调用方回退会话名）；mentioned=true 时打「@我」徽章。
+ * 返回 { name, mentioned }：name 可能为空（调用方回退会话名）；mentioned 布尔仍解析保留（被@徽章已下线，当前无渲染消费者）。
  */
 export function parseWechatSender(raw: unknown): { name: string; mentioned: boolean } {
   const s = typeof raw === 'string' ? raw : raw == null ? '' : String(raw);

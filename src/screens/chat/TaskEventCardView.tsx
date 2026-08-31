@@ -105,8 +105,8 @@ function TaskEventCardViewImpl({
   /** 资源节点微信监听：来了新消息触发唤醒。不是"任务完成"，直接把消息内容显示出来。 */
   const isWechat = kind === 'wechat_message';
   const wxSession = String(ev.session_name || '').trim();
-  // sender 原始串混了 [N] 序号前缀 + [You were mentioned] 标记 → 清洗成纯名字 + 被@标记。
-  const { name: wxSender, mentioned: wxMentioned } = parseWechatSender(ev.sender);
+  // sender 原始串混了 [N] 序号前缀 + [You were mentioned] 标记 → 清洗成纯名字（被@徽章已下线，仅取名字）。
+  const { name: wxSender } = parseWechatSender(ev.sender);
   const wxText = String(ev.text || '').trim();
   const wxPreview = String(ev.preview || '').trim();
   const wxBodyState = String(ev.body_state || '').trim();
@@ -196,23 +196,6 @@ function TaskEventCardViewImpl({
         <View style={[styles.dot, { backgroundColor: failed ? colors.danger : colors.success }]} />
       )}
       <Text style={[styles.title, { color: fg }]}>{title}</Text>
-      {isWechat && wxMentioned ? (
-        <Text
-          style={{
-            flexShrink: 0,
-            fontSize: 10,
-            lineHeight: 14,
-            color: '#07C160',
-            borderWidth: 1,
-            borderColor: '#07C160',
-            borderRadius: 4,
-            paddingHorizontal: 4,
-            marginLeft: 4,
-          }}
-        >
-          @我
-        </Text>
-      ) : null}
       {desc ? (
         <Text style={[styles.desc, { color: fgMuted }]} numberOfLines={1}>
           {desc}
