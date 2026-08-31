@@ -187,7 +187,11 @@ function TaskEventCardViewImpl({
 
   // showCaret=false：有按钮时箭头移出 head、放到按钮右边（保证箭头永远最右）。
   const renderHead = (showCaret = true) => (
-    <TouchableOpacity onPress={() => setOpen((v) => !v)} activeOpacity={0.6} style={styles.head}>
+    <TouchableOpacity
+      onPress={() => setOpen((v) => !v)}
+      activeOpacity={0.6}
+      style={[styles.head, trigger && styles.headOnBubble]}
+    >
       {isWechat ? (
         <Ionicons name="logo-wechat" size={15} color="#07C160" style={{ marginRight: 2 }} />
       ) : (
@@ -451,11 +455,22 @@ function createStyles(c: AppColors) {
       paddingVertical: 7,
       paddingHorizontal: 12,
     },
+    /* 触发气泡里内边距由 triggerBubble 一家出，head 自己清零——对应 Desktop/Web 的
+       `.task-event-head--trigger { padding: 0 }`。之前漏了这条，两层 padding 叠出
+       上下 8+7=15、左右 12+12=24，左边看着明显比上下宽。
+       minHeight 18：把行高钉死，别让它随字体自然行高（13pt 约 16）浮动——triggerBubble
+       的 padding 是按 18 倒推出来的，见那边注释。只钉触发态，穿插灰条仍按文字自然高。 */
+    headOnBubble: { paddingVertical: 0, paddingHorizontal: 0, minHeight: 18 },
     dot: { width: 6, height: 6, borderRadius: 3 },
-    title: { fontSize: 13, fontWeight: '600' },
-    desc: { flex: 1, fontSize: 13 },
+    /* title/status 不收缩、desc 吃余宽——与 Desktop .task-event-title / .task-event-desc 同模型。
+       desc 必须写成 flexBasis:'auto'，**不能用 flex:1**（那是 basis:0）：触发卡的 triggerBubble
+       只有 maxWidth 82%、没有定宽，宽度由内容撑出来，而 basis:0 的子项对内容宽度贡献 0 →
+       整行余宽算成 0 → 正文被压成零宽，卡上就只剩发信人。穿插卡的 row 是 width:'100%' 有定宽，
+       余宽分得到 desc，所以同一份代码在穿插位看着一切正常。 */
+    title: { flexShrink: 0, fontSize: 13, fontWeight: '600' },
+    desc: { flexGrow: 1, flexShrink: 1, flexBasis: 'auto', fontSize: 13 },
     descSpacer: { flex: 1 },
-    status: { fontSize: 13 },
+    status: { flexShrink: 0, fontSize: 13 },
     caret: { fontSize: 9, marginLeft: 2 },
     body: {
       width: '100%',
@@ -483,7 +498,12 @@ function createStyles(c: AppColors) {
     // 触发：右对齐用户消息式
     triggerWrap: { width: '100%', alignItems: 'flex-end', marginVertical: 2 },
     triggerTime: { fontSize: 11, color: c.textMuted, marginBottom: 3 },
-    triggerBubble: { maxWidth: '82%', borderRadius: 10, paddingVertical: 8, paddingHorizontal: 12 },
+    /* 四边同值，且**与用户消息气泡单行等高**——两种气泡在同一列右对齐并排出现，不等高很显眼。
+       用户气泡（ChatScreen.styles.ts `bubble` + `userText`）：12 + 22(lineHeight) + 12 = 46。
+       这里：14 + 18(headOnBubble.minHeight) + 14 = 46。左右 14 也正好等于用户气泡的
+       paddingHorizontal，两边视觉宽度一致。改这两个数之一时另一个要跟着算。
+       注：Desktop/Web 仍是 10px——那边气泡度量另算，不跟这个值。 */
+    triggerBubble: { maxWidth: '82%', borderRadius: 10, padding: 14 },
     triggerToolbar: { flexDirection: 'row', gap: 14, marginTop: 4, paddingRight: 2 },
     toolbarBtn: { paddingVertical: 2 },
     toolbarBtnDisabled: { opacity: 0.5 },
