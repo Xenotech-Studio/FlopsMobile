@@ -145,7 +145,7 @@ function TaskEventCardViewImpl({
         ? '浏览器下载未完成'
         : '浏览器下载完成'
     : isWechat
-      ? wxSession || '微信消息'
+      ? wxSender || wxSession || '微信消息'
       : isSubagentDone
         ? `子 agent ${failed ? '未完成' : '完成'} · ${saLabel}`
         : '后台任务完成';
@@ -171,9 +171,9 @@ function TaskEventCardViewImpl({
         ? `${dlReceived} / ${dlTotal}`
         : dlReceived || dlTotal || status
     : isWechat
-      ? wxSender && wxSender !== wxSession
-        ? wxSender
-        : '微信'
+      ? wxSession && wxSession !== wxSender
+        ? wxSession
+        : ''
       : isSubagentDone
         ? [saSession ? `会话 ${saSession.slice(0, 8)}` : '', runtime].filter(Boolean).join(' · ')
         : [exitCode != null ? `${status} (exit_code=${exitCode})` : status, runtime]
