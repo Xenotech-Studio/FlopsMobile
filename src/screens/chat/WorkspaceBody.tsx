@@ -47,8 +47,16 @@ export type WorkspaceBodyProps = {
   layout: CollabLayoutState;
   /** 顶部 header 高度：内容从它下方开始（header 是绝对定位浮层）。 */
   topInset: number;
-  /** 底部被 sheet + composer 盖住的高度：正文垫这么多，最后一段才滚得出来。 */
+  /**
+   * 底部被 sheet + composer 盖住的高度，取 **sheet 最低档**：滚动类页面（文档 / 项目大纲）
+   * 垫这么多，最后一段才滚得出来 —— 它们本来就该能继续滚到 sheet 底下去。
+   */
   bottomInset: number;
+  /**
+   * sheet **当前档**实际占掉的高度。居中类页面（占位页）得按它算可视区：垫最低档的话，
+   * sheet 一展开内容就被留在原地，跟走马灯叠在一起、半截压进 sheet（真机实测的翻车点）。
+   */
+  viewportBottomInset: number;
   /**
    * 聊天 sheet 顶沿此刻的 y（gorhom animatedPosition，抛出时已含 topInset，与本层同坐标系）。
    * 指示器就浮在它上方一点 —— sheet 拖到哪档 tabs 跟到哪，逐帧走 UI 线程。
@@ -78,6 +86,7 @@ export function WorkspaceBody({
   layout,
   topInset,
   bottomInset,
+  viewportBottomInset,
   sheetTopY,
   sheetTopYMax,
 }: WorkspaceBodyProps) {
@@ -250,7 +259,8 @@ export function WorkspaceBody({
                   title={MODE_LABEL[tab.mode]}
                   hint="手机端暂不支持，请在桌面端查看"
                   topInset={contentTopInset}
-                  bottomInset={bottomInset}
+                  /* 居中在「header 下沿 ↔ 走马灯上沿」之间：当前档高 + 让开整条指示器。 */
+                  bottomInset={viewportBottomInset + INDICATOR_RESERVE}
                   styles={styles}
                   colors={colors}
                 />
@@ -283,9 +293,7 @@ export function WorkspaceBody({
       <Reanimated.View style={[styles.bottomFade, fadeAnimStyle]} pointerEvents="none">
         <LinearGradient
           colors={fadeColors}
-          /* 末档落在 WORKSPACE_FADE_HEIGHT / 总高 处：那以下（压在 sheet 顶沿底下的那几 pt）
-             恒为实色，交界处不会漏出一条没洗白的正文。 */
-          locations={[0, 0.4, 0.65, WORKSPACE_FADE_HEIGHT / WORKSPACE_FADE_TOTAL]}
+          locations={FADE_LOCATIONS}
           style={StyleSheet.absoluteFill}
           start={{ x: 0.5, y: 0 }}
           end={{ x: 0.5, y: 1 }}
@@ -534,11 +542,24 @@ const INDICATOR_PAD = 8;
 const INDICATOR_STRIP_HEIGHT = PILL_HEIGHT + INDICATOR_PAD * 2;
 /** 胶囊底沿与 sheet 顶沿之间留的空。 */
 const INDICATOR_SHEET_GAP = 10;
-/** 底部渐变遮罩：从 sheet 顶沿往上这么高（比整条指示器 44+10 再高一截，胶囊上方还有余量继续淡）。 */
-const WORKSPACE_FADE_HEIGHT = 72;
+/** 整条走马灯从 sheet 顶沿往上占掉的高度：居中类内容要让开这一段。 */
+const INDICATOR_RESERVE = INDICATOR_SHEET_GAP + PILL_HEIGHT + INDICATOR_PAD;
+/** 底部渐变遮罩：从 sheet 顶沿往上这么高。要比整条走马灯再高一截 —— 胶囊上沿之前就得洗完，
+ *  之上还留一段慢慢淡进正文，否则渐变自己会有一道看得见的起始边。 */
+const WORKSPACE_FADE_HEIGHT = 96;
 /** 再往 sheet 里多铺一截实色，兜住渐变末端与 sheet 顶沿之间的亚像素缝。
  *  （sheet 那两个圆角缺口露的本来就是工作区底色 —— 圆角正是靠它才看得出来，不该盖。） */
 const WORKSPACE_FADE_TOTAL = WORKSPACE_FADE_HEIGHT + 8;
+/** 胶囊上沿在渐变带里的位置。**到这儿必须已经洗成实色** —— 真机实测第一版把这里做成
+ *  半透明，正文就从胶囊背后透出来，跟标签糊成一团。 */
+const FADE_SOLID_AT = (WORKSPACE_FADE_HEIGHT - INDICATOR_SHEET_GAP - PILL_HEIGHT) / WORKSPACE_FADE_TOTAL;
+/** 四档位置：0 全透明 → 中途 → 胶囊上沿处实色 → sheet 顶沿以下恒实色。 */
+const FADE_LOCATIONS = [
+  0,
+  FADE_SOLID_AT * 0.55,
+  FADE_SOLID_AT,
+  WORKSPACE_FADE_HEIGHT / WORKSPACE_FADE_TOTAL,
+];
 const HIT_SLOP = { top: 10, bottom: 10, left: 6, right: 6 };
 
 function createStyles(c: AppColors) {

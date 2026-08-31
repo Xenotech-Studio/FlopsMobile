@@ -337,7 +337,7 @@ export function chatInputOverlayGradient(c: AppColors): string[] {
  */
 export function collabWorkspaceFadeGradient(c: AppColors): string[] {
   const bg = c.drawerBackground;
-  return [rgbaFromHex(bg, 0), rgbaFromHex(bg, 0.5), rgbaFromHex(bg, 0.9), bg];
+  return [rgbaFromHex(bg, 0), rgbaFromHex(bg, 0.5), rgbaFromHex(bg, 0.96), bg];
 }
 
 /** 工具卡片半折叠底部淡出 */

@@ -5437,6 +5437,8 @@ export function ChatScreen({
             layout={collabLayout}
             topInset={headerHeight}
             bottomInset={collabSheetPeekHeight}
+            /* 当前档真正占掉的高度：居中类页面按它算可视区（sheet 一展开就得往上让） */
+            viewportBottomInset={collabSheetVisibleHeight}
             /* 走马灯指示器贴着 sheet 上沿走：sheet 拖到哪档，tabs 就跟到哪 */
             sheetTopY={collabSheetPosition}
             sheetTopYMax={collabSheetLowestTopY}
