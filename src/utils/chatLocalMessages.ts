@@ -12,6 +12,24 @@ export type ToolResult = {
   exit_code?: number;
 };
 
+/**
+ * 清洗微信监听事件的 sender 原始串（与 Web/Desktop flops-chat-ui/parseWechatSender 同逻辑）：
+ *  - `[N]名字` → 群成员序号前缀，剥掉（可能多处）
+ *  - `[You were mentioned]` → "@了你" 标记，抽成 mentioned 布尔后剥掉（含换行）
+ *  - 纯名字 → 原样
+ * 返回 { name, mentioned }：name 可能为空（调用方回退会话名）；mentioned=true 时打「@我」徽章。
+ */
+export function parseWechatSender(raw: unknown): { name: string; mentioned: boolean } {
+  const s = typeof raw === 'string' ? raw : raw == null ? '' : String(raw);
+  const mentioned = /\[You were mentioned\]/i.test(s);
+  const name = s
+    .replace(/\[You were mentioned\]/gi, '')
+    .replace(/\[\d+\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return { name, mentioned };
+}
+
 export type TaskEventPayload = {
   status?: string;
   exit_code?: number;
