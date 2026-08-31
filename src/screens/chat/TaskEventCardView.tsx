@@ -172,9 +172,7 @@ function TaskEventCardViewImpl({
         ? `${dlReceived} / ${dlTotal}`
         : dlReceived || dlTotal || status
     : isWechat
-      ? wxSession && wxSession !== wxSender
-        ? wxSession
-        : ''
+      ? '' // 折叠头不显示群名/会话名（只在展开详情的字段组里给），保留发信人名+正文
       : isSubagentDone
         ? [saSession ? `会话 ${saSession.slice(0, 8)}` : '', runtime].filter(Boolean).join(' · ')
         : [exitCode != null ? `${status} (exit_code=${exitCode})` : status, runtime]
