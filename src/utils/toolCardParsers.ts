@@ -1,12 +1,13 @@
-type ParseReadPagesArgs = { goal: string; urls: string[]; parseError: boolean };
+type ParseReadPagesArgs = { summarize: boolean; goal: string; urls: string[]; parseError: boolean };
 
 /**
- * 解析 read_page_subagent 的 arguments（含 pending 阶段未闭合的 JSON 串）。
- * 半成品 JSON 时从头部的有效字段解析 goal / URLs，不把原始 JSON 当作展示文案。
+ * 解析 fetch_url_rendered（及旧名 read_page_subagent / read_page_raw）的 arguments，
+ * 含 pending 阶段未闭合的 JSON 串。半成品 JSON 时从头部的有效字段解析 summarize / goal / URLs，
+ * 不把原始 JSON 当作展示文案。
  */
 export function parseReadPagesBlockArgs(block: { arguments?: unknown }): ParseReadPagesArgs {
   const a = block?.arguments;
-  const base: ParseReadPagesArgs = { goal: '', urls: [], parseError: false };
+  const base: ParseReadPagesArgs = { summarize: false, goal: '', urls: [], parseError: false };
   if (a == null) return { ...base, parseError: true };
 
   if (typeof a === 'object' && a !== null && !Array.isArray(a)) {
@@ -23,7 +24,7 @@ export function parseReadPagesBlockArgs(block: { arguments?: unknown }): ParseRe
   } catch {
     const goal = extractGoalFromPartialJson(trimmed);
     const urls = extractUrlsFromPartialReadPagesJson(trimmed);
-    return { goal, urls, parseError: true };
+    return { summarize: extractSummarizeFromPartialJson(trimmed), goal, urls, parseError: true };
   }
 
   return { ...base, parseError: true };
@@ -33,6 +34,7 @@ function fillFromObject(
   o: Record<string, unknown>,
   out: ParseReadPagesArgs
 ): ParseReadPagesArgs {
+  out.summarize = o.summarize === true || o.summarize === 'true';
   out.goal = typeof o.goal === 'string' ? o.goal.trim() : '';
 
   if (Array.isArray(o.items)) {
@@ -55,6 +57,12 @@ function fillFromObject(
   }
 
   return out;
+}
+
+/** 流式半成品里的 "summarize": true/false（schema 让模型把它写在最前，通常最早可见） */
+function extractSummarizeFromPartialJson(s: string): boolean {
+  const m = s.match(/"summarize"\s*:\s*(true|false)/i);
+  return !!m && m[1].toLowerCase() === 'true';
 }
 
 function extractGoalFromPartialJson(s: string): string {
@@ -315,7 +323,25 @@ export function getLocalExecEnvDisplay(block: {
   return { ...noEnv };
 }
 
-// ---------- read_page_subagent result helpers (align with Desktop readPagesParseArgs + utils) ----------
+// ---------- fetch_url_rendered / 旧名 read_page_subagent result helpers (align with Desktop readPagesParseArgs + utils) ----------
+
+/**
+ * fetch_url_rendered 一个工具两种产出：summarize=true 出 readings（概括），false 出 pages（原文）。
+ * 判定优先看结果（后端在 result 里标了 summarize，readings/pages 两种形态互斥、最权威），
+ * 结果未到时看参数——summarize 在 schema 里排最前，流式时通常第一时间就能看到。
+ */
+export function isFetchUrlRenderedSummarize(block: { arguments?: unknown; result?: unknown }): boolean {
+  const r = block?.result;
+  if (r && typeof r === 'object') {
+    const o = r as Record<string, unknown>;
+    const res = (o.result ?? o) as Record<string, unknown>;
+    if (typeof o.summarize === 'boolean') return o.summarize;
+    if (res && typeof res === 'object' && typeof res.summarize === 'boolean') return res.summarize;
+    if (o.readings || (res && typeof res === 'object' && res.readings)) return true;
+    if (o.pages || (res && typeof res === 'object' && res.pages)) return false;
+  }
+  return parseReadPagesBlockArgs(block).summarize;
+}
 
 export function readPagesResultEntryCount(result: unknown): number {
   if (!result || typeof result !== 'object') return 0;

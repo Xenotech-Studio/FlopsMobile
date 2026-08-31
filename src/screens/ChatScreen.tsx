@@ -163,6 +163,7 @@ import { ansiToSegments } from '../utils/ansiToSegments';
 import {
   parseFileToolArgs,
   parseReadPagesBlockArgs,
+  isFetchUrlRenderedSummarize,
   readPagesResultEntryCount,
   readPagesFinishedCount,
   readPagesSuccessStats,
@@ -410,9 +411,12 @@ function formatSec(sec: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-/** 与 Web/Desktop 一致：read_page_subagent、文件卡片、exec、FlowDoc 写/编/树 默认半展开；doc_read、search_engine 等默认折叠 */
+/** 与 Web/Desktop 一致：读页/取回、文件卡片、exec、FlowDoc 写/编/树 默认半展开；doc_read、search_engine 等默认折叠 */
 function getDefaultToolCardViewMode(toolName: string): 'collapsed' | 'preview' {
   if (
+    toolName === 'fetch_url_rendered' ||
+    toolName === 'fetch_url' ||
+    // 旧名：历史消息沿用原默认展开度
     toolName === 'read_page_subagent' ||
     toolName === 'read_page_raw' ||
     toolName === 'local_write_file' ||
@@ -896,7 +900,7 @@ export function ChatScreen({
   const [toolCardViewMode, setToolCardViewMode] = useState<Record<string, 'collapsed' | 'preview' | 'full'>>({});
   /** local_exec_command 执行中时每秒 +1，用于刷新耗时显示 */
   const [runningExecTick, setRunningExecTick] = useState(0);
-  /** read_page_subagent 点击某条条目后打开的详情 Sheet（与 Task 页筛选同款 BottomSheetModal） */
+  /** 概括读页（fetch_url_rendered summarize / 旧名 read_page_subagent）点击某条条目后打开的详情 Sheet（与 Task 页筛选同款 BottomSheetModal） */
   const [readPagesModalEntry, setReadPagesModalEntry] = useState<{
     cardKey: string;
     entryKey: string;
@@ -4807,7 +4811,12 @@ export function ChatScreen({
       );
     }
 
-    if (block.tool_name === 'read_page_subagent') {
+    // fetch_url_rendered 只有 summarize 产出对得上 ReadPagesCard（readings）；原文形态没有对应富卡，
+    // 与 read_page_raw 一样落 DefaultToolCard。旧名 read_page_subagent 恒走概括卡。
+    if (
+      block.tool_name === 'read_page_subagent' ||
+      (block.tool_name === 'fetch_url_rendered' && isFetchUrlRenderedSummarize(block))
+    ) {
       return renderReadPagesToolCard(block, key);
     }
     if (block.tool_name === 'local_write_file') {
