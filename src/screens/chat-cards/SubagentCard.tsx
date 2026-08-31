@@ -405,13 +405,20 @@ function SubagentCardImpl({
   const childSessionId = String(
     (res?.session_id as string) || (res?.child_conversation_id as string) || sid || ''
   ).trim();
-  // 仅后台型(track=notify/none)需要弹窗：sync 在本对话内同步执行、工具卡展开即全过程可见，弹窗多余。
+  // 「查看对话」显示条件（只要有子会话 id 就显示——父 run 进行中拿到 id 就能点开看已落库内容）：
+  //  - flops：子对话工作**永远在独立 child 会话里**，无论 track/进行中都需弹窗；
+  //  - claude/cursor：只有后台跑(notify/none)的才需要——sync 型父卡内联 agent_blocks 已完整可见。
   // track 取自 arguments（subagent_start 必填），回落 result.track（继续会话 / local CLI 型）。
   const trackArg = String((args.track ?? '') as string).trim().toLowerCase();
   const resTrack = String((res?.track as string) || '').trim().toLowerCase();
   const isBackgroundTrack =
     trackArg === 'notify' || trackArg === 'none' || resTrack === 'notify' || resTrack === 'none';
-  const canViewChild = Boolean(childSessionId && onOpenSubagentView && isBackgroundTrack);
+  const canViewChild = Boolean(
+    childSessionId &&
+      onOpenSubagentView &&
+      (effectiveType === 'flops' ||
+        ((effectiveType === 'claude' || effectiveType === 'cursor') && isBackgroundTrack)),
+  );
   const verb = isResumed ? '继续会话' : '新建会话';
   const deviceName = String((res?.device_name as string) || (res?.device_id as string) || '').trim();
 
