@@ -264,7 +264,7 @@ function TaskEventCardViewImpl({
       activeOpacity={0.6}
       accessibilityLabel="查看对话"
       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-      style={{ width: 28, height: 28, alignItems: 'center', justifyContent: 'center' }}
+      style={{ width: 24, height: 28, alignItems: 'center', justifyContent: 'center' }}
     >
       <Ionicons name="expand-outline" size={16} color={fgMuted} />
     </TouchableOpacity>
@@ -278,7 +278,7 @@ function TaskEventCardViewImpl({
       activeOpacity={0.6}
       accessibilityLabel="打开原对话"
       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-      style={{ width: 28, height: 28, alignItems: 'center', justifyContent: 'center' }}
+      style={{ width: 24, height: 28, alignItems: 'center', justifyContent: 'center' }}
     >
       <Ionicons name="open-outline" size={16} color={fgMuted} />
     </TouchableOpacity>
@@ -296,7 +296,7 @@ function TaskEventCardViewImpl({
           activeOpacity={0.6}
           accessibilityLabel={open ? '收起' : '展开'}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          style={{ width: 28, height: 28, alignItems: 'center', justifyContent: 'center' }}
+          style={{ width: 24, height: 28, alignItems: 'center', justifyContent: 'center' }}
         >
           <Animated.View style={{ transform: [{ rotate: caretRotate }] }}>
             <Ionicons name="chevron-down" size={16} color={fgMuted} />
