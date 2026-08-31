@@ -35,6 +35,13 @@ export type TaskEventPayload = {
   download_save_path?: string;
   download_total_bytes?: number;
   download_received_bytes?: number;
+  /** 资源节点微信监听（kind='wechat_message'）：会话名 / 发信人 / 正文 / 摘要 / 正文状态 / 时间。 */
+  session_name?: string;
+  sender?: string;
+  sender_kind?: string;
+  text?: string;
+  preview?: string;
+  body_state?: string;
   /** 子 agent 一轮完成（kind='subagent_done'）：三种执行体同构（flops 云端对话 / claude·cursor CLI）。 */
   subagent_kind?: string;
   session_id?: string;

@@ -102,6 +102,18 @@ function TaskEventCardViewImpl({
   /** 子 agent 一轮跑完（异步档 track=notify）。三种执行体共用一张卡，靠 subagent_kind 分标签。 */
   const isSubagentDone = kind === 'subagent_done';
   const phase = String(ev.phase || '').trim();
+  /** 资源节点微信监听：来了新消息触发唤醒。不是"任务完成"，直接把消息内容显示出来。 */
+  const isWechat = kind === 'wechat_message';
+  const wxSession = String(ev.session_name || '').trim();
+  const wxSender = String(ev.sender || '').trim();
+  const wxText = String(ev.text || '').trim();
+  const wxPreview = String(ev.preview || '').trim();
+  const wxBodyState = String(ev.body_state || '').trim();
+  const wxObservedAt = String(ev.observed_at || '').trim();
+  const wxBody =
+    wxBodyState === 'ready' && wxText
+      ? wxText
+      : wxPreview || (wxBodyState === 'deferred' ? '(正文暂缺，节点没抢到微信窗口)' : '');
   // 子 agent 完成字段（flops=云端对话，claude/cursor=执行端 CLI）
   const saKind = String(ev.subagent_kind || '').trim().toLowerCase();
   const saLabel = SUBAGENT_KIND_LABEL[saKind] || '子 agent';
@@ -113,10 +125,11 @@ function TaskEventCardViewImpl({
    *  started 阶段 status=running，于是整条被染成 danger 红，用户看到"一个失败一个成功"。
    *  反过来写之后，将来再加事件种类也不会被误伤。 */
   const failed =
-    ['interrupted', 'cancelled', 'canceled', 'failed', 'error'].includes(status.toLowerCase()) ||
-    (typeof exitCode === 'number' && exitCode !== 0) ||
-    // CLI 型子 agent 完成事件带 agent_ok（false = 没跑成，含被超时/打断掐掉）
-    (isSubagentDone && ev.agent_ok === false);
+    !isWechat &&
+    (['interrupted', 'cancelled', 'canceled', 'failed', 'error'].includes(status.toLowerCase()) ||
+      (typeof exitCode === 'number' && exitCode !== 0) ||
+      // CLI 型子 agent 完成事件带 agent_ok（false = 没跑成，含被超时/打断掐掉）
+      (isSubagentDone && ev.agent_ok === false));
 
   const dlFilename = typeof ev.download_filename === 'string' ? ev.download_filename.trim() : '';
   const dlSavePath = typeof ev.download_save_path === 'string' ? ev.download_save_path.trim() : '';
@@ -131,19 +144,23 @@ function TaskEventCardViewImpl({
       : failed
         ? '浏览器下载未完成'
         : '浏览器下载完成'
-    : isSubagentDone
-      ? `子 agent ${failed ? '未完成' : '完成'} · ${saLabel}`
-      : '后台任务完成';
+    : isWechat
+      ? wxSession || '微信消息'
+      : isSubagentDone
+        ? `子 agent ${failed ? '未完成' : '完成'} · ${saLabel}`
+        : '后台任务完成';
 
   // 中间那行「desc」槽位：后台命令显示 description，下载显示文件名——那是这类事件里
   // 最该一眼看到的东西。
   const desc = isDownload
     ? dlFilename
-    : isSubagentDone
-      ? String(ev.title || ev.prompt_preview || ev.description || '').trim()
-      : typeof ev.description === 'string'
-        ? ev.description.trim()
-        : '';
+    : isWechat
+      ? wxBody.replace(/\s+/g, ' ')
+      : isSubagentDone
+        ? String(ev.title || ev.prompt_preview || ev.description || '').trim()
+        : typeof ev.description === 'string'
+          ? ev.description.trim()
+          : '';
   const runtime = formatRuntime(ev.runtime_seconds);
   const tail = typeof ev.log_tail === 'string' ? ev.log_tail.trim() : '';
   // 右侧摘要：下载看字节数（exit_code / runtime 对它没有意义），其余保持原样。
@@ -153,11 +170,15 @@ function TaskEventCardViewImpl({
       : dlReceived && dlTotal
         ? `${dlReceived} / ${dlTotal}`
         : dlReceived || dlTotal || status
-    : isSubagentDone
-      ? [saSession ? `会话 ${saSession.slice(0, 8)}` : '', runtime].filter(Boolean).join(' · ')
-      : [exitCode != null ? `${status} (exit_code=${exitCode})` : status, runtime]
-          .filter(Boolean)
-          .join(' · ');
+    : isWechat
+      ? wxSender && wxSender !== wxSession
+        ? wxSender
+        : '微信'
+      : isSubagentDone
+        ? [saSession ? `会话 ${saSession.slice(0, 8)}` : '', runtime].filter(Boolean).join(' · ')
+        : [exitCode != null ? `${status} (exit_code=${exitCode})` : status, runtime]
+            .filter(Boolean)
+            .join(' · ');
   const logVal = ev.log_path
     ? `${ev.log_path}${typeof ev.log_size_bytes === 'number' ? ` (${ev.log_size_bytes} bytes)` : ''}`
     : '';
@@ -168,7 +189,11 @@ function TaskEventCardViewImpl({
   // showCaret=false：有按钮时箭头移出 head、放到按钮右边（保证箭头永远最右）。
   const renderHead = (showCaret = true) => (
     <TouchableOpacity onPress={() => setOpen((v) => !v)} activeOpacity={0.6} style={styles.head}>
-      <View style={[styles.dot, { backgroundColor: failed ? colors.danger : colors.success }]} />
+      {isWechat ? (
+        <Ionicons name="logo-wechat" size={15} color="#07C160" style={{ marginRight: 2 }} />
+      ) : (
+        <View style={[styles.dot, { backgroundColor: failed ? colors.danger : colors.success }]} />
+      )}
       <Text style={[styles.title, { color: fg }]}>{title}</Text>
       {desc ? (
         <Text style={[styles.desc, { color: fgMuted }]} numberOfLines={1}>
@@ -205,14 +230,20 @@ function TaskEventCardViewImpl({
               ['device_id', ev.device_id],
               ['ended_at', ev.ended_at],
             ] as Array<[string, unknown]>)
-          : ([
-              ['task_id', ev.task_id],
-              ['command', ev.command],
-              ['cwd', ev.cwd],
-              ['log', logVal],
-              ['device_id', ev.device_id],
-              ['ended_at', ev.ended_at],
-            ] as Array<[string, unknown]>)
+          : isWechat
+            ? ([
+                ['会话', wxSession],
+                ['发信人', wxSender],
+                ['时间', wxObservedAt],
+              ] as Array<[string, unknown]>)
+            : ([
+                ['task_id', ev.task_id],
+                ['command', ev.command],
+                ['cwd', ev.cwd],
+                ['log', logVal],
+                ['device_id', ev.device_id],
+                ['ended_at', ev.ended_at],
+              ] as Array<[string, unknown]>)
         ).map(([k, v]) =>
           v == null || v === '' ? null : (
             <View style={styles.field} key={String(k)}>
@@ -223,6 +254,16 @@ function TaskEventCardViewImpl({
             </View>
           ),
         )}
+        {isWechat && (wxText || wxPreview) ? (
+          <View style={styles.tailWrap}>
+            <Text style={[styles.fieldKey, { color: fgMuted }]}>
+              {wxBodyState === 'ready' && wxText ? '正文' : '会话摘要'}
+            </Text>
+            <Text style={[styles.tailText, { color: fg }]} selectable>
+              {wxText || wxPreview}
+            </Text>
+          </View>
+        ) : null}
         {tail ? (
           <View style={styles.tailWrap}>
             <Text style={[styles.fieldKey, { color: fgMuted }]}>
@@ -240,7 +281,9 @@ function TaskEventCardViewImpl({
             ? failed
               ? '下载没有正常结束。可以重新触发一次，或改用命令行下载。'
               : '文件已经在执行端本机，可直接用 local_read_file 处理它。'
-            : '完整输出用 local_read_file 读 log 路径（支持 offset/limit 分页）。'}
+            : isWechat
+              ? '这条来自你挂的微信监听器。回复用 resource_node_wechat_send。'
+              : '完整输出用 local_read_file 读 log 路径（支持 offset/limit 分页）。'}
         </Text>
       </View>
     ) : null;
