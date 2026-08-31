@@ -164,11 +164,12 @@ export function SubagentViewOverlay({
             },
           });
         } else {
-          // flops：轮次分页——初始/刷新拉最近一轮，重置累积。
+          // flops：子 agent 弹窗要看完整工作过程——subagent 常有多轮 trigger 提问、每轮带工具调用，
+          // 只取 1 轮会切掉绝大多数工具步骤。取满 50 轮（后端上限）≈ 全部工作，超长再「加载更早」。
           const res = (await getSubagentView(session, {
             parentConversationId,
             targetSessionId,
-            limitRounds: 1,
+            limitRounds: 50,
           })) as ViewData;
           setData(res);
           const raw = Array.isArray(res?.messages_full)
@@ -199,7 +200,7 @@ export function SubagentViewOverlay({
         const res = (await getSubagentView(session, {
           parentConversationId,
           targetSessionId,
-          limitRounds: 1,
+          limitRounds: 50,
           beforeRoundIndex: oldestRound,
         })) as ViewData;
         const older = Array.isArray(res?.messages_full)
