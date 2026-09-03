@@ -29,6 +29,8 @@ import {
 import LinearGradient from 'react-native-linear-gradient';
 import Reanimated, {
   Easing,
+  runOnJS,
+  useAnimatedReaction,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -148,6 +150,7 @@ import {
   collabLayoutActive,
   collabLayoutEqual,
   collabLayoutFromConversationMeta,
+  collabTabs,
   EMPTY_COLLAB_LAYOUT,
   type CollabLayoutState,
 } from '../utils/collabLayout';
@@ -269,6 +272,8 @@ const COLLAB_SHEET_MAX_RATIO = 0.92;
 const COLLAB_SHEET_HANDLE_H = 24;
 /** 「sheet 位置还没报上来」的哨兵：任何真实屏高都够不着，钳制会把它按到最低档那一端。 */
 const COLLAB_SHEET_POSITION_UNSET = 1e6;
+/** 拖过最高档这么多（**sheet 位移**，过顶带阻尼，手指要多走约 4 倍）就当「要关掉」。 */
+const COLLAB_SHEET_DISMISS_OVERDRAG = 24;
 
 /** High-resolution time when available (e.g. Hermes), else `Date.now()`. Avoids bare `performance` (not in RN TS libs). */
 function perfNowMs(): number {
@@ -1010,9 +1015,21 @@ export function ChatScreen({
     if (prev === conversationId || !prev) return;
     collabLayoutRef.current = EMPTY_COLLAB_LAYOUT;
     setCollabLayout(EMPTY_COLLAB_LAYOUT);
+    /* 换会话回到默认展开：关掉是「这次看这个会话时不想被挡着」，不该跟着人跑到下一个会话。 */
+    setCollabDismissed(false);
   }, [conversationId]);
+  /** 这个会话有没有协同内容（数据侧判定）。要不要真画 sheet 还要看用户有没有把它关掉。 */
+  const collabAvailable = useMemo(() => collabLayoutActive(collabLayout), [collabLayout]);
+  /**
+   * 用户把 sheet 往上拖过头关掉了 —— **纯本地视图状态**：不回写 /cowriter_layout、不动会话
+   * 里的协同数据，桌面端毫无感知。关掉后 header 上留一个带角标的入口，点一下再开回来。
+   * SSE 后续再来布局帧也**不自动弹回**：桌面端在那边翻文档，不该反复弹开手机这边的聊天。
+   */
+  const [collabDismissed, setCollabDismissed] = useState(false);
   /** 手机端此刻要不要进协同布局；false = 普通聊天页原样。停在哪个 tab 归 WorkspaceBody 管。 */
-  const collabActive = useMemo(() => collabLayoutActive(collabLayout), [collabLayout]);
+  const collabActive = collabAvailable && !collabDismissed;
+  /** 关闭态入口上的角标 = 走马灯里有多少项（文档 + 项目 + 两个 mode 占位）。 */
+  const collabTabCount = useMemo(() => collabTabs(collabLayout).length, [collabLayout]);
   /** 协同模式下装聊天消息区的 sheet，留在这里供程序化展开 / 折叠。 */
   const collabSheetRef = useRef<BottomSheet>(null);
   /** sheet 顶沿此刻的 y —— 走马灯指示器贴着它上方浮动（见 WorkspaceBody 的 sheetTopY）。
@@ -1024,6 +1041,31 @@ export function ChatScreen({
   /** sheet 停在最低档（peek）时顶沿的 y = 指示器能落到的最低处。首帧还没量到高度时退化成
    *  header 下沿，onLayout 一到就回到真实值。 */
   const collabSheetLowestTopY = Math.max(headerHeight, collabHostHeight - collabSheetPeekHeight);
+  /**
+   * 「拖过顶就关掉」的判定线：最高档顶沿再往上 COLLAB_SHEET_DISMISS_OVERDRAG。
+   * 注意这是 **sheet 的位移**，不是手指的 —— gorhom 过顶带阻尼（useGestureEventsHandlersDefault：
+   * `最高档 - sqrt(1 + 手指超出量) * overDragResistanceFactor(2.5)`），24pt 的位移要手指再上滑
+   * 约 90pt，得是明确的一把，不会被顺手多拉一点误触。几何还没量到时给 -1（判定恒不成立）。
+   */
+  const collabDismissThresholdY =
+    collabHostHeight > 0
+      ? collabHostHeight -
+        collabSheetSnapHeights[collabSheetSnapHeights.length - 1] -
+        COLLAB_SHEET_DISMISS_OVERDRAG
+      : -1;
+  /* 过顶 → 关掉协同布局。gorhom 没有「拖拽结束」回调，档位类回调（onAnimate/onChange）又只报
+     snap 到哪一档，看不见过冲量；所以直接盯 animatedPosition，在 UI 线程上判。 */
+  useAnimatedReaction(
+    () => collabSheetPosition.value,
+    (y) => {
+      if (!collabActive || collabDismissThresholdY < 0) return;
+      /* 键盘弹起时 interactive 会把 sheet 抬到「最高档 - 键盘高」，那不是用户在拖。
+         用键盘的动画量而不是 React 那份 state：后者在 Android 上落后一两帧，够误判一次。 */
+      if (kbAnimHeight.value !== 0) return;
+      if (y < collabDismissThresholdY) runOnJS(setCollabDismissed)(true);
+    },
+    [collabActive, collabDismissThresholdY],
+  );
   /* 键盘开合：协同模式下聊天区高度要按键盘上沿截断（见 collabSheetChatHeight）。
      只在协同模式挂监听，普通聊天页不用为此多两个订阅。 */
   useEffect(() => {
@@ -5394,6 +5436,30 @@ export function ChatScreen({
             {conversationId ? (conversationTitle || '新对话') : 'Flops'}
           </Text>
         </View>
+        {/* 协同布局被拖过顶关掉后，⋯ 左边留这个入口：角标 = 走马灯里的项数。
+            点一下原样开回来（sheet 回 mid 档，见 BottomSheet 的 index）。 */}
+        {collabAvailable && collabDismissed ? (
+          <View style={styles.headerCollabSlot}>
+            <AnimatedCircleButton
+              style={styles.circleBtn}
+              onPress={() => {
+                /* 档位一并回到 mid：sheet 挂载时 index=1，档位 state 不跟着回去的话，
+                   聊天区高度会先按关掉前那一档算一帧。 */
+                setCollabSheetIndex(1);
+                setCollabDismissed(false);
+              }}
+            >
+              <Ionicons name="layers-outline" size={21} color={colors.textSecondary} />
+            </AnimatedCircleButton>
+            {collabTabCount > 0 ? (
+              <View style={styles.headerUnreadBadge} pointerEvents="none">
+                <Text style={styles.headerUnreadBadgeText} numberOfLines={1}>
+                  {collabTabCount > 99 ? '99+' : collabTabCount}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
         {/* 右上角 ⋯ 菜单 三条路：
          *  - iOS 26+ (Liquid Glass)：AnimatedCircleButton 透传 menuActions 给 BouncyButton，
          *    底下 UIButton 直接挂原生 UIMenu（glass material + 系统 scale + UIMenu 弹层 全套

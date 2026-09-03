@@ -307,6 +307,9 @@ export function createChatStyles(c: AppColors) {
   circleBtnDisabled: { opacity: 0.4 },
   /** 左上角按钮槽：相对定位容器，让未读 badge 绝对锚在按钮右上角。宽高交给内部按钮撑。 */
   headerLeftSlot: { position: 'relative' },
+  /** 协同入口按钮槽（⋯ 左边）：同左槽的相对定位套路，好让角标锚到右上角；
+   *  marginRight 是它与 ⋯ 之间的间距（topBar 是 space-between，两个按钮否则贴在一起）。 */
+  headerCollabSlot: { position: 'relative', marginRight: 8 },
   /** 未读对话数 badge：锚在返回/汉堡按钮右上角。灰底白字，无描边。 */
   headerUnreadBadge: {
     position: 'absolute',
