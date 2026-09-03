@@ -141,6 +141,8 @@ export function createChatStyles(c: AppColors) {
      */
     zIndex: -1,
   },
+  /** 工作区层里再套一层：溶解过渡拿它做淡出 + 微缩，底色留在外层（外层要插值成聊天页画布色）。 */
+  collabWorkspaceInner: { flex: 1 },
   /** sheet 面：保持聊天页主画布色（消息气泡/工具卡都是照这个底调的，不能动），
    *  层次交给「底层更暗 + 上缘 hairline + 向上投影」三件套。 */
   collabSheetBackground: {
@@ -161,7 +163,15 @@ export function createChatStyles(c: AppColors) {
     /** 项目通用 sheet 投影（向上，height:-4）—— 与 ProfileSheet / ModelSelectSheet 同一预设。 */
     ...shadowSheet,
   },
-  collabSheetHandle: { backgroundColor: c.borderD4, width: 36 },
+  /** 握把本体。尺寸要写全 —— 把手改成自渲染（溶解时要淡出）后，gorhom 默认 indicator
+   *  那份样式（4 高 / 圆角 / 居中）不再叠上来。 */
+  collabSheetHandle: {
+    backgroundColor: c.borderD4,
+    width: 36,
+    height: 4,
+    borderRadius: 4,
+    alignSelf: 'center',
+  },
   /** 把手条本体：高度钉死成 COLLAB_SHEET_HANDLE_H（= gorhom 默认的 10+4+10），
    *  聊天区高度按「当前档高 - 这个数」算，浮动一下就会差一截。 */
   collabSheetHandleBar: { height: 24, paddingVertical: 10, justifyContent: 'center' },

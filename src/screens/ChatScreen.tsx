@@ -29,6 +29,7 @@ import {
 import LinearGradient from 'react-native-linear-gradient';
 import Reanimated, {
   Easing,
+  interpolateColor,
   runOnJS,
   useAnimatedReaction,
   useAnimatedStyle,
@@ -272,8 +273,12 @@ const COLLAB_SHEET_MAX_RATIO = 0.92;
 const COLLAB_SHEET_HANDLE_H = 24;
 /** 「sheet 位置还没报上来」的哨兵：任何真实屏高都够不着，钳制会把它按到最低档那一端。 */
 const COLLAB_SHEET_POSITION_UNSET = 1e6;
-/** 拖过最高档这么多（**sheet 位移**，过顶带阻尼，手指要多走约 4 倍）就当「要关掉」。 */
-const COLLAB_SHEET_DISMISS_OVERDRAG = 24;
+/**
+ * 过顶多少（**sheet 位移**）算「溶解完毕」。这不是一个阈值判定，而是**进度的分母**：
+ * 过顶量 / 它 = 0→1 的溶解进度，拖到哪就化到哪，到 1 才真正切状态。
+ * 过顶带阻尼（最高档 - sqrt(1+手指超出量)*2.5），20pt 位移 ≈ 手指再上滑 50pt。
+ */
+const COLLAB_SHEET_DISMISS_TRAVEL = 20;
 
 /** High-resolution time when available (e.g. Hermes), else `Date.now()`. Avoids bare `performance` (not in RN TS libs). */
 function perfNowMs(): number {
@@ -1007,6 +1012,9 @@ export function ChatScreen({
     if (!collabLayoutEqual(prev, next)) setCollabLayout(next);
   }, []);
   /** 换会话 → 布局归零，等新会话自己 hydrate。 */
+  /** 协同布局「溶解」进度 0→1（设计见下面 useAnimatedReaction 那段）。声明提到这儿是因为
+   *  换会话的复位 effect 要把它列进依赖 —— 依赖数组在渲染期求值，声明晚了会踩 TDZ。 */
+  const collabDismissProgress = useSharedValue(0);
   const prevCollabConvIdRef = useRef(conversationId);
   useEffect(() => {
     const prev = prevCollabConvIdRef.current;
@@ -1017,7 +1025,8 @@ export function ChatScreen({
     setCollabLayout(EMPTY_COLLAB_LAYOUT);
     /* 换会话回到默认展开：关掉是「这次看这个会话时不想被挡着」，不该跟着人跑到下一个会话。 */
     setCollabDismissed(false);
-  }, [conversationId]);
+    collabDismissProgress.value = 0;
+  }, [conversationId, collabDismissProgress]);
   /** 这个会话有没有协同内容（数据侧判定）。要不要真画 sheet 还要看用户有没有把它关掉。 */
   const collabAvailable = useMemo(() => collabLayoutActive(collabLayout), [collabLayout]);
   /**
@@ -1041,31 +1050,85 @@ export function ChatScreen({
   /** sheet 停在最低档（peek）时顶沿的 y = 指示器能落到的最低处。首帧还没量到高度时退化成
    *  header 下沿，onLayout 一到就回到真实值。 */
   const collabSheetLowestTopY = Math.max(headerHeight, collabHostHeight - collabSheetPeekHeight);
-  /**
-   * 「拖过顶就关掉」的判定线：最高档顶沿再往上 COLLAB_SHEET_DISMISS_OVERDRAG。
-   * 注意这是 **sheet 的位移**，不是手指的 —— gorhom 过顶带阻尼（useGestureEventsHandlersDefault：
-   * `最高档 - sqrt(1 + 手指超出量) * overDragResistanceFactor(2.5)`），24pt 的位移要手指再上滑
-   * 约 90pt，得是明确的一把，不会被顺手多拉一点误触。几何还没量到时给 -1（判定恒不成立）。
-   */
-  const collabDismissThresholdY =
+  /** 最高档顶沿的 y —— 过顶量从这儿量起。几何还没量到时给 -1（下面的判定恒不成立）。 */
+  const collabSheetHighestTopY =
     collabHostHeight > 0
-      ? collabHostHeight -
-        collabSheetSnapHeights[collabSheetSnapHeights.length - 1] -
-        COLLAB_SHEET_DISMISS_OVERDRAG
+      ? collabHostHeight - collabSheetSnapHeights[collabSheetSnapHeights.length - 1]
       : -1;
-  /* 过顶 → 关掉协同布局。gorhom 没有「拖拽结束」回调，档位类回调（onAnimate/onChange）又只报
-     snap 到哪一档，看不见过冲量；所以直接盯 animatedPosition，在 UI 线程上判。 */
+  /**
+   * 【协同布局的「溶解」进度】0 = 正常，1 = 已经化干净（此刻才真正切状态）。
+   *
+   * 关掉不是一次瞬切，而是一段**跟手的连续过渡**：从最高档继续往上拖，过顶量除以
+   * COLLAB_SHEET_DISMISS_TRAVEL 就是进度 —— 拖到哪化到哪。松手不够就靠 gorhom 自己那条
+   * 回弹弹簧把位置带回最高档，进度跟着连续退回 0（不用我们再写一遍回弹动画）；拖满 1 时
+   * 视觉上已经化完，这时候切 collabDismissed 才看不出接缝。
+   *
+   * 全程只有这一个量（collabDismissProgress，声明在上面换会话复位那段旁边）：sheet 的
+   * 面/把手/顶部淡出带一起淡出，工作区内容淡出并微微后退，底色顺势插值成聊天页画布色 ——
+   * 化完的那一帧就已经长得跟普通聊天页一样了。
+   */
+  /* gorhom 没有「拖拽结束」回调，档位类回调（onAnimate/onChange）又只报 snap 到哪一档、
+     看不见过冲量；所以直接盯 animatedPosition，在 UI 线程上逐帧算进度。 */
   useAnimatedReaction(
     () => collabSheetPosition.value,
     (y) => {
-      if (!collabActive || collabDismissThresholdY < 0) return;
+      if (!collabActive || collabSheetHighestTopY < 0) return;
       /* 键盘弹起时 interactive 会把 sheet 抬到「最高档 - 键盘高」，那不是用户在拖。
          用键盘的动画量而不是 React 那份 state：后者在 Android 上落后一两帧，够误判一次。 */
-      if (kbAnimHeight.value !== 0) return;
-      if (y < collabDismissThresholdY) runOnJS(setCollabDismissed)(true);
+      if (kbAnimHeight.value !== 0) {
+        collabDismissProgress.value = 0;
+        return;
+      }
+      const over = collabSheetHighestTopY - y;
+      const next = Math.min(1, Math.max(0, over / COLLAB_SHEET_DISMISS_TRAVEL));
+      collabDismissProgress.value = next;
+      /* 化到头了才切状态。切完 sheet 与工作区一起卸载，这一帧它们已经是全透明的，
+         接手的普通聊天页底色又跟刚插值到的画布色一致 —— 交接看不出来。 */
+      if (next >= 1) runOnJS(setCollabDismissed)(true);
     },
-    [collabActive, collabDismissThresholdY],
+    [collabActive, collabSheetHighestTopY],
   );
+  /** 工作区画布：底色从抽屉色插值到聊天页画布色，化完时已经是普通聊天页那块底。 */
+  const collabWorkspaceCanvasStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(
+      collabDismissProgress.value,
+      [0, 1],
+      [colors.drawerBackground, colors.chatScreenBackground],
+    ),
+  }));
+  /** 工作区内容：淡出 + 轻微后退，像是被让开而不是被抹掉。 */
+  const collabWorkspaceContentStyle = useAnimatedStyle(() => ({
+    opacity: 1 - collabDismissProgress.value,
+    transform: [{ scale: 1 - collabDismissProgress.value * 0.02 }],
+  }));
+  /** sheet 的「壳」（面 + 把手 + 顶部淡出带）一起淡出；**消息本身不淡** ——
+   *  它要原地留到状态切换之后，这样交接时人眼盯着的那块内容是连续的。 */
+  const collabSheetChromeStyle = useAnimatedStyle(() => ({
+    opacity: 1 - collabDismissProgress.value,
+  }));
+  /** sheet 的面：把 gorhom 传进来的 backgroundStyle 原样接住，只额外挂上溶解透明度。 */
+  const renderCollabSheetBackground = useCallback(
+    ({ style }: { style?: StyleProp<ViewStyle> }) => (
+      <Reanimated.View pointerEvents="none" style={[style, collabSheetChromeStyle]} />
+    ),
+    [collabSheetChromeStyle],
+  );
+  /** 把手：只自渲染握把本体（**不要**在这层铺任何不透明的面 —— 会盖掉 sheet 圆角，
+   *  6ab8591 已经实测翻过一次车），外层容器高度仍是 collabSheetHandleBar 钉死的那份。 */
+  const renderCollabSheetHandle = useCallback(
+    () => (
+      <View style={styles.collabSheetHandleBar}>
+        <Reanimated.View style={[styles.collabSheetHandle, collabSheetChromeStyle]} />
+      </View>
+    ),
+    [styles, collabSheetChromeStyle],
+  );
+  /** 关闭态 header 入口的淡入：跟溶解首尾相接，不要凭空蹦出来。 */
+  const collabEntryOpacity = useSharedValue(0);
+  useEffect(() => {
+    collabEntryOpacity.value = withTiming(collabDismissed ? 1 : 0, { duration: 180 });
+  }, [collabDismissed, collabEntryOpacity]);
+  const collabEntryStyle = useAnimatedStyle(() => ({ opacity: collabEntryOpacity.value }));
   /* 键盘开合：协同模式下聊天区高度要按键盘上沿截断（见 collabSheetChatHeight）。
      只在协同模式挂监听，普通聊天页不用为此多两个订阅。 */
   useEffect(() => {
@@ -5439,10 +5502,12 @@ export function ChatScreen({
         {/* 协同布局被拖过顶关掉后，⋯ 左边留这个入口：角标 = 走马灯里的项数。
             点一下原样开回来（sheet 回 mid 档，见 BottomSheet 的 index）。 */}
         {collabAvailable && collabDismissed ? (
-          <View style={styles.headerCollabSlot}>
+          <Reanimated.View style={[styles.headerCollabSlot, collabEntryStyle]}>
             <AnimatedCircleButton
               style={styles.circleBtn}
               onPress={() => {
+                /* 溶解进度先归零，否则 sheet 与工作区会带着「已经化没了」的透明度挂回来。 */
+                collabDismissProgress.value = 0;
                 /* 档位一并回到 mid：sheet 挂载时 index=1，档位 state 不跟着回去的话，
                    聊天区高度会先按关掉前那一档算一帧。 */
                 setCollabSheetIndex(1);
@@ -5458,7 +5523,7 @@ export function ChatScreen({
                 </Text>
               </View>
             ) : null}
-          </View>
+          </Reanimated.View>
         ) : null}
         {/* 右上角 ⋯ 菜单 三条路：
          *  - iOS 26+ (Liquid Glass)：AnimatedCircleButton 透传 menuActions 给 BouncyButton，
@@ -5511,18 +5576,20 @@ export function ChatScreen({
 
       {/* ── 协同工作模式：工作区主体（最底层，被 sheet 与 composer 盖住的部分靠 inset 让位）── */}
       {collabActive ? (
-        <View style={styles.collabWorkspaceLayer}>
-          <WorkspaceBody
-            layout={collabLayout}
-            topInset={headerHeight}
-            bottomInset={collabSheetPeekHeight}
-            /* 当前档真正占掉的高度：居中类页面按它算可视区（sheet 一展开就得往上让） */
-            viewportBottomInset={collabSheetVisibleHeight}
-            /* 走马灯指示器贴着 sheet 上沿走：sheet 拖到哪档，tabs 就跟到哪 */
-            sheetTopY={collabSheetPosition}
-            sheetTopYMax={collabSheetLowestTopY}
-          />
-        </View>
+        <Reanimated.View style={[styles.collabWorkspaceLayer, collabWorkspaceCanvasStyle]}>
+          <Reanimated.View style={[styles.collabWorkspaceInner, collabWorkspaceContentStyle]}>
+            <WorkspaceBody
+              layout={collabLayout}
+              topInset={headerHeight}
+              bottomInset={collabSheetPeekHeight}
+              /* 当前档真正占掉的高度：居中类页面按它算可视区（sheet 一展开就得往上让） */
+              viewportBottomInset={collabSheetVisibleHeight}
+              /* 走马灯指示器贴着 sheet 上沿走：sheet 拖到哪档，tabs 就跟到哪 */
+              sheetTopY={collabSheetPosition}
+              sheetTopYMax={collabSheetLowestTopY}
+            />
+          </Reanimated.View>
+        </Reanimated.View>
       ) : null}
       {/* ── 协同工作模式：聊天消息区落进 bottom sheet ──
        * 位置在 KeyboardAvoidingView **之前** = 画在 composer 之下：折叠 sheet 也能边看文档边输入。
@@ -5562,10 +5629,13 @@ export function ChatScreen({
              折叠态也不会被永久顶开。 */
           keyboardBehavior="interactive"
           keyboardBlurBehavior="restore"
+          /* 面与把手都自渲染：溶解过渡要让这两样跟着进度淡出（见 collabSheetChromeStyle）。
+             backgroundStyle 照旧传 —— gorhom 会把它拼进 style 交给下面这个组件，圆角 /
+             hairline / 投影全都原样生效。把手容器高度仍钉死在 collabSheetHandleBar 上：
+             聊天区高度是「当前档高 - 把手高」算出来的，这个数不能随内容浮动。 */
           backgroundStyle={styles.collabSheetBackground}
-          /* 把手高度钉死：聊天区高度是「当前档高 - 把手高」算出来的，这个数不能随内容浮动。 */
-          handleStyle={styles.collabSheetHandleBar}
-          handleIndicatorStyle={styles.collabSheetHandle}
+          backgroundComponent={renderCollabSheetBackground}
+          handleComponent={renderCollabSheetHandle}
         >
           {/* 用普通 View 而非 BottomSheetView：后者是给「内容自己量高」的动态尺寸场景用的
               （position:absolute + 无 bottom → 高度由内容决定），塞一个 flex:1 的 ScrollView
@@ -5581,19 +5651,26 @@ export function ChatScreen({
           >
             {chatMessageArea}
             {/* 把手 → 消息区的淡出。消息区自带滚动、内容会一路顶到把手下沿被 overflow 硬切，
-                铺一条同色渐变让它化开（pointerEvents=none，不吃滚动手势）。 */}
-            <LinearGradient
-              colors={collabSheetTopFadeGradient(colors)}
-              /* 中档提前到 0.2（原 0.45）：实色不留平台段，一出把手下沿就开始淡 —— 带子长度
-                 不变（12pt），只是「看得出在淡」的起点往上挪。带子挂在内容区里，top:0 就是
-                 把手下沿，再往上挪只能靠这条曲线：负 top 会被 BottomSheetContent 的 overflow
-                 裁掉，挂到把手层则会拿方角盖掉 sheet 圆角（6ab8591 已实测翻车并回退）。 */
-              locations={[0, 0.2, 1]}
-              style={styles.collabSheetTopFade}
-              start={{ x: 0.5, y: 0 }}
-              end={{ x: 0.5, y: 1 }}
+                铺一条同色渐变让它化开（pointerEvents=none，不吃滚动手势）。
+                它也是 sheet 的「壳」的一部分：溶解时要跟着面一起淡掉，否则 sheet 都化没了
+                还剩一条 sheet 色的横带压在消息上。 */}
+            <Reanimated.View
+              style={[styles.collabSheetTopFade, collabSheetChromeStyle]}
               pointerEvents="none"
-            />
+            >
+              <LinearGradient
+                colors={collabSheetTopFadeGradient(colors)}
+                /* 中档提前到 0.2（原 0.45）：实色不留平台段，一出把手下沿就开始淡 —— 带子长度
+                   不变（12pt），只是「看得出在淡」的起点往上挪。带子挂在内容区里，top:0 就是
+                   把手下沿，再往上挪只能靠这条曲线：负 top 会被 BottomSheetContent 的 overflow
+                   裁掉，挂到把手层则会拿方角盖掉 sheet 圆角（6ab8591 已实测翻车并回退）。 */
+                locations={[0, 0.2, 1]}
+                style={StyleSheet.absoluteFill}
+                start={{ x: 0.5, y: 0 }}
+                end={{ x: 0.5, y: 1 }}
+                pointerEvents="none"
+              />
+            </Reanimated.View>
           </View>
         </BottomSheet>
       ) : null}
