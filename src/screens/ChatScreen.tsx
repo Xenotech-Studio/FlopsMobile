@@ -1024,29 +1024,6 @@ export function ChatScreen({
   /** sheet 停在最低档（peek）时顶沿的 y = 指示器能落到的最低处。首帧还没量到高度时退化成
    *  header 下沿，onLayout 一到就回到真实值。 */
   const collabSheetLowestTopY = Math.max(headerHeight, collabHostHeight - collabSheetPeekHeight);
-  /**
-   * sheet 把手：自渲染，好把顶部淡出带塞进来 —— 渐变要从**把手顶沿**（= sheet 顶沿）起步，
-   * 而不是从把手下沿。层序天然对：gorhom 把整块把手排在内容之后绘制，所以这条带子盖得住
-   * 滚上来的内容；握把又排在带子之后，不会被自己洗掉。塞在内容区里做不到这件事 ——
-   * BottomSheetContent 带 overflow:hidden，往上探的部分会被直接裁掉。
-   * 容器高度仍是 COLLAB_SHEET_HANDLE_H（渐变是绝对定位，不进布局）——聊天区高度按它做减法。
-   */
-  const renderCollabSheetHandle = useCallback(
-    () => (
-      <View style={styles.collabSheetHandleBar}>
-        <LinearGradient
-          colors={collabSheetTopFadeGradient(colors)}
-          locations={[0, 0.45, 1]}
-          style={styles.collabSheetTopFade}
-          start={{ x: 0.5, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          pointerEvents="none"
-        />
-        <View style={styles.collabSheetHandle} />
-      </View>
-    ),
-    [styles, colors],
-  );
   /* 键盘开合：协同模式下聊天区高度要按键盘上沿截断（见 collabSheetChatHeight）。
      只在协同模式挂监听，普通聊天页不用为此多两个订阅。 */
   useEffect(() => {
@@ -5520,10 +5497,9 @@ export function ChatScreen({
           keyboardBehavior="interactive"
           keyboardBlurBehavior="restore"
           backgroundStyle={styles.collabSheetBackground}
-          /* 把手自渲染（见 renderCollabSheetHandle）：顶部淡出带要从把手顶沿起步，只能挂在
-             把手这一层。高度仍钉死在 collabSheetHandleBar 上 —— 聊天区高度是「当前档高 -
-             把手高」算出来的，这个数不能随内容浮动。 */
-          handleComponent={renderCollabSheetHandle}
+          /* 把手高度钉死：聊天区高度是「当前档高 - 把手高」算出来的，这个数不能随内容浮动。 */
+          handleStyle={styles.collabSheetHandleBar}
+          handleIndicatorStyle={styles.collabSheetHandle}
         >
           {/* 用普通 View 而非 BottomSheetView：后者是给「内容自己量高」的动态尺寸场景用的
               （position:absolute + 无 bottom → 高度由内容决定），塞一个 flex:1 的 ScrollView
@@ -5538,6 +5514,16 @@ export function ChatScreen({
             ]}
           >
             {chatMessageArea}
+            {/* 把手 → 消息区的淡出。消息区自带滚动、内容会一路顶到把手下沿被 overflow 硬切，
+                铺一条同色渐变让它化开（pointerEvents=none，不吃滚动手势）。 */}
+            <LinearGradient
+              colors={collabSheetTopFadeGradient(colors)}
+              locations={[0, 0.45, 1]}
+              style={styles.collabSheetTopFade}
+              start={{ x: 0.5, y: 0 }}
+              end={{ x: 0.5, y: 1 }}
+              pointerEvents="none"
+            />
           </View>
         </BottomSheet>
       ) : null}
