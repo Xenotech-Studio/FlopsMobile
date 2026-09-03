@@ -21,7 +21,10 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { AudioManager } from 'react-native-audio-api';
-import BottomSheet from '@gorhom/bottom-sheet';
+import BottomSheet, {
+  useGestureEventsHandlersDefault,
+  type GestureEventsHandlersHookType,
+} from '@gorhom/bottom-sheet';
 import {
   KeyboardAvoidingView,
   useReanimatedKeyboardAnimation,
@@ -279,6 +282,11 @@ const COLLAB_SHEET_POSITION_UNSET = 1e6;
  * 过顶带阻尼（最高档 - sqrt(1+手指超出量)*2.5），20pt 位移 ≈ 手指再上滑 50pt。
  */
 const COLLAB_SHEET_DISMISS_TRAVEL = 20;
+/**
+ * **松手那一刻**进度到这儿才算「要关」，不到就交回 gorhom 回弹。手指还在时无论化到多少
+ * 都不切状态 —— 取消权全程在手里，往回拖就原样化回去。0.5 = 化过一半，判定跟眼睛看到的一致。
+ */
+const COLLAB_SHEET_DISMISS_COMMIT = 0.5;
 
 /** High-resolution time when available (e.g. Hermes), else `Date.now()`. Avoids bare `performance` (not in RN TS libs). */
 function perfNowMs(): number {
@@ -1015,6 +1023,8 @@ export function ChatScreen({
   /** 协同布局「溶解」进度 0→1（设计见下面 useAnimatedReaction 那段）。声明提到这儿是因为
    *  换会话的复位 effect 要把它列进依赖 —— 依赖数组在渲染期求值，声明晚了会踩 TDZ。 */
   const collabDismissProgress = useSharedValue(0);
+  /** 松手已判定为「要关」：补完动画接管进度，逐帧那条 reaction 不再插手。 */
+  const collabDismissCommitted = useSharedValue(false);
   const prevCollabConvIdRef = useRef(conversationId);
   useEffect(() => {
     const prev = prevCollabConvIdRef.current;
@@ -1026,7 +1036,8 @@ export function ChatScreen({
     /* 换会话回到默认展开：关掉是「这次看这个会话时不想被挡着」，不该跟着人跑到下一个会话。 */
     setCollabDismissed(false);
     collabDismissProgress.value = 0;
-  }, [conversationId, collabDismissProgress]);
+    collabDismissCommitted.value = false;
+  }, [conversationId, collabDismissProgress, collabDismissCommitted]);
   /** 这个会话有没有协同内容（数据侧判定）。要不要真画 sheet 还要看用户有没有把它关掉。 */
   const collabAvailable = useMemo(() => collabLayoutActive(collabLayout), [collabLayout]);
   /**
@@ -1059,9 +1070,12 @@ export function ChatScreen({
    * 【协同布局的「溶解」进度】0 = 正常，1 = 已经化干净（此刻才真正切状态）。
    *
    * 关掉不是一次瞬切，而是一段**跟手的连续过渡**：从最高档继续往上拖，过顶量除以
-   * COLLAB_SHEET_DISMISS_TRAVEL 就是进度 —— 拖到哪化到哪。松手不够就靠 gorhom 自己那条
-   * 回弹弹簧把位置带回最高档，进度跟着连续退回 0（不用我们再写一遍回弹动画）；拖满 1 时
-   * 视觉上已经化完，这时候切 collabDismissed 才看不出接缝。
+   * COLLAB_SHEET_DISMISS_TRAVEL 就是进度 —— 拖到哪化到哪，往回拖就原样化回去。
+   *
+   * **手指按着的时候永远不切状态**（哪怕进度已经到 1）：切不切只在松手那一刻判一次，见下面
+   * useCollabSheetGestureHandlers。所以取消权全程在用户手里 —— 化了一半后悔了，拖回去即可。
+   * 松手不够 COMMIT 就交回 gorhom 那条回弹弹簧，进度跟着位置连续退回 0（不用我们再写一遍
+   * 回弹动画）；够了就补完剩下那截再切 collabDismissed，接缝落在「已经化干净」那一帧上。
    *
    * 全程只有这一个量（collabDismissProgress，声明在上面换会话复位那段旁边）：sheet 的
    * 面/把手/顶部淡出带一起淡出，工作区内容淡出并微微后退，底色顺势插值成聊天页画布色 ——
@@ -1073,6 +1087,8 @@ export function ChatScreen({
     () => collabSheetPosition.value,
     (y) => {
       if (!collabActive || collabSheetHighestTopY < 0) return;
+      /* 松手已判定关闭：进度交给补完动画，别再被位置带跑。 */
+      if (collabDismissCommitted.value) return;
       /* 键盘弹起时 interactive 会把 sheet 抬到「最高档 - 键盘高」，那不是用户在拖。
          用键盘的动画量而不是 React 那份 state：后者在 Android 上落后一两帧，够误判一次。 */
       if (kbAnimHeight.value !== 0) {
@@ -1080,14 +1096,46 @@ export function ChatScreen({
         return;
       }
       const over = collabSheetHighestTopY - y;
-      const next = Math.min(1, Math.max(0, over / COLLAB_SHEET_DISMISS_TRAVEL));
-      collabDismissProgress.value = next;
-      /* 化到头了才切状态。切完 sheet 与工作区一起卸载，这一帧它们已经是全透明的，
-         接手的普通聊天页底色又跟刚插值到的画布色一致 —— 交接看不出来。 */
-      if (next >= 1) runOnJS(setCollabDismissed)(true);
+      /* 只更新进度，**不切状态** —— 切与不切归松手那一刻判。 */
+      collabDismissProgress.value = Math.min(1, Math.max(0, over / COLLAB_SHEET_DISMISS_TRAVEL));
     },
     [collabActive, collabSheetHighestTopY],
   );
+  /**
+   * sheet 手势：只截「松手」这一下，其余原样交回 gorhom 默认实现。
+   *
+   * 为什么走 gestureEventsHandlersHook 这个扩展点：v5.2.8 没有拖拽结束回调；onAnimate 又在
+   * 「回弹到同一档」时直接 return（handleOnAnimate 里 `targetIndex === currentIndex` 就不发），
+   * 而过顶松手恰好就是回到原档这一路 —— 拿不到信号。这个 hook 是官方导出的口子
+   * （useGestureEventsHandlersDefault 也从包入口导出），provider 直接调用它取四个 handler。
+   */
+  const useCollabSheetGestureHandlers: GestureEventsHandlersHookType = () => {
+    const defaults = useGestureEventsHandlersDefault();
+    return useMemo(
+      () => ({
+        ...defaults,
+        handleOnEnd: (source, payload) => {
+          'worklet';
+          if (
+            !collabDismissCommitted.value &&
+            collabDismissProgress.value >= COLLAB_SHEET_DISMISS_COMMIT
+          ) {
+            collabDismissCommitted.value = true;
+            /* 补完剩下那截再切状态。这里**不**交回默认处理 —— sheet 不必回弹，
+               它下一刻就要卸载了，让它停在手指松开的位置上化完即可。 */
+            collabDismissProgress.value = withTiming(1, { duration: 140 }, (finished) => {
+              'worklet';
+              if (finished) runOnJS(setCollabDismissed)(true);
+            });
+            return;
+          }
+          /* 不够 COMMIT：交回默认 —— 它会把 sheet 弹回档位，进度随位置连续退回 0。 */
+          defaults.handleOnEnd(source, payload);
+        },
+      }),
+      [defaults],
+    );
+  };
   /** 工作区画布：底色从抽屉色插值到聊天页画布色，化完时已经是普通聊天页那块底。 */
   const collabWorkspaceCanvasStyle = useAnimatedStyle(() => ({
     backgroundColor: interpolateColor(
@@ -5508,6 +5556,7 @@ export function ChatScreen({
               onPress={() => {
                 /* 溶解进度先归零，否则 sheet 与工作区会带着「已经化没了」的透明度挂回来。 */
                 collabDismissProgress.value = 0;
+                collabDismissCommitted.value = false;
                 /* 档位一并回到 mid：sheet 挂载时 index=1，档位 state 不跟着回去的话，
                    聊天区高度会先按关掉前那一档算一帧。 */
                 setCollabSheetIndex(1);
@@ -5614,6 +5663,8 @@ export function ChatScreen({
           /* 顶沿位置逐帧抛给工作区层（指示器跟着它走）。拖拽 / 键盘顶起都在 UI 线程更新，
              不经 React —— 所以 tabs 跟随是跟手的，不是等档位 state 落定才跳一下。 */
           animatedPosition={collabSheetPosition}
+          /* 只为截住「松手」这一下（见 useCollabSheetGestureHandlers）；其余手势行为不变。 */
+          gestureEventsHandlersHook={useCollabSheetGestureHandlers}
           /* 顶到 header 下沿为止：百分比档位按「header 以下」这块算，
              最高档也不会把 handle 藏到顶栏毛玻璃后面。 */
           topInset={headerHeight}
