@@ -170,13 +170,13 @@ export function createChatStyles(c: AppColors) {
    *  正是「视口比 sheet 高、滚不到底」的根子。 */
   collabSheetContent: { width: '100%' },
   /** 把手下沿那一条淡出：消息区滚上来的内容在这儿化开，而不是被 overflow 齐刷刷切一刀。
-   *  高度取把手条那么高，两块加起来约 48pt 的柔和过渡带。 */
+   *  12pt —— 起初给了 24（与把手条等高），实测过渡带拖得太长；这个量够化开又不拖泥带水。 */
   collabSheetTopFade: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    height: 24,
+    height: 12,
   },
   /** 容器高度还没量出来那一帧的兜底：先撑满，别塌成 0 高。 */
   collabSheetContentFill: { flex: 1 },
