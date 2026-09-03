@@ -122,7 +122,11 @@ import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
 import { AnimatedBouncyGlassCard } from '../components/BouncyGlassCard';
 import { HEADER_CIRCLE_BTN_SIZE, bottomInsetTotal } from '../theme/layout';
 import { getBottomInsetSync } from '../utils/screenInfo';
-import { chatInputOverlayGradient, toolPreviewFadeGradient } from '../theme/appColors';
+import {
+  chatInputOverlayGradient,
+  collabSheetTopFadeGradient,
+  toolPreviewFadeGradient,
+} from '../theme/appColors';
 import { useAppTheme } from '../context/ThemeContext';
 import { HamburgerButton } from './shell/HamburgerButton';
 import {
@@ -5510,6 +5514,16 @@ export function ChatScreen({
             ]}
           >
             {chatMessageArea}
+            {/* 把手 → 消息区的淡出。消息区自带滚动、内容会一路顶到把手下沿被 overflow 硬切，
+                铺一条同色渐变让它化开（pointerEvents=none，不吃滚动手势）。 */}
+            <LinearGradient
+              colors={collabSheetTopFadeGradient(colors)}
+              locations={[0, 0.45, 1]}
+              style={styles.collabSheetTopFade}
+              start={{ x: 0.5, y: 0 }}
+              end={{ x: 0.5, y: 1 }}
+              pointerEvents="none"
+            />
           </View>
         </BottomSheet>
       ) : null}

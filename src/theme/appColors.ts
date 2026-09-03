@@ -340,6 +340,16 @@ export function collabWorkspaceFadeGradient(c: AppColors): string[] {
   return [rgbaFromHex(bg, 0), rgbaFromHex(bg, 0.5), rgbaFromHex(bg, 0.96), bg];
 }
 
+/**
+ * 协同 sheet 顶部淡出（把手区 → 消息区）：与 sheet 面同色，往下淡到全透明。
+ * 消息区是自带滚动的，内容会一路顶到把手下沿被 overflow 硬切；铺这一条让它淡出去，
+ * 顺带把把手那块实色和下面的内容接上，不再是一道生硬的分界。
+ */
+export function collabSheetTopFadeGradient(c: AppColors): string[] {
+  const bg = c.chatScreenBackground;
+  return [bg, rgbaFromHex(bg, 0.85), rgbaFromHex(bg, 0)];
+}
+
 /** 工具卡片半折叠底部淡出 */
 export function toolPreviewFadeGradient(isDark: boolean, c: AppColors): string[] {
   if (isDark) return ['rgba(0,0,0,0)', c.toolCardBg];
