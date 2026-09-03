@@ -5518,7 +5518,11 @@ export function ChatScreen({
                 铺一条同色渐变让它化开（pointerEvents=none，不吃滚动手势）。 */}
             <LinearGradient
               colors={collabSheetTopFadeGradient(colors)}
-              locations={[0, 0.45, 1]}
+              /* 中档提前到 0.2（原 0.45）：实色不留平台段，一出把手下沿就开始淡 —— 带子长度
+                 不变（12pt），只是「看得出在淡」的起点往上挪。带子挂在内容区里，top:0 就是
+                 把手下沿，再往上挪只能靠这条曲线：负 top 会被 BottomSheetContent 的 overflow
+                 裁掉，挂到把手层则会拿方角盖掉 sheet 圆角（6ab8591 已实测翻车并回退）。 */
+              locations={[0, 0.2, 1]}
               style={styles.collabSheetTopFade}
               start={{ x: 0.5, y: 0 }}
               end={{ x: 0.5, y: 1 }}
