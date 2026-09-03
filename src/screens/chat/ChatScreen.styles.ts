@@ -161,7 +161,15 @@ export function createChatStyles(c: AppColors) {
     /** 项目通用 sheet 投影（向上，height:-4）—— 与 ProfileSheet / ModelSelectSheet 同一预设。 */
     ...shadowSheet,
   },
-  collabSheetHandle: { backgroundColor: c.borderD4, width: 36 },
+  /** 握把本体。尺寸得自己写全 —— 把手改成自渲染的 handleComponent 后，
+   *  gorhom 默认 indicator 那份样式（4 高 / 圆角 / 居中）不再叠上来。 */
+  collabSheetHandle: {
+    backgroundColor: c.borderD4,
+    width: 36,
+    height: 4,
+    borderRadius: 4,
+    alignSelf: 'center',
+  },
   /** 把手条本体：高度钉死成 COLLAB_SHEET_HANDLE_H（= gorhom 默认的 10+4+10），
    *  聊天区高度按「当前档高 - 这个数」算，浮动一下就会差一截。 */
   collabSheetHandleBar: { height: 24, paddingVertical: 10, justifyContent: 'center' },
@@ -169,14 +177,19 @@ export function createChatStyles(c: AppColors) {
    *  显式下发（见 collabSheetChatHeight）。flex 会让它去跟父级的高度传递链纠缠，而那条链
    *  正是「视口比 sheet 高、滚不到底」的根子。 */
   collabSheetContent: { width: '100%' },
-  /** 把手下沿那一条淡出：消息区滚上来的内容在这儿化开，而不是被 overflow 齐刷刷切一刀。
-   *  12pt —— 起初给了 24（与把手条等高），实测过渡带拖得太长；这个量够化开又不拖泥带水。 */
+  /**
+   * 顶部淡出带：消息区滚上来的内容在这儿化开，而不是被 overflow 齐刷刷切一刀。
+   * 挂在把手条里（把手由 gorhom 排在内容之后绘制 → 这条盖得住内容；握把又排在它之后
+   * → 握把不会被自己洗掉），所以 top:0 = **把手顶沿 = sheet 顶沿**，渐变从那儿就起步。
+   * 36 = 把手条 24 + 探进内容区的 12（内容只在后 12pt 里露头 —— 前 24pt 被 BottomSheetContent
+   * 的 overflow 挡着，本来就没有内容）。
+   */
   collabSheetTopFade: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    height: 12,
+    height: 36,
   },
   /** 容器高度还没量出来那一帧的兜底：先撑满，别塌成 0 高。 */
   collabSheetContentFill: { flex: 1 },
