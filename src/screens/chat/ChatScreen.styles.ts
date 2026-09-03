@@ -129,6 +129,17 @@ export function createChatStyles(c: AppColors) {
   collabWorkspaceLayer: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: c.drawerBackground,
+    /**
+     * **显式压到最底**，不吃「兄弟顺序即 z 序」那套隐式约定。
+     *
+     * 实测教训：这层里的底部渐变遮罩（不透明）本该被 sheet 盖住，实际却画在了 sheet 之上 ——
+     * 早先它多铺 8pt 时，把 sheet 顶上 8pt 的面、圆角弧和投影一起抹掉了（截图逐像素量到
+     * 正好 8.0pt，且那一条连 sheet 投影都没有）。收回那 8pt 只治了标，sheet 向上的投影仍被
+     * 这条贴着顶沿的近实色带子吃掉。containerInner 里另外三个兄弟：leftEdgeGesture / topBar
+     * 都已显式 zIndex 30，sheet 与 KAV(composer) 无 zIndex（靠兄弟顺序保持 composer 在
+     * sheet 之上）—— 这里给 -1 只把本层压到最底，不动那两者的相对次序。
+     */
+    zIndex: -1,
   },
   /** sheet 面：保持聊天页主画布色（消息气泡/工具卡都是照这个底调的，不能动），
    *  层次交给「底层更暗 + 上缘 hairline + 向上投影」三件套。 */
