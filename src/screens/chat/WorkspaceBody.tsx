@@ -223,8 +223,9 @@ export function WorkspaceBody({
       transform: [{ translateY: Math.max(minTop, wanted) }],
     };
   });
-  /** 底部渐变遮罩：下沿压在 sheet 顶沿上，同一个位置信号驱动，任何档位都对得上。
-   *  不做钳制 —— 它只是一层洗白，跟着 sheet 滑出画面（或滑到 header 后面）都无所谓。 */
+  /** 底部渐变遮罩：下沿**正好停在** sheet 顶沿（不能越过，见 WORKSPACE_FADE_HEIGHT 的注释），
+   *  同一个位置信号驱动，任何档位都对得上。不做钳制 —— 它只是一层洗白，跟着 sheet 滑出画面
+   *  （或滑到 header 后面）都无所谓。 */
   const fadeAnimStyle = useAnimatedStyle(() => {
     const sheetY = Math.min(sheetTopY.value, sheetTopYMax);
     return { transform: [{ translateY: sheetY - WORKSPACE_FADE_HEIGHT }] };
@@ -544,22 +545,21 @@ const INDICATOR_STRIP_HEIGHT = PILL_HEIGHT + INDICATOR_PAD * 2;
 const INDICATOR_SHEET_GAP = 10;
 /** 整条走马灯从 sheet 顶沿往上占掉的高度：居中类内容要让开这一段。 */
 const INDICATOR_RESERVE = INDICATOR_SHEET_GAP + PILL_HEIGHT + INDICATOR_PAD;
-/** 底部渐变遮罩：从 sheet 顶沿往上这么高。要比整条走马灯再高一截 —— 胶囊上沿之前就得洗完，
- *  之上还留一段慢慢淡进正文，否则渐变自己会有一道看得见的起始边。 */
+/**
+ * 底部渐变遮罩：从 sheet 顶沿往上这么高，**下沿到 sheet 顶沿为止，一 pt 都不许往下探**。
+ *
+ * 血的教训（真机截图逐像素量出来的）：早先给它多铺了 8pt「兜亚像素缝」，结果那 8pt 实色
+ * 正好糊在 sheet 顶上 —— 量出来 sheet body 顶沿在 435.3pt（按把手指示条倒推），可白面
+ * 直到 443.3pt 才开始，中间 **正好 8.0pt** 是纯工作区底色、连 sheet 自己的投影都没有，
+ * 说明这条带子是压在 sheet **之上**画的。表现就是圆角弧往上拐到一半被一条横线切掉。
+ * 工作区层里任何不透明的东西都不准越过 sheet 顶沿。
+ */
 const WORKSPACE_FADE_HEIGHT = 96;
-/** 再往 sheet 里多铺一截实色，兜住渐变末端与 sheet 顶沿之间的亚像素缝。
- *  （sheet 那两个圆角缺口露的本来就是工作区底色 —— 圆角正是靠它才看得出来，不该盖。） */
-const WORKSPACE_FADE_TOTAL = WORKSPACE_FADE_HEIGHT + 8;
-/** 胶囊上沿在渐变带里的位置。**到这儿必须已经洗成实色** —— 真机实测第一版把这里做成
- *  半透明，正文就从胶囊背后透出来，跟标签糊成一团。 */
-const FADE_SOLID_AT = (WORKSPACE_FADE_HEIGHT - INDICATOR_SHEET_GAP - PILL_HEIGHT) / WORKSPACE_FADE_TOTAL;
-/** 四档位置：0 全透明 → 中途 → 胶囊上沿处实色 → sheet 顶沿以下恒实色。 */
-const FADE_LOCATIONS = [
-  0,
-  FADE_SOLID_AT * 0.55,
-  FADE_SOLID_AT,
-  WORKSPACE_FADE_HEIGHT / WORKSPACE_FADE_TOTAL,
-];
+/** 胶囊上沿在渐变带里的位置。**到这儿必须已经洗成实色** —— 第一版这里才 0.5 alpha，
+ *  正文就从胶囊背后透出来跟标签糊成一团。 */
+const FADE_SOLID_AT = (WORKSPACE_FADE_HEIGHT - INDICATOR_SHEET_GAP - PILL_HEIGHT) / WORKSPACE_FADE_HEIGHT;
+/** 四档位置：0 全透明 → 中途 → 胶囊上沿处实色 → 带底（= sheet 顶沿）实色。 */
+const FADE_LOCATIONS = [0, FADE_SOLID_AT * 0.55, FADE_SOLID_AT, 1];
 const HIT_SLOP = { top: 10, bottom: 10, left: 6, right: 6 };
 
 function createStyles(c: AppColors) {
@@ -573,7 +573,7 @@ function createStyles(c: AppColors) {
       top: 0,
       left: 0,
       right: 0,
-      height: WORKSPACE_FADE_TOTAL,
+      height: WORKSPACE_FADE_HEIGHT,
       zIndex: 4,
     },
     /** 走马灯指示器的定位壳：贴在页面坐标原点，靠 translateY 跟着 sheet 顶沿走。 */
