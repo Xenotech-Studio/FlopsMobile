@@ -13,7 +13,14 @@
  *   熬过协同模式换容器的重挂，所以归 ChatScreen 持有、当 prop 传进来。
  * - 顶部「加载更旧」的**触发与防抖**在这里，**网络调用**在 ChatScreen（onReachTop 桥接）。
  */
-import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -134,6 +141,13 @@ export type ChatMessageAreaProps = {
   historyOverlayBottomOverflow: number;
 };
 
+/**
+ * 重挂后「最后一次钉底」到「开始画」之间等多久（见 pinSettling）。约三帧：够这次
+ * scrollToEnd 落到画面上，又短到看不出中间那段空白。布局还在抖就一次次顺延，
+ * 所以这个数只决定「安静下来之后多久显」，不是总时长。
+ */
+const PIN_REVEAL_SETTLE_MS = 48;
+
 export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageAreaProps>(
   function ChatMessageArea(
     {
@@ -194,30 +208,42 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
      * 第一帧停在 offset 0 —— 也就是对话最顶上的远古历史。钉底要等布局事件回来才生效，
      * 中间那一两帧画出来就是用户看到的「关掉协同布局时闪一下」。
      *
-     * 所以这一两帧干脆不画（只是 opacity，布局照常发生、钉底该收到的事件一个不少），
+     * 所以这几帧干脆不画（只是 opacity，布局照常发生、钉底该收到的事件一个不少），
      * 落位了再显。判据用窗口而不是「有没有内容」：窗口是父级持有的（见 bottomPin），
      * 能穿过重挂活下来，且只有真打算钉底时才开着 —— 普通的首次挂载不受影响。
+     *
+     * **什么时候算落位**：不能按固定帧数猜（试过一帧，太早 —— 钉底靠的是 onLayout /
+     * onContentSizeChange 这类原生事件回 JS，跟 rAF 没有先后保证，先显出来就会看到内容
+     * 从远古历史跳到底部）。改成由真正执行了钉底滚动的那两处来推：每落一次位就把「显」
+     * 往后推 PIN_REVEAL_SETTLE_MS，布局还在抖就一直推，抖停了才显；再加 400ms 硬兜底。
      */
     const [pinSettling, setPinSettling] = useState(() => isInOpenWindow(bottomPin, Date.now()));
-    useEffect(() => {
-      if (!pinSettling) return;
-      let alive = true;
-      const reveal = () => {
-        if (alive) setPinSettling(false);
-      };
-      /* 下一帧：此时 armForOpen 那串补滚（立即 + rAF + 200ms）里的前两发已经落地。
-         不在这里自己再滚一次 —— 滚不滚归钉底状态机管，这里只负责什么时候开始画。 */
-      const raf = requestAnimationFrame(reveal);
-      /* 兜底：布局事件迟迟不来也不能一直藏着。 */
-      const timer = setTimeout(reveal, 400);
-      return () => {
-        alive = false;
-        cancelAnimationFrame(raf);
-        clearTimeout(timer);
-      };
-      /* 只在挂载时判一次：pinSettling 只会 true → false。 */
-      // eslint-disable-next-line react-hooks/exhaustive-deps
+    const pinSettlingRef = useRef(pinSettling);
+    const pinRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const endPinSettling = useCallback(() => {
+      if (pinRevealTimerRef.current) {
+        clearTimeout(pinRevealTimerRef.current);
+        pinRevealTimerRef.current = null;
+      }
+      if (!pinSettlingRef.current) return;
+      pinSettlingRef.current = false;
+      setPinSettling(false);
     }, []);
+    /** 钉底真落了一次 → 等它画出来再显；期间若又落一次（布局还在稳定），顺延到最后一次之后。 */
+    const schedulePinReveal = useCallback(() => {
+      if (!pinSettlingRef.current) return;
+      if (pinRevealTimerRef.current) clearTimeout(pinRevealTimerRef.current);
+      pinRevealTimerRef.current = setTimeout(endPinSettling, PIN_REVEAL_SETTLE_MS);
+    }, [endPinSettling]);
+    useEffect(() => {
+      if (!pinSettlingRef.current) return;
+      /* 兜底：钉底事件迟迟不来（内容为空、布局事件被吞）也不能一直藏着。 */
+      const safety = setTimeout(endPinSettling, 400);
+      return () => {
+        clearTimeout(safety);
+        if (pinRevealTimerRef.current) clearTimeout(pinRevealTimerRef.current);
+      };
+    }, [endPinSettling]);
     /* 「钉底」状态机（见 utils/chatBottomPin）：
      *  - 一次性触发：有新消息 / 回复完成时滚一下，避免展开折叠工具卡片时误滚；
      *  - 打开对话额外武装一个时间窗口：首个 onContentSizeChange 往往发生在图片（fit-image
@@ -288,6 +314,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
             if (isInOpenWindow(bottomPin, Date.now())) {
               atBottomRef.current = true;
               scrollRef.current?.scrollToEnd({ animated: false });
+              schedulePinReveal();
               return;
             }
             /* 视口变矮（协同模式收 sheet 档位、键盘弹起）时 maxOffset 跟着变大，原本贴底的
@@ -339,6 +366,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
                  后台跑出新消息回前台就不会跟到底了。 */
               atBottomRef.current = true;
               scrollRef.current?.scrollToEnd({ animated: intent.animated });
+              schedulePinReveal();
               /* Android：onContentSizeChange 经常在内容真正布局完前先 fire 一次（中间高度），
                  单次 scrollToEnd 只滚到那个中间位置。再补两次延迟滚动盖住后续布局抖动。
                  （iOS 那侧靠打开对话时武装的钉底窗口兜——图片/附件量完高度会再来一次
