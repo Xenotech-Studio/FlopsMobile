@@ -13,7 +13,7 @@
  *   熬过协同模式换容器的重挂，所以归 ChatScreen 持有、当 prop 传进来。
  * - 顶部「加载更旧」的**触发与防抖**在这里，**网络调用**在 ChatScreen（onReachTop 桥接）。
  */
-import React, { forwardRef, useImperativeHandle, useRef } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -188,6 +188,36 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
     const atBottomRef = useRef(false);
     /** 防抖:顶部触发过一次加载后置 true，直到用户滚离顶部(y>300)才重新武装，避免一次滚动连环触发多批。 */
     const nearTopTriggeredRef = useRef(false);
+    /**
+     * 「刚重挂、还没落位」：挂载时钉底窗口就开着 = 我们是被换了父节点重挂出来的
+     * （协同布局开/关会把消息区在 sheet 与平铺容器之间搬家），ScrollView 是全新的、
+     * 第一帧停在 offset 0 —— 也就是对话最顶上的远古历史。钉底要等布局事件回来才生效，
+     * 中间那一两帧画出来就是用户看到的「关掉协同布局时闪一下」。
+     *
+     * 所以这一两帧干脆不画（只是 opacity，布局照常发生、钉底该收到的事件一个不少），
+     * 落位了再显。判据用窗口而不是「有没有内容」：窗口是父级持有的（见 bottomPin），
+     * 能穿过重挂活下来，且只有真打算钉底时才开着 —— 普通的首次挂载不受影响。
+     */
+    const [pinSettling, setPinSettling] = useState(() => isInOpenWindow(bottomPin, Date.now()));
+    useEffect(() => {
+      if (!pinSettling) return;
+      let alive = true;
+      const reveal = () => {
+        if (alive) setPinSettling(false);
+      };
+      /* 下一帧：此时 armForOpen 那串补滚（立即 + rAF + 200ms）里的前两发已经落地。
+         不在这里自己再滚一次 —— 滚不滚归钉底状态机管，这里只负责什么时候开始画。 */
+      const raf = requestAnimationFrame(reveal);
+      /* 兜底：布局事件迟迟不来也不能一直藏着。 */
+      const timer = setTimeout(reveal, 400);
+      return () => {
+        alive = false;
+        cancelAnimationFrame(raf);
+        clearTimeout(timer);
+      };
+      /* 只在挂载时判一次：pinSettling 只会 true → false。 */
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
     /* 「钉底」状态机（见 utils/chatBottomPin）：
      *  - 一次性触发：有新消息 / 回复完成时滚一下，避免展开折叠工具卡片时误滚；
      *  - 打开对话额外武装一个时间窗口：首个 onContentSizeChange 往往发生在图片（fit-image
@@ -244,7 +274,8 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
       <>
         <ScrollView
           ref={scrollRef}
-          style={styles.scroll}
+          /* pinSettling：重挂后还没钉到底的那一两帧先不画（见上面那段） */
+          style={[styles.scroll, pinSettling && styles.scrollSettling]}
           onLayout={(e) => {
             const h = e.nativeEvent.layout.height;
             const prev = scrollViewportHeightRef.current;

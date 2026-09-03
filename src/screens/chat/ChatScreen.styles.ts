@@ -418,6 +418,8 @@ export function createChatStyles(c: AppColors) {
   /* S9 加密子对话解不开（父对话已删/不在本账号）时的说明条。不是错误，是状态，所以用弱化色。 */
   convLockedNotice: { color: c.textMuted, fontSize: 13, lineHeight: 18, paddingHorizontal: CHAT_SCROLL_PADDING_H, paddingVertical: 8 },
   scroll: { flex: 1 },
+  /** 重挂后还没被钉到底的那一两帧：只藏画面、不动布局（见 ChatMessageArea 的 pinSettling）。 */
+  scrollSettling: { opacity: 0 },
   scrollContent: {
     paddingHorizontal: CHAT_SCROLL_PADDING_H,
     paddingVertical: 20,

@@ -1025,6 +1025,19 @@ export function ChatScreen({
   const collabDismissProgress = useSharedValue(0);
   /** 松手已判定为「要关」：补完动画接管进度，逐帧那条 reaction 不再插手。 */
   const collabDismissCommitted = useSharedValue(false);
+  /**
+   * 开/关协同布局：**先武装钉底窗口，再切状态**。
+   *
+   * 切状态会把消息区在 sheet 与平铺容器之间搬家 = 整个实例重挂，新 ScrollView 第一帧停在
+   * offset 0（对话最顶上的远古历史），要等布局事件回来才被钉到底 —— 那一两帧就是「关掉时
+   * 闪一下」。窗口归 ChatScreen 持有（chatBottomPinRef），能穿过重挂活下来，所以**在切之前**
+   * 武装好，新实例首帧就知道自己还没落位、先不画（见 ChatMessageArea 的 pinSettling）。
+   * 放进 effect 里补是来不及的：useEffect 排在提交之后，那时首帧多半已经画出去了。
+   */
+  const setCollabDismissedSettled = useCallback((next: boolean) => {
+    messageAreaRef.current?.armForOpen();
+    setCollabDismissed(next);
+  }, []);
   const prevCollabConvIdRef = useRef(conversationId);
   useEffect(() => {
     const prev = prevCollabConvIdRef.current;
@@ -1125,7 +1138,7 @@ export function ChatScreen({
                它下一刻就要卸载了，让它停在手指松开的位置上化完即可。 */
             collabDismissProgress.value = withTiming(1, { duration: 140 }, (finished) => {
               'worklet';
-              if (finished) runOnJS(setCollabDismissed)(true);
+              if (finished) runOnJS(setCollabDismissedSettled)(true);
             });
             return;
           }
@@ -1133,6 +1146,8 @@ export function ChatScreen({
           defaults.handleOnEnd(source, payload);
         },
       }),
+      /* setCollabDismissedSettled 是 useCallback([])，恒定；linter 认不出 worklet 闭包里的
+         引用，列进来反被判成多余依赖，故不列。 */
       [defaults],
     );
   };
@@ -5560,7 +5575,8 @@ export function ChatScreen({
                 /* 档位一并回到 mid：sheet 挂载时 index=1，档位 state 不跟着回去的话，
                    聊天区高度会先按关掉前那一档算一帧。 */
                 setCollabSheetIndex(1);
-                setCollabDismissed(false);
+                /* 走 settled 版：开回来同样是一次重挂，首帧也得先按住别画。 */
+                setCollabDismissedSettled(false);
               }}
             >
               <Ionicons name="layers-outline" size={21} color={colors.textSecondary} />
