@@ -61,6 +61,12 @@ export type ChatMessageAreaHandle = {
   armOnce: () => void;
   /** 打开对话式钉底：武装一个时间窗口，窗口内每次内容变高都重新贴底。 */
   armForOpen: () => void;
+  /**
+   * 记录「离底距离」锚点，给**换容器**（协同布局开/关会把消息区搬家 = 整个实例重挂）用：
+   * 新实例照它还原，视觉位置就停在原处。返回 null = 当时本来就贴着底（或还没量出尺寸），
+   * 那就没什么可还原的，照旧钉底即可。
+   */
+  captureScrollAnchor: () => number | null;
   /** 视口此刻是否贴在列表底部（回前台补消息时决定要不要跟到底）。 */
   isAtBottom: () => boolean;
   /** 滚到指定内容偏移（摘要分界定位用）。 */
@@ -87,6 +93,12 @@ export type ChatMessageAreaProps = {
   /** 钉底状态机（utils/chatBottomPin）。**由 ChatScreen 持有**，好让它熬过协同模式换容器
    *  带来的重挂；本组件只读写它，不负责创建。理由详见组件内声明区那段注释。 */
   bottomPin: BottomPinState;
+  /**
+   * 换容器时的滚动锚点（离底距离），同样**由 ChatScreen 持有**才能穿过重挂。
+   * 非 null = 切换前用户正在翻历史，新实例落位时还原这个距离而不是钉到底；
+   * null = 当时贴着底，照旧钉底。用完（显形时）由本组件清掉。
+   */
+  scrollAnchorRef: { current: number | null };
 
   /* ---- 状态门控 ---- */
   showEmpty: boolean;
@@ -148,6 +160,9 @@ export type ChatMessageAreaProps = {
  */
 const PIN_REVEAL_SETTLE_MS = 48;
 
+/** 「算贴底」的容差（与 onScroll 里那条同源）：换容器时离底不到这么多就当贴底，不记锚点。 */
+const NEAR_BOTTOM_SLACK = 80;
+
 export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageAreaProps>(
   function ChatMessageArea(
     {
@@ -162,6 +177,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
       contextCompressPlacement,
       contextCompressAnchorRef,
       bottomPin,
+      scrollAnchorRef,
       showEmpty,
       loading,
       bgPauseRecovering,
@@ -227,8 +243,11 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
       }
       if (!pinSettlingRef.current) return;
       pinSettlingRef.current = false;
+      /* 锚点只服务这一次换容器：显形 = 落位完成，就地作废，免得之后来的新消息
+         被它拽回「原来那个离底距离」而不是跟到底。 */
+      scrollAnchorRef.current = null;
       setPinSettling(false);
-    }, []);
+    }, [scrollAnchorRef]);
     /** 钉底真落了一次 → 等它画出来再显；期间若又落一次（布局还在稳定），顺延到最后一次之后。 */
     const schedulePinReveal = useCallback(() => {
       if (!pinSettlingRef.current) return;
@@ -244,6 +263,32 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
         if (pinRevealTimerRef.current) clearTimeout(pinRevealTimerRef.current);
       };
     }, [endPinSettling]);
+    /**
+     * 【落位】钉底窗口该滚的时候都走这里，两种语义二选一：
+     *  - 有锚点（换容器前用户在翻历史）→ 还原「离底距离」。两侧视口底同在屏底、
+     *    paddingBottom 也一样，所以还原离底距离 = 屏幕上看到的内容纹丝不动；
+     *  - 没锚点（正常打开对话 / 切换时本来就贴着底）→ 照旧钉到底。
+     * 落一次位就往后推一次显形（见 schedulePinReveal）。
+     */
+    const landPin = useCallback(
+      (animated: boolean) => {
+        const anchor = scrollAnchorRef.current;
+        const contentH = scrollContentHeightRef.current;
+        const viewportH = scrollViewportHeightRef.current;
+        if (anchor !== null && contentH > 0 && viewportH > 0) {
+          const y = Math.max(0, contentH - viewportH - anchor);
+          scrollRef.current?.scrollTo({ y, animated: false });
+          atBottomRef.current = anchor < NEAR_BOTTOM_SLACK;
+        } else {
+          /* 主动贴底了就直接把 atBottom 记上，不等 onScroll 回声：内容没撑满视口时
+             根本不会有滚动事件，光靠 onScroll 维护的话这种会话永远是 false。 */
+          atBottomRef.current = true;
+          scrollRef.current?.scrollToEnd({ animated });
+        }
+        schedulePinReveal();
+      },
+      [scrollAnchorRef, schedulePinReveal],
+    );
     /* 「钉底」状态机（见 utils/chatBottomPin）：
      *  - 一次性触发：有新消息 / 回复完成时滚一下，避免展开折叠工具卡片时误滚；
      *  - 打开对话额外武装一个时间窗口：首个 onContentSizeChange 往往发生在图片（fit-image
@@ -268,6 +313,14 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
         armOnce: () => {
           armOnce(bottomPin);
         },
+        captureScrollAnchor: () => {
+          const contentH = scrollContentHeightRef.current;
+          const viewportH = scrollViewportHeightRef.current;
+          if (contentH <= 0 || viewportH <= 0) return null;
+          const distance = contentH - viewportH - scrollOffsetYRef.current;
+          /* 贴底（含内容没撑满视口 → 负数）就不记：那种情况钉底本身就是对的。 */
+          return distance > NEAR_BOTTOM_SLACK ? distance : null;
+        },
         armForOpen: () => {
           armForOpen(bottomPin, Date.now());
           /* 光武装窗口不够 —— 窗口的唯一触发源是 onContentSizeChange（内容**变高**）。
@@ -277,9 +330,10 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
              新实例第一帧内容高度就是终值 —— 那唯一一次 onContentSizeChange 跟这里的武装是
              竞态，且此后高度再不变化，窗口就永远等不到触发源，列表停在 offset 0（远古历史）。
              所以主动补几发：立即 + rAF + 200ms，跟 Web snapChatThreadToEnd 同款三连，
-             熬过「刚 mount 还没量完 / sheet 高度还在动画」这段。 */
-          atBottomRef.current = true;
-          const snap = () => scrollRef.current?.scrollToEnd({ animated: false });
+             熬过「刚 mount 还没量完 / sheet 高度还在动画」这段。
+             走 landPin 而不是直接 scrollToEnd：换容器时若带着锚点，这三发同样要还原
+             「离底距离」，否则它们会把刚还原好的位置又拽回底部。 */
+          const snap = () => landPin(false);
           snap();
           requestAnimationFrame(snap);
           setTimeout(snap, 200);
@@ -293,7 +347,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
       }),
       /* bottomPin 是 ChatScreen 那边 useRef 里的对象，整个会话期间恒定，句柄实际不会重建；
          列进依赖只为满足 exhaustive-deps，顺带保证万一父级换了对象也不会拿到旧的。 */
-      [bottomPin]
+      [bottomPin, landPin]
     );
 
     return (
@@ -312,9 +366,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
                只认窗口、不消费 once：一次性 latch 说的是「下次内容**变高**时滚」，让一次纯
                视口变化（发完消息键盘收起之类）提前吃掉，真正的新消息反而会落在屏幕外。 */
             if (isInOpenWindow(bottomPin, Date.now())) {
-              atBottomRef.current = true;
-              scrollRef.current?.scrollToEnd({ animated: false });
-              schedulePinReveal();
+              landPin(false);
               return;
             }
             /* 视口变矮（协同模式收 sheet 档位、键盘弹起）时 maxOffset 跟着变大，原本贴底的
@@ -361,12 +413,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
             /* 加载更旧的锚定已交给 maintainVisibleContentPosition（原生帧级维持），这里只管触底滚动。 */
             const intent = consumeScrollIntent(bottomPin, Date.now());
             if (intent) {
-              /* 主动贴底了就直接把 atBottom 记上，不等 onScroll 回声：内容没撑满视口时
-                 根本不会有滚动事件，光靠 onScroll 维护的话这种会话永远是 false，
-                 后台跑出新消息回前台就不会跟到底了。 */
-              atBottomRef.current = true;
-              scrollRef.current?.scrollToEnd({ animated: intent.animated });
-              schedulePinReveal();
+              landPin(intent.animated);
               /* Android：onContentSizeChange 经常在内容真正布局完前先 fire 一次（中间高度），
                  单次 scrollToEnd 只滚到那个中间位置。再补两次延迟滚动盖住后续布局抖动。
                  （iOS 那侧靠打开对话时武装的钉底窗口兜——图片/附件量完高度会再来一次

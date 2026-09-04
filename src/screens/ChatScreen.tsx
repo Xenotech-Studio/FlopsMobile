@@ -936,6 +936,9 @@ export function ChatScreen({
    *  内容变高事件，窗口就永远没人消费 → 列表停在最顶部。放这里能穿过重挂活下来。
    *  ChatScreen 本身按 conversationId 上 key，所以换会话时它自然是新的。 */
   const chatBottomPinRef = useRef(createBottomPinState());
+  /** 换容器时的滚动锚点（离底距离）。同样挂在这一层才能穿过重挂；用完由消息区自己清掉。
+   *  非 null = 切换前用户正在翻历史，新实例还原这个距离而不是钉到底。 */
+  const chatScrollAnchorRef = useRef<number | null>(null);
   /** 摘要分界行原生节点，用于 measureLayout 相对 ScrollView 内容容器得到可 scrollTo 的偏移 */
   const contextCompressAnchorRef = useRef<View>(null);
   /** 流式文件卡片(半折叠)内部 ScrollView 引用，保持视图跟随最后几行 */
@@ -1035,6 +1038,9 @@ export function ChatScreen({
    * 放进 effect 里补是来不及的：useEffect 排在提交之后，那时首帧多半已经画出去了。
    */
   const setCollabDismissedSettled = useCallback((next: boolean) => {
+    /* 再记一个滚动锚点：切换前正在翻历史的话，新实例照「离底距离」还原，视觉上停在原处，
+       而不是被钉底拽回最新消息。贴底时 captureScrollAnchor 给 null → 照旧钉底。 */
+    chatScrollAnchorRef.current = messageAreaRef.current?.captureScrollAnchor() ?? null;
     messageAreaRef.current?.armForOpen();
     setCollabDismissed(next);
   }, []);
@@ -1050,6 +1056,8 @@ export function ChatScreen({
     setCollabDismissed(false);
     collabDismissProgress.value = 0;
     collabDismissCommitted.value = false;
+    /* 锚点不跨会话：换过去是「打开新对话」，该回到底部。 */
+    chatScrollAnchorRef.current = null;
   }, [conversationId, collabDismissProgress, collabDismissCommitted]);
   /** 这个会话有没有协同内容（数据侧判定）。要不要真画 sheet 还要看用户有没有把它关掉。 */
   const collabAvailable = useMemo(() => collabLayoutActive(collabLayout), [collabLayout]);
@@ -5474,6 +5482,7 @@ export function ChatScreen({
       contextCompressPlacement={contextCompressPlacement}
       contextCompressAnchorRef={contextCompressAnchorRef}
       bottomPin={chatBottomPinRef.current}
+      scrollAnchorRef={chatScrollAnchorRef}
       showEmpty={showEmpty}
       loading={loading}
       bgPauseRecovering={bgPauseRecovering}
