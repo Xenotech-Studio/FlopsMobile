@@ -279,11 +279,18 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
           const y = Math.max(0, contentH - viewportH - anchor);
           scrollRef.current?.scrollTo({ y, animated: false });
           atBottomRef.current = anchor < NEAR_BOTTOM_SLACK;
+          /* 程序化滚动**自己把 offset 记上**：不能指望 onScroll 回声 —— 它是否为
+             animated:false 的 scrollTo 派发，两端行为并不一致。这个 ref 是
+             captureScrollAnchor 的输入，记漏了下次换容器算出来的离底距离就是错的。 */
+          scrollOffsetYRef.current = y;
         } else {
           /* 主动贴底了就直接把 atBottom 记上，不等 onScroll 回声：内容没撑满视口时
              根本不会有滚动事件，光靠 onScroll 维护的话这种会话永远是 false。 */
           atBottomRef.current = true;
           scrollRef.current?.scrollToEnd({ animated });
+          if (contentH > 0 && viewportH > 0) {
+            scrollOffsetYRef.current = Math.max(0, contentH - viewportH);
+          }
         }
         schedulePinReveal();
       },
@@ -309,16 +316,29 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
       () => ({
         scrollToBottom: (animated = true) => {
           scrollRef.current?.scrollToEnd({ animated });
+          atBottomRef.current = true;
+          const contentH = scrollContentHeightRef.current;
+          const viewportH = scrollViewportHeightRef.current;
+          /* 同 landPin：程序化滚动自己把 offset 记上，别让锚点算在陈旧值上。 */
+          if (contentH > 0 && viewportH > 0) {
+            scrollOffsetYRef.current = Math.max(0, contentH - viewportH);
+          }
         },
         armOnce: () => {
           armOnce(bottomPin);
         },
         captureScrollAnchor: () => {
+          /* **贴底一律不记锚点**，且这一条要先判：atBottomRef 是全组件公认的「在不在底部」
+             （onScroll 用同帧的 contentSize/layoutMeasurement 维护，程序化钉底也会置位），
+             比拿 offset 现算可靠。反过来若只信 offset：一个从头到尾没被用户碰过、只被
+             scrollToEnd 钉在底部的会话，offset 若没被记上就还是 0，算出来的「离底距离」
+             等于整个可滚长度 —— 还原时 y 被钳成 0，直接跳到对话最顶上。 */
+          if (atBottomRef.current) return null;
           const contentH = scrollContentHeightRef.current;
           const viewportH = scrollViewportHeightRef.current;
           if (contentH <= 0 || viewportH <= 0) return null;
           const distance = contentH - viewportH - scrollOffsetYRef.current;
-          /* 贴底（含内容没撑满视口 → 负数）就不记：那种情况钉底本身就是对的。 */
+          /* 离底不到一个容差（含内容没撑满视口 → 负数）也不记：那种情况钉底本身就是对的。 */
           return distance > NEAR_BOTTOM_SLACK ? distance : null;
         },
         armForOpen: () => {
