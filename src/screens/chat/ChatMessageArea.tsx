@@ -48,7 +48,10 @@ import {
   consumeScrollIntent,
   isInOpenWindow,
   release as releaseBottomPin,
+  scrollAnchorDistance,
+  SCROLL_ANCHOR_WINDOW_MS,
   type BottomPinState,
+  type ScrollAnchor,
 } from '../../utils/chatBottomPin';
 
 type ChatStyles = ReturnType<typeof createChatStyles>;
@@ -66,7 +69,7 @@ export type ChatMessageAreaHandle = {
    * 新实例照它还原，视觉位置就停在原处。返回 null = 当时本来就贴着底（或还没量出尺寸），
    * 那就没什么可还原的，照旧钉底即可。
    */
-  captureScrollAnchor: () => number | null;
+  captureScrollAnchor: () => ScrollAnchor | null;
   /** 视口此刻是否贴在列表底部（回前台补消息时决定要不要跟到底）。 */
   isAtBottom: () => boolean;
   /** 滚到指定内容偏移（摘要分界定位用）。 */
@@ -94,11 +97,11 @@ export type ChatMessageAreaProps = {
    *  带来的重挂；本组件只读写它，不负责创建。理由详见组件内声明区那段注释。 */
   bottomPin: BottomPinState;
   /**
-   * 换容器时的滚动锚点（离底距离），同样**由 ChatScreen 持有**才能穿过重挂。
-   * 非 null = 切换前用户正在翻历史，新实例落位时还原这个距离而不是钉到底；
-   * null = 当时贴着底，照旧钉底。用完（显形时）由本组件清掉。
+   * 换容器时的滚动锚点（离底距离 + 有效期），同样**由 ChatScreen 持有**才能穿过重挂。
+   * 非 null 且未过期 = 切换前用户正在翻历史，落位时还原这个距离而不是钉到底；
+   * null / 已过期 = 照旧钉底。靠有效期自然作废，不需要谁去清（见 utils/chatBottomPin）。
    */
-  scrollAnchorRef: { current: number | null };
+  scrollAnchorRef: { current: ScrollAnchor | null };
 
   /* ---- 状态门控 ---- */
   showEmpty: boolean;
@@ -243,11 +246,11 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
       }
       if (!pinSettlingRef.current) return;
       pinSettlingRef.current = false;
-      /* 锚点只服务这一次换容器：显形 = 落位完成，就地作废，免得之后来的新消息
-         被它拽回「原来那个离底距离」而不是跟到底。 */
-      scrollAnchorRef.current = null;
+      /* **不在这里清锚点**。显形只说明「可以画了」，不代表这次换容器引发的落位都跑完了 ——
+         armForOpen 的最后一发补滚在 200ms 后，比显形晚。早先在这儿清，那一发就会拿着
+         null 走 scrollToEnd，把刚还原好的位置又拽回底部。锚点改由有效期自然作废。 */
       setPinSettling(false);
-    }, [scrollAnchorRef]);
+    }, []);
     /** 钉底真落了一次 → 等它画出来再显；期间若又落一次（布局还在稳定），顺延到最后一次之后。 */
     const schedulePinReveal = useCallback(() => {
       if (!pinSettlingRef.current) return;
@@ -272,7 +275,7 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
      */
     const landPin = useCallback(
       (animated: boolean) => {
-        const anchor = scrollAnchorRef.current;
+        const anchor = scrollAnchorDistance(scrollAnchorRef.current, Date.now());
         const contentH = scrollContentHeightRef.current;
         const viewportH = scrollViewportHeightRef.current;
         if (anchor !== null && contentH > 0 && viewportH > 0) {
@@ -339,7 +342,8 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
           if (contentH <= 0 || viewportH <= 0) return null;
           const distance = contentH - viewportH - scrollOffsetYRef.current;
           /* 离底不到一个容差（含内容没撑满视口 → 负数）也不记：那种情况钉底本身就是对的。 */
-          return distance > NEAR_BOTTOM_SLACK ? distance : null;
+          if (distance <= NEAR_BOTTOM_SLACK) return null;
+          return { distance, until: Date.now() + SCROLL_ANCHOR_WINDOW_MS };
         },
         armForOpen: () => {
           armForOpen(bottomPin, Date.now());
@@ -391,9 +395,11 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
             }
             /* 视口变矮（协同模式收 sheet 档位、键盘弹起）时 maxOffset 跟着变大，原本贴底的
                视图会被留在半空 —— 「刚还在底部，收个档就掉进历史中间」。贴底态下补一次。
-               收档动画期间这里每帧都会 fire，等于全程钉着底收下去，不会跳。 */
+               收档动画期间这里每帧都会 fire，等于全程钉着底收下去，不会跳。
+               走 landPin：**打开**协同布局那一路视口是变矮的，正好落进这个分支，直接
+               scrollToEnd 会把刚按锚点还原好的位置拽回底部。 */
             if (prev > 0 && h < prev && atBottomRef.current) {
-              scrollRef.current?.scrollToEnd({ animated: false });
+              landPin(false);
             }
           }}
           contentContainerStyle={[
@@ -438,9 +444,10 @@ export const ChatMessageArea = forwardRef<ChatMessageAreaHandle, ChatMessageArea
                  单次 scrollToEnd 只滚到那个中间位置。再补两次延迟滚动盖住后续布局抖动。
                  （iOS 那侧靠打开对话时武装的钉底窗口兜——图片/附件量完高度会再来一次
                  onContentSizeChange，窗口内照样贴底。） */
+              /* 同样走 landPin，别绕开锚点（绕开的话 Android 上换容器必被这两发拽回底）。 */
               if (Platform.OS === 'android') {
-                requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
-                setTimeout(() => scrollRef.current?.scrollToEnd({ animated: false }), 200);
+                requestAnimationFrame(() => landPin(false));
+                setTimeout(() => landPin(false), 200);
               }
             }
           }}

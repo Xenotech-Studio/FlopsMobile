@@ -24,6 +24,31 @@
 /** 打开对话后的钉底时长。够覆盖弱网下图片 getSize 的往返，又不至于长到影响后续交互。 */
 export const BOTTOM_PIN_WINDOW_MS = 6000;
 
+/**
+ * 换容器（协同布局开/关会把消息区在 sheet 与平铺之间搬家 = 整个实例重挂）时的滚动锚点：
+ * 记下「离底距离」，新实例照它还原，视觉位置就停在原处。
+ *
+ * **带有效期**，而不是「用一次就作废」：一次换容器会引发一连串落位（armForOpen 的三连
+ * 补滚、新实例的 onLayout / onContentSizeChange、Android 那两发补滚），它们前后跨了两百多
+ * 毫秒。锚点若在其中任何一发之后就被清掉，剩下的那几发会各自 scrollToEnd，把刚还原好的
+ * 位置又拽回底部 —— 正是「锚点看着没生效」的真身。用时间兜住整串，才能每一发都还原到
+ * 同一处；过期之后回归正常钉底语义（发消息该跳底还是跳底）。
+ */
+export type ScrollAnchor = {
+  /** 内容底部到视口底部的距离（contentHeight - viewportHeight - scrollY）。 */
+  distance: number;
+  /** 失效时间戳（Date.now() 口径）。 */
+  until: number;
+};
+
+/** 锚点有效期：盖住 armForOpen 那串补滚的最后一发（200ms）再留一截余量。 */
+export const SCROLL_ANCHOR_WINDOW_MS = 400;
+
+/** 锚点还有效吗？有效则给出离底距离，否则 null（调用方回落到钉底）。 */
+export function scrollAnchorDistance(a: ScrollAnchor | null, now: number): number | null {
+  return a && now < a.until ? a.distance : null;
+}
+
 export type BottomPinState = {
   /** 一次性触发（发消息 / 回复完成等），消费一次即清 */
   once: boolean;

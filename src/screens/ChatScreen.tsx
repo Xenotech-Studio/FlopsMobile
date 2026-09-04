@@ -147,7 +147,7 @@ import {
   COMPOSER_TEXT_INSET_TALL,
 } from './chat/ChatScreen.styles';
 import { ChatMessageArea, type ChatMessageAreaHandle } from './chat/ChatMessageArea';
-import { createBottomPinState } from '../utils/chatBottomPin';
+import { createBottomPinState, type ScrollAnchor } from '../utils/chatBottomPin';
 import { WorkspaceBody } from './chat/WorkspaceBody';
 import {
   applyCollabLayoutPayload,
@@ -936,9 +936,9 @@ export function ChatScreen({
    *  内容变高事件，窗口就永远没人消费 → 列表停在最顶部。放这里能穿过重挂活下来。
    *  ChatScreen 本身按 conversationId 上 key，所以换会话时它自然是新的。 */
   const chatBottomPinRef = useRef(createBottomPinState());
-  /** 换容器时的滚动锚点（离底距离）。同样挂在这一层才能穿过重挂；用完由消息区自己清掉。
-   *  非 null = 切换前用户正在翻历史，新实例还原这个距离而不是钉到底。 */
-  const chatScrollAnchorRef = useRef<number | null>(null);
+  /** 换容器时的滚动锚点（离底距离 + 有效期，见 utils/chatBottomPin）。同样挂在这一层才能
+   *  穿过重挂。非 null 且未过期 = 切换前用户正在翻历史，新实例还原这个距离而不是钉到底。 */
+  const chatScrollAnchorRef = useRef<ScrollAnchor | null>(null);
   /** 摘要分界行原生节点，用于 measureLayout 相对 ScrollView 内容容器得到可 scrollTo 的偏移 */
   const contextCompressAnchorRef = useRef<View>(null);
   /** 流式文件卡片(半折叠)内部 ScrollView 引用，保持视图跟随最后几行 */
