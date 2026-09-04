@@ -317,9 +317,50 @@ export function createChatStyles(c: AppColors) {
   circleBtnDisabled: { opacity: 0.4 },
   /** 左上角按钮槽：相对定位容器，让未读 badge 绝对锚在按钮右上角。宽高交给内部按钮撑。 */
   headerLeftSlot: { position: 'relative' },
-  /** 协同入口按钮槽（⋯ 左边）：同左槽的相对定位套路，好让角标锚到右上角；
-   *  marginRight 是它与 ⋯ 之间的间距（topBar 是 space-between，两个按钮否则贴在一起）。 */
-  headerCollabSlot: { position: 'relative', marginRight: 8 },
+  /** 协同入口按钮槽：相对定位容器，好让角标锚到右上角。 */
+  headerCollabSlot: { position: 'relative' },
+  /**
+   * 右上角双选项胶囊：协同入口 + ⋯ 并排成一颗。外形跟 header 圆钮同一套（同底色、
+   * 同阴影），圆角取高度一半，宽度由两格自适应撑开。
+   */
+  headerCapsule: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: HEADER_CIRCLE_BTN_SIZE,
+    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
+    backgroundColor: c.surface,
+    ...shadowCircleButtonThemed(c),
+  },
+  /** iOS 26+ 的替代：⋯ 在那条路上是系统 Liquid Glass 材质的原生按钮，塞不进自绘胶囊
+   *  （底色会被系统剥掉，变成玻璃药丸叠实色胶囊）。那边两颗玻璃钮紧挨着，靠 gap 成组。 */
+  headerActionsPair: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  /** 胶囊里的一格：比圆钮窄，两格并排才不至于太胖；不带底色，底色归胶囊。 */
+  headerCapsuleSegment: {
+    width: 40,
+    height: HEADER_CIRCLE_BTN_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  /** 两格之间的分隔：只占中段高度，不顶到胶囊上下边。 */
+  headerCapsuleDivider: {
+    width: StyleSheet.hairlineWidth,
+    height: 18,
+    backgroundColor: c.border,
+  },
+  /** 胶囊里的角标：收在这一格右上角**内侧**（挂到胶囊外会像浮在按钮外的孤点），
+   *  比独立圆钮那颗小一号，免得压到分隔线。 */
+  headerCapsuleBadge: {
+    position: 'absolute',
+    top: 5,
+    right: 0,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    backgroundColor: c.textSecondary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   /** 未读对话数 badge：锚在返回/汉堡按钮右上角。灰底白字，无描边。 */
   headerUnreadBadge: {
     position: 'absolute',

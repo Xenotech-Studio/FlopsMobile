@@ -5517,6 +5517,103 @@ export function ChatScreen({
     />
   );
 
+  /* ── 右上角操作簇 ──
+   * 协同布局被关掉时，⋯ 左边多一个带角标的协同入口。两个选项合成**一颗胶囊**（同底色、
+   * 同阴影、圆角取高度一半，中间一条 hairline 分隔），而不是两颗独立圆钮。
+   * iOS 26+ 例外：那条路上 ⋯ 是系统 Liquid Glass 材质的原生 UIButton（AnimatedCircleButton
+   * 会剥掉我们给的底色交给系统画），塞进自绘胶囊里会变成「玻璃药丸叠在实色胶囊上」。
+   * 那边保持两颗玻璃钮紧挨着 —— 本来就是 iOS 26 分组按钮的原生样子。 */
+  const collabEntryVisible = collabAvailable && collabDismissed;
+  /** ⋯ 触发器在胶囊里是「一格」，单独出现时还是圆钮（玻璃路径恒为圆钮，形状归系统材质）。 */
+  const convMenuTriggerStyle =
+    collabEntryVisible && !IS_IOS_LIQUID_GLASS ? styles.headerCapsuleSegment : styles.circleBtn;
+  /* 右上角 ⋯ 菜单 三条路：
+   *  - iOS 26+ (Liquid Glass)：AnimatedCircleButton 透传 menuActions 给 BouncyButton，
+   *    底下 UIButton 直接挂原生 UIMenu（glass material + 系统 scale + UIMenu 弹层 全套
+   *    系统接管）。
+   *  - iOS 15..25：保留 MenuView（也是原生 UIMenu，但没玻璃 material，配手挂 scale）。
+   *  - Android：AnimatedCircleButton + 自绘 Modal popover。 */
+  const convMenuTrigger = IS_IOS_LIQUID_GLASS ? (
+    <AnimatedCircleButton
+      style={[convMenuTriggerStyle, !conversationId ? styles.circleBtnDisabled : null]}
+      disabled={!conversationId}
+      menuActions={glassMenuActions}
+      iosSfSymbol={{ name: 'ellipsis', size: 16, color: colors.textSecondary }}
+      onMenuAction={onConvMenuAction}
+    >
+      <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
+    </AnimatedCircleButton>
+  ) : Platform.OS === 'ios' ? (
+    <MenuView
+      title=""
+      actions={convMenuActions}
+      onPressAction={onConvMenuPressAction}
+      onOpenMenu={animateConvMenuPressDown}
+      onCloseMenu={animateConvMenuPressUp}
+      shouldOpenOnLongPress={false}
+    >
+      <Animated.View
+        style={[
+          convMenuTriggerStyle,
+          !conversationId && styles.circleBtnDisabled,
+          { transform: [{ scale: convMenuBtnScale }] },
+        ]}
+        pointerEvents={conversationId ? 'auto' : 'none'}
+      >
+        <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
+      </Animated.View>
+    </MenuView>
+  ) : (
+    <Reanimated.View style={convMenuTriggerAnimStyle}>
+      <AnimatedCircleButton
+        style={[convMenuTriggerStyle, !conversationId && styles.circleBtnDisabled]}
+        onPress={openConvMenu}
+        disabled={!conversationId}
+      >
+        <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
+      </AnimatedCircleButton>
+    </Reanimated.View>
+  );
+  /** 协同入口那一格：图标 + 角标；胶囊里角标收在格子内侧，玻璃路径下仍挂在圆钮外角。 */
+  const collabEntryNode = collabEntryVisible ? (
+    <Reanimated.View style={[styles.headerCollabSlot, collabEntryStyle]}>
+      <AnimatedCircleButton
+        style={IS_IOS_LIQUID_GLASS ? styles.circleBtn : styles.headerCapsuleSegment}
+        onPress={() => {
+          /* 溶解进度先归零，否则 sheet 与工作区会带着「已经化没了」的透明度挂回来。 */
+          collabDismissProgress.value = 0;
+          collabDismissCommitted.value = false;
+          /* 档位一并回到 mid：sheet 挂载时 index=1，档位 state 不跟着回去的话，
+             聊天区高度会先按关掉前那一档算一帧。 */
+          setCollabSheetIndex(1);
+          /* 走 settled 版：开回来同样是一次重挂，首帧也得先按住别画。 */
+          setCollabDismissedSettled(false);
+        }}
+      >
+        <Ionicons name="layers-outline" size={21} color={colors.textSecondary} />
+      </AnimatedCircleButton>
+      {collabTabCount > 0 ? (
+        <View
+          style={IS_IOS_LIQUID_GLASS ? styles.headerUnreadBadge : styles.headerCapsuleBadge}
+          pointerEvents="none"
+        >
+          <Text style={styles.headerUnreadBadgeText} numberOfLines={1}>
+            {collabTabCount > 99 ? '99+' : collabTabCount}
+          </Text>
+        </View>
+      ) : null}
+    </Reanimated.View>
+  ) : null;
+  const headerActions = collabEntryVisible ? (
+    <View style={IS_IOS_LIQUID_GLASS ? styles.headerActionsPair : styles.headerCapsule}>
+      {collabEntryNode}
+      {IS_IOS_LIQUID_GLASS ? null : <View style={styles.headerCapsuleDivider} />}
+      {convMenuTrigger}
+    </View>
+  ) : (
+    convMenuTrigger
+  );
+
   return (
     <>
     {/* edges 不含 'bottom'：bottom inset 交给 bottomOverlay 处理（见 navInset），
@@ -5577,81 +5674,7 @@ export function ChatScreen({
             {conversationId ? (conversationTitle || '新对话') : 'Flops'}
           </Text>
         </View>
-        {/* 协同布局被拖过顶关掉后，⋯ 左边留这个入口：角标 = 走马灯里的项数。
-            点一下原样开回来（sheet 回 mid 档，见 BottomSheet 的 index）。 */}
-        {collabAvailable && collabDismissed ? (
-          <Reanimated.View style={[styles.headerCollabSlot, collabEntryStyle]}>
-            <AnimatedCircleButton
-              style={styles.circleBtn}
-              onPress={() => {
-                /* 溶解进度先归零，否则 sheet 与工作区会带着「已经化没了」的透明度挂回来。 */
-                collabDismissProgress.value = 0;
-                collabDismissCommitted.value = false;
-                /* 档位一并回到 mid：sheet 挂载时 index=1，档位 state 不跟着回去的话，
-                   聊天区高度会先按关掉前那一档算一帧。 */
-                setCollabSheetIndex(1);
-                /* 走 settled 版：开回来同样是一次重挂，首帧也得先按住别画。 */
-                setCollabDismissedSettled(false);
-              }}
-            >
-              <Ionicons name="layers-outline" size={21} color={colors.textSecondary} />
-            </AnimatedCircleButton>
-            {collabTabCount > 0 ? (
-              <View style={styles.headerUnreadBadge} pointerEvents="none">
-                <Text style={styles.headerUnreadBadgeText} numberOfLines={1}>
-                  {collabTabCount > 99 ? '99+' : collabTabCount}
-                </Text>
-              </View>
-            ) : null}
-          </Reanimated.View>
-        ) : null}
-        {/* 右上角 ⋯ 菜单 三条路：
-         *  - iOS 26+ (Liquid Glass)：AnimatedCircleButton 透传 menuActions 给 BouncyButton，
-         *    底下 UIButton 直接挂原生 UIMenu（glass material + 系统 scale + UIMenu 弹层 全套
-         *    系统接管）。
-         *  - iOS 15..25：保留 MenuView（也是原生 UIMenu，但没玻璃 material，配手挂 scale）。
-         *  - Android：AnimatedCircleButton + 自绘 Modal popover。 */}
-        {IS_IOS_LIQUID_GLASS ? (
-          <AnimatedCircleButton
-            style={[styles.circleBtn, !conversationId ? styles.circleBtnDisabled : null]}
-            disabled={!conversationId}
-            menuActions={glassMenuActions}
-            iosSfSymbol={{ name: 'ellipsis', size: 16, color: colors.textSecondary }}
-            onMenuAction={onConvMenuAction}
-          >
-            <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
-          </AnimatedCircleButton>
-        ) : Platform.OS === 'ios' ? (
-          <MenuView
-            title=""
-            actions={convMenuActions}
-            onPressAction={onConvMenuPressAction}
-            onOpenMenu={animateConvMenuPressDown}
-            onCloseMenu={animateConvMenuPressUp}
-            shouldOpenOnLongPress={false}
-          >
-            <Animated.View
-              style={[
-                styles.circleBtn,
-                !conversationId && styles.circleBtnDisabled,
-                { transform: [{ scale: convMenuBtnScale }] },
-              ]}
-              pointerEvents={conversationId ? 'auto' : 'none'}
-            >
-              <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
-            </Animated.View>
-          </MenuView>
-        ) : (
-          <Reanimated.View style={convMenuTriggerAnimStyle}>
-            <AnimatedCircleButton
-              style={[styles.circleBtn, !conversationId && styles.circleBtnDisabled]}
-              onPress={openConvMenu}
-              disabled={!conversationId}
-            >
-              <Ionicons name="ellipsis-horizontal" size={22} color={colors.textSecondary} />
-            </AnimatedCircleButton>
-          </Reanimated.View>
-        )}
+        {headerActions}
       </View>
 
       {/* ── 协同工作模式：工作区主体（最底层，被 sheet 与 composer 盖住的部分靠 inset 让位）── */}
