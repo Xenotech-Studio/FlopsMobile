@@ -1099,14 +1099,14 @@ export function ChatScreen({
       if (started) return;
       started = true;
       setCollabReopenPhase('settling');
-      collabDismissProgress.value = withTiming(
-        0,
-        { duration: COLLAB_REOPEN_MS },
-        (finished) => {
-          'worklet';
-          if (finished) collabDismissCommitted.value = false;
-        },
-      );
+      collabDismissProgress.value = withTiming(0, { duration: COLLAB_REOPEN_MS }, () => {
+        'worklet';
+        /* **不判 finished**：动画被打断（重开途中用户就去拖 sheet）时若不交还这把闩，
+           盯位置那条 reaction 永远不再接管，progress 就冻在半路 —— 而 sheet 的面/把手/
+           顶部淡出带的透明度都是 1-progress，冻在 0.4 就是整个 sheet 壳半透明。
+           交还是安全的：reaction 会按当前档位重算，任何驻留档算出来都是 0。 */
+        collabDismissCommitted.value = false;
+      });
     };
     const tick = () => {
       if (maxTop > 0 && Math.abs(collabSheetPosition.value - maxTop) < 4) {
@@ -5994,11 +5994,11 @@ export function ChatScreen({
             >
               <LinearGradient
                 colors={collabSheetTopFadeGradient(colors)}
-                /* 中档提前到 0.2（原 0.45）：实色不留平台段，一出把手下沿就开始淡 —— 带子长度
-                   不变（12pt），只是「看得出在淡」的起点往上挪。带子挂在内容区里，top:0 就是
-                   把手下沿，再往上挪只能靠这条曲线：负 top 会被 BottomSheetContent 的 overflow
-                   裁掉，挂到把手层则会拿方角盖掉 sheet 圆角（6ab8591 已实测翻车并回退）。 */
-                locations={[0, 0.2, 1]}
+                /* 中档回到 0.35：留出约三分之一带子的近实色平台，文字不会一出把手下沿就现形
+                   （0.2 那版平台几乎归零，观感退回硬裁剪）。带子挂在内容区里，top:0 就是把手
+                   下沿；再往上挪只能靠曲线，不能靠位移 —— 负 top 会被 BottomSheetContent 的
+                   overflow 裁掉，挂到把手层则会拿方角盖掉 sheet 圆角（6ab8591 实测翻车已回退）。 */
+                locations={[0, 0.35, 1]}
                 style={StyleSheet.absoluteFill}
                 start={{ x: 0.5, y: 0 }}
                 end={{ x: 0.5, y: 1 }}

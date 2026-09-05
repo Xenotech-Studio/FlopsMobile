@@ -347,10 +347,12 @@ export function collabWorkspaceFadeGradient(c: AppColors): string[] {
  */
 export function collabSheetTopFadeGradient(c: AppColors): string[] {
   const bg = c.chatScreenBackground;
-  /* 中档 0.7（原先 0.85）：带子只有 12pt，起手那段太实的话「看得出在淡」的位置就被推到
-     一半以下。压低中档 + 把它的 location 提前（见调用处），实色几乎不留平台段，
-     淡出观感的起点跟着上移；顶端仍是 alpha 1，紧贴切口那一行照旧洗干净，不会退回硬切。 */
-  return [bg, rgbaFromHex(bg, 0.7), rgbaFromHex(bg, 0)];
+  /* 中档 0.75 + location 0.35（见调用处）：**留一小段近实色的平台**，再往下平滑到透明。
+     调参史：0.85@0.45 太实（"看得出在淡"的位置被推到带子一半以下）→ 压成 0.7@0.2，
+     平台段几乎归零，结果走到另一头 —— 紧贴把手下沿那一两 pt 就已经透出七成，文字一出
+     切口就现形，观感回到"硬裁剪"。现在取中间：顶端仍是 alpha 1（切口那一行照旧洗干净），
+     往下约三分之一带子保持近实色，剩下三分之二匀速化开。 */
+  return [bg, rgbaFromHex(bg, 0.75), rgbaFromHex(bg, 0)];
 }
 
 /** 工具卡片半折叠底部淡出 */
