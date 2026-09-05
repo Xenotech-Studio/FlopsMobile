@@ -110,18 +110,11 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
   // 当前 glass material tint + prominence（控制按钮 base color / 实色感）
   NSString *_glassTintColorHex;
   BOOL _glassProminent;
-  /* 【玻璃胶囊模式】(iOS 26+) —— 一枚连续玻璃胶囊，内含并排若干格。
-     _capsuleView: UIVisualEffectView + UIGlassEffect，胶囊本体（圆角 = 高/2）；
-     _capsuleButtons: 每格一个普通 UIButton，放在 effect view 的 contentView 里；
-     _capsuleMenuButton: 标了 "menu":true 的那一格，UIMenu 挂它身上。
-     胶囊模式下 _glassButton 整个隐藏——两者互斥。 */
-  /* 落影单独一层，套在 _capsuleView 外面。**不能挂在 self.layer 上**：RCTViewComponentView
-     的 invalidateLayer（updateLayoutMetrics 每次都会走）会按 props 重算 shadowPath，而我们
-     这个 view 背景是 clearColor（玻璃路径把底色剥了），它那条分支直接 shadowPath = nil，
-     没有路径、又没有背景内容的图层等于不投影 —— 表现就是"胶囊完全没有轮廓"。
-     自己的子 view RN 不管，挂这儿才稳。 */
-  UIView *_capsuleShadowView;
-  UIVisualEffectView *_capsuleView;
+  /* 【玻璃胶囊模式】(iOS 26+) —— 一枚玻璃胶囊，内含并排若干格。
+     胶囊本体**就是 _glassButton 本人**（glassButtonConfiguration + cornerStyle=Capsule），
+     胶囊模式下它退化成不吃触摸的背景板；各格是叠在它上面的普通 UIButton。
+     不自己搭 UIVisualEffectView + UIGlassEffect 的原因见 applyCapsuleSegmentsJson。
+     _capsuleMenuButton: 标了 "menu":true 的那一格，UIMenu 挂它身上。 */
   NSMutableArray<UIButton *> *_capsuleButtons;
   NSMutableArray<UIView *> *_capsuleDividers;
   UIButton *_capsuleMenuButton;
@@ -183,15 +176,14 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
     self.layer.transform = CATransform3DIdentity;
     _pressing = NO;
   }
-  /* 玻璃胶囊整个拆掉，_glassButton 复位可见：回收后的下一个 callsite 多半是普通圆钮。 */
-  if (_capsuleView) {
-    [_capsuleShadowView removeFromSuperview];
-    _capsuleShadowView = nil;
-    _capsuleView = nil;
+  /* 胶囊各格拆掉、_glassButton 恢复成能点的普通圆钮：回收后的下一个 callsite 多半就是它。 */
+  if (_capsuleButtons.count > 0) {
+    for (UIButton *b in _capsuleButtons) [b removeFromSuperview];
+    for (UIView *d in _capsuleDividers) [d removeFromSuperview];
     _capsuleButtons = nil;
     _capsuleDividers = nil;
     _capsuleMenuButton = nil;
-    _glassButton.hidden = NO;
+    _glassButton.userInteractionEnabled = YES;
   }
   _capsuleSegmentsJson = nil;
   _menuActionsJson = nil;
@@ -382,15 +374,15 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
 
 // MARK: - Glass capsule mode (iOS 26+)
 
-/* 一枚连续玻璃胶囊 + 并排若干格。跟 _glassButton 互斥：JSON 非空（≥2 段）就建胶囊、
-   把 _glassButton 藏起来；回到空 JSON 则拆掉胶囊、_glassButton 复出。
+/* 一枚玻璃胶囊 + 并排若干格。JSON 非空（≥2 段）进胶囊模式，空则回到普通单钮。
 
-   为什么不是「N 颗 glassButtonConfiguration 的按钮并排」：那样是 N 枚独立药丸，中间有缝，
-   跟参考图里「一枚连续玻璃 + 中间一条细分隔」不是一个东西。这里改成 UIVisualEffectView
-   套 UIGlassEffect（SDK 26 的 UIGlassEffect.h）当胶囊本体，格子退化成放在它 contentView
-   里的普通 UIButton —— 玻璃是一整块，格子只负责命中与内容。
-   effect.interactive = YES 让系统给整块玻璃做触摸响应；「各格独立高亮」由我们给被按的
-   那一格做 scale spring（复用本文件既有的 kPressDuration / kReleaseDuration 参数）。 */
+   为什么不是「N 颗玻璃按钮并排」：那是 N 枚独立药丸、中间有缝，不是参考图里那种
+   「一整枚 + 中间一条细分隔」。这里的做法是：**胶囊本体沿用本组件已有的 _glassButton**
+   （系统 glassButtonConfiguration + cornerStyle=Capsule，铺满 self.bounds），胶囊模式下
+   把它降级成不吃触摸的背景板；各格是叠在它之上的普通 UIButton，只管命中与内容。
+   于是整块材质由系统画、跟同屏其它玻璃钮同源，我们只排版。
+   「各格独立高亮」由我们给被按的那一格做 scale spring（复用本文件既有的
+   kPressDuration / kReleaseDuration 参数）。 */
 - (void)applyCapsuleSegmentsJson:(NSString *)json
                         colorHex:(NSString *)colorHex
                        pointSize:(CGFloat)pointSize {
@@ -414,15 +406,14 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
 
   /* 先拆旧的：胶囊模式是「重建」而不是「增量改」——段数 / 顺序 / 图标都可能变，
      重建几个 UIButton 的成本远低于维护一套 diff。 */
-  [_capsuleShadowView removeFromSuperview];
-  _capsuleShadowView = nil;
-  _capsuleView = nil;
+  for (UIButton *b in _capsuleButtons) [b removeFromSuperview];
+  for (UIView *d in _capsuleDividers) [d removeFromSuperview];
   _capsuleButtons = nil;
   _capsuleDividers = nil;
   _capsuleMenuButton = nil;
 
   if (segs == nil) {
-    _glassButton.hidden = NO;
+    _glassButton.userInteractionEnabled = YES;
     /* 菜单宿主回到 _glassButton：重新按当前 JSON 挂一次，别留着指向已销毁的格子。 */
     NSString *pendingMenu = _menuActionsJson;
     _menuActionsJson = nil;
@@ -430,36 +421,19 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
     return;
   }
 
-  _glassButton.hidden = YES;
-  if (@available(iOS 26.0, *)) {
-    UIGlassEffect *effect = [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
-    effect.interactive = YES;
-    _capsuleView = [[UIVisualEffectView alloc] initWithEffect:effect];
-  }
-  _capsuleView.frame = self.bounds;
-  _capsuleView.autoresizingMask =
-      UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-  /* 胶囊形**必须走 cornerConfiguration，不能用 clipsToBounds + layer.cornerRadius**。
-     UIVisualEffectView 明确不支持被 mask（masksToBounds 会把材质那趟合成裁没）——实测表现
-     是：contentView 里的图标/分隔线/角标照常画，玻璃本体一片都不画，于是只剩我们那层落影
-     透出来，胶囊看着比页面还暗（量到胶囊内 (219,219,221) vs 页面 (246,246,248)）。
-     iOS 26 给了 UICornerConfiguration 就是干这个的，系统的 glassButtonConfiguration
-     （左上角返回钮那颗，能正常显示）内部也是 cornerStyle 而不是自己 mask。 */
-  if (@available(iOS 26.0, *)) {
-    _capsuleView.cornerConfiguration = [UICornerConfiguration capsuleConfiguration];
-  }
-  /* 浅色背景上玻璃跟页面的亮度差很小，光靠材质几乎看不出轮廓 —— 参考实现（Claude iOS
-     右上角那颗）也是靠一层很淡的落影把胶囊"浮"起来。影子挂在自己的壳层上：
-     _capsuleView 自己 clipsToBounds=YES（要靠它裁圆角），masksToBounds 的图层画不出外阴影；
-     self.layer 则会被 RN 的 invalidateLayer 每帧重置（见 ivar 那段注释）。 */
-  _capsuleShadowView = [[UIView alloc] initWithFrame:self.bounds];
-  _capsuleShadowView.backgroundColor = [UIColor clearColor];
-  _capsuleShadowView.layer.shadowColor = [UIColor blackColor].CGColor;
-  _capsuleShadowView.layer.shadowOffset = CGSizeMake(0, 2);
-  _capsuleShadowView.layer.shadowOpacity = 0.12;
-  _capsuleShadowView.layer.shadowRadius = 8;
-  [_capsuleShadowView addSubview:_capsuleView];
-  [self addSubview:_capsuleShadowView];
+  /* 【胶囊本体 = _glassButton 本人】
+     不再自己搭 UIVisualEffectView + UIGlassEffect。两个理由，都是真机像素量出来的：
+     1) 手搭那版材质根本不显形 —— 胶囊内量到 (218,218,220)，比页面 (246,246,248) 还暗，
+        那是我们自己那层落影透出来的；而同屏返回钮（系统 glassButtonConfiguration）量到
+        (252,252,252)，白得干干净净。材质本身没问题，是搭法不对。
+     2) 就算让它显形，UIGlassEffect 是**容器**玻璃 —— 一层很淡的磨砂，本来就不是按钮那种
+        亮白质感。而目标（Android 版胶囊内 (255,255,255)、返回钮同样 (255,255,255)）要的
+        正是「按钮」那种实白。
+     所以直接复用本组件已有的 _glassButton：它就是一颗 glassButtonConfiguration +
+     cornerStyle=Capsule 的系统玻璃按钮，尺寸跟着 self.bounds 走 —— 天生就是我们要的胶囊，
+     且视觉与同屏返回钮**同款同源**。它在胶囊模式下只当背景板，不吃触摸（触摸归下面各格）。 */
+  _glassButton.hidden = NO;
+  _glassButton.userInteractionEnabled = NO;
 
   UIColor *tint = _bb_uiColorFromHex(colorHex) ?: [UIColor labelColor];
   CGFloat symbolSize = pointSize > 0 ? pointSize : 20;
@@ -497,7 +471,7 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
                     action:@selector(handleCapsuleSegmentPress:)
           forControlEvents:UIControlEventTouchUpInside];
     }
-    [_capsuleView.contentView addSubview:btn];
+    [self addSubview:btn];
     [_capsuleButtons addObject:btn];
     if (isMenu) _capsuleMenuButton = btn;
 
@@ -517,10 +491,17 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
       UIView *divider = [[UIView alloc] init];
       divider.backgroundColor = [[UIColor separatorColor] colorWithAlphaComponent:0.6];
       divider.userInteractionEnabled = NO;
-      [_capsuleView.contentView addSubview:divider];
+      [self addSubview:divider];
       [_capsuleDividers addObject:divider];
     }
   }
+
+  /* 一行自检：胶囊到底建没建、几格、多大、材质那颗在不在。装机后用
+     `npx react-native log-ios` 或 Xcode 控制台搜 "[BouncyButton] capsule" 就能确认，
+     不用再靠肉眼猜是不是走到了这条路。 */
+  NSLog(@"[BouncyButton] capsule built: segs=%lu bounds=%@ glassBody=%@ menuSeg=%@",
+        (unsigned long)_capsuleButtons.count, NSStringFromCGRect(self.bounds),
+        _glassButton ? @"YES" : @"NO", _capsuleMenuButton ? @"YES" : @"NO");
 
   /* 菜单改挂到 menu 那一格上：清掉 diff 缓存逼它重建一次。 */
   NSString *menuJson = _menuActionsJson;
@@ -536,18 +517,10 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
 
 - (void)layoutSubviews {
   [super layoutSubviews];
-  if (!_capsuleView) return;
-  CGRect b = self.bounds;
-  _capsuleShadowView.frame = b;
-  _capsuleView.frame = _capsuleShadowView.bounds;
-  /* 圆角归 cornerConfiguration 管（见建胶囊那段），这里不能再动 layer.cornerRadius/mask。 */
-  /* 落影路径跟着胶囊形状走：壳层没有背景色，不显式给路径就不画影子。 */
-  _capsuleShadowView.layer.shadowPath =
-      [UIBezierPath bezierPathWithRoundedRect:_capsuleShadowView.bounds
-                                 cornerRadius:b.size.height / 2.0]
-          .CGPath;
   NSUInteger n = _capsuleButtons.count;
   if (n == 0) return;
+  /* 胶囊本体是 _glassButton（autoresizingMask 已经让它铺满 self.bounds），这里只排各格。 */
+  CGRect b = self.bounds;
   CGFloat segW = b.size.width / (CGFloat)n;
   for (NSUInteger i = 0; i < n; i++) {
     UIButton *btn = _capsuleButtons[i];
@@ -557,7 +530,7 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
       [badgeLabel sizeToFit];
       CGFloat h = 16;
       CGFloat w = MAX(h, badgeLabel.bounds.size.width + 8);
-      /* 收在格子右上角内侧：挂到胶囊外会被 clipsToBounds 裁掉。 */
+      /* 收在格子右上角内侧：贴着胶囊边缘更像一体，也不会压到分隔线。 */
       badgeLabel.frame = CGRectMake(segW - w - 2, 5, w, h);
       badgeLabel.layer.cornerRadius = h / 2.0;
     }
