@@ -5531,6 +5531,9 @@ export function ChatScreen({
    * —— 自绘这条路已经在跑、且用户认可，就不为了材质再耗。胶囊里的两格都用 iosForceWorklet
    * 走非玻璃路径，否则 iOS 26 会在白胶囊里再叠两颗玻璃药丸。 */
   const collabEntryVisible = collabAvailable && collabDismissed;
+  /** 玻璃胶囊那条路：按压反馈交给整颗胶囊（系统 interactive glass 带着 children 一起形变），
+   *  各格因此**不再自己缩**。自绘胶囊没有这个整体动画，仍由各格自己做 bouncy。 */
+  const capsuleUsesSystemPress = IS_IOS_LIQUID_GLASS && collabEntryVisible;
   /** ⋯ 触发器在胶囊里是「一格」（透明、无底色），单独出现时才是圆钮。 */
   const convMenuTriggerStyle = collabEntryVisible
     ? styles.headerCapsuleSegment
@@ -5564,7 +5567,9 @@ export function ChatScreen({
         style={[
           convMenuTriggerStyle,
           !conversationId && styles.circleBtnDisabled,
-          { transform: [{ scale: convMenuBtnScale }] },
+          /* 玻璃胶囊里不做单格缩放：按压反馈由整颗胶囊来（BouncyGlassCard interactive），
+             两层叠一起会看到"胶囊缩一次、图标又自己缩一次"。 */
+          capsuleUsesSystemPress ? null : { transform: [{ scale: convMenuBtnScale }] },
         ]}
         pointerEvents={conversationId ? 'auto' : 'none'}
       >
@@ -5593,17 +5598,28 @@ export function ChatScreen({
     /* 走 settled 版：开回来同样是一次重挂，首帧也得先按住别画。 */
     setCollabDismissedSettled(false);
   };
-  /** 协同入口那一格。iosForceWorklet：胶囊里不要玻璃材质，否则 iOS 26 会在白胶囊里
-   *  再叠一颗玻璃药丸（仍有 UI 线程 bouncy 按压反馈，只是没材质）。 */
+  /**
+   * 协同入口那一格。两条路的按压反馈来源不同：
+   *  - 玻璃胶囊（iOS 26）：整颗胶囊由系统 interactive glass 缩放，children 跟着一起形变，
+   *    所以这里用**不带任何视觉反馈**的 Pressable，免得图标再自己缩一次；
+   *  - 自绘胶囊（Android / iOS<26）：没有整体动画，仍用 AnimatedCircleButton 各格自己 bouncy。
+   *    iosForceWorklet 是为了别在白胶囊里再叠一颗玻璃药丸。
+   */
   const collabEntryNode = collabEntryVisible ? (
     <Reanimated.View style={[styles.headerCollabSlot, collabEntryStyle]}>
-      <AnimatedCircleButton
-        style={styles.headerCapsuleSegment}
-        onPress={openCollabWorkspace}
-        iosForceWorklet
-      >
-        <Ionicons name="layers-outline" size={21} color={colors.textSecondary} />
-      </AnimatedCircleButton>
+      {capsuleUsesSystemPress ? (
+        <Pressable style={styles.headerCapsuleSegment} onPress={openCollabWorkspace}>
+          <Ionicons name="layers-outline" size={21} color={colors.textSecondary} />
+        </Pressable>
+      ) : (
+        <AnimatedCircleButton
+          style={styles.headerCapsuleSegment}
+          onPress={openCollabWorkspace}
+          iosForceWorklet
+        >
+          <Ionicons name="layers-outline" size={21} color={colors.textSecondary} />
+        </AnimatedCircleButton>
+      )}
       {collabTabCount > 0 ? (
         <View style={styles.headerCapsuleBadge} pointerEvents="none">
           <Text style={styles.headerUnreadBadgeText} numberOfLines={1}>
@@ -5629,11 +5645,14 @@ export function ChatScreen({
        UIView.cornerConfiguration 而不是 layer mask（玻璃由系统 out-of-process 渲染，
        in-process 的 mask 裁不动它，见 BouncyGlassCardComponentView.applyCornerShape 的注释）
        —— 我先前自搭那几版栽的正是这一条。
-       interactive=false：不要整颗胶囊一起放大，按压反馈各格自己做（同 composer 的选择）。 */
+       interactive=true：按下时整颗胶囊由系统缩放（children 在 effectView.contentView 里，
+       会跟着一起形变），跟其它玻璃按钮一个体感。各格因此不再自己缩（见 collabEntryNode）。
+       它自带的 tap recognizer 是 cancelsTouchesInView=NO + simultaneous，不挡各格的点击；
+       卡片级 onGlassPress 我们不接，落在格子上的 tap 各格自己处理。 */
     <BouncyGlassCard
       style={styles.headerGlassCapsule}
       cornerRadius={HEADER_CIRCLE_BTN_SIZE / 2}
-      interactive={false}
+      interactive
     >
       {headerCapsuleContent}
     </BouncyGlassCard>
