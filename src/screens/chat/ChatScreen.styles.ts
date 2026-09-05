@@ -345,7 +345,13 @@ export function createChatStyles(c: AppColors) {
   },
   /** 胶囊里的一格：比圆钮窄，两格并排才不至于太胖；不带底色，底色归胶囊。 */
   headerCapsuleSegment: {
-    width: 40,
+    /**
+     * 宽度 = 胶囊高度，不是拍脑袋的数：胶囊两端是半圆，半径 = 高/2 = 24，**末端半圆的圆心
+     * 就在距端点 24pt 处**。格子铺满胶囊、图标在格内居中，所以格宽取 48 时图标中心正好
+     * 落在 24 —— 跟半圆圆心重合，视觉上图标是"坐在端头那个圆里"的。
+     * 之前 40：图标中心落在 20 / 距右端 20，两颗都比圆心外偏 4pt，看着往两头挤。
+     */
+    width: HEADER_CIRCLE_BTN_SIZE,
     height: HEADER_CIRCLE_BTN_SIZE,
     alignItems: 'center',
     justifyContent: 'center',
@@ -361,7 +367,9 @@ export function createChatStyles(c: AppColors) {
   headerCapsuleBadge: {
     position: 'absolute',
     top: 5,
-    right: 0,
+    /** 8 而不是 0：格子加宽到 48 后，贴格子右缘会飘到中缝那头、跟图标脱开。
+     *  图标居中占 x∈[13.5,34.5]，右缘留 8 让角标压在图标右上角上。 */
+    right: 8,
     minWidth: 16,
     height: 16,
     borderRadius: 8,
