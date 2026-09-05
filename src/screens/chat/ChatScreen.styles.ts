@@ -336,13 +336,6 @@ export function createChatStyles(c: AppColors) {
     borderColor: c.border,
     ...shadowCircleButtonThemed(c),
   },
-  /** iOS 26+：整颗胶囊由 native 画（UIGlassEffect），这里只给尺寸 —— 底色/阴影都会被
-   *  glass 路径剥掉。宽度 = 两格 × 42。 */
-  headerGlassCapsule: {
-    width: 84,
-    height: HEADER_CIRCLE_BTN_SIZE,
-    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
-  },
   /** 胶囊里的一格：比圆钮窄，两格并排才不至于太胖；不带底色，底色归胶囊。 */
   headerCapsuleSegment: {
     width: 40,

@@ -288,12 +288,6 @@ const COLLAB_SHEET_DISMISS_TRAVEL = 20;
  */
 const COLLAB_SHEET_DISMISS_COMMIT = 0.5;
 
-/** iOS 26+ 玻璃胶囊的两格（角标在渲染时按当前项数补上）。SF Symbol 取跟 Ionicons 同语义的：
- *  square.stack ≈ layers-outline（多页工作区），ellipsis = ⋯。 */
-const COLLAB_CAPSULE_SEGMENTS_BASE = [
-  { id: 'collab', sfSymbol: 'square.stack' },
-  { id: 'menu', sfSymbol: 'ellipsis', menu: true },
-];
 
 /** High-resolution time when available (e.g. Hermes), else `Date.now()`. Avoids bare `performance` (not in RN TS libs). */
 function perfNowMs(): number {
@@ -5525,22 +5519,29 @@ export function ChatScreen({
   );
 
   /* ── 右上角操作簇 ──
-   * 协同布局被关掉时，⋯ 左边多一个带角标的协同入口。两个选项合成**一颗胶囊**（同底色、
-   * 同阴影、圆角取高度一半，中间一条 hairline 分隔），而不是两颗独立圆钮。
-   * iOS 26+ 例外：那条路上 ⋯ 是系统 Liquid Glass 材质的原生 UIButton（AnimatedCircleButton
-   * 会剥掉我们给的底色交给系统画），塞进自绘胶囊里会变成「玻璃药丸叠在实色胶囊上」。
-   * 那边保持两颗玻璃钮紧挨着 —— 本来就是 iOS 26 分组按钮的原生样子。 */
+   * 协同布局被关掉时，⋯ 左边多一个带角标的协同入口，两个选项合成**一颗胶囊**。
+   *
+   * 胶囊态**三端一律走自绘**（白底 + hairline + 投影），包括 iOS 26。原本想在 iOS 26 上用
+   * 系统 Liquid Glass 材质做胶囊本体，试了三版都是「材质一片不画」：真机逐像素量，胶囊内
+   * 与页面底色一模一样 (248,249,251)，而同屏返回钮（同样走 glassButtonConfiguration）是
+   * (252,252,254) 亮得出来。手搭 UIVisualEffectView+UIGlassEffect 不画、复用 _glassButton
+   * 当背景板也不画，配置链查下来没问题（applySfSymbolName 空名只清 image、不动 glass cfg），
+   * 剩下的怀疑点只能上真机调试才能收敛。
+   * 而目标本来就是 Android 那枚**白色实底**胶囊（量到胶囊内 (255,255,255)、页面 (247,247,247)）
+   * —— 自绘这条路已经在跑、且用户认可，就不为了材质再耗。胶囊里的两格都用 iosForceWorklet
+   * 走非玻璃路径，否则 iOS 26 会在白胶囊里再叠两颗玻璃药丸。 */
   const collabEntryVisible = collabAvailable && collabDismissed;
-  /** ⋯ 触发器在胶囊里是「一格」，单独出现时还是圆钮（玻璃路径恒为圆钮，形状归系统材质）。 */
-  const convMenuTriggerStyle =
-    collabEntryVisible && !IS_IOS_LIQUID_GLASS ? styles.headerCapsuleSegment : styles.circleBtn;
+  /** ⋯ 触发器在胶囊里是「一格」（透明、无底色），单独出现时才是圆钮。 */
+  const convMenuTriggerStyle = collabEntryVisible
+    ? styles.headerCapsuleSegment
+    : styles.circleBtn;
   /* 右上角 ⋯ 菜单 三条路：
-   *  - iOS 26+ (Liquid Glass)：AnimatedCircleButton 透传 menuActions 给 BouncyButton，
+   *  - iOS 26+ 且**不在胶囊里**：AnimatedCircleButton 透传 menuActions 给 BouncyButton，
    *    底下 UIButton 直接挂原生 UIMenu（glass material + 系统 scale + UIMenu 弹层 全套
-   *    系统接管）。
-   *  - iOS 15..25：保留 MenuView（也是原生 UIMenu，但没玻璃 material，配手挂 scale）。
+   *    系统接管）。进了胶囊就得让位给 MenuView —— 玻璃材质那条路没法只要菜单不要材质。
+   *  - iOS 15..25 / iOS 26 胶囊态：MenuView（同样是原生 UIMenu，只是没玻璃 material）。
    *  - Android：AnimatedCircleButton + 自绘 Modal popover。 */
-  const convMenuTrigger = IS_IOS_LIQUID_GLASS ? (
+  const convMenuTrigger = IS_IOS_LIQUID_GLASS && !collabEntryVisible ? (
     <AnimatedCircleButton
       style={[convMenuTriggerStyle, !conversationId ? styles.circleBtnDisabled : null]}
       disabled={!conversationId}
@@ -5592,17 +5593,19 @@ export function ChatScreen({
     /* 走 settled 版：开回来同样是一次重挂，首帧也得先按住别画。 */
     setCollabDismissedSettled(false);
   };
-  /** 协同入口那一格（自绘胶囊路径用；玻璃路径整颗胶囊由 native 画，见下面 headerActions）。 */
+  /** 协同入口那一格。iosForceWorklet：胶囊里不要玻璃材质，否则 iOS 26 会在白胶囊里
+   *  再叠一颗玻璃药丸（仍有 UI 线程 bouncy 按压反馈，只是没材质）。 */
   const collabEntryNode = collabEntryVisible ? (
     <Reanimated.View style={[styles.headerCollabSlot, collabEntryStyle]}>
-      <AnimatedCircleButton style={styles.headerCapsuleSegment} onPress={openCollabWorkspace}>
+      <AnimatedCircleButton
+        style={styles.headerCapsuleSegment}
+        onPress={openCollabWorkspace}
+        iosForceWorklet
+      >
         <Ionicons name="layers-outline" size={21} color={colors.textSecondary} />
       </AnimatedCircleButton>
       {collabTabCount > 0 ? (
-        <View
-          style={IS_IOS_LIQUID_GLASS ? styles.headerUnreadBadge : styles.headerCapsuleBadge}
-          pointerEvents="none"
-        >
+        <View style={styles.headerCapsuleBadge} pointerEvents="none">
           <Text style={styles.headerUnreadBadgeText} numberOfLines={1}>
             {collabTabCount > 99 ? '99+' : collabTabCount}
           </Text>
@@ -5610,40 +5613,14 @@ export function ChatScreen({
       ) : null}
     </Reanimated.View>
   ) : null;
-  const headerActions = !collabEntryVisible ? (
-    convMenuTrigger
-  ) : IS_IOS_LIQUID_GLASS ? (
-    /* iOS 26+：整颗胶囊交给 native —— UIVisualEffectView + UIGlassEffect 做一整块玻璃，
-       两格是它里面的 UIButton（左格发 onCapsuleSegmentPress，右格直接挂原生 UIMenu），
-       格间一条 hairline。自绘胶囊在这条路上不行：AnimatedCircleButton 会把我们给的底色
-       剥掉交给系统材质，实色胶囊 + 玻璃格子会叠成两层。 */
-    <Reanimated.View style={collabEntryStyle}>
-      <AnimatedCircleButton
-        style={styles.headerGlassCapsule}
-        disabled={!conversationId}
-        menuActions={glassMenuActions}
-        onMenuAction={onConvMenuAction}
-        /* name 留空 = 不给「单颗按钮」设图标；size / color 供胶囊每一格取用。 */
-        iosSfSymbol={{ name: '', size: 20, color: colors.textSecondary }}
-        iosGlassCapsuleSegments={COLLAB_CAPSULE_SEGMENTS_BASE.map((s) =>
-          s.id === 'collab' && collabTabCount > 0
-            ? { ...s, badge: collabTabCount > 99 ? '99+' : String(collabTabCount) }
-            : s,
-        )}
-        onCapsuleSegmentPress={(segmentId) => {
-          if (segmentId === 'collab') openCollabWorkspace();
-        }}
-        childrenRendering="never"
-      >
-        {null}
-      </AnimatedCircleButton>
-    </Reanimated.View>
-  ) : (
+  const headerActions = collabEntryVisible ? (
     <View style={styles.headerCapsule}>
       {collabEntryNode}
       <View style={styles.headerCapsuleDivider} />
       {convMenuTrigger}
     </View>
+  ) : (
+    convMenuTrigger
   );
 
   return (
