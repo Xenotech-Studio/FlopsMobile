@@ -439,8 +439,15 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
   _capsuleView.frame = self.bounds;
   _capsuleView.autoresizingMask =
       UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-  /* 胶囊形：圆角在 layoutSubviews 里按实际高度取一半（RN 那边可能改高度）。 */
-  _capsuleView.clipsToBounds = YES;
+  /* 胶囊形**必须走 cornerConfiguration，不能用 clipsToBounds + layer.cornerRadius**。
+     UIVisualEffectView 明确不支持被 mask（masksToBounds 会把材质那趟合成裁没）——实测表现
+     是：contentView 里的图标/分隔线/角标照常画，玻璃本体一片都不画，于是只剩我们那层落影
+     透出来，胶囊看着比页面还暗（量到胶囊内 (219,219,221) vs 页面 (246,246,248)）。
+     iOS 26 给了 UICornerConfiguration 就是干这个的，系统的 glassButtonConfiguration
+     （左上角返回钮那颗，能正常显示）内部也是 cornerStyle 而不是自己 mask。 */
+  if (@available(iOS 26.0, *)) {
+    _capsuleView.cornerConfiguration = [UICornerConfiguration capsuleConfiguration];
+  }
   /* 浅色背景上玻璃跟页面的亮度差很小，光靠材质几乎看不出轮廓 —— 参考实现（Claude iOS
      右上角那颗）也是靠一层很淡的落影把胶囊"浮"起来。影子挂在自己的壳层上：
      _capsuleView 自己 clipsToBounds=YES（要靠它裁圆角），masksToBounds 的图层画不出外阴影；
@@ -533,7 +540,7 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
   CGRect b = self.bounds;
   _capsuleShadowView.frame = b;
   _capsuleView.frame = _capsuleShadowView.bounds;
-  _capsuleView.layer.cornerRadius = b.size.height / 2.0;
+  /* 圆角归 cornerConfiguration 管（见建胶囊那段），这里不能再动 layer.cornerRadius/mask。 */
   /* 落影路径跟着胶囊形状走：壳层没有背景色，不显式给路径就不画影子。 */
   _capsuleShadowView.layer.shadowPath =
       [UIBezierPath bezierPathWithRoundedRect:_capsuleShadowView.bounds
