@@ -329,11 +329,20 @@ export function createChatStyles(c: AppColors) {
     height: HEADER_CIRCLE_BTN_SIZE,
     borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
     backgroundColor: c.surface,
+    /** 收一条 hairline：胶囊底色(#ffffff) 跟顶栏画布(#f9fafb) 只差一档，浅色下光靠投影
+     *  轮廓很弱 —— 用户实测反馈就是「看不出胶囊、像两个图标浮在页面上」。圆钮不需要是
+     *  因为它更小、投影更聚拢；这颗横着摊开，边缘得钉一下。 */
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.border,
     ...shadowCircleButtonThemed(c),
   },
-  /** iOS 26+ 的替代：⋯ 在那条路上是系统 Liquid Glass 材质的原生按钮，塞不进自绘胶囊
-   *  （底色会被系统剥掉，变成玻璃药丸叠实色胶囊）。那边两颗玻璃钮紧挨着，靠 gap 成组。 */
-  headerActionsPair: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  /** iOS 26+：整颗胶囊由 native 画（UIGlassEffect），这里只给尺寸 —— 底色/阴影都会被
+   *  glass 路径剥掉。宽度 = 两格 × 42。 */
+  headerGlassCapsule: {
+    width: 84,
+    height: HEADER_CIRCLE_BTN_SIZE,
+    borderRadius: HEADER_CIRCLE_BTN_SIZE / 2,
+  },
   /** 胶囊里的一格：比圆钮窄，两格并排才不至于太胖；不带底色，底色归胶囊。 */
   headerCapsuleSegment: {
     width: 40,

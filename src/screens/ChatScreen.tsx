@@ -288,6 +288,13 @@ const COLLAB_SHEET_DISMISS_TRAVEL = 20;
  */
 const COLLAB_SHEET_DISMISS_COMMIT = 0.5;
 
+/** iOS 26+ 玻璃胶囊的两格（角标在渲染时按当前项数补上）。SF Symbol 取跟 Ionicons 同语义的：
+ *  square.stack ≈ layers-outline（多页工作区），ellipsis = ⋯。 */
+const COLLAB_CAPSULE_SEGMENTS_BASE = [
+  { id: 'collab', sfSymbol: 'square.stack' },
+  { id: 'menu', sfSymbol: 'ellipsis', menu: true },
+];
+
 /** High-resolution time when available (e.g. Hermes), else `Date.now()`. Avoids bare `performance` (not in RN TS libs). */
 function perfNowMs(): number {
   const w = globalThis as typeof globalThis & { performance?: { now?: () => number } };
@@ -5574,22 +5581,21 @@ export function ChatScreen({
       </AnimatedCircleButton>
     </Reanimated.View>
   );
-  /** 协同入口那一格：图标 + 角标；胶囊里角标收在格子内侧，玻璃路径下仍挂在圆钮外角。 */
+  /** 点协同入口 → 原样开回协同布局。 */
+  const openCollabWorkspace = () => {
+    /* 溶解进度先归零，否则 sheet 与工作区会带着「已经化没了」的透明度挂回来。 */
+    collabDismissProgress.value = 0;
+    collabDismissCommitted.value = false;
+    /* 档位一并回到 mid：sheet 挂载时 index=1，档位 state 不跟着回去的话，
+       聊天区高度会先按关掉前那一档算一帧。 */
+    setCollabSheetIndex(1);
+    /* 走 settled 版：开回来同样是一次重挂，首帧也得先按住别画。 */
+    setCollabDismissedSettled(false);
+  };
+  /** 协同入口那一格（自绘胶囊路径用；玻璃路径整颗胶囊由 native 画，见下面 headerActions）。 */
   const collabEntryNode = collabEntryVisible ? (
     <Reanimated.View style={[styles.headerCollabSlot, collabEntryStyle]}>
-      <AnimatedCircleButton
-        style={IS_IOS_LIQUID_GLASS ? styles.circleBtn : styles.headerCapsuleSegment}
-        onPress={() => {
-          /* 溶解进度先归零，否则 sheet 与工作区会带着「已经化没了」的透明度挂回来。 */
-          collabDismissProgress.value = 0;
-          collabDismissCommitted.value = false;
-          /* 档位一并回到 mid：sheet 挂载时 index=1，档位 state 不跟着回去的话，
-             聊天区高度会先按关掉前那一档算一帧。 */
-          setCollabSheetIndex(1);
-          /* 走 settled 版：开回来同样是一次重挂，首帧也得先按住别画。 */
-          setCollabDismissedSettled(false);
-        }}
-      >
+      <AnimatedCircleButton style={styles.headerCapsuleSegment} onPress={openCollabWorkspace}>
         <Ionicons name="layers-outline" size={21} color={colors.textSecondary} />
       </AnimatedCircleButton>
       {collabTabCount > 0 ? (
@@ -5604,14 +5610,40 @@ export function ChatScreen({
       ) : null}
     </Reanimated.View>
   ) : null;
-  const headerActions = collabEntryVisible ? (
-    <View style={IS_IOS_LIQUID_GLASS ? styles.headerActionsPair : styles.headerCapsule}>
+  const headerActions = !collabEntryVisible ? (
+    convMenuTrigger
+  ) : IS_IOS_LIQUID_GLASS ? (
+    /* iOS 26+：整颗胶囊交给 native —— UIVisualEffectView + UIGlassEffect 做一整块玻璃，
+       两格是它里面的 UIButton（左格发 onCapsuleSegmentPress，右格直接挂原生 UIMenu），
+       格间一条 hairline。自绘胶囊在这条路上不行：AnimatedCircleButton 会把我们给的底色
+       剥掉交给系统材质，实色胶囊 + 玻璃格子会叠成两层。 */
+    <Reanimated.View style={collabEntryStyle}>
+      <AnimatedCircleButton
+        style={styles.headerGlassCapsule}
+        disabled={!conversationId}
+        menuActions={glassMenuActions}
+        onMenuAction={onConvMenuAction}
+        /* name 留空 = 不给「单颗按钮」设图标；size / color 供胶囊每一格取用。 */
+        iosSfSymbol={{ name: '', size: 20, color: colors.textSecondary }}
+        iosGlassCapsuleSegments={COLLAB_CAPSULE_SEGMENTS_BASE.map((s) =>
+          s.id === 'collab' && collabTabCount > 0
+            ? { ...s, badge: collabTabCount > 99 ? '99+' : String(collabTabCount) }
+            : s,
+        )}
+        onCapsuleSegmentPress={(segmentId) => {
+          if (segmentId === 'collab') openCollabWorkspace();
+        }}
+        childrenRendering="never"
+      >
+        {null}
+      </AnimatedCircleButton>
+    </Reanimated.View>
+  ) : (
+    <View style={styles.headerCapsule}>
       {collabEntryNode}
-      {IS_IOS_LIQUID_GLASS ? null : <View style={styles.headerCapsuleDivider} />}
+      <View style={styles.headerCapsuleDivider} />
       {convMenuTrigger}
     </View>
-  ) : (
-    convMenuTrigger
   );
 
   return (

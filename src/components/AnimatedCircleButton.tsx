@@ -105,6 +105,24 @@ type Props = {
    *  prominent 适合需要强烈视觉权重的「主操作 / 选中态」，regular 适合次要按钮。
    *  iOS < 26 / Android 忽略。 */
   iosGlassProminent?: boolean;
+  /**
+   * 【玻璃胶囊】iOS 26+ 专属：给 ≥2 段时，本按钮不再是一颗玻璃圆钮，而是**一枚连续的
+   * Liquid Glass 胶囊、里面并排若干格**（native 侧用 UIVisualEffectView + UIGlassEffect
+   * 做胶囊本体，格子是它 contentView 里的普通 UIButton，格间一条 hairline）。
+   * 图标走 SF Symbol（材质 tint，颜色/字号复用 iosSfSymbol.color / .size）。
+   * 标了 `menu: true` 的那一格挂 menuActions 建出来的原生 UIMenu；其余格点中经
+   * onCapsuleSegmentPress 回调 id。iOS < 26 / Android 忽略（调用方自己画自绘胶囊）。
+   */
+  iosGlassCapsuleSegments?: Array<{
+    id: string;
+    sfSymbol: string;
+    /** 非空时在该格右上角画数字角标 */
+    badge?: string;
+    /** true = 这一格挂原生 UIMenu（用 menuActions） */
+    menu?: boolean;
+  }>;
+  /** 玻璃胶囊某一格被点中（menu 格除外，那格走 onMenuAction）。 */
+  onCapsuleSegmentPress?: (segmentId: string) => void;
   /** iOS 强制走 Reanimated worklet 路径（跟 Android 同款）—— bypass iOS 26 glass material。
    *  适合不需要玻璃质感的次要按钮，需要：
    *    - 完全自定义 bg 色（包括 solid 浅灰、纯黑等 glass 给不出来的色）
@@ -190,6 +208,8 @@ function IosNativeBouncy({
   iosShowsSpinner,
   iosGlassTintColor,
   iosGlassProminent,
+  iosGlassCapsuleSegments,
+  onCapsuleSegmentPress,
   childrenRendering = 'auto',
 }: Props) {
   const handleNativePress = useCallback(
@@ -247,6 +267,26 @@ function IosNativeBouncy({
     IS_IOS_LIQUID_GLASS && !!iosSfSymbol && iosSfSymbol.name.length > 0;
   const hasNativeTitle =
     IS_IOS_LIQUID_GLASS && !!iosNativeTitle && iosNativeTitle.text.length > 0;
+  const handleNativeCapsuleSegment = useCallback(
+    (e: NativeSyntheticEvent<Readonly<{ segmentId: string }>>) => {
+      onCapsuleSegmentPress?.(e.nativeEvent.segmentId);
+    },
+    [onCapsuleSegmentPress],
+  );
+  /* 胶囊段落序列化。跟 menuActionsJson 同款：用 useMemo 缓存字符串，避免每次渲染都
+     stringify 触发 native 的 prop diff（diff 不等就整段重建胶囊）。 */
+  const capsuleSegmentsJson = useMemo(() => {
+    if (!IS_IOS_LIQUID_GLASS) return '';
+    if (!iosGlassCapsuleSegments || iosGlassCapsuleSegments.length < 2) return '';
+    return JSON.stringify(
+      iosGlassCapsuleSegments.map((s) => ({
+        id: s.id,
+        sfSymbol: s.sfSymbol,
+        ...(s.badge ? { badge: s.badge } : null),
+        ...(s.menu ? { menu: true } : null),
+      })),
+    );
+  }, [iosGlassCapsuleSegments]);
   const hasSpinner = IS_IOS_LIQUID_GLASS && !!iosShowsSpinner;
   const usingAnyNativeContent = hasNativeSymbol || hasNativeTitle || hasSpinner;
   const shouldRenderChildren = childrenRendering !== 'never';
@@ -260,13 +300,17 @@ function IosNativeBouncy({
       bouncyDisabled={!!disabled}
       menuActionsJson={menuActionsJson}
       sfSymbolName={hasNativeSymbol ? iosSfSymbol!.name : ''}
-      sfSymbolPointSize={hasNativeSymbol ? (iosSfSymbol!.size ?? 22) : 22}
-      sfSymbolColorHex={hasNativeSymbol ? (iosSfSymbol!.color ?? '') : ''}
+      /* size / color 不跟 name 绑：玻璃胶囊模式下没有单个 symbol name，但每一格的图标
+         仍要用这两个值上色和定字号。 */
+      sfSymbolPointSize={iosSfSymbol?.size ?? 22}
+      sfSymbolColorHex={iosSfSymbol?.color ?? ''}
       nativeTitle={hasNativeTitle ? iosNativeTitle!.text : ''}
       nativeTitleColorHex={hasNativeTitle ? (iosNativeTitle!.color ?? '') : ''}
       showsActivityIndicator={hasSpinner}
       glassTintColorHex={IS_IOS_LIQUID_GLASS ? (iosGlassTintColor ?? '') : ''}
       glassProminent={IS_IOS_LIQUID_GLASS ? !!iosGlassProminent : false}
+      glassCapsuleSegmentsJson={capsuleSegmentsJson}
+      onCapsuleSegmentPress={handleNativeCapsuleSegment}
       onBouncyPress={handleNativePress}
       onMenuAction={handleNativeMenuAction}
       onMenuWillShow={handleNativeMenuWillShow}
