@@ -160,6 +160,15 @@ import {
   EMPTY_COLLAB_LAYOUT,
   type CollabLayoutState,
 } from '../utils/collabLayout';
+import {
+  collabDetentPosition,
+  collabSheetPrefsReady,
+  ensureCollabSheetPrefs,
+  flushCollabSheetPrefs,
+  nearestCollabDetent,
+  readCollabSheetPref,
+  saveCollabSheetPref,
+} from '../utils/collabSheetPrefs';
 import { ThinkingBlockView } from './chat/ThinkingBlockView';
 import { TaskEventCardView, UserInjectionInline } from './chat/TaskEventCardView';
 import { ComposerContextRing } from './chat/ComposerContextRing';
@@ -1120,8 +1129,13 @@ export function ChatScreen({
   }, []);
   /** 换会话 → 布局归零，等新会话自己 hydrate。 */
   /** 协同布局「溶解」进度 0→1（设计见下面 useAnimatedReaction 那段）。声明提到这儿是因为
-   *  换会话的复位 effect 要把它列进依赖 —— 依赖数组在渲染期求值，声明晚了会踩 TDZ。 */
-  const collabDismissProgress = useSharedValue(0);
+   *  换会话的复位 effect 要把它列进依赖 —— 依赖数组在渲染期求值，声明晚了会踩 TDZ。
+   *
+   *  **初值是 1（= 已收起）**，跟 collabDismissed 的初值配套。它不只驱动溶解动画，还驱动
+   *  右上角胶囊的宽度（0 = 收成一格圆钮、1 = 两格露出协同入口）。协同布局改成默认收起后，
+   *  这里若还留 0，有协同数据的会话一进去胶囊就是收成一格的样子 —— 协同入口被裁在外面、
+   *  点都点不到，也就没法展开抽屉了。 */
+  const collabDismissProgress = useSharedValue(1);
   /** 松手已判定为「要关」：补完动画接管进度，逐帧那条 reaction 不再插手。 */
   const collabDismissCommitted = useSharedValue(false);
   /**
@@ -1224,33 +1238,111 @@ export function ChatScreen({
    * 那样，视口上探到把手底下、用 contentContainer 的 paddingTop/Bottom 把内容压回来，让内容
    * 真正延伸进把手区。视口尺寸不变、实例不重挂，滚动位置天然就守住了。
    */
+  /** 落盘用的随手快照：setCollabDismissedSettled 必须保持 useCallback([])（worklet 闭包依赖它
+   *  恒定），所以会话 id 与最后驻留档位只能走 ref 带进去。 */
+  const collabPrefRef = useRef({ convId: conversationId, position: 0 });
+  collabPrefRef.current.convId = conversationId;
   const setCollabDismissedSettled = useCallback((next: boolean) => {
     messageAreaRef.current?.armForOpen();
     setCollabDismissed(next);
+    /* 开/关都记一笔：下次进这个会话照着恢复。位置沿用最后一次驻留档（关掉不改变"我上次
+       拉到哪"这件事，重开时还回到那儿）。 */
+    saveCollabSheetPref(collabPrefRef.current.convId, {
+      opened: !next,
+      position: collabPrefRef.current.position,
+    });
   }, []);
+  /** 每个会话只恢复一次（协同数据可能分多帧到达，别反复弹开）。 */
+  const collabRestoredForRef = useRef<string | null>(null);
   const prevCollabConvIdRef = useRef(conversationId);
   useEffect(() => {
     const prev = prevCollabConvIdRef.current;
     prevCollabConvIdRef.current = conversationId;
     /* 「空 → 有 id」是本次发送刚把会话建出来，不是换会话：这一轮 run 里已经到达的布局帧要留着。 */
     if (prev === conversationId || !prev) return;
+    /* 切走之前把上一个会话的偏好落定，别留在防抖窗口里被下一个会话的写覆盖掉。 */
+    flushCollabSheetPrefs();
     collabLayoutRef.current = EMPTY_COLLAB_LAYOUT;
     setCollabLayout(EMPTY_COLLAB_LAYOUT);
-    /* 换会话回到默认展开：关掉是「这次看这个会话时不想被挡着」，不该跟着人跑到下一个会话。 */
-    setCollabDismissed(false);
-    collabDismissProgress.value = 0;
+    /* 换会话一律先回到**收起态**，再由下面那条 effect 按该会话自己的记录决定要不要展开。
+       关掉/展开是「这个会话」的偏好，不该跟着人跑到下一个会话。 */
+    setCollabDismissed(true);
+    setCollabOpenIndex(COLLAB_SHEET_HALF_INDEX);
+    collabRestoredForRef.current = null;
+    collabPrefRef.current.position = 0;
+    /* 跟着回到「已收起」那一端：胶囊张开成两格、协同入口点得到（进度也驱动胶囊宽度）。 */
+    collabDismissProgress.value = 1;
     collabDismissCommitted.value = false;
   }, [conversationId, collabDismissProgress, collabDismissCommitted]);
+  /* 组件卸载（退出对话）时把最后一次改动落盘。 */
+  useEffect(() => () => flushCollabSheetPrefs(), []);
   /** 这个会话有没有协同内容（数据侧判定）。要不要真画 sheet 还要看用户有没有把它关掉。 */
   const collabAvailable = useMemo(() => collabLayoutActive(collabLayout), [collabLayout]);
   /**
-   * 用户把 sheet 往上拖过头关掉了 —— **纯本地视图状态**：不回写 /cowriter_layout、不动会话
-   * 里的协同数据，桌面端毫无感知。关掉后 header 上留一个带角标的入口，点一下再开回来。
-   * SSE 后续再来布局帧也**不自动弹回**：桌面端在那边翻文档，不该反复弹开手机这边的聊天。
+   * 协同抽屉此刻是不是收着 —— **纯本地视图状态**：不回写 /cowriter_layout、不动会话里的
+   * 协同数据，桌面端毫无感知。收起时 header 上留一个带角标的入口，点一下展开。
+   *
+   * **初值是 true（收起）**：有协同数据不再等于自动展开，只让右上角胶囊亮起角标提示"这里
+   * 有东西"，展不展开由用户说了算。于是 SSE 首次把协同数据推进来时页面不会自己跳成分屏 ——
+   * 之前那个行为在桌面端一边编辑时会反复把手机这边的聊天挤走。
+   * 上次展开过的会话由下面 collabRestoredForRef 那条 effect 按本地记录恢复。
    */
-  const [collabDismissed, setCollabDismissed] = useState(false);
+  const [collabDismissed, setCollabDismissed] = useState(true);
+  /**
+   * 展开时 sheet 落在哪一档（gorhom 的 index prop）。常态是 mid；只有"按本地记录恢复"
+   * 那条路会把它改成别的档。
+   *
+   * **不要拿它去跟用户拖拽同步**：它一变就是给 gorhom 下一次 snap 指令。用户自己拖出来的
+   * 档位记在 collabSheetIndex 里，两者分工不同。
+   */
+  const [collabOpenIndex, setCollabOpenIndex] = useState(COLLAB_SHEET_HALF_INDEX);
   /** 手机端此刻要不要进协同布局；false = 普通聊天页原样。停在哪个 tab 归 WorkspaceBody 管。 */
   const collabActive = collabAvailable && !collabDismissed;
+  /**
+   * 按本地记录恢复：这个会话上次是展开着的，就替用户再展开一次，并落到最接近上次那个
+   * 高度百分比的档位。
+   *
+   * 时机必须挂在 collabAvailable 上而不是 conversationId：协同数据是异步到的（会话详情 /
+   * SSE），id 变的那一刻还没有档位可展。ref 保证每个会话只恢复一次，后续布局帧再来也
+   * 不会把用户手动收起的抽屉又弹开。
+   *
+   * 恢复走的是**普通入场**（sheet 从屏底升上来），不是 openCollabWorkspace 那套"全屏收下来
+   * 的倒放" —— 倒放是给"用户从全屏点入口"用的，进对话时并没有一个全屏态可以倒着播。
+   */
+  useEffect(() => {
+    if (!collabAvailable) return;
+    if (collabRestoredForRef.current === conversationId) return;
+    let cancelled = false;
+    const apply = () => {
+      if (cancelled) return;
+      collabRestoredForRef.current = conversationId;
+      const pref = readCollabSheetPref(conversationId);
+      if (!pref?.opened) return;
+      const index = nearestCollabDetent(collabSheetSnapHeights, pref.position);
+      collabPrefRef.current.position = pref.position;
+      /* 两个 index 都要给：collabOpenIndex 决定 sheet 落在哪档，collabSheetIndex 决定
+         聊天区高度按哪档算 —— 少给后者，第一帧会用 mid 的高度。 */
+      setCollabOpenIndex(index);
+      setCollabSheetIndex(index);
+      /* 进度直接拨到「展开」那端，不做动画：这条路 sheet 是从屏底正常入场的，没有一个
+         全屏态可以倒着播；而盯位置那条 reaction 一旦接管也会立刻把它算成 0，withTiming
+         只会被它盖掉。代价是胶囊从两格瞬间收成一格，落在打开会话那一下、不显眼。 */
+      collabDismissProgress.value = 0;
+      setCollabDismissedSettled(false);
+    };
+    /* 预热通常早就完了（模块 import 时就排队，这里已经是挂载之后），没赶上才走异步。 */
+    if (collabSheetPrefsReady()) apply();
+    else void ensureCollabSheetPrefs().then(apply);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    collabAvailable,
+    conversationId,
+    collabSheetSnapHeights,
+    setCollabDismissedSettled,
+    collabDismissProgress,
+  ]);
   /** 关闭态入口上的角标 = 走马灯里有多少项（文档 + 项目 + 两个 mode 占位）。 */
   const collabTabCount = useMemo(() => collabTabs(collabLayout).length, [collabLayout]);
   /** 协同模式下装聊天消息区的 sheet，留在这里供程序化展开 / 折叠。 */
@@ -5877,6 +5969,9 @@ export function ChatScreen({
     /* 档位 state 先跟到最高档：sheet 这次是「从全屏收下来」，聊天区高度得按最高档起算，
        否则第一帧会用半屏档的高度。收下来后 onAnimate/onChange 会把它带回去。 */
     setCollabSheetIndex(COLLAB_SHEET_MAX_INDEX);
+    /* 收下来的落点固定是 mid：这条路是"从全屏倒放回抽屉"，落点若是记录里的最高档，
+       placing 与 settling 同档、整段位移动画就没了。会话级记忆只管进对话时那一次恢复。 */
+    setCollabOpenIndex(COLLAB_SHEET_HALF_INDEX);
     /* placing：sheet 无动画直接出现在最高档（index=max + 入场动画 duration:0）。
        此刻视觉上跟用户看到的全屏几乎重合，所以「什么都还没发生」。
        两帧后转 settling，那时才同时开跑「sheet 收下来」和「progress 退回 0」。 */
@@ -6058,7 +6153,8 @@ export function ChatScreen({
         <BottomSheet
           ref={collabSheetRef}
           snapPoints={collabSheetSnapPoints}
-          /* 常态是 mid。从关闭态重开时先给最高档、并把**入场动画时长设为 0**，于是 sheet
+          /* 常态是 collabOpenIndex（默认 mid；按本地记录恢复时是记下来的那档）。
+             从关闭态重开时先给最高档、并把**入场动画时长设为 0**，于是 sheet
              无声地直接出现在用户此刻看到的「全屏」位置；两帧后转 settling，index 变回半屏档、
              动画配置换成跟 progress 同时长的 timing —— 那次 prop 变化就是「从全屏收下来」的
              动画本体，正好是关闭的倒放。
@@ -6068,7 +6164,7 @@ export function ChatScreen({
              sheet 永远停在 INITIAL_POSITION（屏幕底外），实测就是「sheet 根本不出现、
              走马灯被钳在 peek 顶沿」。改走 animationConfigs 是因为 animate() 只看 configs
              里有没有 duration 来决定走 timing 还是 spring，duration:0 即瞬时落位。 */
-          index={collabReopenPhase === 'placing' ? COLLAB_SHEET_MAX_INDEX : COLLAB_SHEET_HALF_INDEX}
+          index={collabReopenPhase === 'placing' ? COLLAB_SHEET_MAX_INDEX : collabOpenIndex}
           /* placing：0ms = 瞬时落位；settling：跟 progress 同时长的 timing，两条动画同步；
              idle：交还默认弹簧，用户自己拖档位时手感不变。 */
           animationConfigs={
@@ -6085,7 +6181,14 @@ export function ChatScreen({
             if (to >= 0) setCollabSheetIndex(to);
           }}
           onChange={(index) => {
-            if (index >= 0) setCollabSheetIndex(index);
+            if (index < 0) return;
+            setCollabSheetIndex(index);
+            /* onChange = **驻留档位已经稳定**（拖拽甩动结束、动画收尾），这才是记账的时机；
+               onAnimate 给的只是目标，拖到一半松手回弹也会触发，记下去会记成没停过的档。
+               档位换算成百分比再存，理由见 collabSheetPrefs 文件头。 */
+            const position = collabDetentPosition(collabSheetSnapHeights, index);
+            collabPrefRef.current.position = position;
+            saveCollabSheetPref(collabPrefRef.current.convId, { opened: true, position });
           }}
           /* 顶沿位置逐帧抛给工作区层（指示器跟着它走）。拖拽 / 键盘顶起都在 UI 线程更新，
              不经 React —— 所以 tabs 跟随是跟手的，不是等档位 state 落定才跳一下。 */
