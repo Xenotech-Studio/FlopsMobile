@@ -125,7 +125,7 @@ import {
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
-import { AnimatedBouncyGlassCard } from '../components/BouncyGlassCard';
+import { AnimatedBouncyGlassCard, BouncyGlassCard } from '../components/BouncyGlassCard';
 import { HEADER_CIRCLE_BTN_SIZE, bottomInsetTotal } from '../theme/layout';
 import { getBottomInsetSync } from '../utils/screenInfo';
 import {
@@ -5613,14 +5613,32 @@ export function ChatScreen({
       ) : null}
     </Reanimated.View>
   ) : null;
-  const headerActions = collabEntryVisible ? (
-    <View style={styles.headerCapsule}>
+  /* 胶囊里的两格 + 中缝，两条路共用。 */
+  const headerCapsuleContent = (
+    <>
       {collabEntryNode}
       <View style={styles.headerCapsuleDivider} />
       {convMenuTrigger}
-    </View>
-  ) : (
+    </>
+  );
+  const headerActions = !collabEntryVisible ? (
     convMenuTrigger
+  ) : IS_IOS_LIQUID_GLASS ? (
+    /* iOS 26：胶囊本体直接用 BouncyGlassCard —— 项目里**已经验证能画出玻璃**的那套
+       （底部 composer 就是它）。它内部是 UIVisualEffectView + UIGlassEffect，形状走
+       UIView.cornerConfiguration 而不是 layer mask（玻璃由系统 out-of-process 渲染，
+       in-process 的 mask 裁不动它，见 BouncyGlassCardComponentView.applyCornerShape 的注释）
+       —— 我先前自搭那几版栽的正是这一条。
+       interactive=false：不要整颗胶囊一起放大，按压反馈各格自己做（同 composer 的选择）。 */
+    <BouncyGlassCard
+      style={styles.headerGlassCapsule}
+      cornerRadius={HEADER_CIRCLE_BTN_SIZE / 2}
+      interactive={false}
+    >
+      {headerCapsuleContent}
+    </BouncyGlassCard>
+  ) : (
+    <View style={styles.headerCapsule}>{headerCapsuleContent}</View>
   );
 
   return (

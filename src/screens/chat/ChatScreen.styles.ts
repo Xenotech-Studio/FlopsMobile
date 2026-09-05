@@ -336,6 +336,13 @@ export function createChatStyles(c: AppColors) {
     borderColor: c.border,
     ...shadowCircleButtonThemed(c),
   },
+  /** iOS 26 胶囊：本体是 BouncyGlassCard（系统玻璃），这里只排版 —— 底色/圆角都归它，
+   *  圆角走 cornerRadius prop（进玻璃本体的 cornerConfiguration），不在样式里给。 */
+  headerGlassCapsule: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: HEADER_CIRCLE_BTN_SIZE,
+  },
   /** 胶囊里的一格：比圆钮窄，两格并排才不至于太胖；不带底色，底色归胶囊。 */
   headerCapsuleSegment: {
     width: 40,
