@@ -345,20 +345,51 @@ export function collabWorkspaceFadeGradient(c: AppColors): string[] {
  * 消息区是自带滚动的，内容会一路顶到把手下沿被 overflow 硬切；铺这一条让它淡出去，
  * 顺带把把手那块实色和下面的内容接上，不再是一道生硬的分界。
  */
-export function collabSheetTopFadeGradient(c: AppColors): string[] {
+/** 化开段采样多少段折线去逼近曲线。段数只影响每个停靠点上那点折角，16 段已经量不出来。 */
+const COLLAB_FADE_RAMP_STEPS = 16;
+/**
+ * alpha 曲线的指数。**这是"生硬"的解药**，原理见下。
+ *
+ * 观察：alpha 直接就是这条带子盖在黑气泡上时的显示亮度（白底色 × alpha）。而人眼感知的
+ * 明度 L* ≈ Y^(1/3) —— 对亮度的**暗端极其敏感**。所以一条 alpha 线性下降的带子，
+ * 感知上根本不是匀速的：真机截图逐像素量过当时那版（两段线性、ramp 18pt），
+ * 每 pt 的 ΔL* 是 1.7 → 2.4（前段几乎看不出在变）… 最后 1pt 直接 **31**。
+ * 也就是说**最后一个 pt 承担的感知变化，比前面 15pt 加起来还多** —— 那道"说不出具体
+ * 位置、但就是很明显"的断层就是它。（另有两处折角：平台→化开的拐点，和中点 0.6 那个
+ * 斜率突变 2.4→3.8。）
+ *
+ * 解法：alpha = (1 - smoothstep(t))^2。
+ *  - smoothstep 让两端**导数为 0** → 平台接化开、化开接透明，两处折角都没了；
+ *  - 平方项补掉 L* 的立方根压缩 → 感知明度近似匀速下降。
+ * 实算：ramp 28pt 时每 pt 的 ΔL* 落在 0.8..5.8 之间（最大值从 31 降到 5.8），
+ * 且 y=10..22 那段稳定在 4.1~5.8，正是"看不出哪里在变"的均匀感。
+ */
+const COLLAB_FADE_RAMP_GAMMA = 2;
+/**
+ * 顶部淡出带的**颜色 + 停靠点**（两者必须同源，分开写迟早对不上）。
+ *
+ * 形状 = 前 plateauFraction 是 alpha 1 的实色平台，其余是上面那条曲线化到全透明。
+ * 所有停靠点 RGB 全同、只有 alpha 在变 —— 插值不可能跑出色偏，末段也必须是
+ * `rgba(bg, 0)` 而不是 transparent（后者在部分实现里是透明黑，会在尾巴上泛灰）。
+ *
+ * @param plateauFraction 实色平台占整条带子的比例（调用处按 平台/总长 算）
+ */
+export function collabSheetTopFadeStops(
+  c: AppColors,
+  plateauFraction: number,
+): { colors: string[]; locations: number[] } {
   const bg = c.chatScreenBackground;
-  /* 四段，配合调用处按常量算出来的 COLLAB_FADE_LOCATIONS（≈ [0, 0.571, 0.786, 1]）：
-       前两段**都是不透明底色** → 带子前 24pt 是一段**真正平的实色平台**（不是"接近实色"）；
-       0.6@ramp 中点 → 中点压在 0.6 而不是线性的 0.5，意思是"先稳住再快速化掉"，
-                       字不会一出平台就现形；
-       0@100%        → 化干净。
-     调参史：
-      ① 最早三段 [1, 0.75, 0]，alpha 从 y=0 就往下掉 —— **根本没有平台**，实测反馈
-         "渐变开始色不是纯色"；
-      ② 于是拆成「5pt 实色块 + 渐变」两层，又暴露出接缝与色调衔接问题，且实色段各档一样长。
-     现在平台做在渐变**自己**的前两段里（一个渐变，无拼接），长度由调用处**平移**带子来控制：
-     露出多少平台就是多长 —— max 24pt / mid 10 / peek 0。 */
-  return [bg, bg, rgbaFromHex(bg, 0.6), rgbaFromHex(bg, 0)];
+  /* 平台起点。平台终点就是化开段的第一个停靠点（alpha 仍是 1），不用单独给。 */
+  const colors: string[] = [bg];
+  const locations: number[] = [0];
+  for (let i = 0; i <= COLLAB_FADE_RAMP_STEPS; i++) {
+    const t = i / COLLAB_FADE_RAMP_STEPS;
+    const smooth = t * t * (3 - 2 * t);
+    const alpha = Math.pow(1 - smooth, COLLAB_FADE_RAMP_GAMMA);
+    colors.push(rgbaFromHex(bg, alpha));
+    locations.push(plateauFraction + (1 - plateauFraction) * t);
+  }
+  return { colors, locations };
 }
 
 /** 工具卡片半折叠底部淡出 */

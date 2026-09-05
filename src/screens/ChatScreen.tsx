@@ -132,7 +132,7 @@ import { HEADER_CIRCLE_BTN_SIZE, bottomInsetTotal } from '../theme/layout';
 import { getBottomInsetSync } from '../utils/screenInfo';
 import {
   chatInputOverlayGradient,
-  collabSheetTopFadeGradient,
+  collabSheetTopFadeStops,
   toolPreviewFadeGradient,
 } from '../theme/appColors';
 import { useAppTheme } from '../context/ThemeContext';
@@ -292,9 +292,16 @@ const COLLAB_SHEET_HANDLE_H = 24;
 const COLLAB_FADE_PLATEAU_PEEK = 0;
 const COLLAB_FADE_PLATEAU_MID = 10;
 const COLLAB_FADE_PLATEAU_MAX = 24;
-/** 化开段长度，三档恒定：平台结束之后总是用同样一段距离化到透明。
- *  于是各档的**总长** = 平台 + 这个数 = 18 / 28 / 42。 */
-const COLLAB_FADE_RAMP_H = 18;
+/**
+ * 化开段长度，三档恒定：平台结束之后总是用同样一段距离化到透明。
+ * 于是各档的**总长** = 平台 + 这个数 = 28 / 38 / 52。
+ *
+ * 18 → 28：真机截图逐像素量下来，光换曲线还不够 —— 带子越短，同样的感知跨度就要挤进
+ * 越少的像素里。28pt 配上 (1-smoothstep)² 那条曲线，每 pt 的感知步长（ΔL*）压到 5.8 以内。
+ * 再长就会开始吃掉可读区域：静止时首条消息在 y=44，max 档 y=44 处 alpha 只剩 0.04，
+ * 刚好擦边不影响阅读；继续加长就得连带把 paddingTop 一起推下去了。
+ */
+const COLLAB_FADE_RAMP_H = 28;
 /**
  * 带子的布局高度 = 最长那档（max：平台 24 + 化开 18）。矮档位不改高度也不缩放，
  * 而是**整条往上平移**，多出来的平台被 collabSheetContent 的 overflow:hidden 裁掉 ——
@@ -305,17 +312,8 @@ const COLLAB_FADE_RAMP_H = 18;
  * 而且整条是**一个**渐变，平台与化开段之间不存在两层拼接的接缝。
  */
 const COLLAB_FADE_BAND_H = COLLAB_FADE_PLATEAU_MAX + COLLAB_FADE_RAMP_H;
-/**
- * 四个停靠点在带子内的比例，与 collabSheetTopFadeGradient 的四段颜色一一对应：
- * 前两段同色 → 0..24pt 是**真正平的实色平台**；后两段化到透明，中点压在 0.6 而非线性的
- * 0.5，「先稳住再快速化掉」。数值由上面几个常量算出来，改常量这里自动跟着走。
- */
-const COLLAB_FADE_LOCATIONS = [
-  0,
-  COLLAB_FADE_PLATEAU_MAX / COLLAB_FADE_BAND_H,
-  (COLLAB_FADE_PLATEAU_MAX + COLLAB_FADE_RAMP_H / 2) / COLLAB_FADE_BAND_H,
-  1,
-];
+/** 实色平台占整条带子的比例 —— 交给 collabSheetTopFadeStops 去铺停靠点。 */
+const COLLAB_FADE_PLATEAU_FRACTION = COLLAB_FADE_PLATEAU_MAX / COLLAB_FADE_BAND_H;
 /** 「sheet 位置还没报上来」的哨兵：任何真实屏高都够不着，钳制会把它按到最低档那一端。 */
 const COLLAB_SHEET_POSITION_UNSET = 1e6;
 /**
@@ -1370,6 +1368,11 @@ export function ChatScreen({
     );
     return { transform: [{ translateY: plateau - COLLAB_FADE_PLATEAU_MAX }] };
   });
+  /** 淡出带的颜色与停靠点（同源生成，见 collabSheetTopFadeStops）。只随主题变，缓存一份。 */
+  const collabFadeStops = useMemo(
+    () => collabSheetTopFadeStops(colors, COLLAB_FADE_PLATEAU_FRACTION),
+    [colors],
+  );
   /** sheet 的面：把 gorhom 传进来的 backgroundStyle 原样接住，只额外挂上溶解透明度。 */
   const renderCollabSheetBackground = useCallback(
     ({ style }: { style?: StyleProp<ViewStyle> }) => (
@@ -6103,17 +6106,19 @@ export function ChatScreen({
               pointerEvents="none"
             >
               <LinearGradient
-                colors={collabSheetTopFadeGradient(colors)}
-                /* 带子自身的形状恒定（平台 24 + 化开 18），随档位变的是它被往上平移多少、
+                colors={collabFadeStops.colors}
+                /* 带子自身的形状恒定（平台 24 + 化开 28），随档位变的是它被往上平移多少、
                    于是露出多少平台。落到实际 y 上（y 从 sheet 顶沿量起）：
-                     max ：实色 0..24 → 0.6@y=33 → 化净 y=42（握把整段坐在纯色上）
-                     mid ：实色 0..10 → 0.6@y=19 → 化净 y=28
-                     peek：无平台，1.0@y=0 → 0.6@y=9 → 化净 y=18（从顶沿就开始化）
-                   任何档位下 y=0 那一行都是 alpha 1，顶沿的 hairline 与圆角接缝始终干净。
-                   静止时最上面那条消息在 y=44（把手 24 + paddingTop 20），比最长的 42 还低，
-                   所以**任何档位、静止状态下都不会有消息压在遮盖里**。
-                   想改各档留多少纯色调三个 PLATEAU 常量；想改化开的长度调 RAMP_H。 */
-                locations={COLLAB_FADE_LOCATIONS}
+                     max ：实色 0..24 → alpha 0.5@y≈34 → 化净 y=52（握把整段坐在纯色上）
+                     mid ：实色 0..10 → alpha 0.5@y≈20 → 化净 y=38
+                     peek：无平台，从顶沿就开始化 → alpha 0.5@y≈10 → 化净 y=28
+                   任何档位下 y=0 那一行都是 alpha 1，且曲线在两端导数为 0 —— 顶沿的
+                   hairline 与圆角接缝始终干净，平台接化开、化开接透明都没有折角。
+                   静止时最上面那条消息在 y=44（把手 24 + paddingTop 20）：max 档那里
+                   alpha 只剩 0.04，擦边不影响阅读；其余档位早已化净。
+                   想改各档留多少纯色调三个 PLATEAU 常量；想改化开长度调 RAMP_H；
+                   想改软硬调 appColors 里的 COLLAB_FADE_RAMP_GAMMA。 */
+                locations={collabFadeStops.locations}
                 style={StyleSheet.absoluteFill}
                 start={{ x: 0.5, y: 0 }}
                 end={{ x: 0.5, y: 1 }}

@@ -203,7 +203,7 @@ export function createChatStyles(c: AppColors) {
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
   },
-  /** 顶部淡出带。布局高度钉死成 COLLAB_FADE_BAND_H = 平台 24 + 化开 18 = 42，形状恒定；
+  /** 顶部淡出带。布局高度钉死成 COLLAB_FADE_BAND_H = 平台 24 + 化开 28 = 52，形状恒定；
    *  档位差异**全靠往上平移**（见 collabFadeShiftStyle），顶出 sheet 顶沿的那截平台由
    *  collabSheetContent 的 overflow:hidden 裁掉。所以这里既不缩放也不改高度，
    *  transformOrigin 自然也不需要了。 */
@@ -212,7 +212,7 @@ export function createChatStyles(c: AppColors) {
     top: 0,
     left: 0,
     right: 0,
-    height: 42,
+    height: 52,
   },
   /** 容器高度还没量出来那一帧的兜底：先撑满，别塌成 0 高。 */
   collabSheetContentFill: { flex: 1 },
