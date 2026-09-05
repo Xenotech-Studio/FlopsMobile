@@ -566,6 +566,19 @@ export function ChatScreen({
     return [collabSheetPeekHeight, mid, max];
   }, [collabSheetPeekHeight, collabSheetContainerHeight]);
   const collabSheetSnapPoints = collabSheetSnapHeights;
+  /** sheet 顶沿此刻的 y —— 走马灯指示器贴着它上方浮动（见 WorkspaceBody 的 sheetTopY）。
+   *  gorhom 往外抛这个值时已经加过 topInset（lib 内 useAnimatedReaction: `内部位置 + topInset`），
+   *  于是它与 collabWorkspaceLayer（containerInner 里的 absoluteFill）同一套坐标，可以直接用。
+   *  起手给个远大于屏高的哨兵：lib 的 INITIAL_POSITION 就是 SCREEN_HEIGHT（sheet 从屏底升起），
+   *  钳制会把指示器按在最低档上方，随 sheet 入场一起升上来，而不是先在 header 底下闪一帧。 */
+  const collabSheetPosition = useSharedValue(COLLAB_SHEET_POSITION_UNSET);
+  /** 最高档顶沿的 y —— 过顶量从这儿量起，重开时也靠它判断「sheet 是否已落到最高档」。
+   *  几何还没量到时给 -1（相关判定恒不成立）。声明放这儿是因为上面那些 effect 的依赖数组
+   *  在渲染期就要求值，声明晚了会踩 TDZ。 */
+  const collabSheetHighestTopY =
+    collabHostHeight > 0
+      ? collabHostHeight - collabSheetSnapHeights[collabSheetSnapHeights.length - 1]
+      : -1;
   /* 【聊天区高度】直接给死像素高，不再靠「flex:1 撑满 + paddingBottom 补掉多余」那套。
    *
    * 起因：gorhom 恒按**最高档**给 sheet body 布局（BottomSheetContent 的高度 =
@@ -1068,27 +1081,55 @@ export function ChatScreen({
    */
   useEffect(() => {
     if (collabReopenPhase !== 'placing') return;
-    /* 两帧后再动：第一帧 sheet 刚挂上、容器高度未必量到，太早改 index 会被 gorhom 当成
-       还没 layout 而丢掉 —— 丢掉的后果就是它一直停在最高档（对话占大半屏）。 */
-    const raf1 = requestAnimationFrame(() => {
-      const raf2 = requestAnimationFrame(() => {
-        setCollabReopenPhase('settling');
-        collabDismissProgress.value = withTiming(
-          0,
-          { duration: COLLAB_REOPEN_MS },
-          (finished) => {
-            'worklet';
-            if (finished) collabDismissCommitted.value = false;
-          },
-        );
-      });
-      reopenRafRef.current = raf2;
-    });
-    reopenRafRef.current = raf1;
+    /**
+     * **等 sheet 真的落到最高档再动，别猜帧数。**
+     *
+     * gorhom 的 handleSnapToIndex 开头就是 `if (!isLayoutReady) return;` —— 而且**不排队**。
+     * 之前拍两帧就改 index，赶在容器量完之前的话那次「收下来」直接被丢掉；随后 mount 分支
+     * 才补定位，而那时它算的已经是新 index（半屏）的位置 —— 于是 sheet 凭空出现在半屏，
+     * 全程没有运动。实测反馈的「直接出现在上半屏、没有运动过程」就是这么来的。
+     *
+     * 这里改成盯 animatedPosition：它等于最高档顶沿，就说明 mount 定位已经跑完、layout
+     * 一定就绪了。这时再开跑，两条动画（sheet 收下来 / progress 退回 0）才都跑得出来，
+     * 而且起点在屏幕内，280ms 全程可见。
+     */
+    const maxTop = collabSheetHighestTopY;
+    let started = false;
+    const start = () => {
+      if (started) return;
+      started = true;
+      setCollabReopenPhase('settling');
+      collabDismissProgress.value = withTiming(
+        0,
+        { duration: COLLAB_REOPEN_MS },
+        (finished) => {
+          'worklet';
+          if (finished) collabDismissCommitted.value = false;
+        },
+      );
+    };
+    const tick = () => {
+      if (maxTop > 0 && Math.abs(collabSheetPosition.value - maxTop) < 4) {
+        start();
+        return;
+      }
+      reopenRafRef.current = requestAnimationFrame(tick);
+    };
+    reopenRafRef.current = requestAnimationFrame(tick);
+    /* 兜底：真等不到（几何异常 / 位置一直对不上）也别卡在 placing —— 照常开跑，
+       最差不过是退化成没有位移动画，不会卡死在全屏。 */
+    const safety = setTimeout(start, 500);
     return () => {
       if (reopenRafRef.current != null) cancelAnimationFrame(reopenRafRef.current);
+      clearTimeout(safety);
     };
-  }, [collabReopenPhase, collabDismissProgress, collabDismissCommitted]);
+  }, [
+    collabReopenPhase,
+    collabSheetHighestTopY,
+    collabSheetPosition,
+    collabDismissProgress,
+    collabDismissCommitted,
+  ]);
   /** settling 跑完就回 idle：动画配置交还默认弹簧，之后用户自己拖档位才是原来的手感。 */
   useEffect(() => {
     if (collabReopenPhase !== 'settling') return;
@@ -1150,20 +1191,9 @@ export function ChatScreen({
   const collabTabCount = useMemo(() => collabTabs(collabLayout).length, [collabLayout]);
   /** 协同模式下装聊天消息区的 sheet，留在这里供程序化展开 / 折叠。 */
   const collabSheetRef = useRef<BottomSheet>(null);
-  /** sheet 顶沿此刻的 y —— 走马灯指示器贴着它上方浮动（见 WorkspaceBody 的 sheetTopY）。
-   *  gorhom 往外抛这个值时已经加过 topInset（lib 内 useAnimatedReaction: `内部位置 + topInset`），
-   *  于是它与 collabWorkspaceLayer（containerInner 里的 absoluteFill）同一套坐标，可以直接用。
-   *  起手给个远大于屏高的哨兵：lib 的 INITIAL_POSITION 就是 SCREEN_HEIGHT（sheet 从屏底升起），
-   *  钳制会把指示器按在最低档上方，随 sheet 入场一起升上来，而不是先在 header 底下闪一帧。 */
-  const collabSheetPosition = useSharedValue(COLLAB_SHEET_POSITION_UNSET);
   /** sheet 停在最低档（peek）时顶沿的 y = 指示器能落到的最低处。首帧还没量到高度时退化成
    *  header 下沿，onLayout 一到就回到真实值。 */
   const collabSheetLowestTopY = Math.max(headerHeight, collabHostHeight - collabSheetPeekHeight);
-  /** 最高档顶沿的 y —— 过顶量从这儿量起。几何还没量到时给 -1（下面的判定恒不成立）。 */
-  const collabSheetHighestTopY =
-    collabHostHeight > 0
-      ? collabHostHeight - collabSheetSnapHeights[collabSheetSnapHeights.length - 1]
-      : -1;
   /**
    * 【协同布局的「溶解」进度】0 = 正常，1 = 已经化干净（此刻才真正切状态）。
    *
