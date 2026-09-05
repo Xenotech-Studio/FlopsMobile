@@ -1274,6 +1274,10 @@ export function ChatScreen({
       [colors.drawerBackground, colors.chatScreenBackground],
     ),
   }));
+  /** 顶栏底色的抽屉色那一层：跟工作区画布同一条曲线淡出，别在状态翻转时硬切。 */
+  const collabHeaderBaseStyle = useAnimatedStyle(() => ({
+    opacity: 1 - collabDismissProgress.value,
+  }));
   /** 工作区内容：淡出 + 轻微后退，像是被让开而不是被抹掉。 */
   const collabWorkspaceContentStyle = useAnimatedStyle(() => ({
     opacity: 1 - collabDismissProgress.value,
@@ -5824,14 +5828,32 @@ export function ChatScreen({
         />
       ) : null}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+        {/* 渐变基色必须跟顶栏**背后那块画布**同色，否则实色段与画布错开一档、渐变尾巴
+            也会浮出一层灰。普通聊天页背后是消息区（chatScreenBackground）；协同模式下
+            顶栏压的是工作区层，而它是 drawerBackground（见 collabWorkspaceLayer）。
+
+            两种基色**叠着交叉淡化**，而不是按 collabActive 二选一：后者会在状态翻转那一
+            瞬间把顶栏底色从抽屉色切成画布色 —— 溶解的其它部分（工作区淡出、底色插值、
+            sheet 壳淡出、胶囊回缩）全是跟着 progress 连续走的，只有这里是硬切，实测就是
+            「推到顶那一下顶部颜色瞬变」。下层恒为画布色（= 溶解终点），上层抽屉色按
+            1-progress 淡出，于是顶栏底色跟工作区画布**同一条曲线**变过去。 */}
         <BlurHeaderBackground
           style={StyleSheet.absoluteFill}
           topSolidHeight={insets.top + 8}
-          /* 渐变基色必须跟顶栏**背后那块画布**同色，否则实色段与画布错开一档、渐变尾巴
-             也会浮出一层灰。普通聊天页背后是消息区（chatScreenBackground）；协同模式下
-             顶栏压的是工作区层，而它已随分层改成了 drawerBackground（见 collabWorkspaceLayer）。 */
-          gradientBaseHex={collabActive ? colors.drawerBackground : colors.chatScreenBackground}
+          gradientBaseHex={colors.chatScreenBackground}
         />
+        {collabAvailable ? (
+          <Reanimated.View
+            style={[StyleSheet.absoluteFill, collabHeaderBaseStyle]}
+            pointerEvents="none"
+          >
+            <BlurHeaderBackground
+              style={StyleSheet.absoluteFill}
+              topSolidHeight={insets.top + 8}
+              gradientBaseHex={colors.drawerBackground}
+            />
+          </Reanimated.View>
+        ) : null}
         {/* inDrawer（compact 覆盖式抽屉顶层）= 永远汉堡；否则能返回就显返回箭头（mainPane pop 嵌套栈 /
          *  iPhone pop 根栈），不能返回（mainPane 栈底）兜底汉堡。 */}
         {/* 左上角按钮槽：返回箭头 / 汉堡 / 占位，其余对话有未读时右上角挂微信式红点数字 badge。 */}
