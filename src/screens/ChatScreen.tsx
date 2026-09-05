@@ -299,6 +299,9 @@ const COLLAB_SHEET_MAX_INDEX = 2;
 /** 「从全屏收回 sheet」这段倒放的时长。跟 gorhom 自己从最高档收到 mid 的时间量级对齐，
  *  两条动画（sheet 位置 / progress 派生的那堆淡入）看起来才是同一件事。 */
 const COLLAB_REOPEN_MS = 280;
+/** 重开那一帧给 gorhom 的动画配置：duration 0 = 瞬时落位（animate() 见到 duration 就走
+ *  timing）。模块级常量，别每次渲染新建对象。 */
+const COLLAB_SHEET_INSTANT_ANIM = { duration: 0 };
 
 
 /** High-resolution time when available (e.g. Hermes), else `Date.now()`. Avoids bare `performance` (not in RN TS libs). */
@@ -5663,7 +5666,7 @@ export function ChatScreen({
     /* 档位 state 先跟到最高档：sheet 这次是「从全屏收下来」，聊天区高度得按最高档起算，
        否则第一帧会用 mid 的高度。收到 mid 后 onAnimate/onChange 会把它带回 1。 */
     setCollabSheetIndex(COLLAB_SHEET_MAX_INDEX);
-    /* 让 sheet 无动画地直接出现在最高档（animateOnMount=false + index=max），
+    /* 让 sheet 无动画地直接出现在最高档（index=max + 入场动画 duration:0），
        下一帧再把 index 改回 mid —— 那次 prop 变化本身就是一段向下收的动画。
        不这么做的话 gorhom 会走默认入场：从屏幕底部弹上来，跟「倒放」是反的。 */
     setCollabReopening(true);
@@ -5834,11 +5837,18 @@ export function ChatScreen({
         <BottomSheet
           ref={collabSheetRef}
           snapPoints={collabSheetSnapPoints}
-          /* 常态是 mid。从关闭态重开时先给最高档 + animateOnMount=false（无动画直接落在
-             用户此刻看到的「全屏」位置），两帧后 collabReopening 归 false，index 变回 mid
-             —— 那次 prop 变化就是「从全屏收下来」的动画本体，正好是关闭的倒放。 */
+          /* 常态是 mid。从关闭态重开时先给最高档、并把**入场动画时长设为 0**，于是 sheet
+             无声地直接出现在用户此刻看到的「全屏」位置；两帧后 collabReopening 归 false，
+             index 变回 mid、动画配置回默认弹簧 —— 那次 prop 变化就是「从全屏收下来」的
+             动画本体，正好是关闭的倒放。
+             **不能用 animateOnMount={false}**：v5.2.8 里 isAnimatedOnMount 初值是
+             `!animateOnMount || index === -1`，传 false 时它一上来就是 true，于是那条唯一
+             会调 setToPosition 的分支（`if (!isAnimatedOnMount.value)`）被整个跳过 ——
+             sheet 永远停在 INITIAL_POSITION（屏幕底外），实测就是「sheet 根本不出现、
+             走马灯被钳在 peek 顶沿」。改走 animationConfigs 是因为 animate() 只看 configs
+             里有没有 duration 来决定走 timing 还是 spring，duration:0 即瞬时落位。 */
           index={collabReopening ? COLLAB_SHEET_MAX_INDEX : 1}
-          animateOnMount={!collabReopening}
+          animationConfigs={collabReopening ? COLLAB_SHEET_INSTANT_ANIM : undefined}
           /* 档位变化 → 聊天区高度要跟着变（见 collabSheetChatHeight）。
              onAnimate 给的是**目标**档，动画一开始就把 ScrollView 调到位（展开时新露出来的
              那块当场就有内容）；onChange 是收尾确认，兜住拖拽甩到别档的情况。 */
