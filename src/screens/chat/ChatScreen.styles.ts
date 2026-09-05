@@ -203,18 +203,16 @@ export function createChatStyles(c: AppColors) {
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
   },
-  /** 顶部淡出带：**整条**（实色平台 + 化开段）都从 sheet 顶沿 y=0 起画。
-   *  布局高度取最长那档（peek 的 42 = 把手 24 + 化开 18），其余档位靠 scaleY 往下缩，
-   *  transformOrigin:'top' 保证上沿钉死在顶沿、缩的是下沿。
-   *  平台长度是按比例给的（见 COLLAB_FADE_LOCATIONS），所以缩带子时平台跟着一起缩 ——
-   *  上一版拆出来的那条 5pt 固定底座就是废在这儿（各档实色段一样长），已删。 */
+  /** 顶部淡出带。布局高度钉死成 COLLAB_FADE_BAND_H = 平台 24 + 化开 18 = 42，形状恒定；
+   *  档位差异**全靠往上平移**（见 collabFadeShiftStyle），顶出 sheet 顶沿的那截平台由
+   *  collabSheetContent 的 overflow:hidden 裁掉。所以这里既不缩放也不改高度，
+   *  transformOrigin 自然也不需要了。 */
   collabSheetTopFade: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     height: 42,
-    transformOrigin: 'top',
   },
   /** 容器高度还没量出来那一帧的兜底：先撑满，别塌成 0 高。 */
   collabSheetContentFill: { flex: 1 },

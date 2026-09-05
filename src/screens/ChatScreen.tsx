@@ -280,30 +280,42 @@ const COLLAB_SHEET_MAX_RATIO = 0.92;
  *  也就是滚动内容的顶部留白基数，于是「静止时最上面那条消息落在哪」跟改动前一模一样。 */
 const COLLAB_SHEET_HANDLE_H = 24;
 /**
- * 顶部淡出带的**总长**，按驻留档位分别给。规律：**sheet 驻留得越高，带子越短、
- * 把手区透出来的内容越多**；三档之间连续插值（见 collabFadeScaleStyle）。
+ * 【顶部淡出带】随档位变的是**实色平台的长度**（不是带子总长）。
  *
- *  - peek 42：= 把手 24 + 化开 18，把手区大部分仍被盖住。sheet 这时只剩贴着 composer
- *    的一条，顶上那截本来就该是干净的 chrome，透内容只会显脏。
- *  - max 24：遮盖正好在「改动前把手下沿」那条线上化净，把手区基本透出内容。sheet 快占满
- *    屏时它更像一整页，内容从 chrome 底下滚过去才是对的观感。
- *  - mid 33：两者中值。
+ * 规律：**sheet 驻留得越高，纵向预算越足，就留越长的纯色给把手**。
+ *  - peek 0 ：sheet 只剩贴着 composer 的一条，一共没几十 pt，不能拿来铺 chrome ——
+ *    平台归零，从 sheet 顶沿就开始化开。
+ *  - max 24：整个把手区都是纯色，握把稳稳坐在实色上；化开段接在把手下沿之后。
+ *  - mid 10：中间。
+ * 三档之间连续插值，靠 collabSheetPosition 全程跟手（见 collabFadeShiftStyle）。
  */
-const COLLAB_FADE_TOTAL_PEEK = 42;
-const COLLAB_FADE_TOTAL_MID = 33;
-const COLLAB_FADE_TOTAL_MAX = 24;
+const COLLAB_FADE_PLATEAU_PEEK = 0;
+const COLLAB_FADE_PLATEAU_MID = 10;
+const COLLAB_FADE_PLATEAU_MAX = 24;
+/** 化开段长度，三档恒定：平台结束之后总是用同样一段距离化到透明。
+ *  于是各档的**总长** = 平台 + 这个数 = 18 / 28 / 42。 */
+const COLLAB_FADE_RAMP_H = 18;
 /**
- * 淡出带的形状（比例，与 collabSheetTopFadeGradient 的四段颜色一一对应）：
- * **0..40% 是实色平台，40%..100% 化开**。
+ * 带子的布局高度 = 最长那档（max：平台 24 + 化开 18）。矮档位不改高度也不缩放，
+ * 而是**整条往上平移**，多出来的平台被 collabSheetContent 的 overflow:hidden 裁掉 ——
+ * 露出多少平台，就等于平台有多长。
  *
- * 关键在于平台是**比例**而不是固定像素 —— 整条带子按档位 scaleY 缩放时，平台的绝对长度
- * 跟着一起伸缩：peek 0.4×42 ≈ 16.8pt / mid 0.4×33 ≈ 13.2 / max 0.4×24 ≈ 9.6。
- * 上一版那条 5pt 固定底座正是错在这儿：任何档位下实色段一样长，"平台随档位变"就没了。
- *
- * 落到握把（y=10..14）上：peek 档整个握把坐在实色平台里；到 max 档平台在 9.6 就结束，
- * 握把背后从 0.98 掉到约 0.76，再往下 y=20 只剩约 0.33 —— 把手区下半段透出内容。
+ * 为什么不用 scaleY：等比缩放会把平台和化开段**一起**缩，可这一版要的是「平台变、
+ * 化开段不变」，比例是变的，缩放表达不了。平移只动 transform、同样不进布局，
+ * 而且整条是**一个**渐变，平台与化开段之间不存在两层拼接的接缝。
  */
-const COLLAB_FADE_LOCATIONS = [0, 0.4, 0.7, 1];
+const COLLAB_FADE_BAND_H = COLLAB_FADE_PLATEAU_MAX + COLLAB_FADE_RAMP_H;
+/**
+ * 四个停靠点在带子内的比例，与 collabSheetTopFadeGradient 的四段颜色一一对应：
+ * 前两段同色 → 0..24pt 是**真正平的实色平台**；后两段化到透明，中点压在 0.6 而非线性的
+ * 0.5，「先稳住再快速化掉」。数值由上面几个常量算出来，改常量这里自动跟着走。
+ */
+const COLLAB_FADE_LOCATIONS = [
+  0,
+  COLLAB_FADE_PLATEAU_MAX / COLLAB_FADE_BAND_H,
+  (COLLAB_FADE_PLATEAU_MAX + COLLAB_FADE_RAMP_H / 2) / COLLAB_FADE_BAND_H,
+  1,
+];
 /** 「sheet 位置还没报上来」的哨兵：任何真实屏高都够不着，钳制会把它按到最低档那一端。 */
 const COLLAB_SHEET_POSITION_UNSET = 1e6;
 /**
@@ -1323,7 +1335,14 @@ export function ChatScreen({
     opacity: 1 - collabDismissProgress.value,
   }));
   /**
-   * 【顶部淡出带按档位伸缩】驻留越靠上 → 带子越短 → 渐变起点越靠下 → 把手区透出的内容越多。
+   * 【顶部淡出带的实色平台按档位伸缩】驻留越靠上 → 平台越长 → 留给把手的纯色越多。
+   *
+   * 做法是**整条带子上下平移**：带子恒为「平台 24 + 化开 18」，往上平移 (24 - 平台长)，
+   * 多出来的平台顶出 sheet 顶沿、被 collabSheetContent 的 overflow:hidden 裁掉。
+   * 于是「露出多少平台」= 平台有多长，而化开段始终完整、长度不变。
+   *  - max ：平移 0   → 平台 0..24、化开 24..42
+   *  - mid ：平移 -14 → 平台 0..10、化开 10..28
+   *  - peek：平移 -24 → 平台被裁光、化开 0..18（从顶沿就开始化）
    *
    * 驱动量就是 collabSheetPosition（UI 线程的顶沿 y），所以**拖拽全程跟手** —— 不是等档位
    * state 落定才跳一下。键盘把 sheet 顶上去、过顶溶解那 20pt（CLAMP 住）也都自然吃到同一
@@ -1331,31 +1350,25 @@ export function ChatScreen({
    *
    * 输入区间必须递增，而顶沿 y 越小 = sheet 越高，所以顺序是 max → mid → peek。
    *
-   * 用 scaleY 而不是逐帧改 height：带子是绝对定位的一小块，缩放只动 transform、不进布局；
-   * 而 locations 是**按比例**给的，整条等比缩短跟改 locations 完全等价 —— 何况 locations
-   * 是 LinearGradient 的普通 prop，本来就没法逐帧动（改它要重渲染，只能瞬跳）。
-   * transformOrigin:'top'（在样式里）让它贴着顶沿缩，缩的是下沿。
-   *
-   * 「实色平台跟着一起缩」也是靠这一条：平台在 locations 里占 0..40%，等比缩放之后它的
-   * 绝对长度自然随档位变（见 COLLAB_FADE_LOCATIONS）。
+   * 平移只动 transform、不进布局；而且整条自始至终是**一个**渐变，平台与化开段之间不存在
+   * 拼接接缝（上一版拆成「实色块 + 渐变」两层，接缝与色调衔接正是实测被挑出来的问题）。
    */
-  const collabFadeScaleStyle = useAnimatedStyle(() => {
-    /* 几何还没量到 / 三档退化成不严格递增时，退回最长那档（= peek 的现状观感）。 */
+  const collabFadeShiftStyle = useAnimatedStyle(() => {
+    /* 几何还没量到 / 三档退化成不严格递增时，退回平台归零那端（chrome 最少，最不容易出错）。 */
     if (
       collabSheetHighestTopY < 0 ||
       collabSheetMidTopY <= collabSheetHighestTopY ||
       collabSheetLowestTopY <= collabSheetMidTopY
     ) {
-      return { transform: [{ scaleY: 1 }] };
+      return { transform: [{ translateY: -COLLAB_FADE_PLATEAU_MAX }] };
     }
-    const total = interpolate(
+    const plateau = interpolate(
       collabSheetPosition.value,
       [collabSheetHighestTopY, collabSheetMidTopY, collabSheetLowestTopY],
-      [COLLAB_FADE_TOTAL_MAX, COLLAB_FADE_TOTAL_MID, COLLAB_FADE_TOTAL_PEEK],
+      [COLLAB_FADE_PLATEAU_MAX, COLLAB_FADE_PLATEAU_MID, COLLAB_FADE_PLATEAU_PEEK],
       Extrapolation.CLAMP,
     );
-    /* 带子布局高度就是最长那档，所以比值直接是「这一档 / peek」。 */
-    return { transform: [{ scaleY: total / COLLAB_FADE_TOTAL_PEEK }] };
+    return { transform: [{ translateY: plateau - COLLAB_FADE_PLATEAU_MAX }] };
   });
   /** sheet 的面：把 gorhom 传进来的 backgroundStyle 原样接住，只额外挂上溶解透明度。 */
   const renderCollabSheetBackground = useCallback(
@@ -6086,19 +6099,20 @@ export function ChatScreen({
                 它也是 sheet 的「壳」的一部分：溶解时要跟着面一起淡掉，否则 sheet 都化没了
                 还剩一条 sheet 色的横带压在消息上。 */}
             <Reanimated.View
-              style={[styles.collabSheetTopFade, collabSheetChromeStyle, collabFadeScaleStyle]}
+              style={[styles.collabSheetTopFade, collabSheetChromeStyle, collabFadeShiftStyle]}
               pointerEvents="none"
             >
               <LinearGradient
                 colors={collabSheetTopFadeGradient(colors)}
-                /* 停靠点是**比例**，所以整条（含实色平台）随 scaleY 等比压缩，三档共用这
-                   一份曲线。落到实际 y 上（y 从 sheet 顶沿量起）：
-                     peek（总长 42）：实色 0..16.8 → 0.6@y≈29.4 → 化净 y=42
-                     mid （总长 33）：实色 0..13.2 → 0.6@y≈23.1 → 化净 y=33
-                     max （总长 24）：实色 0..9.6  → 0.6@y≈16.8 → 化净 y=24
-                   于是「改动前把手下沿」那条线（y=24）上的遮盖：peek 还有约 0.77，
-                   max 已经归零 —— 驻留越靠上，把手区透出的内容越多。
-                   想改各档露多少调三个 TOTAL 常量；想改平台占比调 COLLAB_FADE_LOCATIONS。 */
+                /* 带子自身的形状恒定（平台 24 + 化开 18），随档位变的是它被往上平移多少、
+                   于是露出多少平台。落到实际 y 上（y 从 sheet 顶沿量起）：
+                     max ：实色 0..24 → 0.6@y=33 → 化净 y=42（握把整段坐在纯色上）
+                     mid ：实色 0..10 → 0.6@y=19 → 化净 y=28
+                     peek：无平台，1.0@y=0 → 0.6@y=9 → 化净 y=18（从顶沿就开始化）
+                   任何档位下 y=0 那一行都是 alpha 1，顶沿的 hairline 与圆角接缝始终干净。
+                   静止时最上面那条消息在 y=44（把手 24 + paddingTop 20），比最长的 42 还低，
+                   所以**任何档位、静止状态下都不会有消息压在遮盖里**。
+                   想改各档留多少纯色调三个 PLATEAU 常量；想改化开的长度调 RAMP_H。 */
                 locations={COLLAB_FADE_LOCATIONS}
                 style={StyleSheet.absoluteFill}
                 start={{ x: 0.5, y: 0 }}
