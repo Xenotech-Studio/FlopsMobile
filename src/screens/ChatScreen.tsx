@@ -279,6 +279,31 @@ const COLLAB_SHEET_MAX_RATIO = 0.92;
  *  顶沿起画（见 collabSheetContent 的负 marginTop）。这个数改去当消息区的 headerHeight ——
  *  也就是滚动内容的顶部留白基数，于是「静止时最上面那条消息落在哪」跟改动前一模一样。 */
 const COLLAB_SHEET_HANDLE_H = 24;
+/**
+ * 顶部淡出带的**总长**，按驻留档位分别给。规律：**sheet 驻留得越高，带子越短、
+ * 把手区透出来的内容越多**；三档之间连续插值（见 collabFadeScaleStyle）。
+ *
+ *  - peek 42：= 把手 24 + 化开 18，把手区大部分仍被盖住。sheet 这时只剩贴着 composer
+ *    的一条，顶上那截本来就该是干净的 chrome，透内容只会显脏。
+ *  - max 24：遮盖正好在「改动前把手下沿」那条线上化净，把手区基本透出内容。sheet 快占满
+ *    屏时它更像一整页，内容从 chrome 底下滚过去才是对的观感。
+ *  - mid 33：两者中值。
+ */
+const COLLAB_FADE_TOTAL_PEEK = 42;
+const COLLAB_FADE_TOTAL_MID = 33;
+const COLLAB_FADE_TOTAL_MAX = 24;
+/**
+ * 带子最顶上这一小段**恒定实色、不参与缩放**：任何档位下都护住 sheet 顶沿的 hairline
+ * 与圆角接缝那道线。
+ *
+ * 为什么 5pt 就够：内容本身**溢不出圆角**（collabSheetContent 自带 overflow:hidden +
+ * 半径 32 的裁剪），所以这里要护的不是「内容跑到弧线外面」，而只是顶沿那道缝别贴着字。
+ * 弧线内侧那片（y=5..32 的两个角）遮盖确实变弱了，但消息列是限宽 380 居中 + 左右
+ * paddingHorizontal 的，正常排不到离屏幕边 15pt 以内，那块实际是空底。
+ */
+const COLLAB_FADE_SOLID_BASE = 5;
+/** 渐变本体的布局高度 = 最长那档减去实色底座；scaleY 从这个长度往下缩。 */
+const COLLAB_FADE_GRADIENT_H = COLLAB_FADE_TOTAL_PEEK - COLLAB_FADE_SOLID_BASE;
 /** 「sheet 位置还没报上来」的哨兵：任何真实屏高都够不着，钳制会把它按到最低档那一端。 */
 const COLLAB_SHEET_POSITION_UNSET = 1e6;
 /**
@@ -582,6 +607,10 @@ export function ChatScreen({
     collabHostHeight > 0
       ? collabHostHeight - collabSheetSnapHeights[collabSheetSnapHeights.length - 1]
       : -1;
+  /** 中间档顶沿的 y —— 顶部淡出带按「顶沿此刻在哪」在三档之间插值，需要中间这个锚点。
+   *  同样在几何没量到时给 -1（与 collabSheetHighestTopY 同一个判据，一处判完即可）。 */
+  const collabSheetMidTopY =
+    collabHostHeight > 0 ? collabHostHeight - collabSheetSnapHeights[1] : -1;
   /* 【聊天区高度】直接给死像素高，不再靠「flex:1 撑满 + paddingBottom 补掉多余」那套。
    *
    * 起因：gorhom 恒按**最高档**给 sheet body 布局（BottomSheetContent 的高度 =
@@ -1293,6 +1322,40 @@ export function ChatScreen({
   const collabSheetChromeStyle = useAnimatedStyle(() => ({
     opacity: 1 - collabDismissProgress.value,
   }));
+  /**
+   * 【顶部淡出带按档位伸缩】驻留越靠上 → 带子越短 → 渐变起点越靠下 → 把手区透出的内容越多。
+   *
+   * 驱动量就是 collabSheetPosition（UI 线程的顶沿 y），所以**拖拽全程跟手** —— 不是等档位
+   * state 落定才跳一下。键盘把 sheet 顶上去、过顶溶解那 20pt（CLAMP 住）也都自然吃到同一
+   * 条曲线，不用额外接线。
+   *
+   * 输入区间必须递增，而顶沿 y 越小 = sheet 越高，所以顺序是 max → mid → peek。
+   *
+   * 用 scaleY 而不是逐帧改 height：带子是绝对定位的一小块，缩放只动 transform、不进布局；
+   * 而 locations 是**按比例**给的，整条等比缩短跟改 locations 完全等价 —— 何况 locations
+   * 是 LinearGradient 的普通 prop，本来就没法逐帧动（改它要重渲染，只能瞬跳）。
+   * transformOrigin:'top'（在样式里）让它贴着顶沿缩，缩的是下沿。
+   */
+  const collabFadeScaleStyle = useAnimatedStyle(() => {
+    /* 几何还没量到 / 三档退化成不严格递增时，退回最长那档（= peek 的现状观感）。 */
+    if (
+      collabSheetHighestTopY < 0 ||
+      collabSheetMidTopY <= collabSheetHighestTopY ||
+      collabSheetLowestTopY <= collabSheetMidTopY
+    ) {
+      return { transform: [{ scaleY: 1 }] };
+    }
+    const total = interpolate(
+      collabSheetPosition.value,
+      [collabSheetHighestTopY, collabSheetMidTopY, collabSheetLowestTopY],
+      [COLLAB_FADE_TOTAL_MAX, COLLAB_FADE_TOTAL_MID, COLLAB_FADE_TOTAL_PEEK],
+      Extrapolation.CLAMP,
+    );
+    /* 实色底座不参与缩放，所以缩的是「总长减底座」那一截。 */
+    return {
+      transform: [{ scaleY: (total - COLLAB_FADE_SOLID_BASE) / COLLAB_FADE_GRADIENT_H }],
+    };
+  });
   /** sheet 的面：把 gorhom 传进来的 backgroundStyle 原样接住，只额外挂上溶解透明度。 */
   const renderCollabSheetBackground = useCallback(
     ({ style }: { style?: StyleProp<ViewStyle> }) => (
@@ -6022,25 +6085,31 @@ export function ChatScreen({
                 它也是 sheet 的「壳」的一部分：溶解时要跟着面一起淡掉，否则 sheet 都化没了
                 还剩一条 sheet 色的横带压在消息上。 */}
             <Reanimated.View
-              style={[styles.collabSheetTopFade, collabSheetChromeStyle]}
+              style={[styles.collabSheetTopFadeLayer, collabSheetChromeStyle]}
               pointerEvents="none"
             >
-              <LinearGradient
-                colors={collabSheetTopFadeGradient(colors)}
-                /* 三个停靠点落在 42pt 带子上的实际位置（alpha 取自 collabSheetTopFadeGradient
-                   的 [1, 0.75, 0]）：
-                     0     → y=0      顶沿实色，护住圆角与 hairline，内容不会溢到弧线上；
-                     0.38  → y≈16     刚过握把下沿（握把占 y=10..14），到这儿还有 0.75 的遮盖，
-                                      握把读得清楚，同时下半个把手区已经能透出内容；
-                     1     → y=42     化干净（= 原来的 24 把手 + 18 淡出带，总长不变）。
-                   于是原来那条硬切口所在的 y=24 处遮盖只剩约 0.52 —— 「把手高度内完全看不到
-                   内容」这条限制就是在这儿解开的。想再多露一点就把 0.38 往小调。 */
-                locations={[0, 0.38, 1]}
-                style={StyleSheet.absoluteFill}
-                start={{ x: 0.5, y: 0 }}
-                end={{ x: 0.5, y: 1 }}
-                pointerEvents="none"
-              />
+              {/* 恒定实色底座：唯一不随档位缩短的一段，护住顶沿那道 hairline 接缝。 */}
+              <View style={styles.collabSheetTopFadeBase} />
+              {/* 渐变本体：接在底座下沿，按档位 scaleY 缩短（见 collabFadeScaleStyle）。 */}
+              <Reanimated.View style={[styles.collabSheetTopFade, collabFadeScaleStyle]}>
+                <LinearGradient
+                  colors={collabSheetTopFadeGradient(colors)}
+                  /* 停靠点是**比例**，所以整条随 scaleY 等比压缩，三档共用这一份曲线。
+                     alpha 取自 collabSheetTopFadeGradient 的 [1, 0.75, 0]，落到实际 y 上
+                     （y 从 sheet 顶沿量起，含 5pt 实色底座）：
+                       peek（总长 42）：实色 0..5 → 0.75@y≈16 → 化净 y=42
+                       mid （总长 33）：实色 0..5 → 0.75@y≈13 → 化净 y=33
+                       max （总长 24）：实色 0..5 → 0.75@y≈11 → 化净 y=24
+                     握把占 y=10..14：peek 那档它整段坐在 0.75 上、读得最实；到 max 档遮盖
+                     跨过握把时已经从 0.75 掉到约 0.4，把手区因此「基本透出内容」。
+                     想整体多露一点就把 0.3 往小调，想改各档露多少去调三个 TOTAL 常量。 */
+                  locations={[0, 0.3, 1]}
+                  style={StyleSheet.absoluteFill}
+                  start={{ x: 0.5, y: 0 }}
+                  end={{ x: 0.5, y: 1 }}
+                  pointerEvents="none"
+                />
+              </Reanimated.View>
             </Reanimated.View>
           </View>
         </BottomSheet>
