@@ -250,6 +250,15 @@ export function createChatStyles(c: AppColors) {
     right: 0,
     zIndex: 10,
   },
+  /** 「点一下回到底部」热区的外壳：贴着 bottomOverlay 底沿，高度由 chatBottomHotZoneStyle
+   *  逐帧给（随 sheet 档位压缩）。刻意不用 absoluteFill —— 铺满整块正是 peek 档"列表滚不动"
+   *  的成因。必须排在 bottomOverlayInner 之前，composer 的控件才压得住它。 */
+  bottomOverlayHotZone: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+  },
   bottomOverlayInner: {
     position: 'absolute',
     bottom: 0,

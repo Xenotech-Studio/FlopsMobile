@@ -323,6 +323,17 @@ const COLLAB_FADE_RAMP_H = 30;
 const COLLAB_FADE_BAND_H = COLLAB_FADE_PLATEAU_MAX + COLLAB_FADE_RAMP_H;
 /** 实色平台占整条带子的比例 —— 交给 collabSheetTopFadeStops 去铺停靠点。 */
 const COLLAB_FADE_PLATEAU_FRACTION = COLLAB_FADE_PLATEAU_MAX / COLLAB_FADE_BAND_H;
+/**
+ * 输入区上方那条「点一下回到底部」热区**高出 composer 的可点带**的常态高度。
+ *
+ * 48 → 28（约六成）：48 是 gradientStripHeight，也就是渐变带的**视觉**高度，热区原来
+ * 直接铺满整块（absoluteFill）。视觉高度不动，只把"能点"的范围收窄 —— 渐变带上半截
+ * 本来就淡到看不出是可点区域，压掉之后误触明显少，滚动区还回给消息列表。
+ */
+const CHAT_HOT_ZONE_H = 28;
+/** peek 档收到这么窄。10pt 已经小到基本不会误触，但仍够刻意点中，
+ *  所以低档位是**压缩而不是隐藏**（隐藏会让"点渐变回底"在低档位突然失效）。 */
+const CHAT_HOT_ZONE_MIN = 10;
 /** 「sheet 位置还没报上来」的哨兵：任何真实屏高都够不着，钳制会把它按到最低档那一端。 */
 const COLLAB_SHEET_POSITION_UNSET = 1e6;
 /**
@@ -1382,6 +1393,40 @@ export function ChatScreen({
     () => collabSheetTopFadeStops(colors, COLLAB_FADE_PLATEAU_FRACTION),
     [colors],
   );
+  /**
+   * 【回底热区随 sheet 档位压缩】热区总高 = 盖住 composer 的那一段（恒定）+ 高出 composer
+   * 的可点带（随档位变）。变的只有后者：
+   *  - 普通聊天页 / sheet 在最高档：CHAT_HOT_ZONE_H（常态）
+   *  - sheet 越矮 → 越窄，peek 档收到 CHAT_HOT_ZONE_MIN
+   *
+   * 为什么要随档位变：热区是 composer 那层的浮层，**画在 sheet 之上**，高出 composer 的
+   * 那一截正压在可视聊天区上。peek 档聊天区一共才 56pt，48pt 的热区几乎盖满 —— 手指落上去
+   * 全被判成"点一下回底"，列表根本滚不动。压到 10pt 后既还回了滚动区，又仍留着一条能刻意
+   * 点中的带子（所以是压缩不是隐藏：隐藏会让"点渐变回底"这个习惯在低档位突然失效，
+   * 而且状态翻转时还得处理一次不连续）。
+   *
+   * 驱动量仍是 collabSheetPosition（UI 线程），拖拽全程跟手。协同模式关掉时没有 sheet，
+   * 直接给常态值 —— 而那一刻 sheet 正停在最高档、插值出来也是常态值，两边接得上，
+   * 溶解/重开翻状态时不会跳。
+   */
+  const chatBottomHotZoneStyle = useAnimatedStyle(() => {
+    /* composer 本体那一段恒定盖住，随键盘变化的部分由 bottomOverlayInner 自己管。 */
+    const composerBlock = inputRowHeight + restingNavInset;
+    if (
+      !collabActive ||
+      collabSheetHighestTopY < 0 ||
+      collabSheetLowestTopY <= collabSheetHighestTopY
+    ) {
+      return { height: CHAT_HOT_ZONE_H + composerBlock };
+    }
+    const strip = interpolate(
+      collabSheetPosition.value,
+      [collabSheetHighestTopY, collabSheetLowestTopY],
+      [CHAT_HOT_ZONE_H, CHAT_HOT_ZONE_MIN],
+      Extrapolation.CLAMP,
+    );
+    return { height: strip + composerBlock };
+  });
   /** sheet 的面：把 gorhom 传进来的 backgroundStyle 原样接住，只额外挂上溶解透明度。 */
   const renderCollabSheetBackground = useCallback(
     ({ style }: { style?: StyleProp<ViewStyle> }) => (
@@ -6177,16 +6222,25 @@ export function ChatScreen({
               end={{ x: 0.5, y: 1 }}
               pointerEvents="none"
             />
-            <Pressable
-              style={StyleSheet.absoluteFill}
-              onPress={() => {
-                /* 渐变带 = 非 composer 区域，点这里也应该失焦（语义上跟点消息区一致）。 */
-                dismissComposer();
-                messageAreaRef.current?.scrollToBottom(true);
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="滚动到对话底部"
-            />
+            {/* 「点一下回到底部」热区。**不再是 absoluteFill** —— 它高出 composer 的那一截
+                （原来是整条 gradientStripHeight=48）会压在消息区上方，sheet 收到 peek 档时
+                可视聊天区本来就没剩几十 pt，热区几乎把它盖满，列表就滚不动了。
+                改成按档位压缩，见 chatBottomHotZoneStyle。渐变本身的视觉高度不动（仍是
+                bottomOverlayHeight 那一整块），只收窄"能点"的范围。
+                盖住 composer 的那一段照旧保留：composer 自己的控件在上层（bottomOverlayInner
+                是 box-none），落到缝隙上的点击仍应该失焦 + 回底。 */}
+            <Reanimated.View style={[styles.bottomOverlayHotZone, chatBottomHotZoneStyle]}>
+              <Pressable
+                style={StyleSheet.absoluteFill}
+                onPress={() => {
+                  /* 渐变带 = 非 composer 区域，点这里也应该失焦（语义上跟点消息区一致）。 */
+                  dismissComposer();
+                  messageAreaRef.current?.scrollToBottom(true);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="滚动到对话底部"
+              />
+            </Reanimated.View>
             <Reanimated.View style={[styles.bottomOverlayInner, navInsetAnimStyle]} pointerEvents="box-none">
               {/* P2 待发队列：agent 在跑时回车发的消息排这里，逐条自动发；可对某条立刻穿插或删除 */}
               {sendQueue.length > 0 ? (
