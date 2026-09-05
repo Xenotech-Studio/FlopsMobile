@@ -335,6 +335,9 @@ export function createChatStyles(c: AppColors) {
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: c.border,
     ...shadowCircleButtonThemed(c),
+    /** 同 headerGlassCapsule：内容靠右，宽度收窄时裁掉的是左边那格、⋯ 留在原处。 */
+    justifyContent: 'flex-end',
+    overflow: 'hidden',
   },
   /** iOS 26 胶囊：本体是 BouncyGlassCard（系统玻璃），这里只排版 —— 底色/圆角都归它，
    *  圆角走 cornerRadius prop（进玻璃本体的 cornerConfiguration），不在样式里给。 */

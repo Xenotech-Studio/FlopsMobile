@@ -1209,29 +1209,28 @@ export function ChatScreen({
     [styles, collabSheetChromeStyle],
   );
   /**
-   * 关闭态 header 操作簇的「展开」进度 0→1，跟溶解首尾相接：溶解一化完、状态一翻，
-   * 右上角就从**一颗 ⋯ 圆钮长成一枚两格胶囊**，而不是硬切一下蹦出来。
+   * 右上角胶囊的形变**直接挂在溶解进度上**（collabDismissProgress，UI 线程），
+   * 跟卡片阴影那类参数一样跟手：手指往上拖一点，胶囊就长一点；往回拖就缩回去；
+   * 松手不够 COMMIT 时 gorhom 把 sheet 弹回档位、进度连续退到 0，胶囊也一路缩回一格。
+   * 反方向（点入口重新打开）同理 —— openCollabWorkspace 把进度拨回 0，胶囊跟着收，
+   * 上一版「打开是瞬时切换」的遗留一并解决。
    *
-   * 只有一个量，派生两件事（见 collabCapsuleGrowStyle / collabEntryStyle）：
+   * 同一个量派生两件事：
    *  - 胶囊宽度：一格 → 两格。右缘被 header 的 space-between 钉住不动，所以是「向左长出来」；
    *    内容靠右排 + contentView 自带圆角裁剪（BouncyGlassCard 的 applyCornerShape），
    *    于是左边那格是被**逐渐揭开**的，不是凭空出现。
-   *  - 协同入口那格的图标/角标：宽度先走一段再淡入，免得图标悬在还没长到位的胶囊外面。
+   *  - 协同入口那格的图标/角标：宽度先走 35% 再淡入，免得图标悬在还没长到位的胶囊外面。
    */
-  const collabEntryOpacity = useSharedValue(0);
-  useEffect(() => {
-    collabEntryOpacity.value = withTiming(collabDismissed ? 1 : 0, { duration: 240 });
-  }, [collabDismissed, collabEntryOpacity]);
   const collabCapsuleGrowStyle = useAnimatedStyle(() => ({
     width: interpolate(
-      collabEntryOpacity.value,
+      collabDismissProgress.value,
       [0, 1],
       [HEADER_CIRCLE_BTN_SIZE, HEADER_CAPSULE_WIDTH],
       Extrapolation.CLAMP,
     ),
   }));
   const collabEntryStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(collabEntryOpacity.value, [0.35, 1], [0, 1], Extrapolation.CLAMP),
+    opacity: interpolate(collabDismissProgress.value, [0.35, 1], [0, 1], Extrapolation.CLAMP),
   }));
   /* 键盘开合：协同模式下聊天区高度要按键盘上沿截断（见 collabSheetChatHeight）。
      只在协同模式挂监听，普通聊天页不用为此多两个订阅。 */
@@ -5555,12 +5554,22 @@ export function ChatScreen({
    * 而目标本来就是 Android 那枚**白色实底**胶囊（量到胶囊内 (255,255,255)、页面 (247,247,247)）
    * —— 自绘这条路已经在跑、且用户认可，就不为了材质再耗。胶囊里的两格都用 iosForceWorklet
    * 走非玻璃路径，否则 iOS 26 会在白胶囊里再叠两颗玻璃药丸。 */
-  const collabEntryVisible = collabAvailable && collabDismissed;
+  /**
+   * 右上角进入「胶囊形态」的条件是**只要这个会话有协同内容**，而不是「已经关掉了」。
+   *
+   * 为的是让胶囊在整条溶解里都活着、宽度跟着 collabDismissProgress 连续变形：
+   *  - progress 0（协同开着）：胶囊收成一格 48 宽 —— 圆角 24 = 半径，画出来就是一颗圆钮，
+   *    跟原来那颗 ⋯ 视觉等价；左边那格被 contentView 的圆角裁剪切掉、也点不到；
+   *  - progress 1（关闭态）：长成两格 96.33，协同入口露出来。
+   * 挂载条件若还挂在 collabDismissed 上，胶囊只会在状态翻转那一刻才挂出来，而那时
+   * progress 已经是 1 —— 只能补一段定时动画，跟手是做不到的。
+   */
+  const headerCapsuleMode = collabAvailable;
   /** 玻璃胶囊那条路：按压反馈交给整颗胶囊（系统 interactive glass 带着 children 一起形变），
    *  各格因此**不再自己缩**。自绘胶囊没有这个整体动画，仍由各格自己做 bouncy。 */
-  const capsuleUsesSystemPress = IS_IOS_LIQUID_GLASS && collabEntryVisible;
+  const capsuleUsesSystemPress = IS_IOS_LIQUID_GLASS && headerCapsuleMode;
   /** ⋯ 触发器在胶囊里是「一格」（透明、无底色），单独出现时才是圆钮。 */
-  const convMenuTriggerStyle = collabEntryVisible
+  const convMenuTriggerStyle = headerCapsuleMode
     ? styles.headerCapsuleSegment
     : styles.circleBtn;
   /* 右上角 ⋯ 菜单 三条路：
@@ -5569,7 +5578,7 @@ export function ChatScreen({
    *    系统接管）。进了胶囊就得让位给 MenuView —— 玻璃材质那条路没法只要菜单不要材质。
    *  - iOS 15..25 / iOS 26 胶囊态：MenuView（同样是原生 UIMenu，只是没玻璃 material）。
    *  - Android：AnimatedCircleButton + 自绘 Modal popover。 */
-  const convMenuTrigger = IS_IOS_LIQUID_GLASS && !collabEntryVisible ? (
+  const convMenuTrigger = IS_IOS_LIQUID_GLASS && !headerCapsuleMode ? (
     <AnimatedCircleButton
       style={[convMenuTriggerStyle, !conversationId ? styles.circleBtnDisabled : null]}
       disabled={!conversationId}
@@ -5630,7 +5639,7 @@ export function ChatScreen({
    *  - 自绘胶囊（Android / iOS<26）：没有整体动画，仍用 AnimatedCircleButton 各格自己 bouncy。
    *    iosForceWorklet 是为了别在白胶囊里再叠一颗玻璃药丸。
    */
-  const collabEntryNode = collabEntryVisible ? (
+  const collabEntryNode = headerCapsuleMode ? (
     <Reanimated.View style={[styles.headerCollabSlot, collabEntryStyle]}>
       {capsuleUsesSystemPress ? (
         <Pressable style={styles.headerCapsuleSegment} onPress={openCollabWorkspace}>
@@ -5662,7 +5671,7 @@ export function ChatScreen({
       {convMenuTrigger}
     </>
   );
-  const headerActions = !collabEntryVisible ? (
+  const headerActions = !headerCapsuleMode ? (
     convMenuTrigger
   ) : IS_IOS_LIQUID_GLASS ? (
     /* iOS 26：胶囊本体直接用 BouncyGlassCard —— 项目里**已经验证能画出玻璃**的那套
@@ -5682,7 +5691,11 @@ export function ChatScreen({
       {headerCapsuleContent}
     </AnimatedBouncyGlassCard>
   ) : (
-    <View style={styles.headerCapsule}>{headerCapsuleContent}</View>
+    /* 自绘胶囊（Android / iOS<26）同样跟着进度伸缩 —— 它是普通 View，包成 Reanimated.View
+       就能接同一条 width 动画。收到一格宽（48）时圆角 24 正好画成一颗圆钮。 */
+    <Reanimated.View style={[styles.headerCapsule, collabCapsuleGrowStyle]}>
+      {headerCapsuleContent}
+    </Reanimated.View>
   );
 
   return (
