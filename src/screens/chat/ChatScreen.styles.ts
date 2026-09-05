@@ -172,22 +172,46 @@ export function createChatStyles(c: AppColors) {
     borderRadius: 4,
     alignSelf: 'center',
   },
-  /** 把手条本体：高度钉死成 COLLAB_SHEET_HANDLE_H（= gorhom 默认的 10+4+10），
-   *  聊天区高度按「当前档高 - 这个数」算，浮动一下就会差一截。 */
+  /** 把手条本体：高度钉死成 COLLAB_SHEET_HANDLE_H（= gorhom 默认的 10+4+10）。
+   *  gorhom 拿它的 onLayout 高度当 handleHeight（内容盒的排布起点、拖拽手势的命中区都按它算），
+   *  而消息区的顶部留白也是同一个数，所以它不能随内容浮动。
+   *  这一层**必须保持透明**：内容现在就在它背后透出来，铺任何底色都等于把改动整个抵消掉。 */
   collabSheetHandleBar: { height: 24, paddingVertical: 10, justifyContent: 'center' },
   /** sheet 里聊天区的容器。**刻意不用 flex:1** —— 高度由 ChatScreen 按当前档位算好后
    *  显式下发（见 collabSheetChatHeight）。flex 会让它去跟父级的高度传递链纠缠，而那条链
    *  正是「视口比 sheet 高、滚不到底」的根子。 */
-  collabSheetContent: { width: '100%' },
-  /** 把手下沿那一条淡出：消息区滚上来的内容在这儿化开，而不是被 overflow 齐刷刷切一刀。
-   *  18pt —— 调参史：24 太长（过渡带拖泥带水）→ 12 又太短，配上压低的曲线后文字一出
-   *  切口就现形、观感退回硬裁剪。18 配 [0,0.35,1] 曲线：前 6pt 近实色、后 12pt 化开。 */
+  collabSheetContent: {
+    width: '100%',
+    /**
+     * 【顶进把手区】把内容盒的上沿从「把手下沿」推回 **sheet 顶沿**，数值 = COLLAB_SHEET_HANDLE_H。
+     *
+     * gorhom 的 body 是 column-reverse，BottomSheetContent 是排在把手**下面**的流内兄弟 ——
+     * 靠调高度是永远上不去的（只会往下长）。唯一的出路是负 marginTop 顶出去，而顶出去这段
+     * 会不会被裁掉，取决于 BottomSheetContent 的 overflow：v5.2.8 写死成
+     * `detached ? 'visible' : 'hidden'`。所以 sheet 那边必须传 detached（见 ChatScreen 里
+     * 那段注释），这两处是**一对**，改一处就废。
+     */
+    marginTop: -24,
+    /**
+     * 顶出去之后内容会盖到 sheet 的圆角和 hairline 上，裁剪因此改由这层自己做。
+     * 半径与 collabSheetBackground 同为 32，两层的弧才叠得住。
+     *
+     * 注意别把 shadowSheet 也搬进来：iOS 上 overflow:hidden 就是 masksToBounds，
+     * 会把投影一起裁没。面/投影仍留在 collabSheetBackground 那层。
+     */
+    overflow: 'hidden',
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+  },
+  /** sheet 顶沿往下那条淡出带：内容从顶沿起画，全靠它收口，所以它**盖住整个把手区**。
+   *  42 = 把手 24 + 把手下沿再化开 18（18 是 885647c 调定的长度，沿用）。
+   *  曲线见 ChatScreen 里 locations 那段注释：顶沿实色护圆角，握把下沿附近 0.75，42 处化净。 */
   collabSheetTopFade: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    height: 18,
+    height: 42,
   },
   /** 容器高度还没量出来那一帧的兜底：先撑满，别塌成 0 高。 */
   collabSheetContentFill: { flex: 1 },

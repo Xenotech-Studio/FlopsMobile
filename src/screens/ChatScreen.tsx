@@ -269,12 +269,15 @@ const WIDGET_ECHO_QUEUE_SOFT_MAX = 3;
 const IS_ANDROID = Platform.OS === 'android';
 
 /** 协同模式 sheet 的中/高两档（占 sheet 容器高度的比例）。
- *  聊天区高度就是「当前档高 - 把手高」（见 collabSheetSnapHeights / collabSheetChatHeight），
+ *  聊天区高度就是当前档高（见 collabSheetSnapHeights / collabSheetChatHeight），
  *  所以档位必须是我们自己定的像素、两处同源；分家一次，视口就整体差一截。 */
 const COLLAB_SHEET_MID_RATIO = 0.58;
 const COLLAB_SHEET_MAX_RATIO = 0.92;
-/** sheet 顶部把手那一条的高度。与 gorhom 默认握把等高（padding 10 + 指示条 4 + padding 10），
- *  同时用 handleStyle 把它钉死 —— 聊天区高度要拿「当前档高 - 把手高」算，这个数不能是猜的。 */
+/** sheet 顶部把手那一条的高度。与 gorhom 默认握把等高（padding 10 + 指示条 4 + padding 10）。
+ *
+ *  它现在**只是把手的高度**，不再从聊天区高度里扣掉：滚动内容已经顶进把手区、从 sheet
+ *  顶沿起画（见 collabSheetContent 的负 marginTop）。这个数改去当消息区的 headerHeight ——
+ *  也就是滚动内容的顶部留白基数，于是「静止时最上面那条消息落在哪」跟改动前一模一样。 */
 const COLLAB_SHEET_HANDLE_H = 24;
 /** 「sheet 位置还没报上来」的哨兵：任何真实屏高都够不着，钳制会把它按到最低档那一端。 */
 const COLLAB_SHEET_POSITION_UNSET = 1e6;
@@ -603,7 +606,9 @@ export function ChatScreen({
     const visible = collabKeyboardShown
       ? Math.min(maxH, collabSheetContainerHeight - collabKeyboardHeight)
       : collabSheetVisibleHeight;
-    return Math.max(0, visible - COLLAB_SHEET_HANDLE_H);
+    /* 不再扣把手高：内容盒的上沿已经被负 marginTop 顶回 sheet 顶沿（见 collabSheetContent），
+       所以它要的就是「当前档整档高」，扣了就会短一截、底下多出一条空带。 */
+    return Math.max(0, visible);
   }, [
     collabSheetContainerHeight,
     collabSheetSnapHeights,
@@ -1295,8 +1300,10 @@ export function ChatScreen({
     ),
     [collabSheetChromeStyle],
   );
-  /** 把手：只自渲染握把本体（**不要**在这层铺任何不透明的面 —— 会盖掉 sheet 圆角，
-   *  6ab8591 已经实测翻过一次车），外层容器高度仍是 collabSheetHandleBar 钉死的那份。 */
+  /** 把手：只自渲染握把本体。**这一层不能铺任何不透明的面** —— 两个理由，各翻过一次车：
+   *  ① 方角的面会盖掉 sheet 圆角（6ab8591 实测已回退）；
+   *  ② 滚动内容现在就从这层背后透上来，铺底色等于把「内容顶进把手区」整个抵消。
+   *  外层容器高度仍是 collabSheetHandleBar 钉死的那份（gorhom 拿它当 handleHeight）。 */
   const renderCollabSheetHandle = useCallback(
     () => (
       <View style={styles.collabSheetHandleBar}>
@@ -5631,8 +5638,11 @@ export function ChatScreen({
       onDismissComposer={dismissComposer}
       styles={styles}
       colors={colors}
-      /* 协同模式下消息区在 sheet 里：顶上没有 header 要让位，只留 sheet handle 的余量。 */
-      headerHeight={collabActive ? 0 : headerHeight}
+      /* 协同模式下消息区在 sheet 里，顶上没有 header 要让位 —— 但滚动内容现在是从 sheet
+         顶沿起画的（负 marginTop 顶进了把手区），得自己空出把手那一条，否则静止时最上面
+         那条消息会压在握把底下。给把手高 = 内容静止位置与改动前完全一致
+         （原来是「内容盒从把手下沿开始 + paddingTop 20」，现在是「从顶沿开始 + 24 + 20」）。 */
+      headerHeight={collabActive ? COLLAB_SHEET_HANDLE_H : headerHeight}
       scrollBottomPadding={scrollBottomPadding}
       wideChat={wideChat}
       historyOverlayBottomOverflow={insets.bottom + 32}
@@ -5951,6 +5961,25 @@ export function ChatScreen({
           /* 顶到 header 下沿为止：百分比档位按「header 以下」这块算，
              最高档也不会把 handle 藏到顶栏毛玻璃后面。 */
           topInset={headerHeight}
+          /**
+           * 【让滚动内容顶进把手区的那把钥匙】——这里要的**只是 overflow**。
+           *
+           * v5.2.8 里 BottomSheetContent 的裁剪写死成 `detached ? 'visible' : 'hidden'`，
+           * hosting container 同理。默认那条 hidden 正是「把手高度内完全看不到内容」的根子：
+           * body 是 column-reverse 的 flex 容器，BottomSheetContent 是排在把手**下面**的
+           * 流内兄弟，负 marginTop 顶上去的那 24pt 会被它齐刷刷裁掉。
+           *
+           * detached 在这个版本里只额外做一件事：closedDetentPosition 从 containerHeight
+           * 变成 containerHeight + bottomInset（useAnimatedDetents）。我们没传 bottomInset
+           * （默认 0），这一项恒等；且 enablePanDownToClose={false}、永不去 index -1，
+           * 关闭档位本来也用不上。除此之外全 lib 再无第二处读 detached —— 逐处 grep 确认过。
+           * 所以这里没有「把 sheet 变成悬浮卡片」的副作用，只是把两层裁剪打开。
+           *
+           * 顺带一个观感变化：hosting container 不再在 header 下沿把 sheet 切齐，过顶溶解
+           * 的那 20pt 里内容会探进顶栏毛玻璃后面。顶栏 zIndex:30 恒在其上，而这正是普通
+           * 聊天页「内容从顶栏底下滚过去」的样子 —— 溶解的终点本来就是那个页面。
+           */
+          detached
           enableDynamicSizing={false}
           enablePanDownToClose={false}
           /* 消息区是自带滚动的普通 ScrollView（Phase 0 抽出来时原样保留），不是
@@ -5965,8 +5994,10 @@ export function ChatScreen({
           keyboardBlurBehavior="restore"
           /* 面与把手都自渲染：溶解过渡要让这两样跟着进度淡出（见 collabSheetChromeStyle）。
              backgroundStyle 照旧传 —— gorhom 会把它拼进 style 交给下面这个组件，圆角 /
-             hairline / 投影全都原样生效。把手容器高度仍钉死在 collabSheetHandleBar 上：
-             聊天区高度是「当前档高 - 把手高」算出来的，这个数不能随内容浮动。 */
+             hairline / 投影全都原样生效 —— 面仍是这一层在画，圆角与投影都没搬家。
+             注意面画的圆角只管**面自己**：内容顶进把手区之后会盖到弧线上，那份裁剪归
+             collabSheetContent 自己做（同半径 32，两层弧叠住才看不出接缝）。
+             把手容器高度仍钉死在 collabSheetHandleBar 上，gorhom 拿它当 handleHeight。 */
           backgroundStyle={styles.collabSheetBackground}
           backgroundComponent={renderCollabSheetBackground}
           handleComponent={renderCollabSheetHandle}
@@ -5984,8 +6015,10 @@ export function ChatScreen({
             ]}
           >
             {chatMessageArea}
-            {/* 把手 → 消息区的淡出。消息区自带滚动、内容会一路顶到把手下沿被 overflow 硬切，
-                铺一条同色渐变让它化开（pointerEvents=none，不吃滚动手势）。
+            {/* 顶部淡出带。内容盒顶上去之后 top:0 就是 **sheet 顶沿**（不再是把手下沿），
+                所以这条带子现在整个盖住把手区：内容从 sheet 顶沿起画，靠它一路化开。
+                pointerEvents=none，不吃滚动手势；握把是把手层画的、在它之上（body 里
+                HandleContainer 排在 Content 之后 = 画在上面），所以握把不会被这层压住。
                 它也是 sheet 的「壳」的一部分：溶解时要跟着面一起淡掉，否则 sheet 都化没了
                 还剩一条 sheet 色的横带压在消息上。 */}
             <Reanimated.View
@@ -5994,11 +6027,15 @@ export function ChatScreen({
             >
               <LinearGradient
                 colors={collabSheetTopFadeGradient(colors)}
-                /* 中档回到 0.35：留出约三分之一带子的近实色平台，文字不会一出把手下沿就现形
-                   （0.2 那版平台几乎归零，观感退回硬裁剪）。带子挂在内容区里，top:0 就是把手
-                   下沿；再往上挪只能靠曲线，不能靠位移 —— 负 top 会被 BottomSheetContent 的
-                   overflow 裁掉，挂到把手层则会拿方角盖掉 sheet 圆角（6ab8591 实测翻车已回退）。 */
-                locations={[0, 0.35, 1]}
+                /* 三个停靠点落在 42pt 带子上的实际位置（alpha 取自 collabSheetTopFadeGradient
+                   的 [1, 0.75, 0]）：
+                     0     → y=0      顶沿实色，护住圆角与 hairline，内容不会溢到弧线上；
+                     0.38  → y≈16     刚过握把下沿（握把占 y=10..14），到这儿还有 0.75 的遮盖，
+                                      握把读得清楚，同时下半个把手区已经能透出内容；
+                     1     → y=42     化干净（= 原来的 24 把手 + 18 淡出带，总长不变）。
+                   于是原来那条硬切口所在的 y=24 处遮盖只剩约 0.52 —— 「把手高度内完全看不到
+                   内容」这条限制就是在这儿解开的。想再多露一点就把 0.38 往小调。 */
+                locations={[0, 0.38, 1]}
                 style={StyleSheet.absoluteFill}
                 start={{ x: 0.5, y: 0 }}
                 end={{ x: 0.5, y: 1 }}
