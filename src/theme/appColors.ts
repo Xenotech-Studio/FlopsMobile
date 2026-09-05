@@ -347,12 +347,16 @@ export function collabWorkspaceFadeGradient(c: AppColors): string[] {
  */
 export function collabSheetTopFadeGradient(c: AppColors): string[] {
   const bg = c.chatScreenBackground;
-  /* 中档 0.75 + location 0.35（见调用处）：**留一小段近实色的平台**，再往下平滑到透明。
-     调参史：0.85@0.45 太实（"看得出在淡"的位置被推到带子一半以下）→ 压成 0.7@0.2，
-     平台段几乎归零，结果走到另一头 —— 紧贴把手下沿那一两 pt 就已经透出七成，文字一出
-     切口就现形，观感回到"硬裁剪"。现在取中间：顶端仍是 alpha 1（切口那一行照旧洗干净），
-     往下约三分之一带子保持近实色，剩下三分之二匀速化开。 */
-  return [bg, rgbaFromHex(bg, 0.75), rgbaFromHex(bg, 0)];
+  /* 四段，配合调用处的 COLLAB_FADE_LOCATIONS = [0, 0.4, 0.7, 1]：
+       前两段**都是不透明底色** → 0..40% 是一段**真正平的实色平台**（不是"接近实色"）；
+       0.6@70% → 平台末端接上化开段，且中点压在 0.6 而不是线性的 0.5，
+                 意思是"先稳住再快速化掉"，字不会一出平台就现形；
+       0@100%  → 化干净。
+     调参史：上一版只有三段 [1, 0.75, 0]，alpha 从 y=0 就开始往下掉 —— **根本没有平台**，
+     实测反馈就是"渐变开始色不是纯色"、跟上面那条实色底座之间看得出割断。现在把平台做成
+     真的（两段同色），底座那一层因此也就多余了，一并删掉（少一层 = 少一条可能的接缝）。
+     平台的**绝对长度**由调用处按档位 scaleY 缩放：peek 16.8pt / mid 13.2 / max 9.6。 */
+  return [bg, bg, rgbaFromHex(bg, 0.6), rgbaFromHex(bg, 0)];
 }
 
 /** 工具卡片半折叠底部淡出 */

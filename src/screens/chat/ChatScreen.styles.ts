@@ -203,36 +203,17 @@ export function createChatStyles(c: AppColors) {
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
   },
-  /** 顶部淡出带的外层：只承载溶解透明度，高度取**最长那档**（peek 的 42 = 把手 24 + 化开 18）。
-   *  里头分两块 —— 恒定实色底座 + 按档位 scaleY 缩短的渐变本体，见下面两条与
-   *  ChatScreen 的 collabFadeScaleStyle。 */
-  collabSheetTopFadeLayer: {
+  /** 顶部淡出带：**整条**（实色平台 + 化开段）都从 sheet 顶沿 y=0 起画。
+   *  布局高度取最长那档（peek 的 42 = 把手 24 + 化开 18），其余档位靠 scaleY 往下缩，
+   *  transformOrigin:'top' 保证上沿钉死在顶沿、缩的是下沿。
+   *  平台长度是按比例给的（见 COLLAB_FADE_LOCATIONS），所以缩带子时平台跟着一起缩 ——
+   *  上一版拆出来的那条 5pt 固定底座就是废在这儿（各档实色段一样长），已删。 */
+  collabSheetTopFade: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     height: 42,
-  },
-  /** 恒定实色底座（COLLAB_FADE_SOLID_BASE = 5）：**不参与缩放**，任何档位下都护住 sheet
-   *  顶沿的 hairline 与圆角接缝。底色必须跟渐变第一段同源（都是 chatScreenBackground），
-   *  差一档就会在 y=5 处看到一条接缝。 */
-  collabSheetTopFadeBase: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 5,
-    backgroundColor: c.chatScreenBackground,
-  },
-  /** 渐变本体：接在底座下沿（top = 5），布局高度 37 = 42 - 5，也就是 peek 那档的长度。
-   *  档位靠 scaleY 往下缩，transformOrigin:'top' 保证缩的是下沿、上沿钉在底座下面不动 ——
-   *  「带子变短」在观感上就等于「渐变起点下移」。 */
-  collabSheetTopFade: {
-    position: 'absolute',
-    top: 5,
-    left: 0,
-    right: 0,
-    height: 37,
     transformOrigin: 'top',
   },
   /** 容器高度还没量出来那一帧的兜底：先撑满，别塌成 0 高。 */

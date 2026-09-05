@@ -293,17 +293,17 @@ const COLLAB_FADE_TOTAL_PEEK = 42;
 const COLLAB_FADE_TOTAL_MID = 33;
 const COLLAB_FADE_TOTAL_MAX = 24;
 /**
- * 带子最顶上这一小段**恒定实色、不参与缩放**：任何档位下都护住 sheet 顶沿的 hairline
- * 与圆角接缝那道线。
+ * 淡出带的形状（比例，与 collabSheetTopFadeGradient 的四段颜色一一对应）：
+ * **0..40% 是实色平台，40%..100% 化开**。
  *
- * 为什么 5pt 就够：内容本身**溢不出圆角**（collabSheetContent 自带 overflow:hidden +
- * 半径 32 的裁剪），所以这里要护的不是「内容跑到弧线外面」，而只是顶沿那道缝别贴着字。
- * 弧线内侧那片（y=5..32 的两个角）遮盖确实变弱了，但消息列是限宽 380 居中 + 左右
- * paddingHorizontal 的，正常排不到离屏幕边 15pt 以内，那块实际是空底。
+ * 关键在于平台是**比例**而不是固定像素 —— 整条带子按档位 scaleY 缩放时，平台的绝对长度
+ * 跟着一起伸缩：peek 0.4×42 ≈ 16.8pt / mid 0.4×33 ≈ 13.2 / max 0.4×24 ≈ 9.6。
+ * 上一版那条 5pt 固定底座正是错在这儿：任何档位下实色段一样长，"平台随档位变"就没了。
+ *
+ * 落到握把（y=10..14）上：peek 档整个握把坐在实色平台里；到 max 档平台在 9.6 就结束，
+ * 握把背后从 0.98 掉到约 0.76，再往下 y=20 只剩约 0.33 —— 把手区下半段透出内容。
  */
-const COLLAB_FADE_SOLID_BASE = 5;
-/** 渐变本体的布局高度 = 最长那档减去实色底座；scaleY 从这个长度往下缩。 */
-const COLLAB_FADE_GRADIENT_H = COLLAB_FADE_TOTAL_PEEK - COLLAB_FADE_SOLID_BASE;
+const COLLAB_FADE_LOCATIONS = [0, 0.4, 0.7, 1];
 /** 「sheet 位置还没报上来」的哨兵：任何真实屏高都够不着，钳制会把它按到最低档那一端。 */
 const COLLAB_SHEET_POSITION_UNSET = 1e6;
 /**
@@ -1335,6 +1335,9 @@ export function ChatScreen({
    * 而 locations 是**按比例**给的，整条等比缩短跟改 locations 完全等价 —— 何况 locations
    * 是 LinearGradient 的普通 prop，本来就没法逐帧动（改它要重渲染，只能瞬跳）。
    * transformOrigin:'top'（在样式里）让它贴着顶沿缩，缩的是下沿。
+   *
+   * 「实色平台跟着一起缩」也是靠这一条：平台在 locations 里占 0..40%，等比缩放之后它的
+   * 绝对长度自然随档位变（见 COLLAB_FADE_LOCATIONS）。
    */
   const collabFadeScaleStyle = useAnimatedStyle(() => {
     /* 几何还没量到 / 三档退化成不严格递增时，退回最长那档（= peek 的现状观感）。 */
@@ -1351,10 +1354,8 @@ export function ChatScreen({
       [COLLAB_FADE_TOTAL_MAX, COLLAB_FADE_TOTAL_MID, COLLAB_FADE_TOTAL_PEEK],
       Extrapolation.CLAMP,
     );
-    /* 实色底座不参与缩放，所以缩的是「总长减底座」那一截。 */
-    return {
-      transform: [{ scaleY: (total - COLLAB_FADE_SOLID_BASE) / COLLAB_FADE_GRADIENT_H }],
-    };
+    /* 带子布局高度就是最长那档，所以比值直接是「这一档 / peek」。 */
+    return { transform: [{ scaleY: total / COLLAB_FADE_TOTAL_PEEK }] };
   });
   /** sheet 的面：把 gorhom 传进来的 backgroundStyle 原样接住，只额外挂上溶解透明度。 */
   const renderCollabSheetBackground = useCallback(
@@ -6085,31 +6086,25 @@ export function ChatScreen({
                 它也是 sheet 的「壳」的一部分：溶解时要跟着面一起淡掉，否则 sheet 都化没了
                 还剩一条 sheet 色的横带压在消息上。 */}
             <Reanimated.View
-              style={[styles.collabSheetTopFadeLayer, collabSheetChromeStyle]}
+              style={[styles.collabSheetTopFade, collabSheetChromeStyle, collabFadeScaleStyle]}
               pointerEvents="none"
             >
-              {/* 恒定实色底座：唯一不随档位缩短的一段，护住顶沿那道 hairline 接缝。 */}
-              <View style={styles.collabSheetTopFadeBase} />
-              {/* 渐变本体：接在底座下沿，按档位 scaleY 缩短（见 collabFadeScaleStyle）。 */}
-              <Reanimated.View style={[styles.collabSheetTopFade, collabFadeScaleStyle]}>
-                <LinearGradient
-                  colors={collabSheetTopFadeGradient(colors)}
-                  /* 停靠点是**比例**，所以整条随 scaleY 等比压缩，三档共用这一份曲线。
-                     alpha 取自 collabSheetTopFadeGradient 的 [1, 0.75, 0]，落到实际 y 上
-                     （y 从 sheet 顶沿量起，含 5pt 实色底座）：
-                       peek（总长 42）：实色 0..5 → 0.75@y≈16 → 化净 y=42
-                       mid （总长 33）：实色 0..5 → 0.75@y≈13 → 化净 y=33
-                       max （总长 24）：实色 0..5 → 0.75@y≈11 → 化净 y=24
-                     握把占 y=10..14：peek 那档它整段坐在 0.75 上、读得最实；到 max 档遮盖
-                     跨过握把时已经从 0.75 掉到约 0.4，把手区因此「基本透出内容」。
-                     想整体多露一点就把 0.3 往小调，想改各档露多少去调三个 TOTAL 常量。 */
-                  locations={[0, 0.3, 1]}
-                  style={StyleSheet.absoluteFill}
-                  start={{ x: 0.5, y: 0 }}
-                  end={{ x: 0.5, y: 1 }}
-                  pointerEvents="none"
-                />
-              </Reanimated.View>
+              <LinearGradient
+                colors={collabSheetTopFadeGradient(colors)}
+                /* 停靠点是**比例**，所以整条（含实色平台）随 scaleY 等比压缩，三档共用这
+                   一份曲线。落到实际 y 上（y 从 sheet 顶沿量起）：
+                     peek（总长 42）：实色 0..16.8 → 0.6@y≈29.4 → 化净 y=42
+                     mid （总长 33）：实色 0..13.2 → 0.6@y≈23.1 → 化净 y=33
+                     max （总长 24）：实色 0..9.6  → 0.6@y≈16.8 → 化净 y=24
+                   于是「改动前把手下沿」那条线（y=24）上的遮盖：peek 还有约 0.77，
+                   max 已经归零 —— 驻留越靠上，把手区透出的内容越多。
+                   想改各档露多少调三个 TOTAL 常量；想改平台占比调 COLLAB_FADE_LOCATIONS。 */
+                locations={COLLAB_FADE_LOCATIONS}
+                style={StyleSheet.absoluteFill}
+                start={{ x: 0.5, y: 0 }}
+                end={{ x: 0.5, y: 1 }}
+                pointerEvents="none"
+              />
             </Reanimated.View>
           </View>
         </BottomSheet>
