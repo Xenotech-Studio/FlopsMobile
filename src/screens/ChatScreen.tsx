@@ -294,6 +294,12 @@ const COLLAB_SHEET_DISMISS_COMMIT = 0.5;
  *  展开动画从「一格宽」（= 只剩 ⋯ 那颗，跟原来的圆钮同宽）长到这个数。 */
 const HEADER_CAPSULE_WIDTH = HEADER_CIRCLE_BTN_SIZE * 2 + StyleSheet.hairlineWidth;
 
+/** 三档里的最高档下标（peek / mid / max）。 */
+const COLLAB_SHEET_MAX_INDEX = 2;
+/** 「从全屏收回 sheet」这段倒放的时长。跟 gorhom 自己从最高档收到 mid 的时间量级对齐，
+ *  两条动画（sheet 位置 / progress 派生的那堆淡入）看起来才是同一件事。 */
+const COLLAB_REOPEN_MS = 280;
+
 
 /** High-resolution time when available (e.g. Hermes), else `Date.now()`. Avoids bare `performance` (not in RN TS libs). */
 function perfNowMs(): number {
@@ -1032,6 +1038,27 @@ export function ChatScreen({
   const collabDismissProgress = useSharedValue(0);
   /** 松手已判定为「要关」：补完动画接管进度，逐帧那条 reaction 不再插手。 */
   const collabDismissCommitted = useSharedValue(false);
+  /**
+   * 「从关闭态点入口重开」的那一帧：sheet 要无动画地直接落在最高档（= 用户此刻看到的全屏），
+   * 下一帧再把 index 改回 mid，靠那次 prop 变化收下来 —— 倒放。
+   * 只在这条用户主动重开的路上为真；SSE 带来协同数据那种首次进入仍走 gorhom 默认的
+   * 「从底部弹上来」，那是正常的 sheet 入场，不该被改。
+   */
+  const [collabReopening, setCollabReopening] = useState(false);
+  const reopenRafRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!collabReopening) return;
+    /* 两帧后再放手：第一帧 sheet 刚挂上、容器高度未必量到，太早改 index 会被 gorhom
+       当成还没 layout 而排队/丢掉。 */
+    const raf1 = requestAnimationFrame(() => {
+      const raf2 = requestAnimationFrame(() => setCollabReopening(false));
+      reopenRafRef.current = raf2;
+    });
+    reopenRafRef.current = raf1;
+    return () => {
+      if (reopenRafRef.current != null) cancelAnimationFrame(reopenRafRef.current);
+    };
+  }, [collabReopening]);
   /**
    * 开/关协同布局：**先武装钉底窗口，再切状态**。
    *
@@ -5623,14 +5650,33 @@ export function ChatScreen({
   );
   /** 点协同入口 → 原样开回协同布局。 */
   const openCollabWorkspace = () => {
-    /* 溶解进度先归零，否则 sheet 与工作区会带着「已经化没了」的透明度挂回来。 */
-    collabDismissProgress.value = 0;
-    collabDismissCommitted.value = false;
-    /* 档位一并回到 mid：sheet 挂载时 index=1，档位 state 不跟着回去的话，
-       聊天区高度会先按关掉前那一档算一帧。 */
-    setCollabSheetIndex(1);
+    /**
+     * 打开 = 关闭的倒放，所以**进度不能瞬间归零**，要让它从 1 连续退回 0：
+     * 工作区淡入 + 底色插值回抽屉色、sheet 的面/把手/顶部淡出带淡入、胶囊缩回一格，
+     * 全都是既有的 progress 派生量，倒着跑一遍就行。
+     *
+     * 期间把 committed 闩上：盯 sheet 位置那条 reaction 会按位置反算进度，sheet 一挂出来
+     * 就在最高档、算出来是 0，会把这段动画瞬间抹平。动画跑完再交还给它（那时 sheet 停在
+     * mid，位置反算同样是 0，接得上、不跳）。
+     */
+    collabDismissCommitted.value = true;
+    /* 档位 state 先跟到最高档：sheet 这次是「从全屏收下来」，聊天区高度得按最高档起算，
+       否则第一帧会用 mid 的高度。收到 mid 后 onAnimate/onChange 会把它带回 1。 */
+    setCollabSheetIndex(COLLAB_SHEET_MAX_INDEX);
+    /* 让 sheet 无动画地直接出现在最高档（animateOnMount=false + index=max），
+       下一帧再把 index 改回 mid —— 那次 prop 变化本身就是一段向下收的动画。
+       不这么做的话 gorhom 会走默认入场：从屏幕底部弹上来，跟「倒放」是反的。 */
+    setCollabReopening(true);
     /* 走 settled 版：开回来同样是一次重挂，首帧也得先按住别画。 */
     setCollabDismissedSettled(false);
+    collabDismissProgress.value = withTiming(
+      0,
+      { duration: COLLAB_REOPEN_MS },
+      (finished) => {
+        'worklet';
+        if (finished) collabDismissCommitted.value = false;
+      },
+    );
   };
   /**
    * 协同入口那一格。两条路的按压反馈来源不同：
@@ -5788,7 +5834,11 @@ export function ChatScreen({
         <BottomSheet
           ref={collabSheetRef}
           snapPoints={collabSheetSnapPoints}
-          index={1}
+          /* 常态是 mid。从关闭态重开时先给最高档 + animateOnMount=false（无动画直接落在
+             用户此刻看到的「全屏」位置），两帧后 collabReopening 归 false，index 变回 mid
+             —— 那次 prop 变化就是「从全屏收下来」的动画本体，正好是关闭的倒放。 */
+          index={collabReopening ? COLLAB_SHEET_MAX_INDEX : 1}
+          animateOnMount={!collabReopening}
           /* 档位变化 → 聊天区高度要跟着变（见 collabSheetChatHeight）。
              onAnimate 给的是**目标**档，动画一开始就把 ScrollView 调到位（展开时新露出来的
              那块当场就有内容）；onChange 是收尾确认，兜住拖拽甩到别档的情况。 */
