@@ -32,6 +32,8 @@ import {
 import LinearGradient from 'react-native-linear-gradient';
 import Reanimated, {
   Easing,
+  Extrapolation,
+  interpolate,
   interpolateColor,
   runOnJS,
   useAnimatedReaction,
@@ -125,7 +127,7 @@ import {
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { BlurHeaderBackground } from '../components/BlurHeaderBackground';
-import { AnimatedBouncyGlassCard, BouncyGlassCard } from '../components/BouncyGlassCard';
+import { AnimatedBouncyGlassCard } from '../components/BouncyGlassCard';
 import { HEADER_CIRCLE_BTN_SIZE, bottomInsetTotal } from '../theme/layout';
 import { getBottomInsetSync } from '../utils/screenInfo';
 import {
@@ -287,6 +289,10 @@ const COLLAB_SHEET_DISMISS_TRAVEL = 20;
  * 都不切状态 —— 取消权全程在手里，往回拖就原样化回去。0.5 = 化过一半，判定跟眼睛看到的一致。
  */
 const COLLAB_SHEET_DISMISS_COMMIT = 0.5;
+
+/** 关闭态胶囊的满宽 = 两格（各取胶囊高，图标才落在末端半圆圆心上）+ 中缝那条 hairline。
+ *  展开动画从「一格宽」（= 只剩 ⋯ 那颗，跟原来的圆钮同宽）长到这个数。 */
+const HEADER_CAPSULE_WIDTH = HEADER_CIRCLE_BTN_SIZE * 2 + StyleSheet.hairlineWidth;
 
 
 /** High-resolution time when available (e.g. Hermes), else `Date.now()`. Avoids bare `performance` (not in RN TS libs). */
@@ -1202,12 +1208,31 @@ export function ChatScreen({
     ),
     [styles, collabSheetChromeStyle],
   );
-  /** 关闭态 header 入口的淡入：跟溶解首尾相接，不要凭空蹦出来。 */
+  /**
+   * 关闭态 header 操作簇的「展开」进度 0→1，跟溶解首尾相接：溶解一化完、状态一翻，
+   * 右上角就从**一颗 ⋯ 圆钮长成一枚两格胶囊**，而不是硬切一下蹦出来。
+   *
+   * 只有一个量，派生两件事（见 collabCapsuleGrowStyle / collabEntryStyle）：
+   *  - 胶囊宽度：一格 → 两格。右缘被 header 的 space-between 钉住不动，所以是「向左长出来」；
+   *    内容靠右排 + contentView 自带圆角裁剪（BouncyGlassCard 的 applyCornerShape），
+   *    于是左边那格是被**逐渐揭开**的，不是凭空出现。
+   *  - 协同入口那格的图标/角标：宽度先走一段再淡入，免得图标悬在还没长到位的胶囊外面。
+   */
   const collabEntryOpacity = useSharedValue(0);
   useEffect(() => {
-    collabEntryOpacity.value = withTiming(collabDismissed ? 1 : 0, { duration: 180 });
+    collabEntryOpacity.value = withTiming(collabDismissed ? 1 : 0, { duration: 240 });
   }, [collabDismissed, collabEntryOpacity]);
-  const collabEntryStyle = useAnimatedStyle(() => ({ opacity: collabEntryOpacity.value }));
+  const collabCapsuleGrowStyle = useAnimatedStyle(() => ({
+    width: interpolate(
+      collabEntryOpacity.value,
+      [0, 1],
+      [HEADER_CIRCLE_BTN_SIZE, HEADER_CAPSULE_WIDTH],
+      Extrapolation.CLAMP,
+    ),
+  }));
+  const collabEntryStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(collabEntryOpacity.value, [0.35, 1], [0, 1], Extrapolation.CLAMP),
+  }));
   /* 键盘开合：协同模式下聊天区高度要按键盘上沿截断（见 collabSheetChatHeight）。
      只在协同模式挂监听，普通聊天页不用为此多两个订阅。 */
   useEffect(() => {
@@ -5649,13 +5674,13 @@ export function ChatScreen({
        会跟着一起形变），跟其它玻璃按钮一个体感。各格因此不再自己缩（见 collabEntryNode）。
        它自带的 tap recognizer 是 cancelsTouchesInView=NO + simultaneous，不挡各格的点击；
        卡片级 onGlassPress 我们不接，落在格子上的 tap 各格自己处理。 */
-    <BouncyGlassCard
-      style={styles.headerGlassCapsule}
+    <AnimatedBouncyGlassCard
+      style={[styles.headerGlassCapsule, collabCapsuleGrowStyle]}
       cornerRadius={HEADER_CIRCLE_BTN_SIZE / 2}
       interactive
     >
       {headerCapsuleContent}
-    </BouncyGlassCard>
+    </AnimatedBouncyGlassCard>
   ) : (
     <View style={styles.headerCapsule}>{headerCapsuleContent}</View>
   );

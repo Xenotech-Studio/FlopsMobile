@@ -342,6 +342,10 @@ export function createChatStyles(c: AppColors) {
     flexDirection: 'row',
     alignItems: 'center',
     height: HEADER_CIRCLE_BTN_SIZE,
+    /** 靠右排。展开动画是把胶囊**宽度**从一格拉到两格，而胶囊的右缘被 header 的
+     *  space-between 钉死不动 —— 内容靠右，收窄时裁掉的才是左边那格（协同入口），
+     *  ⋯ 始终待在原处；靠左排的话会反过来把 ⋯ 裁掉。满宽时两者等价。 */
+    justifyContent: 'flex-end',
   },
   /** 胶囊里的一格：比圆钮窄，两格并排才不至于太胖；不带底色，底色归胶囊。 */
   headerCapsuleSegment: {
