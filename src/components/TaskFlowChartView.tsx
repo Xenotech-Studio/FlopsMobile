@@ -19,7 +19,6 @@ import {
   readFlowViewport,
   saveFlowViewport,
 } from '../utils/flowViewportStore';
-import { normalizeServerUrl, DEFAULT_SERVER_URL } from '../config';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -55,42 +54,6 @@ import {
 /** 与 Web `EditableNode.css` `.editable-node` width */
 export const FLOW_NODE_WIDTH = 150;
 /** 无换行时的最小卡片高度（与 Web padding 公式一致） */
-
-/**
- * 【临时调试】流程图诊断日志。
- *
- * RN 0.84 起 console.log 不再进 Metro 终端（"JavaScript logs have moved" → DevTools），
- * 真机排查时开发者拿不到。所以除了照常 console.log，再 fire-and-forget 发一份到服务端的
- * `/api/debug/mobile_log`，落成文件后可由 GET 读回。
- *
- * 只在 __DEV__ 下发；失败完全静默（诊断日志不该反过来影响被诊断的功能）。
- * **排查完请连同服务端那两个 debug 端点一起删掉。**
- */
-/** 实例序号：同一时刻可能有多个流程图挂着（工作区一个、项目页一个），
- *  日志经独立 fetch 上报、时间戳还是服务端给的 —— 不带身份就会被误读成同一条链。 */
-let flowInstanceSeq = 0;
-export function nextFlowInstanceTag(): string {
-  flowInstanceSeq += 1;
-  return `#${flowInstanceSeq}`;
-}
-
-function flowLog(msg: string): void {
-  if (!__DEV__) return;
-  console.log(msg);
-  try {
-    /* 固定用默认网关：这条通道只在 __DEV__ 下走，且诊断的是布局几何、不涉及账号数据，
-       不值得为它把 session 一路传进这个纯展示组件。 */
-    const base = normalizeServerUrl(DEFAULT_SERVER_URL);
-    void fetch(`${base}api/debug/mobile_log`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lines: [msg] }),
-    }).catch(() => {});
-  } catch {
-    /* 静默 */
-  }
-}
-
 const MIN_CARD_HEIGHT = 40;
 const FONT_SIZE = 14;
 const LINE_HEIGHT = 21; // 1.5em
@@ -613,9 +576,6 @@ export function TaskFlowChartView({
 }: TaskFlowChartViewProps) {
   const { colors, isDark } = useAppTheme();
   const canvasBg = backgroundColor ?? colors.chatScreenBackground;
-  /** 本实例的日志身份（见 nextFlowInstanceTag）。用 ref 读而不是解构成 const ——
-   *  后者会被 exhaustive-deps 当成响应式值，逼所有日志所在的 hook 都加一条无意义依赖。 */
-  const tagRef = useRef(nextFlowInstanceTag());
   const choreRegionFill = isDark ? CHORE_REGION_FILL_DARK : CHORE_REGION_FILL_LIGHT;
   /** 与 Web 画布边线浅色 #b1b1b7、深色 #3e3e3e 一致 */
   const choreRegionStroke = isDark ? '#3e3e3e' : WEB.edge;
@@ -676,8 +636,8 @@ export function TaskFlowChartView({
    *
    * 两个后果，我们两个都踩到了：
    *
-   * 1. JS 线程上「写完立刻读」必然读到写之前的值 —— 探针日志里那条
-   *    `restore-applied readback scale=1 tx=41 ty=337` 就是这么来的，不是"另一个实例"。
+   * 1. JS 线程上「写完立刻读」必然读到写之前的值 —— 想验证"赋值有没有生效"，只能在
+   *    UI 线程的 worklet 里读。
    * 2. 更要命：任何「JS 线程读-改-写」都会拿**过期值**算出结果、再排到别人的写入
    *    后面，把刚恢复/fit 好的视口整个覆盖掉。applyClamp 原来就是这么干的，
    *    它把 restore 写的 (-1413.8, -1257.2) 换成了拿旧值 (41,337) 钳出来的 (0,0)
@@ -687,23 +647,14 @@ export function TaskFlowChartView({
    * translate 还没换"的中间帧），也天然跟手势 / clamp 的写入排在同一条队列上。
    */
   const applyViewportOnUI = useCallback(
-    (s: number, tx: number, ty: number, minScale: number, label: string) => {
-      runOnUI(
-        (nextScale: number, nextTx: number, nextTy: number, nextMin: number, tag: string) => {
-          'worklet';
-          scale.value = nextScale;
-          translateX.value = nextTx;
-          translateY.value = nextTy;
-          minPinchScale.value = nextMin;
-          if (tag) {
-            /* 读回探针只能在 UI 线程做 —— JS 侧读不到刚排队的写入（见上）。 */
-            runOnJS(flowLog)(
-              `[flowchart]${tag} applied scale=${scale.value}` +
-                ` tx=${translateX.value} ty=${translateY.value}`,
-            );
-          }
-        },
-      )(s, tx, ty, minScale, label);
+    (s: number, tx: number, ty: number, minScale: number) => {
+      runOnUI((nextScale: number, nextTx: number, nextTy: number, nextMin: number) => {
+        'worklet';
+        scale.value = nextScale;
+        translateX.value = nextTx;
+        translateY.value = nextTy;
+        minPinchScale.value = nextMin;
+      })(s, tx, ty, minScale);
     },
     [scale, translateX, translateY, minPinchScale],
   );
@@ -783,12 +734,6 @@ export function TaskFlowChartView({
         maxY: minY + effViewportH / cached.scale + m,
       };
       const showsSomething = nodesDraw.some((n) => rectsOverlap(nodeOuterBounds(n), rect));
-      if (__DEV__) {
-        flowLog(
-          `[flowchart]${tagRef.current} restore key=${viewportCacheKey} scale=${cached.scale}` +
-            ` tx=${cached.tx} ty=${cached.ty} showsNodes=${showsSomething}`,
-        );
-      }
       if (showsSomething) {
         applyViewportOnUI(
           cached.scale,
@@ -796,7 +741,6 @@ export function TaskFlowChartView({
           cached.ty,
           /* 恢复值可能低于捏合下限（大图），放宽下限否则一捏就被弹回去。 */
           Math.min(MIN_FLOW_SCALE, cached.scale),
-          __DEV__ ? `${tagRef.current} restore` : '',
         );
         lastViewportRef.current = { scale: cached.scale, tx: cached.tx, ty: cached.ty };
         viewportOwnedRef.current = true;
@@ -828,7 +772,6 @@ export function TaskFlowChartView({
       ty,
       /* fit 比常规捏合下限还小（大图）时，把下限放宽到 fit —— 否则捏一下就弹回去。 */
       Math.min(MIN_FLOW_SCALE, s),
-      __DEV__ ? `${tagRef.current} fit` : '',
     );
     visibleRectQuantizedKeyRef.current = '';
     /**
@@ -840,12 +783,6 @@ export function TaskFlowChartView({
      * 没有缓存的项目每次进来重新 fit 即可，本来就是期望行为。
      */
     lastViewportRef.current = { scale: s, tx, ty };
-    if (__DEV__) {
-      flowLog(`[flowchart]${tagRef.current} fit vp=${effViewportW}x${effViewportH} svg=${svgW}x${svgH}` +
-          ` -> scale=${s} tx=${tx} ty=${ty}` +
-          ` finite=${Number.isFinite(s) && Number.isFinite(tx) && Number.isFinite(ty)}`,
-      );
-    }
   }, [
     isBuilding,
     chartError,
@@ -925,27 +862,19 @@ export function TaskFlowChartView({
   useEffect(() => {
     canvasW.value = svgW;
     canvasH.value = svgH;
-    if (__DEV__) flowLog(`[flowchart]${tagRef.current} canvas svgW=${svgW} svgH=${svgH}`);
   }, [svgW, svgH, canvasW, canvasH]);
 
   useEffect(() => {
     vpW.value = effViewportW;
     vpH.value = effViewportH;
-    if (__DEV__) {
-      flowLog(`[flowchart]${tagRef.current} effViewport w=${effViewportW} h=${effViewportH}` +
-          ` (measured ${viewport.w}x${viewport.h}, win ${win.width}x${win.height},` +
-          ` insets top=${topInset} bottom=${bottomInset})`,
-      );
-    }
-  }, [effViewportW, effViewportH, vpW, vpH, viewport.w, viewport.h, win.width, win.height, topInset, bottomInset]);
+  }, [effViewportW, effViewportH, vpW, vpH]);
 
   useEffect(() => {
     visibleRectQuantizedKeyRef.current = '';
   }, [nodesDraw, edgesDraw]);
 
-  /* 诊断：裁剪矩形每次真正变化时打一条（已被 visibleRectQuantizedKeyRef 节流，不会刷屏）。 */
   const publishVisibleWorldRect = useCallback(
-    (minX: number, minY: number, vw: number, vh: number, s: number, rawTx = 0, rawTy = 0) => {
+    (minX: number, minY: number, vw: number, vh: number, s: number) => {
       const safeS = s < 0.0001 ? 0.0001 : s;
       const marginWorld = 120 / safeS;
       const maxX = minX + vw;
@@ -965,12 +894,6 @@ export function TaskFlowChartView({
         maxX: maxX + marginWorld,
         maxY: maxY + marginWorld,
       };
-      if (__DEV__) {
-        flowLog(`[flowchart]${tagRef.current} visibleRect x=[${Math.round(rect.minX)},${Math.round(rect.maxX)}]` +
-            ` y=[${Math.round(rect.minY)},${Math.round(rect.maxY)}] scale=${s}` +
-            ` rawTx=${Math.round(rawTx)} rawTy=${Math.round(rawTy)}`,
-        );
-      }
       setVisibleWorldRect(rect);
     },
     []
@@ -988,25 +911,14 @@ export function TaskFlowChartView({
         vw: w / safe,
         vh: h / safe,
         s: safe,
-        rawTx: translateX.value,
-        rawTy: translateY.value,
       };
     },
     (curr) => {
       if (curr.vw <= 0 || curr.vh <= 0) return;
-      /* 探针：把 worklet 侧真正读到的原始 shared value 一并带出来 —— 判断到底是
-         "反应式读到了旧值"还是"值真的被改回去了"。 */
-      runOnJS(publishVisibleWorldRect)(curr.minX, curr.minY, curr.vw, curr.vh, curr.s, curr.rawTx, curr.rawTy);
+      runOnJS(publishVisibleWorldRect)(curr.minX, curr.minY, curr.vw, curr.vh, curr.s);
     },
     [publishVisibleWorldRect]
   );
-
-  useEffect(() => {
-    if (!__DEV__) return;
-    flowLog(`[flowchart]${tagRef.current} model tasks=${tasks.length} nodesDraw=${nodesDraw.length}` +
-        ` edgesDraw=${edgesDraw.length} isBuilding=${isBuilding} chartError=${chartError ? 'YES' : 'no'}`,
-    );
-  }, [tasks.length, nodesDraw, edgesDraw, isBuilding, chartError]);
 
   const visibleCardNodes = useMemo(() => {
     const list = nodesDraw.filter((n) => !n.isChoreArea);
@@ -1028,24 +940,6 @@ export function TaskFlowChartView({
       )
     );
   }, [choreRegionsDraw, visibleWorldRect]);
-
-  /* 诊断：最终真正画出去的规模（Svg 尺寸 + 裁剪前后的节点/连线数）。 */
-  useEffect(() => {
-    if (!__DEV__) return;
-    flowLog(`[flowchart]${tagRef.current} draw slot=${Math.max(1, effViewportW)}x${Math.max(1, effViewportH)}` +
-        ` visibleNodes=${visibleCardNodes.length}/${nodesDraw.length}` +
-        ` visibleEdges=${visibleEdges.length}/${edgesDraw.length}` +
-        ` rect=${visibleWorldRect ? 'set' : 'null'}`,
-    );
-  }, [
-    effViewportW,
-    effViewportH,
-    visibleCardNodes.length,
-    nodesDraw.length,
-    visibleEdges.length,
-    edgesDraw.length,
-    visibleWorldRect,
-  ]);
 
   /**
    * 画布/视口变化后把平移收回合法范围。**整个读-改-写都必须在 UI 线程做**（见
@@ -1211,7 +1105,6 @@ export function TaskFlowChartView({
   const onCanvasLayout = useCallback(
     (e: { nativeEvent: { layout: { width: number; height: number } } }) => {
       const { width, height } = e.nativeEvent.layout;
-      if (__DEV__) flowLog(`[flowchart]${tagRef.current} onLayout w=${width} h=${height}`);
       setViewport({ w: width, h: height });
     },
     []
