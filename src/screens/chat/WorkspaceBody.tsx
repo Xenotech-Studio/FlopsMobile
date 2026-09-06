@@ -9,9 +9,13 @@
  *    内容显示暂不支持，但页面在序列里 —— 桌面端切过去时手机端跟着停到占位页，滑一下能滑回文档。
  * 顶部的胶囊指示器 = 当前页展开成「图标 + 名字」，其余收成小圆点（可点直达）。
  *
- * 边界：**只读 + 纯本地切换**。用户横滑/点圆点只改本地选中，不 POST /cowriter_layout
- * 抢桌面端的焦点。服务端换焦点时（agent 又改了另一篇 / 桌面端切了 mode），本地跟随
- * (activeMode, activeId) 二元组跳过去。
+ * 边界：**只读**（不编辑文档内容），但切换是**双向**的：
+ *  - 服务端换焦点（agent 又改了另一篇 / 桌面端切了 mode）→ 本地跟随 (activeMode, activeId)
+ *    二元组跳过去（useFollowedSelection）；
+ *  - 用户在这儿横滑 / 点圆点 → 先本地切显示，再经 onSelectTab 回写服务端（ChatScreen 发的
+ *    POST /cowriter_layout），于是桌面端下次加载会话时停在同一处、手机端重开也驻留。
+ * 早期版本刻意"纯本地不回写"，怕抢桌面端焦点；后来明确了：**用户主动划**就是明确的切换
+ * 意图，该回写；要避免的只是"被动跟随也回写"那种回弹。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -61,6 +65,12 @@ export type WorkspaceBodyProps = {
    * 至今在 tsc 基线里挂着一条 TS2769），而这个钩子是有类型的、语义也更准。
    */
   onUserTouch?: () => void;
+  /**
+   * 用户**主动**切走马灯（横滑翻页 / 点圆点）时回调，带上目标 tab。
+   * 只在用户操作时发；服务端推来的跟随（activeKey 变化经 useFollowedSelection 落到本地）
+   * **不发** —— 否则会把桌面端的切换原样回弹给服务端，变成一次无意义的写、还平白 +1 seq。
+   */
+  onSelectTab?: (tab: CollabTabRef) => void;
   /** 顶部 header 高度：内容从它下方开始（header 是绝对定位浮层）。 */
   topInset: number;
   /**
@@ -123,6 +133,7 @@ export function WorkspaceBody({
   layout,
   pending,
   onUserTouch,
+  onSelectTab,
   topInset,
   bottomInset,
   viewportBottomInset,
@@ -137,9 +148,22 @@ export function WorkspaceBody({
 
   const tabs = useMemo(() => collabTabs(layout), [layout]);
   const tabKeys = useMemo(() => tabs.map((t) => t.key), [tabs]);
+  /** tabs 的 ref 镜像：setSelectedKey 要按 key 反查 tab，但不该把 tabs 列进它的依赖 ——
+   *  布局每变一次就重建回调，PagerView / 指示器跟着白重渲染一轮。 */
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
   /** 服务端此刻的焦点（mode + id 二元组压成的 key）。 */
   const activeKey = useMemo(() => activeCollabTabKey(layout), [layout]);
-  const [selectedKey, setSelectedKey] = useFollowedSelection(activeKey, tabKeys);
+  const [selectedKey, setSelectedKeyRaw] = useFollowedSelection(activeKey, tabKeys);
+  /** 用户主动切：先本地切显示（跟手、不等网络），再把意图回写给服务端。 */
+  const setSelectedKey = useCallback(
+    (key: string) => {
+      setSelectedKeyRaw(key);
+      const tab = tabsRef.current.find((t) => t.key === key);
+      if (tab) onSelectTab?.(tab);
+    },
+    [setSelectedKeyRaw, onSelectTab],
+  );
   const selectedIndex = Math.max(
     0,
     tabs.findIndex((t) => t.key === selectedKey),

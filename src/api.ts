@@ -970,6 +970,51 @@ export async function placeConversation(
 }
 
 /**
+ * 回写协同布局：POST /api/conversations/{cid}/cowriter_layout
+ *
+ * 移动端只用到两种写法（服务端那个端点还支持 cocoder 的文件 tab / 终端 / safe_mode 等，
+ * 手机端不碰）：
+ *  1. **同 mode 内换焦点项**：`{layout_mode:'cowriter', doc_ids:[...], active_doc_id}`。
+ *     `doc_ids` **必须带全量列表** —— 服务端拿它整体覆盖该桶，只发 active_doc_id 的话
+ *     其余已打开文档会被当成"用户关掉了"而删除。
+ *  2. **只换 mode**：`{layout_mode, mode_only:true}`。服务端只改 active_mode，不动各桶内容。
+ *     注意它有条规则：目标桶必须**已有内容**才切得过去（cobrowser 例外，它无打开项概念，
+ *     服务端会现建一个 `{open:true}` 最小桶）。所以手机端滑到一个桌面端还没开过的
+ *     cocoder/coplanner 占位页时，服务端会**静默不切**（seq 照样 +1）—— 这是服务端刻意
+ *     不凭空造空桶的设计，不是失败。
+ *
+ * seq 由**服务端**自增并回传，客户端不发；并发就是到达顺序 last-write-wins。
+ * 返回值直接就是新布局，调用方可以拿去更新本地状态，不必等下一次 hydrate。
+ */
+export async function postCowriterLayout(
+  session: Session,
+  conversationId: string,
+  body: Record<string, unknown>
+): Promise<{ cowriter_layout: Record<string, unknown> | null; cowriter_layout_seq: number }> {
+  const base = session.server_base_url;
+  const res = await fetchWithDebugLog(
+    `${base}api/conversations/${encodeURIComponent(conversationId)}/cowriter_layout`,
+    {
+      method: 'POST',
+      headers: authHeaders(session.access_token),
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || `协同布局同步失败: ${res.status}`);
+  }
+  const data = (await res.json()) as {
+    cowriter_layout?: Record<string, unknown> | null;
+    cowriter_layout_seq?: number;
+  };
+  return {
+    cowriter_layout: data?.cowriter_layout ?? null,
+    cowriter_layout_seq: Number(data?.cowriter_layout_seq) || 0,
+  };
+}
+
+/**
  * 列项目内的 folder：GET /api/flowtask/projects/{project_id}/folders
  * 返回顺序就是后端给的顺序（已按 sort_key）。
  */

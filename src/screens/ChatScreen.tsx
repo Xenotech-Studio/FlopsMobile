@@ -97,6 +97,7 @@ import {
   type ConversationMessage,
   type Conversation,
   type ConversationAttachment,
+  postCowriterLayout,
   type UsageStats,
   type UsageRun,
   type AgentProfile,
@@ -166,6 +167,7 @@ import {
   collabLayoutFromConversationMeta,
   EMPTY_COLLAB_LAYOUT,
   type CollabLayoutState,
+  type CollabTabRef,
 } from '../utils/collabLayout';
 import {
   collabDetentPosition,
@@ -1262,6 +1264,69 @@ export function ChatScreen({
       position: collabPrefRef.current.position,
     });
   }, []);
+  /**
+   * 【走马灯切换回写服务端】用户主动横滑 / 点圆点 → 把新焦点写回 cowriter_layout。
+   *
+   * 两种写法（服务端端点的规则见 api.ts postCowriterLayout 的注释）：
+   *  - **同 mode 内换焦点项**（换文档 / 换项目）：带**全量 id 列表** + active。只发 active
+   *    的话服务端会把该桶整体覆盖成只剩这一项 —— 其余打开着的文档就被当成"用户关掉了"。
+   *  - **跨 mode**（滑到别的模式）：`mode_only`，只改 active_mode、不动任何桶内容。
+   *
+   * 失败/被拒都**不回滚本地显示**：走马灯首先是个查看器，用户划到哪就该看到哪；回写是给
+   * 桌面端和下次重开的额外好处，不该反过来把手里的页面抢走。而且服务端对空桶的 mode_only
+   * 是刻意"静默不切"（不凭空造空桶），那不是错误，只是这次没同步过去。
+   *
+   * 拿响应回写本地布局是安全的、且不会跟走马灯打架：
+   *  - 服务端接受了 → activeKey 变成用户刚选的那个 → useFollowedSelection 里
+   *    `local !== activeKey` 不成立，不动；
+   *  - 服务端没切（空桶被拒）→ activeKey **压根没变** → 那条纠正根本不触发，本地保持用户
+   *    划到的页。两种情况都不会闪回。
+   */
+  const collabWriteGenRef = useRef(0);
+  const handleCollabSelectTab = useCallback(
+    (tab: CollabTabRef) => {
+      const cid = conversationIdRef.current;
+      if (!session || !cid) return;
+      const layout = collabLayoutRef.current;
+      let body: Record<string, unknown>;
+      if (tab.mode === 'cowriter') {
+        const docIds = layout.cowriter?.docIds ?? [];
+        if (!docIds.includes(tab.id)) return;
+        body = { layout_mode: 'cowriter', doc_ids: docIds, active_doc_id: tab.id };
+      } else if (tab.mode === 'coplanner') {
+        const projectIds = layout.coplanner?.projectIds ?? [];
+        if (!projectIds.includes(tab.id)) return;
+        body = {
+          layout_mode: 'coplanner',
+          project_ids: projectIds,
+          active_project_id: tab.id,
+        };
+      } else {
+        /* cocoder / cobrowser 在手机端只有占位页，没有"打开项"可发 —— 只表达换 mode。 */
+        body = { layout_mode: tab.mode, mode_only: true };
+      }
+      const gen = ++collabWriteGenRef.current;
+      void postCowriterLayout(session, cid, body)
+        .then((res) => {
+          /* 连划几页时只认最后一次的响应：早发的请求可能后到，应用它会把布局倒回去。 */
+          if (gen !== collabWriteGenRef.current) return;
+          if (conversationIdRef.current !== cid) return;
+          const next = collabLayoutFromConversationMeta(
+            res.cowriter_layout,
+            res.cowriter_layout_seq,
+          );
+          const prev = collabLayoutRef.current;
+          /* seq 由服务端自增，比本地旧就丢 —— 与 SSE / hydrate 同一条守卫。 */
+          if (next.seq < prev.seq) return;
+          collabLayoutRef.current = next;
+          if (!collabLayoutEqual(prev, next)) setCollabLayout(next);
+        })
+        .catch(() => {
+          /* 网络失败：本地显示保持不动（见上面那段），下次 hydrate 自然对账。 */
+        });
+    },
+    [session],
+  );
   /** 这个会话有没有协同内容（**数据侧**判定）。注意 false 有两种含义，见 collabLayoutHydrated。 */
   const collabAvailable = useMemo(() => collabLayoutActive(collabLayout), [collabLayout]);
   /**
@@ -6257,6 +6322,8 @@ export function ChatScreen({
                * 没聚焦时是 no-op，加开关反而多一处状态要同步。
                */
               onUserTouch={dismissComposer}
+              /* 用户主动切走马灯 → 回写服务端（见 handleCollabSelectTab）。 */
+              onSelectTab={handleCollabSelectTab}
               topInset={headerHeight}
               bottomInset={collabSheetPeekHeight}
               /* 当前档真正占掉的高度：居中类页面按它算可视区（sheet 一展开就得往上让） */
