@@ -1152,6 +1152,28 @@ export function ChatScreen({
   /** 松手已判定为「要关」：补完动画接管进度，逐帧那条 reaction 不再插手。 */
   const collabDismissCommitted = useSharedValue(false);
   /**
+   * 当前停留的走马灯页支不支持「过顶关闭」—— 只有 cowriter（文档）页支持。
+   *
+   * 其余页（coplanner 流程图、cocoder / cobrowser 占位）往上推到顶**不关抽屉**，按普通
+   * 档位拖拽自然回落。流程图那页尤其明显：它整幅都是可拖的画布，用户在上面做纵向拖拽是
+   * 常态，再让"推到顶就关掉工作区"叠在同一个方向上，误触代价太大（工作区没了）。
+   *
+   * 判据用**走马灯的本地选中项**（WorkspaceBody 经 onSelectionChange 报上来的 mode），
+   * 不是服务端 activeMode：用户在本地划到哪一页，此刻看到的就是哪一页，行为该跟眼睛一致；
+   * 服务端焦点可能还停在别处（本地划动是先切显示、松手才回写的）。
+   *
+   * 存成 shared value 而不是 state：读它的是 UI 线程那条逐帧 reaction，走 state 的话每次
+   * 换页都要让 ChatScreen 整棵树白重渲一轮。写入是 JS 侧的异步排队（Reanimated 4 语义），
+   * 但换页与"用户开始拖 sheet"之间隔着好几帧，读到的必然是新值。
+   */
+  const collabOverTopDismissible = useSharedValue(false);
+  const handleCollabSelectionChange = useCallback(
+    (tab: CollabTabRef | null) => {
+      collabOverTopDismissible.value = tab?.mode === 'cowriter';
+    },
+    [collabOverTopDismissible],
+  );
+  /**
    * 「从关闭态点入口重开」的那一帧：sheet 要无动画地直接落在最高档（= 用户此刻看到的全屏），
    * 下一帧再把 index 改回 mid，靠那次 prop 变化收下来 —— 倒放。
    * 只在这条用户主动重开的路上为真；SSE 带来协同数据那种首次进入仍走 gorhom 默认的
@@ -1591,6 +1613,12 @@ export function ChatScreen({
       if (!collabActive || collabSheetHighestTopY < 0) return;
       /* 松手已判定关闭：进度交给补完动画，别再被位置带跑。 */
       if (collabDismissCommitted.value) return;
+      /* 这一页不支持过顶关闭（见 collabOverTopDismissible）：进度钳死 0，于是既不会有
+         溶解观感，松手时 handleOnEnd 也够不到 COMMIT 阈值，自然交回 gorhom 弹回档位。 */
+      if (!collabOverTopDismissible.value) {
+        collabDismissProgress.value = 0;
+        return;
+      }
       /* 键盘弹起时 interactive 会把 sheet 抬到「最高档 - 键盘高」，那不是用户在拖。
          用键盘的动画量而不是 React 那份 state：后者在 Android 上落后一两帧，够误判一次。 */
       if (kbAnimHeight.value !== 0) {
@@ -6355,6 +6383,8 @@ export function ChatScreen({
               onUserTouch={dismissComposer}
               /* 用户主动切走马灯 → 回写服务端（见 handleCollabSelectTab）。 */
               onSelectTab={handleCollabSelectTab}
+              /* 停在哪一页（含被动跟随）→ 决定这一页支不支持过顶关闭抽屉。 */
+              onSelectionChange={handleCollabSelectionChange}
               topInset={headerHeight}
               bottomInset={collabSheetPeekHeight}
               /* 当前档真正占掉的高度：居中类页面按它算可视区（sheet 一展开就得往上让） */

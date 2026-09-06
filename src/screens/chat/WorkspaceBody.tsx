@@ -78,6 +78,15 @@ export type WorkspaceBodyProps = {
    * **不发** —— 否则会把桌面端的切换原样回弹给服务端，变成一次无意义的写、还平白 +1 seq。
    */
   onSelectTab?: (tab: CollabTabRef) => void;
+  /**
+   * 当前停在哪一页 —— **状态镜像**，选中项一变就报一次，含跟随服务端的被动切换；
+   * 序列里找不到（布局还空着）时给 null。
+   *
+   * 跟 onSelectTab 的分工：那个是「用户表达了切换意图」的事件（要回写服务端），这个是
+   * 「此刻停在哪」的事实。调用方拿它做与当前页相关的行为判断 —— 目前是 ChatScreen 的
+   * 「过顶关闭抽屉只对 cowriter 文档页开放」。
+   */
+  onSelectionChange?: (tab: CollabTabRef | null) => void;
   /** 顶部 header 高度：内容从它下方开始（header 是绝对定位浮层）。 */
   topInset: number;
   /**
@@ -141,6 +150,7 @@ export function WorkspaceBody({
   pending,
   onUserTouch,
   onSelectTab,
+  onSelectionChange,
   topInset,
   bottomInset,
   viewportBottomInset,
@@ -175,6 +185,11 @@ export function WorkspaceBody({
     0,
     tabs.findIndex((t) => t.key === selectedKey),
   );
+  /* 停在哪一页往上报（含被动跟随）。挂 selectedKey 而不是 tabs：增删文档不改"停在哪"，
+     不该白报一次；而 key 一变必然是真的换页了。 */
+  useEffect(() => {
+    onSelectionChange?.(tabsRef.current.find((t) => t.key === selectedKey) ?? null);
+  }, [selectedKey, onSelectionChange]);
 
   /* ── 文档名解析：胶囊标签与正文大标题共用一份 ──
      树缓存（DocsScreen 加载后写进去的进程级单例）优先；缺项拉一次全树；仍拿不到的
