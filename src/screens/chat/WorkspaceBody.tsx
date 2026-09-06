@@ -338,6 +338,7 @@ export function WorkspaceBody({
         >
           <ActivityIndicator size="small" color={colors.textSecondary} />
         </View>
+        <Reanimated.View style={[styles.bottomFadeOverhang, fadeAnimStyle]} pointerEvents="none" />
         <Reanimated.View style={[styles.bottomFade, fadeAnimStyle]} pointerEvents="none">
           <LinearGradient
             colors={fadeColors}
@@ -450,6 +451,9 @@ export function WorkspaceBody({
           );
         })}
       </PagerView>
+      {/* 圆角缺口的堵头：接在渐变带下沿之后、探到 sheet 背后（见 WORKSPACE_FADE_OVERHANG）。
+          放在渐变带**之前**渲染无所谓 —— 两者同 zIndex、不重叠，各管一段。 */}
+      <Reanimated.View style={[styles.bottomFadeOverhang, fadeAnimStyle]} pointerEvents="none" />
       {/* 工作区底部的渐变遮罩：在正文之上、走马灯之下（zIndex 4 vs 5）。 */}
       <Reanimated.View style={[styles.bottomFade, fadeAnimStyle]} pointerEvents="none">
         <LinearGradient
@@ -695,6 +699,24 @@ const INDICATOR_RESERVE = INDICATOR_SHEET_GAP + PILL_HEIGHT + INDICATOR_PAD;
  * 工作区层里任何不透明的东西都不准越过 sheet 顶沿。
  */
 const WORKSPACE_FADE_HEIGHT = 96;
+/**
+ * 渐变带下沿再往 sheet 背后探这么多，**专门堵 sheet 顶沿两侧的圆角缺口**。
+ *
+ * 起因：流程图画布改成铺满整个工作区后，内容会一直画到 sheet 顶沿之下。sheet 的面是
+ * 圆角矩形，左右上角那两片"缺口"里没有面 —— 于是画布上的文字直接从缺口透出来
+ * （真机截图右下角那处）。中间被走马灯/渐变盖住的部分没事，坏的就是这两小片。
+ *
+ * 32 是 sheet 的圆角半径（collabSheetBackground borderTopLeftRadius），取 40 留点余量。
+ *
+ * 【为什么这次可以越过 sheet 顶沿，而上面那条注释说"一 pt 都不许"】那条教训成立于
+ * collabWorkspaceLayer **还没有** zIndex:-1 的年代 —— 当时这层不透明的东西会画到 sheet
+ * 之上，把圆角弧和投影一起切掉。zIndex:-1 之后本层被显式压到最底，越过去的部分**在 sheet
+ * 背后**：sheet 有面的地方它被完全遮住（连投影都不受影响），只有缺口处露出来 ——
+ * 那正是我们要它露的地方。
+ * 溶解时它跟着工作区内容一起淡出（同在 collabWorkspaceInner 里），不会在 sheet 化掉之后
+ * 留一条横带。
+ */
+const WORKSPACE_FADE_OVERHANG = 40;
 /** 胶囊上沿在渐变带里的位置。**到这儿必须已经洗成实色** —— 第一版这里才 0.5 alpha，
  *  正文就从胶囊背后透出来跟标签糊成一团。 */
 const FADE_SOLID_AT = (WORKSPACE_FADE_HEIGHT - INDICATOR_SHEET_GAP - PILL_HEIGHT) / WORKSPACE_FADE_HEIGHT;
@@ -717,6 +739,17 @@ function createStyles(c: AppColors) {
       left: 0,
       right: 0,
       height: WORKSPACE_FADE_HEIGHT,
+      zIndex: 4,
+    },
+    /** 圆角缺口的堵头：跟渐变带同一个 transform，接在它下沿之后（top = 带高），
+     *  所以恰好从 sheet 顶沿开始往下铺。实色取渐变的终点色 = 工作区底色。 */
+    bottomFadeOverhang: {
+      position: 'absolute',
+      top: WORKSPACE_FADE_HEIGHT,
+      left: 0,
+      right: 0,
+      height: WORKSPACE_FADE_OVERHANG,
+      backgroundColor: c.drawerBackground,
       zIndex: 4,
     },
     /** 走马灯指示器的定位壳：贴在页面坐标原点，靠 translateY 跟着 sheet 顶沿走。 */
