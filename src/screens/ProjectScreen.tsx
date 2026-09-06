@@ -705,8 +705,9 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
                 key={projectId}
                 tasks={flowChartTasks}
                 topInset={headerHeight}
-                /* 与 Desktop 一致：按项目记住视口，回来时停在上次离开的位置。 */
-                viewportCacheKey={projectId}
+                /* 与 Desktop 一致：按项目记住视口，回来时停在上次离开的位置。
+                   `proj:` 前缀跟协同工作区那块画布分开，见 TaskFlowChartView 的 prop 注释。 */
+                viewportCacheKey={`proj:${projectId}`}
               />
             ))}
         </View>

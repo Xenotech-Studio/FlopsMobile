@@ -65,6 +65,14 @@ export const FLOW_NODE_WIDTH = 150;
  * 只在 __DEV__ 下发；失败完全静默（诊断日志不该反过来影响被诊断的功能）。
  * **排查完请连同服务端那两个 debug 端点一起删掉。**
  */
+/** 实例序号：同一时刻可能有多个流程图挂着（工作区一个、项目页一个），
+ *  日志经独立 fetch 上报、时间戳还是服务端给的 —— 不带身份就会被误读成同一条链。 */
+let flowInstanceSeq = 0;
+export function nextFlowInstanceTag(): string {
+  flowInstanceSeq += 1;
+  return `#${flowInstanceSeq}`;
+}
+
 function flowLog(msg: string): void {
   if (!__DEV__) return;
   console.log(msg);
@@ -574,9 +582,13 @@ export type TaskFlowChartViewProps = {
    */
   insidePager?: boolean;
   /**
-   * 按项目缓存视口（缩放 + 平移）的 key —— 传 **projectId**，与 Desktop 的粒度一致
-   * （FitViewOnLoad + ViewportStore：同一个项目在哪儿打开都是同一个视口）。
-   * 有缓存就恢复、没有才「缩到全图」；不传 = 不缓存，每次都 fit（旧行为）。
+   * 缓存视口（缩放 + 平移）的 key。有缓存就恢复、没有才「缩到全图」；不传 = 不缓存。
+   *
+   * **必须带上"哪个界面"，不能只用 projectId。** Desktop 那侧只用 projectId 是因为它同一
+   * 时刻只有一块画布；移动端不是 —— 项目页和协同工作区可以**同时挂着**同一个项目的图，
+   * 而两者的可视区差得远（整屏 402×874 vs 工作区那条带）。共用一个 key 的话两个实例会
+   * 互相覆盖：A 存的视口被 B 读走、B 存的又被 A 读走，恢复出来的比例和平移都是给另一块
+   * 画布算的 —— 真机上表现为"切回来一片空白"。
    */
   viewportCacheKey?: string;
   /**
@@ -600,6 +612,9 @@ export function TaskFlowChartView({
 }: TaskFlowChartViewProps) {
   const { colors, isDark } = useAppTheme();
   const canvasBg = backgroundColor ?? colors.chatScreenBackground;
+  /** 本实例的日志身份（见 nextFlowInstanceTag）。用 ref 读而不是解构成 const ——
+   *  后者会被 exhaustive-deps 当成响应式值，逼所有日志所在的 hook 都加一条无意义依赖。 */
+  const tagRef = useRef(nextFlowInstanceTag());
   const choreRegionFill = isDark ? CHORE_REGION_FILL_DARK : CHORE_REGION_FILL_LIGHT;
   /** 与 Web 画布边线浅色 #b1b1b7、深色 #3e3e3e 一致 */
   const choreRegionStroke = isDark ? '#3e3e3e' : WEB.edge;
@@ -726,7 +741,7 @@ export function TaskFlowChartView({
       const showsSomething = nodesDraw.some((n) => rectsOverlap(nodeOuterBounds(n), rect));
       if (__DEV__) {
         flowLog(
-          `[flowchart] restore key=${viewportCacheKey} scale=${cached.scale}` +
+          `[flowchart]${tagRef.current} restore key=${viewportCacheKey} scale=${cached.scale}` +
             ` tx=${cached.tx} ty=${cached.ty} showsNodes=${showsSomething}`,
         );
       }
@@ -743,7 +758,7 @@ export function TaskFlowChartView({
           /* 探针：赋值后立刻读回。日志里 visibleRect 反解出 tx=ty=0，但这里写的是恢复值 ——
              读回值能区分"根本没写进去"和"写进去又被别人改回 0"。 */
           flowLog(
-            `[flowchart] restore-applied readback scale=${scale.value}` +
+            `[flowchart]${tagRef.current} restore-applied readback scale=${scale.value}` +
               ` tx=${translateX.value} ty=${translateY.value}`,
           );
         }
@@ -784,7 +799,7 @@ export function TaskFlowChartView({
      */
     lastViewportRef.current = { scale: s, tx, ty };
     if (__DEV__) {
-      flowLog(`[flowchart] fit vp=${effViewportW}x${effViewportH} svg=${svgW}x${svgH}` +
+      flowLog(`[flowchart]${tagRef.current} fit vp=${effViewportW}x${effViewportH} svg=${svgW}x${svgH}` +
           ` -> scale=${s} tx=${tx} ty=${ty}` +
           ` finite=${Number.isFinite(s) && Number.isFinite(tx) && Number.isFinite(ty)}`,
       );
@@ -871,14 +886,14 @@ export function TaskFlowChartView({
   useEffect(() => {
     canvasW.value = svgW;
     canvasH.value = svgH;
-    if (__DEV__) flowLog(`[flowchart] canvas svgW=${svgW} svgH=${svgH}`);
+    if (__DEV__) flowLog(`[flowchart]${tagRef.current} canvas svgW=${svgW} svgH=${svgH}`);
   }, [svgW, svgH, canvasW, canvasH]);
 
   useEffect(() => {
     vpW.value = effViewportW;
     vpH.value = effViewportH;
     if (__DEV__) {
-      flowLog(`[flowchart] effViewport w=${effViewportW} h=${effViewportH}` +
+      flowLog(`[flowchart]${tagRef.current} effViewport w=${effViewportW} h=${effViewportH}` +
           ` (measured ${viewport.w}x${viewport.h}, win ${win.width}x${win.height},` +
           ` insets top=${topInset} bottom=${bottomInset})`,
       );
@@ -912,7 +927,7 @@ export function TaskFlowChartView({
         maxY: maxY + marginWorld,
       };
       if (__DEV__) {
-        flowLog(`[flowchart] visibleRect x=[${Math.round(rect.minX)},${Math.round(rect.maxX)}]` +
+        flowLog(`[flowchart]${tagRef.current} visibleRect x=[${Math.round(rect.minX)},${Math.round(rect.maxX)}]` +
             ` y=[${Math.round(rect.minY)},${Math.round(rect.maxY)}] scale=${s}` +
             ` rawTx=${Math.round(rawTx)} rawTy=${Math.round(rawTy)}`,
         );
@@ -949,7 +964,7 @@ export function TaskFlowChartView({
 
   useEffect(() => {
     if (!__DEV__) return;
-    flowLog(`[flowchart] model tasks=${tasks.length} nodesDraw=${nodesDraw.length}` +
+    flowLog(`[flowchart]${tagRef.current} model tasks=${tasks.length} nodesDraw=${nodesDraw.length}` +
         ` edgesDraw=${edgesDraw.length} isBuilding=${isBuilding} chartError=${chartError ? 'YES' : 'no'}`,
     );
   }, [tasks.length, nodesDraw, edgesDraw, isBuilding, chartError]);
@@ -978,7 +993,7 @@ export function TaskFlowChartView({
   /* 诊断：最终真正画出去的规模（Svg 尺寸 + 裁剪前后的节点/连线数）。 */
   useEffect(() => {
     if (!__DEV__) return;
-    flowLog(`[flowchart] draw slot=${Math.max(1, effViewportW)}x${Math.max(1, effViewportH)}` +
+    flowLog(`[flowchart]${tagRef.current} draw slot=${Math.max(1, effViewportW)}x${Math.max(1, effViewportH)}` +
         ` visibleNodes=${visibleCardNodes.length}/${nodesDraw.length}` +
         ` visibleEdges=${visibleEdges.length}/${edgesDraw.length}` +
         ` rect=${visibleWorldRect ? 'set' : 'null'}`,
@@ -1147,7 +1162,7 @@ export function TaskFlowChartView({
   const onCanvasLayout = useCallback(
     (e: { nativeEvent: { layout: { width: number; height: number } } }) => {
       const { width, height } = e.nativeEvent.layout;
-      if (__DEV__) flowLog(`[flowchart] onLayout w=${width} h=${height}`);
+      if (__DEV__) flowLog(`[flowchart]${tagRef.current} onLayout w=${width} h=${height}`);
       setViewport({ w: width, h: height });
     },
     []
