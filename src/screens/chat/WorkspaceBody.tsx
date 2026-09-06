@@ -11,10 +11,11 @@
  *
  * 贴在 sheet 顶沿的胶囊指示器 = 当前页展开成「图标 + 名字」，其余收成小圆点（可点直达）。
  *
- * 【翻页手势：整页横滑，coplanner 例外】默认整幅都能横滑翻页（PagerView 自己那套）。
- * 只有停在 coplanner 时分叉：流程图整幅都是可拖可捏的画布，翻页跟它抢同一个方向 ——
- * 抢赢了是误翻页、抢输了画布拖不动，没有能两全的阈值。所以那一页关掉翻页器的横滑，
- * 走马灯手势只留在**底部那条指示器**上（拖一下翻一页）。见 carouselSwipeOnPager。
+ * 【翻页手势】翻页轨道是**自绘**的（不是 PagerView，理由见下面 trackX 那段），所以两条路
+ * 跑的是同一份 worklet、手感一模一样：
+ *  - 拖底部那条指示器 —— **所有页都生效**，内容 1:1 跟着手指平移，松手吸附最近页；
+ *  - 整幅横滑 —— 除 coplanner 外都生效。流程图整幅都是可拖可捏的画布，整幅横滑跟它抢
+ *    同一个方向，抢赢了是误翻页、抢输了画布拖不动，所以那一页只留指示器那条路。
  *
  * 边界：**只读**（不编辑文档内容），但切换是**双向**的：
  *  - 服务端换焦点（agent 又改了另一篇 / 桌面端切了 mode）→ 本地跟随 (activeMode, activeId)
@@ -31,12 +32,19 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
+  type LayoutChangeEvent,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import PagerView from 'react-native-pager-view';
-import Reanimated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
+import Reanimated, {
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  type SharedValue,
+} from 'react-native-reanimated';
 import LinearGradient from 'react-native-linear-gradient';
 import { getFlowDocItemName, getFlowDocTree, type FlowDocTreeItem } from '../../api';
 import { fetchTasks, type TaskItem } from '../../taskApi';
@@ -269,103 +277,151 @@ export function WorkspaceBody({
     [names, docItems, projectNameOf],
   );
 
-  /* ── 翻页器 ↔ 选中项双向同步（ref 比对避免回环） ── */
-  const pagerRef = useRef<PagerView | null>(null);
-  const pagerPageRef = useRef(selectedIndex);
+  /* ─────────────────────────── 自绘翻页轨道 ─────────────────────────── */
   /**
-   * 【这次翻页是不是手指驱动的】—— 决定 onPageSelected 要不要回写服务端。
+   * 【为什么不用 PagerView 了】要的是「拖底部指示器时，上面的内容 1:1 跟着平移」。
    *
-   * 要解决的问题：同步 effect 调 setPage 之后 PagerView 照样回一发 onPageSelected，分不出来
-   * 的话**被动跟随会被当成用户主动切而回写**，服务端再广播、两端互相纠正 → 闪一下又弹回去。
+   * react-native-pager-view@8.0.2 的命令式接口只有 setPage / setPageWithoutAnimation /
+   * setScrollEnabled（PagerView.d.ts 的全部内容），**没有逐帧设置滚动偏移的口子**，也不把
+   * 内部滚动位置交给外部手势驱动。所以手势挂在哪儿都一样，最多做到"过了阈值翻一页"的离散
+   * 翻页 —— 就是上一版的样子，而那正是用户说"不是我要的"。
    *
-   * 判据用 `onPageScrollStateChanged` 的 **dragging**，而不是"比对我们刚才设的目标 index"。
-   * 后者是**猜**，实测那版间歇性失灵，两个方向的洞都有：
-   *  - **漏写**（用户切了却没同步）：程序化 setPage 落到「已经在这一页」时原生不回
-   *    onPageSelected，或动画被打断导致回调对不上 —— 目标 index 就**留成了陈旧值**，
-   *    之后用户真划到那一页反而被当成回声吞掉；
-   *  - **多写**（跟随却写了）：连着两次程序化翻页时只存得下最后一个目标，第一发
-   *    onPageSelected 对不上，被误判成用户操作又 POST 一次 —— 震荡照旧。
-   *
-   * dragging 是**因果**信号而不是猜测：手指划过必然经过 dragging，程序化翻页只走
-   * settling → idle。而且它每个滚动周期都会重新置位，不会像 index 那样留下陈旧值毒害后续。
-   * 消费即清（onPageSelected 里读完置 false），程序化翻页前也主动清一次。
+   * 于是自绘：一条 flexDirection:'row' 的轨道，每页宽 = 视口宽，整条靠一个 shared value
+   * （trackX）平移。代价是翻页器该有的东西（吸附、阻尼、快甩）得自己写；换来的是**位移完全
+   * 由我们说了算** —— 指示器拖拽和整幅横滑跑同一份 worklet，手感因此天然一模一样。
    */
-  const userDrivenPageRef = useRef(false);
-  /** selectedIndex 的 ref 镜像：指示器手势要在 onStart 时读起点，但它不该因此重建。 */
+  const win = useWindowDimensions();
+  const [hostW, setHostW] = useState(0);
+  /** 一页多宽：以量到的为准，量到之前用窗口宽兜底（工作区是全出血的，两者一致）。 */
+  const pageWidth = hostW > 1 ? hostW : win.width;
+  const onHostLayout = useCallback((e: LayoutChangeEvent) => {
+    setHostW(e.nativeEvent.layout.width);
+  }, []);
+  /**
+   * 轨道此刻的 translateX（px，≤ 0）——**显示位置的唯一真相，全程只在 UI 线程写**。
+   * Reanimated 4 里 JS 侧写 shared value 是异步排队、读是同步插队（见 TaskFlowChartView 的
+   * applyViewportOnUI），逐帧跟手的量一旦沾上 JS 线程的读-改-写就必然抖 —— 所以手势回调
+   * 全是 worklet，JS 只在松手那一下经 runOnJS 收一次结果。
+   */
+  const trackX = useSharedValue(-selectedIndex * pageWidth);
+  /** 手势起点的 trackX（worklet 内部用）。 */
+  const dragStartX = useSharedValue(0);
+  /* worklet 读不到 React 值，几个几何量各留一份镜像。 */
+  const pageWidthSV = useSharedValue(pageWidth);
+  const pageCountSV = useSharedValue(tabs.length);
+  const selectedIndexSV = useSharedValue(selectedIndex);
+  /** selectedIndex 的 ref 镜像：commitPage 要判「这次拖拽到底翻没翻动」。 */
   const selectedIndexRef = useRef(selectedIndex);
   selectedIndexRef.current = selectedIndex;
-  /** tab 集合指纹：增删文档会让索引整体错位，此时要重新把翻页器摆到选中项上。 */
+  /** 轨道已经停在哪一页 —— 手势自己会把轨道弹到位，别让下面那条 effect 再弹一次。 */
+  const settledIndexRef = useRef(selectedIndex);
+  /** tab 集合指纹：增删文档会让索引整体错位，此时要重新摆位而不是播一段翻页动画。 */
   const tabsSig = tabKeys.join('|');
   const lastSigRef = useRef(tabsSig);
+  const lastWidthRef = useRef(pageWidth);
   useEffect(() => {
+    pageWidthSV.value = pageWidth;
+    pageCountSV.value = tabs.length;
+    selectedIndexSV.value = selectedIndex;
     const sigChanged = lastSigRef.current !== tabsSig;
+    const widthChanged = lastWidthRef.current !== pageWidth;
     lastSigRef.current = tabsSig;
-    if (!sigChanged && pagerPageRef.current === selectedIndex) return;
-    pagerPageRef.current = selectedIndex;
-    /* 这一发是我们叫的：把手指标记清掉，免得上一轮拖拽的残留把它认成用户操作。 */
-    userDrivenPageRef.current = false;
-    /* 集合变了是「重新摆位」不是「用户翻页」：直接落位，别播一段无中生有的滑动动画。 */
-    if (sigChanged) pagerRef.current?.setPageWithoutAnimation(selectedIndex);
-    else pagerRef.current?.setPage(selectedIndex);
-  }, [selectedIndex, tabsSig]);
-
+    lastWidthRef.current = pageWidth;
+    if (!sigChanged && !widthChanged && settledIndexRef.current === selectedIndex) return;
+    settledIndexRef.current = selectedIndex;
+    const to = -selectedIndex * pageWidth;
+    /* 集合变了 / 转屏是「重新摆位」，直接落位，别播一段无中生有的滑动。 */
+    trackX.value = sigChanged || widthChanged ? to : withSpring(to, TRACK_SPRING);
+  }, [
+    selectedIndex,
+    tabsSig,
+    pageWidth,
+    tabs.length,
+    trackX,
+    pageWidthSV,
+    pageCountSV,
+    selectedIndexSV,
+  ]);
+  /** 松手落定：记下来 + 回写服务端。整段拖拽只走一次。 */
+  const commitPage = useCallback(
+    (index: number) => {
+      settledIndexRef.current = index;
+      /* 停在原地就别回写：没翻动的拖拽不该 +1 seq、更不该让桌面端跟着动一下。 */
+      if (index === selectedIndexRef.current) return;
+      const key = tabsRef.current[index]?.key;
+      if (key) setSelectedKey(key);
+    },
+    [setSelectedKey],
+  );
   /**
-   * 【coplanner 页把整幅横滑让给画布】—— 只有这一页分叉。
+   * 走马灯拖拽手势。**指示器和整幅内容各挂一份**（同一个 Gesture 实例不能挂两处），逻辑
+   * 完全共用 —— 用户要的就是"滑底部目录跟滑上面内容手感一模一样"。
    *
-   * 流程图整幅都是可拖可捏的画布，翻页手势跟它抢同一个方向：抢赢了是误翻页、抢输了画布
-   * 拖不动，没有能两全的阈值。所以停在 coplanner 时关掉翻页器的横滑，走马灯手势只留在
-   * **底部那条指示器**上（见下面 indicatorPanEnabled）。
-   * 其余页（cowriter 文档、cocoder/cobrowser 占位）保持整页横滑翻页，原样不动。
+   * 每个回调都显式标 'worklet'：Reanimated 的 babel 插件按语法形状认手势回调，链一拆就静默
+   * 失去 workletization（本仓踩过，真机报 "None of the callbacks are worklets"）。这里的回调
+   * 只碰 shared value，本来就该留在 UI 线程 —— 逐帧跟手的东西不能过 JS。
    */
-  const carouselSwipeOnPager = tabs[selectedIndex]?.mode !== 'coplanner';
-  /**
-   * 【指示器横拖翻页】—— 只在翻页器不吃横滑时挂（即 coplanner 页），两套机制永远只有一套在跑。
-   *
-   * 手势放 **JS 线程**（`.runOnJS(true)`）：它只改 React state、叫原生翻页器换页，
-   * 一个 shared value 都不写，没有留在 UI 线程的理由；顺带绕开 Reanimated babel 插件
-   * "按语法形状认 worklet" 那套脆弱依赖（本仓踩过：链式调用一拆就静默失去 worklet）。
-   *
-   * 拖动途中**只切本地**，松手才回写服务端：一次拖拽跨几页就 POST 几次的话，
-   * 桌面端会跟着来回跳。
-   */
-  const panStartRef = useRef({ index: 0, live: 0 });
-  const indicatorPan = useMemo(
+  const buildCarouselPan = useCallback(
     () =>
       Gesture.Pan()
-        .runOnJS(true)
+        /* 横向占优才激活、明显纵向的直接判失败：纵向留给文档滚动 / 画布拖拽。 */
         .activeOffsetX([-8, 8])
-        /* 明显是纵向的拖拽直接判失败，别把"先往下再拐个弯"认成翻页。
-           （这条带子自己收触摸，纵向拖不会落到下面的画布上，只是什么都不做。） */
-        .failOffsetY([-12, 12])
+        .failOffsetY([-14, 14])
         .onStart(() => {
-          panStartRef.current = { index: selectedIndexRef.current, live: selectedIndexRef.current };
+          'worklet';
+          dragStartX.value = trackX.value;
         })
         .onUpdate((e) => {
-          /* 拖动途中不看速度：那时的 velocityX 抖得厉害，会让页在相邻两页之间来回跳。 */
-          const next = pageAfterSwipe(
-            panStartRef.current.index,
-            e.translationX,
-            0,
-            tabsRef.current.length,
-          );
-          if (next === panStartRef.current.live) return;
-          panStartRef.current.live = next;
-          const key = tabsRef.current[next]?.key;
-          if (key) setSelectedKeyRaw(key);
+          'worklet';
+          const w = pageWidthSV.value > 0 ? pageWidthSV.value : 1;
+          const min = -Math.max(0, pageCountSV.value - 1) * w;
+          let x = dragStartX.value + e.translationX;
+          /* 两端阻尼：越界仍跟手，但只跟三成，松手弹回 —— 系统翻页器的手感。 */
+          if (x > 0) x *= TRACK_OVERDRAG;
+          else if (x < min) x = min + (x - min) * TRACK_OVERDRAG;
+          trackX.value = x;
         })
         .onEnd((e) => {
-          const next = pageAfterSwipe(
-            panStartRef.current.index,
-            e.translationX,
-            e.velocityX,
-            tabsRef.current.length,
-          );
-          const key = tabsRef.current[next]?.key;
-          /* 整段拖拽只回写一次服务端。 */
-          if (key) setSelectedKey(key);
+          'worklet';
+          const w = pageWidthSV.value > 0 ? pageWidthSV.value : 1;
+          const maxIndex = Math.max(0, pageCountSV.value - 1);
+          const from = Math.round(-dragStartX.value / w);
+          /* 吸附最近页。 */
+          let target = Math.round(-trackX.value / w);
+          /* 快甩：朝甩的方向至少进一页 —— 位移没够的轻弹也该翻得过去。用 max/min 而不是
+             直接 from±1：已经拖过好几页时别把它拽回来。 */
+          if (e.velocityX <= -TRACK_FLING_V) target = Math.max(target, from + 1);
+          else if (e.velocityX >= TRACK_FLING_V) target = Math.min(target, from - 1);
+          target = Math.min(maxIndex, Math.max(0, target));
+          trackX.value = withSpring(-target * w, TRACK_SPRING);
+          runOnJS(commitPage)(target);
         }),
-    [setSelectedKey, setSelectedKeyRaw],
+    [commitPage, trackX, dragStartX, pageWidthSV, pageCountSV],
   );
+  /**
+   * 【coplanner 页把整幅横滑让给画布】—— 只有这一页分叉，而且只关**整幅**那一份。
+   *
+   * 流程图整幅都是可拖可捏的画布，整幅横滑跟它抢同一个方向：抢赢了是误翻页、抢输了画布
+   * 拖不动。指示器那份不受影响 —— 它在底部一条独立的带子上、跟画布不重叠，所以**所有页
+   * （含 coplanner）都能拖指示器翻页**，这正是用户要的"对所有类型的页面都生效"。
+   */
+  const carouselSwipeOnPager = tabs[selectedIndex]?.mode !== 'coplanner';
+  const indicatorPan = useMemo(() => buildCarouselPan(), [buildCarouselPan]);
+  const contentPan = useMemo(
+    () => buildCarouselPan().enabled(carouselSwipeOnPager),
+    [buildCarouselPan, carouselSwipeOnPager],
+  );
+  const trackStyle = useAnimatedStyle(() => ({ transform: [{ translateX: trackX.value }] }));
+  /**
+   * 指示器在拖拽中的视觉反馈：整行圆点/胶囊跟着内容同向平移一小段（阻尼到 14pt 封顶）。
+   * 不做"胶囊精确滑向下一个圆点"—— 胶囊宽度随文档名变、圆点间距也不固定，精确映射得先量
+   * 每一项的位置，收益不值那份复杂度。同向微移已经足够让人感到"它被拖着"。
+   */
+  const indicatorDragStyle = useAnimatedStyle(() => {
+    const w = pageWidthSV.value > 0 ? pageWidthSV.value : 1;
+    const frac = (trackX.value + selectedIndexSV.value * w) / w;
+    return { transform: [{ translateX: Math.min(1, Math.max(-1, frac)) * INDICATOR_DRAG_SHIFT }] };
+  });
 
   /* 指示器不再占正文顶部那一条（它浮到 sheet 上沿去了），正文直接从 header 下沿开始。 */
   const contentTopInset = topInset;
@@ -402,100 +458,73 @@ export function WorkspaceBody({
 
   return (
     <View style={styles.body} onStartShouldSetResponderCapture={handleUserTouch}>
-      <PagerView
-        ref={pagerRef}
-        style={styles.pager}
-        initialPage={selectedIndex}
-        /* 整页横滑翻页；只有 coplanner 那页让给画布（见 carouselSwipeOnPager）。 */
-        scrollEnabled={carouselSwipeOnPager}
-        /* offscreenPageLimit 刻意不设：Android 侧透传给 ViewPager2，0 会直接抛
-           IllegalArgumentException（只收 >0 或 -1）。真正的省法在下面 —— 只有当前页
-           挂真内容，其余页留空壳，免得一次挂起好几个 DocBodyView（WebView / 富文本重物）。 */
-        /* 手指一碰就置位；onPageSelected 读完即清（见 userDrivenPageRef）。 */
-        onPageScrollStateChanged={(e) => {
-          if (e.nativeEvent.pageScrollState === 'dragging') userDrivenPageRef.current = true;
-        }}
-        onPageSelected={(e) => {
-          const i = e.nativeEvent.position;
-          pagerPageRef.current = i;
-          const key = tabs[i]?.key;
-          if (!key) return;
-          /* 读完即清：一次滚动周期只算一次用户操作。 */
-          const userDriven = userDrivenPageRef.current;
-          userDrivenPageRef.current = false;
-          /**
-           * 程序化（服务端焦点变了 / 点圆点、拖指示器已经写过一次了）：**什么都不做**。
-           *
-           * 这里原来会 setSelectedKeyRaw(key) "对齐本地"，那是个反馈环：本地选中本来就是
-           * 这次移动的**源头**（local → selectedIndex → setPage），再把翻页器报回来的页码
-           * 写回 local，等于让结果去改原因。只要有一发 onPageSelected 报的不是最终目标页
-           * （跨多页的程序化滚动途中、或事件被合并/延迟），local 就被拽到中间页 →
-           * 同步 effect 立刻改道去那一页 → 动画被自己打断。
-           * 现象就是"闪了一下，而且没停在正确的位置"。
-           *
-           * pagerPageRef 已在上面记过，同步 effect 靠它判断"还用不用再 setPage"，够了。
-           */
-          if (!userDriven) return;
-          setSelectedKey(key);
-        }}
-      >
-        {tabs.map((tab) => {
-          /* 占位页是纯静态的，常驻着（横滑过去当场就有东西看）；文档 / 项目页要拉网络、
-             还带 WebView，只在选中时才挂 —— 未选中的留空壳。 */
-          const isPlaceholder = tab.mode === 'cocoder' || tab.mode === 'cobrowser';
-          const mounted = isPlaceholder || tab.key === selectedKey;
-          return (
-            <View key={tab.key} style={styles.page} collapsable={false}>
-              {!mounted ? null : isPlaceholder ? (
-                <PlaceholderPage
-                  icon={MODE_ICON[tab.mode]}
-                  title={MODE_LABEL[tab.mode]}
-                  hint="手机端暂不支持，请在桌面端查看"
-                  topInset={contentTopInset}
-                  /* 居中在「header 下沿 ↔ 走马灯上沿」之间：当前档高 + 让开整条指示器。 */
-                  bottomInset={viewportBottomInset + INDICATOR_RESERVE}
-                  styles={styles}
-                  colors={colors}
-                />
-              ) : tab.mode === 'cowriter' ? (
-                <DocBodyView
-                  docId={tab.id}
-                  /* 树里查不到就按 document 渲染：cowriter 的 doc_ids 绝大多数就是富文本文档，
-                     真是别的类型（paper/flowbase）DocBodyView 自己会给出「暂不支持」占位。 */
-                  docType={docItems[tab.id]?.type || 'document'}
-                  title={labelOf(tab)}
-                  meta={docItems[tab.id]?.meta}
-                  contentTopInset={contentTopInset}
-                  contentBottomInset={bottomInset}
-                  /* 排版向聊天正文对齐，见 DOC_* 常量。 */
-                  baseFontSize={DOC_BASE_FONT_SIZE}
-                  bodyLineHeightRatio={DOC_BODY_LH_RATIO}
-                  maxContentWidth={DOC_MAX_CONTENT_WIDTH}
-                />
-              ) : (
-                <CoplannerPage
-                  projectId={tab.id}
-                  topInset={contentTopInset}
-                  /**
-                   * 流程图是**居中类**页面（自己缩到全图 + 居中），不是滚动类 —— 所以跟占位页
-                   * 取同一个 inset：**当前档高** + 让开整条指示器。
-                   *
-                   * 之前沿用了旧任务大纲那份 `bottomInset`（= sheet **最低档**）。滚动类页面
-                   * 垫最低档是对的（内容本来就该能继续滚到 sheet 底下去），但居中类页面垫它，
-                   * 算出来的"可视区"会把 sheet 盖住的那块也算进去 —— 图于是居中到 sheet 后面。
-                   * sheet 停在高档位时上方只剩一条，看起来就是「什么都没加载出来」。
-                   * WorkspaceBodyProps 里 viewportBottomInset 的注释早写过这个坑，占位页
-                   * 当初就是这么翻的车，我换流程图时漏了这条。
-                   */
-                  bottomInset={viewportBottomInset + INDICATOR_RESERVE}
-                  styles={styles}
-                  colors={colors}
-                />
-              )}
-            </View>
-          );
-        })}
-      </PagerView>
+      <GestureDetector gesture={contentPan}>
+        <View style={styles.pager} onLayout={onHostLayout}>
+          <Reanimated.View
+            style={[styles.track, { width: pageWidth * Math.max(1, tabs.length) }, trackStyle]}
+          >
+            {tabs.map((tab, i) => {
+              /* 占位页是纯静态的，常驻着；文档 / 项目页要拉网络、还带 WebView，只挂**当前页与
+                 左右相邻页**。
+                 为什么必须带上相邻页：拖拽是 1:1 跟手的，下一页在手指还按着时就已经露在屏幕上，
+                 留空壳的话看到的是一页空白滑进来。窗口固定 ±1，再远的仍留空壳 —— 一次最多三个
+                 DocBodyView（WebView / 富文本重物），是这套手感必须付的成本。 */
+              const isPlaceholder = tab.mode === 'cocoder' || tab.mode === 'cobrowser';
+              const mounted = isPlaceholder || Math.abs(i - selectedIndex) <= 1;
+              return (
+                <View key={tab.key} style={[styles.page, { width: pageWidth }]} collapsable={false}>
+                  {!mounted ? null : isPlaceholder ? (
+                    <PlaceholderPage
+                      icon={MODE_ICON[tab.mode]}
+                      title={MODE_LABEL[tab.mode]}
+                      hint="手机端暂不支持，请在桌面端查看"
+                      topInset={contentTopInset}
+                      /* 居中在「header 下沿 ↔ 走马灯上沿」之间：当前档高 + 让开整条指示器。 */
+                      bottomInset={viewportBottomInset + INDICATOR_RESERVE}
+                      styles={styles}
+                      colors={colors}
+                    />
+                  ) : tab.mode === 'cowriter' ? (
+                    <DocBodyView
+                      docId={tab.id}
+                      /* 树里查不到就按 document 渲染：cowriter 的 doc_ids 绝大多数就是富文本文档，
+                         真是别的类型（paper/flowbase）DocBodyView 自己会给出「暂不支持」占位。 */
+                      docType={docItems[tab.id]?.type || 'document'}
+                      title={labelOf(tab)}
+                      meta={docItems[tab.id]?.meta}
+                      contentTopInset={contentTopInset}
+                      contentBottomInset={bottomInset}
+                      /* 排版向聊天正文对齐，见 DOC_* 常量。 */
+                      baseFontSize={DOC_BASE_FONT_SIZE}
+                      bodyLineHeightRatio={DOC_BODY_LH_RATIO}
+                      maxContentWidth={DOC_MAX_CONTENT_WIDTH}
+                    />
+                  ) : (
+                    <CoplannerPage
+                      projectId={tab.id}
+                      topInset={contentTopInset}
+                      /**
+                       * 流程图是**居中类**页面（自己缩到全图 + 居中），不是滚动类 —— 所以跟占位页
+                       * 取同一个 inset：**当前档高** + 让开整条指示器。
+                       *
+                       * 之前沿用了旧任务大纲那份 `bottomInset`（= sheet **最低档**）。滚动类页面
+                       * 垫最低档是对的（内容本来就该能继续滚到 sheet 底下去），但居中类页面垫它，
+                       * 算出来的"可视区"会把 sheet 盖住的那块也算进去 —— 图于是居中到 sheet 后面。
+                       * sheet 停在高档位时上方只剩一条，看起来就是「什么都没加载出来」。
+                       * WorkspaceBodyProps 里 viewportBottomInset 的注释早写过这个坑，占位页
+                       * 当初就是这么翻的车，我换流程图时漏了这条。
+                       */
+                      bottomInset={viewportBottomInset + INDICATOR_RESERVE}
+                      styles={styles}
+                      colors={colors}
+                    />
+                  )}
+                </View>
+              );
+            })}
+          </Reanimated.View>
+        </View>
+      </GestureDetector>
       {/* 圆角缺口的堵头：接在渐变带下沿之后、探到 sheet 背后（见 WORKSPACE_FADE_OVERHANG）。
           放在渐变带**之前**渲染无所谓 —— 两者同 zIndex、不重叠，各管一段。 */}
       <Reanimated.View style={[styles.bottomFadeOverhang, fadeAnimStyle]} pointerEvents="none" />
@@ -515,8 +544,7 @@ export function WorkspaceBody({
         labelOf={labelOf}
         onSelect={setSelectedKey}
         pan={indicatorPan}
-        /* 翻页器不吃横滑（coplanner）时，走马灯手势就只剩这条带子了 —— 让它收触摸。 */
-        panEnabled={!carouselSwipeOnPager}
+        dragStyle={indicatorDragStyle}
         animStyle={indicatorAnimStyle}
         styles={styles}
         colors={colors}
@@ -555,7 +583,7 @@ function TabIndicator({
   labelOf,
   onSelect,
   pan,
-  panEnabled,
+  dragStyle,
   animStyle,
   styles,
   colors,
@@ -565,20 +593,17 @@ function TabIndicator({
   labelOf: (tab: CollabTabRef) => string;
   onSelect: (key: string) => void;
   pan: ReturnType<typeof Gesture.Pan>;
-  panEnabled: boolean;
+  dragStyle: ReturnType<typeof useAnimatedStyle>;
   animStyle: ReturnType<typeof useAnimatedStyle>;
   styles: Styles;
   colors: AppColors;
 }) {
-  const scrollable = tabs.length > MAX_STATIC_TABS;
   /**
-   * 挂不挂翻页手势，两个条件都得满足：
-   *  - panEnabled：整页横滑还在的时候不挂 —— 这条带子横跨整幅，收了触摸就会把正文那一条
-   *    滑动吃掉。那时它回到原来的形态：box-none 透传，只有胶囊和圆点吃点按。
-   *  - !scrollable：项多到要横滚时，横滑的语义是"滚动圆点条去够远处的项"，跟翻页抢同一个
-   *    方向，只能二选一。而项一多，点圆点直达本就比划过去快（点一下 vs 划过 9 页）。
+   * 项多到要横滚时**不挂翻页手势**：那时横滑的语义是"滚动圆点条去够远处的项"，跟翻页抢
+   * 同一个方向，只能二选一。而项一多，点圆点直达本就比划过去快（点一下 vs 划过 9 页）。
+   * 常态（四个模式 + 几篇文档）都挂着。
    */
-  const panning = panEnabled && !scrollable;
+  const scrollable = tabs.length > MAX_STATIC_TABS;
   const body = (
     /* 外层只负责跟着 sheet 平移（transform 走 UI 线程，比逐帧改 top 省一次布局），
        触摸交给里面那条同尺寸的 strip。 */
@@ -586,37 +611,40 @@ function TabIndicator({
       <ScrollView
         horizontal
         scrollEnabled={scrollable}
-        /* 只有"这条带子就是翻页控件"时才整条收触摸（胶囊两侧的空白也得能划）；
-           否则透传，别把正文那一条横滑翻页吃掉。 */
-        pointerEvents={scrollable || panning ? 'auto' : 'box-none'}
+        /* 整条带子收触摸：它**就是**走马灯的拖拽条，胶囊两侧的空白也得能划。它只有 44pt
+           高、又浮在 sheet 顶沿上方，挡掉的那一条画布可以接受。 */
+        pointerEvents="auto"
         showsHorizontalScrollIndicator={false}
         style={styles.tabStrip}
         contentContainerStyle={styles.tabStripContent}
       >
-        {tabs.map((tab) =>
-          tab.key === selectedKey ? (
-            <View key={tab.key} style={styles.pill}>
-              <Ionicons name={MODE_ICON[tab.mode]} size={14} color={colors.textPrimary} />
-              <Text numberOfLines={1} style={styles.pillText}>
-                {labelOf(tab)}
-              </Text>
-            </View>
-          ) : (
-            <TouchableOpacity
-              key={tab.key}
-              onPress={() => onSelect(tab.key)}
-              activeOpacity={0.6}
-              hitSlop={HIT_SLOP}
-              style={styles.dotHit}
-            >
-              <View style={styles.dot} />
-            </TouchableOpacity>
-          ),
-        )}
+        {/* 拖拽中整行跟着内容同向微移（见 indicatorDragStyle）。 */}
+        <Reanimated.View style={[styles.tabStripRow, dragStyle]}>
+          {tabs.map((tab) =>
+            tab.key === selectedKey ? (
+              <View key={tab.key} style={styles.pill}>
+                <Ionicons name={MODE_ICON[tab.mode]} size={14} color={colors.textPrimary} />
+                <Text numberOfLines={1} style={styles.pillText}>
+                  {labelOf(tab)}
+                </Text>
+              </View>
+            ) : (
+              <TouchableOpacity
+                key={tab.key}
+                onPress={() => onSelect(tab.key)}
+                activeOpacity={0.6}
+                hitSlop={HIT_SLOP}
+                style={styles.dotHit}
+              >
+                <View style={styles.dot} />
+              </TouchableOpacity>
+            ),
+          )}
+        </Reanimated.View>
       </ScrollView>
     </Reanimated.View>
   );
-  if (!panning) return body;
+  if (scrollable) return body;
   return <GestureDetector gesture={pan}>{body}</GestureDetector>;
 }
 
@@ -754,33 +782,14 @@ const INDICATOR_STRIP_HEIGHT = PILL_HEIGHT + INDICATOR_PAD * 2;
 const INDICATOR_SHEET_GAP = 10;
 /** 整条走马灯从 sheet 顶沿往上占掉的高度：居中类内容要让开这一段。 */
 const INDICATOR_RESERVE = INDICATOR_SHEET_GAP + PILL_HEIGHT + INDICATOR_PAD;
-/** 指示器上横拖超过这么多 pt 算翻一页。 */
-const INDICATOR_PAGE_TRIGGER = 32;
-/** 超过这个横向速度（pt/s）算「甩」：位移没够也翻一页。 */
-const INDICATOR_FLING_V = 450;
-
-function clampIndex(raw: number, count: number): number {
-  if (count <= 0) return 0;
-  return Math.min(count - 1, Math.max(0, raw));
-}
-
-/**
- * 一次拖拽最多翻**一页** —— 指示器是翻页控件，不是滚动条。
- *
- * 上一版按「56pt 换算一页」连续取整，一次舒展的横扫能连翻三四页，跟"划一下翻一页"的
- * 直觉对不上（用户实测反馈）。改成只看方向、不看幅度：过了 32pt 就是相邻那一页，再拖
- * 也还是那一页；想连翻就多划几次 —— 这跟整页横滑翻页（PagerView 自己那套）的语义一致，
- * 两条路的手感于是对得上。
- */
-function pageAfterSwipe(startIndex: number, tx: number, vx: number, count: number): number {
-  let step = 0;
-  if (tx <= -INDICATOR_PAGE_TRIGGER) step = 1;
-  else if (tx >= INDICATOR_PAGE_TRIGGER) step = -1;
-  /* 位移不够但甩得快：按甩的方向算一页 —— 轻弹一下也该翻得过去。 */
-  else if (vx <= -INDICATOR_FLING_V) step = 1;
-  else if (vx >= INDICATOR_FLING_V) step = -1;
-  return clampIndex(startIndex + step, count);
-}
+/** 越过两端还能拖多少：只跟三成，松手弹回。 */
+const TRACK_OVERDRAG = 0.3;
+/** 超过这个横向速度（pt/s）算「甩」：位移没够也朝那个方向进一页。 */
+const TRACK_FLING_V = 450;
+/** 吸附用的弹簧。偏硬、不回弹 —— 翻页要利落，不要晃两下。 */
+const TRACK_SPRING = { damping: 22, stiffness: 220, mass: 0.7, overshootClamping: true } as const;
+/** 拖拽中指示器行跟着内容同向平移的最大量。 */
+const INDICATOR_DRAG_SHIFT = 14;
 /**
  * 底部渐变遮罩：从 sheet 顶沿往上这么高，**下沿到 sheet 顶沿为止，一 pt 都不许往下探**。
  *
@@ -819,8 +828,12 @@ const HIT_SLOP = { top: 10, bottom: 10, left: 6, right: 6 };
 function createStyles(c: AppColors) {
   return StyleSheet.create({
     body: { flex: 1 },
-    pager: { flex: 1 },
-    page: { flex: 1 },
+    /** 翻页轨道的窗口：**必须裁剪**，否则左右邻页会画到工作区外面去。 */
+    pager: { flex: 1, overflow: 'hidden' },
+    /** 轨道本体：一行横排，总宽 = 页宽 × 页数（宽度按 pageWidth 现算，走内联样式）。 */
+    track: { flexDirection: 'row', height: '100%' },
+    /** 单页：宽度按 pageWidth 现算，这里只固定高度 —— 给 flex:1 会让几页去平分轨道宽。 */
+    page: { height: '100%' },
     /** 「乐观展开但数据没到」那一屏：转圈居中在 header 下沿与 sheet 上沿之间，
      *  padding 跟占位页取同一套 inset，数据到了换成走马灯时视觉重心不跳。 */
     /** 底部渐变遮罩：同样贴原点 + translateY 跟随 sheet；在正文之上、指示器之下。 */
@@ -859,8 +872,10 @@ function createStyles(c: AppColors) {
       paddingHorizontal: 12,
       alignItems: 'center',
       justifyContent: 'center',
-      gap: 8,
     },
+    /** 胶囊 + 圆点那一行。单独一层是为了让它整体跟着拖拽微移（indicatorDragStyle）；
+     *  横排与间距原本在 contentContainerStyle 上，一并挪过来。 */
+    tabStripRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     /** 当前页：展开成带图标的名字胶囊。浮在正文上（不再压在 header 下沿），
      *  所以给一层轻阴影把它从文字里托起来。 */
     pill: {
