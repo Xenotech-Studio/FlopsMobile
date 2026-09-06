@@ -662,8 +662,10 @@ export function TaskFlowChartView({
    * viewBox 都挂在这两个值上，会跟着重算。ProjectScreen 那边量得到，走不到兜底分支。
    */
   const effViewportW = viewport.w > 1 ? viewport.w : Math.max(1, win.width);
-  const effViewportH =
-    viewport.h > 1 ? viewport.h : Math.max(1, win.height - topInset - bottomInset);
+  /* 兜底**不减 inset**：9d07aab 之后 root 不再吃 padding、panSlot 是全出血的，实测回来
+     就是整屏高（日志实证 measured=402x874）。减了的话下面 fit 会把 inset 再扣一遍，
+     bandH 变负 → 钳成 1px → scale 掉到 FIT_MIN_SCALE(0.02)，画面看起来就是"飘了"。 */
+  const effViewportH = viewport.h > 1 ? viewport.h : Math.max(1, win.height);
 
   const [model, setModel] = useState<FlowChartBuiltModel>(() => emptyFlowModel());
   const [isBuilding, setIsBuilding] = useState(false);
@@ -687,6 +689,16 @@ export function TaskFlowChartView({
     if (nodesDraw.length === 0) return;
     /* 已被缓存恢复 / 用户手势接管：不再自动重排（见 viewportOwnedRef）。 */
     if (viewportOwnedRef.current) return;
+    /**
+     * **必须等 panSlot 真的量出来再做决策**，不能拿窗口兜底值凑合。
+     *
+     * 兜底值只是为了让 Svg 别退化成 1×1（画布空白那次的修法），它跟真实可视区可能差很多；
+     * 拿它去 fit 会算出一个错的比例，拿它去校验缓存（showsNodes）还会**误判**：同一条缓存
+     * 在 402x266 下算出来"看不见节点"、在真实的 402x874 下其实看得见，于是好端端的视口被
+     * 当成坏值丢掉、改摆成全图 —— 用户感受就是"切回来视口飘了"。
+     * 量到之前这条 effect 直接挂起，viewport 一到位它自己会重跑（effViewport 在依赖里）。
+     */
+    if (!(viewport.w > 1 && viewport.h > 1)) return;
     /**
      * 【恢复缓存 与 缩到全图 是同一个决策，必须在同一处做】
      *
@@ -785,6 +797,8 @@ export function TaskFlowChartView({
     viewportPrefsTick,
     topInset,
     bottomInset,
+    viewport.w,
+    viewport.h,
   ]);
 
   useEffect(() => {
