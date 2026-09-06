@@ -39,6 +39,7 @@ import { collabWorkspaceFadeGradient, type AppColors } from '../../theme/appColo
 import { shadowSoft, shadowToggleThumb } from '../../theme/shadows';
 import { docsTreeStore } from '../docs/docsTreeStore';
 import { DocBodyView } from '../docs/DocBodyView';
+import { TaskFlowChartView } from '../../components/TaskFlowChartView';
 import {
   activeCollabTabKey,
   collabTabs,
@@ -427,7 +428,6 @@ export function WorkspaceBody({
               ) : (
                 <CoplannerPage
                   projectId={tab.id}
-                  title={labelOf(tab)}
                   topInset={contentTopInset}
                   bottomInset={bottomInset}
                   styles={styles}
@@ -544,43 +544,14 @@ function TabIndicator({
 
 /* ──────────────────────── CoPlanner：任务树只读大纲 ──────────────────────── */
 
-type OutlineRow = { task: TaskItem; depth: number };
-
-/** childrenId 关系铺成缩进大纲：无父的做根，DFS 下钻；成环/多父只画第一次出现的位置。 */
-function buildOutline(tasks: TaskItem[]): OutlineRow[] {
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  const childIds = new Set<string>();
-  for (const t of tasks) {
-    for (const c of t.childrenId ?? []) if (byId.has(c)) childIds.add(c);
-  }
-  const roots = tasks.filter((t) => !childIds.has(t.id));
-  const out: OutlineRow[] = [];
-  const seen = new Set<string>();
-  const walk = (task: TaskItem, depth: number) => {
-    if (seen.has(task.id)) return;
-    seen.add(task.id);
-    out.push({ task, depth });
-    for (const cid of task.childrenId ?? []) {
-      const child = byId.get(cid);
-      if (child) walk(child, depth + 1);
-    }
-  };
-  for (const r of roots) walk(r, 0);
-  /* 全是环（没有根）时兜底：剩下没画到的平铺出来，别整块空白。 */
-  for (const t of tasks) if (!seen.has(t.id)) walk(t, 0);
-  return out;
-}
-
 function CoplannerPage({
   projectId,
-  title,
   topInset,
   bottomInset,
   styles,
   colors,
 }: {
   projectId: string;
-  title: string;
   topInset: number;
   bottomInset: number;
   styles: Styles;
@@ -617,42 +588,46 @@ function CoplannerPage({
     void load();
   }, [load]);
 
-  const outline = useMemo(() => buildOutline(tasks), [tasks]);
-
-  return (
-    <ScrollView
-      style={styles.body}
-      contentContainerStyle={[
-        styles.outlineContent,
-        { paddingTop: topInset + 24, paddingBottom: bottomInset },
-      ]}
-    >
-      <Text style={styles.projectTitle}>{title}</Text>
-      {loading && outline.length === 0 ? (
-        <ActivityIndicator color={colors.textMuted} style={styles.inlineSpinner} />
-      ) : null}
-      {error ? (
+  /* 加载 / 出错 / 空项目这三种态自己画（TaskFlowChartView 只管有任务时的图）。 */
+  if (loading && tasks.length === 0) {
+    return (
+      <View style={[styles.coplannerCenter, { paddingTop: topInset, paddingBottom: bottomInset }]}>
+        <ActivityIndicator color={colors.textMuted} />
+      </View>
+    );
+  }
+  if (error) {
+    return (
+      <View style={[styles.coplannerCenter, { paddingTop: topInset, paddingBottom: bottomInset }]}>
         <TouchableOpacity onPress={() => void load()} activeOpacity={0.7}>
           <Text style={styles.errorText}>{error}（点这里重试）</Text>
         </TouchableOpacity>
-      ) : null}
-      {!loading && !error && outline.length === 0 ? (
+      </View>
+    );
+  }
+  if (tasks.length === 0) {
+    return (
+      <View style={[styles.coplannerCenter, { paddingTop: topInset, paddingBottom: bottomInset }]}>
         <Text style={styles.emptyHint}>这个项目还没有任务</Text>
-      ) : null}
-      {outline.map(({ task, depth }) => (
-        <View key={task.id} style={[styles.taskRow, { paddingLeft: depth * 16 }]}>
-          <View
-            style={[
-              styles.taskDot,
-              task.done ? styles.taskDotDone : task.doing ? styles.taskDotDoing : null,
-            ]}
-          />
-          <Text numberOfLines={2} style={[styles.taskTitle, task.done && styles.taskTitleDone]}>
-            {task.title?.trim() || '未命名任务'}
-          </Text>
-        </View>
-      ))}
-    </ScrollView>
+      </View>
+    );
+  }
+  /**
+   * 流程图直接复用项目页那套 TaskFlowChartView —— 它的入参就是 `tasks: TaskItem[]`，
+   * 跟这里已经在拉的数据完全同形，不需要中间层。
+   *
+   * insidePager：把**横向**拖拽让给走马灯，否则手指横划被画布吃掉、用户划不出这一页。
+   * bottomInset：底下压着聊天 sheet，减掉之后"缩到全图并居中"才居中在真正看得见的那块里。
+   * key={projectId}：换项目时整块重建，别让上一张图的缩放/平移残留过来。
+   */
+  return (
+    <TaskFlowChartView
+      key={projectId}
+      tasks={tasks}
+      topInset={topInset}
+      bottomInset={bottomInset}
+      insidePager
+    />
   );
 }
 
@@ -771,32 +746,14 @@ function createStyles(c: AppColors) {
       backgroundColor: c.placeholder,
       ...shadowToggleThumb,
     },
-    outlineContent: { paddingHorizontal: 16 },
-    projectTitle: {
-      fontSize: 22,
-      fontWeight: '700',
-      color: c.textHeader,
-      marginBottom: 16,
-    },
-    taskRow: {
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      gap: 8,
-      paddingVertical: 7,
-    },
-    taskDot: {
-      width: 7,
-      height: 7,
-      borderRadius: 4,
-      marginTop: 6,
-      backgroundColor: c.placeholder,
-    },
-    taskDotDone: { backgroundColor: c.success },
-    taskDotDoing: { backgroundColor: c.accentPurple },
-    taskTitle: { flex: 1, fontSize: 14, lineHeight: 20, color: c.textBody },
-    taskTitleDone: { color: c.textMuted, textDecorationLine: 'line-through' },
-    inlineSpinner: { alignSelf: 'flex-start', marginVertical: 12 },
     errorText: { fontSize: 13, color: c.placeholder, marginVertical: 12 },
+    /** coplanner 的 loading / 出错 / 空项目三态：居中在 header 与 sheet 之间那块。 */
+    coplannerCenter: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 24,
+    },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
     emptyIcon: { marginBottom: 12, opacity: 0.5 },
     emptyTitle: { fontSize: 15, fontWeight: '600', color: c.textMuted, marginBottom: 6 },

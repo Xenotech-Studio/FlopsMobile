@@ -506,13 +506,32 @@ function buildFlowChartPayload(tasks: TaskItem[]): FlowChartBuiltModel {
 export type TaskFlowChartViewProps = {
   tasks: TaskItem[];
   topInset?: number;
+  /**
+   * 底部被浮层盖住的高度。跟 topInset 同款做法（root 的 padding），于是量到的 panSlot
+   * 就是**真正看得见**的那块，「缩到全图并居中」也居中在这块里。
+   * 协同工作区要用：那儿底下压着聊天 sheet，不减掉的话图会居中到 sheet 后面去。
+   */
+  bottomInset?: number;
+  /**
+   * 放在横向翻页器（走马灯）里时置 true：把画布的**横向**拖拽让给翻页器。
+   *
+   * 不让的话手指横划会被画布的 Pan 吃掉 —— 用户**划不出这一页**，走马灯等于卡死在流程图上。
+   * 代价是画布只能纵向拖；但进场就已经"缩到全图可见"，横向本来也没什么可拖的，
+   * 真要看细节还有双指缩放，以及走马灯的圆点可以直接点着切页。
+   */
+  insidePager?: boolean;
 };
 
 /** 与 Web `FlowChart.css` --flow-chore-region-fill / `EditableNode.css` .chore-area-unified 一致 */
 const CHORE_REGION_FILL_LIGHT = 'rgba(120, 120, 130, 0.16)';
 const CHORE_REGION_FILL_DARK = 'rgba(100, 100, 110, 0.18)';
 
-export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProps) {
+export function TaskFlowChartView({
+  tasks,
+  topInset = 0,
+  bottomInset = 0,
+  insidePager = false,
+}: TaskFlowChartViewProps) {
   const { colors, isDark } = useAppTheme();
   const choreRegionFill = isDark ? CHORE_REGION_FILL_DARK : CHORE_REGION_FILL_LIGHT;
   /** 与 Web 画布边线浅色 #b1b1b7、深色 #3e3e3e 一致 */
@@ -700,8 +719,13 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
   }, [applyClamp, svgW, svgH]);
 
   const flowGestures = useMemo(() => {
-    const pan = Gesture.Pan()
-      .maxPointers(1)
+    let pan = Gesture.Pan()
+      .maxPointers(1);
+    if (insidePager) {
+      /* 纵向占优才激活、横向直接判失败 —— 横划于是落到走马灯手上，用户划得出这一页。 */
+      pan = pan.activeOffsetY([-10, 10]).failOffsetX([-16, 16]);
+    }
+    pan = pan
       .onStart(() => {
         startPanX.value = translateX.value;
         startPanY.value = translateY.value;
@@ -761,8 +785,10 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
       });
 
     return Gesture.Simultaneous(pan, pinch);
+    /* insidePager 要列进来：它决定 pan 的激活条件，换了就得重建手势。其余捕获的都是
+       shared value / worklet 常量，本来就稳定。 */
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stable shared refs
-  }, []);
+  }, [insidePager]);
 
   const canvasStyle = useAnimatedStyle(() => ({
     transformOrigin: 'left top',
@@ -819,7 +845,7 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
       <View
         style={[
           styles.empty,
-          { paddingTop: topInset, backgroundColor: colors.chatScreenBackground },
+          { paddingTop: topInset, paddingBottom: bottomInset, backgroundColor: colors.chatScreenBackground },
         ]}
       >
         <Text style={[styles.emptyText, { color: colors.textMuted }]}>该项目暂无任务</Text>
@@ -831,7 +857,7 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
   if (isBuilding) {
     return (
       <View
-        style={[styles.root, { paddingTop: topInset, backgroundColor: colors.chatScreenBackground }]}
+        style={[styles.root, { paddingTop: topInset, paddingBottom: bottomInset, backgroundColor: colors.chatScreenBackground }]}
       >
         <View style={styles.empty}>
           <ActivityIndicator size="large" color={colors.primary} />
@@ -843,7 +869,7 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
   if (chartError) {
     return (
       <View
-        style={[styles.root, { paddingTop: topInset, backgroundColor: colors.chatScreenBackground }]}
+        style={[styles.root, { paddingTop: topInset, paddingBottom: bottomInset, backgroundColor: colors.chatScreenBackground }]}
       >
         <View style={styles.chartErrorBox}>
           <Text style={[styles.chartErrorTitle, { color: colors.textPrimary }]}>流程图数据异常</Text>
@@ -869,7 +895,7 @@ export function TaskFlowChartView({ tasks, topInset = 0 }: TaskFlowChartViewProp
   const slotH = Math.max(1, viewport.h);
 
   return (
-    <View style={[styles.root, { paddingTop: topInset, backgroundColor: colors.chatScreenBackground }]}>
+    <View style={[styles.root, { paddingTop: topInset, paddingBottom: bottomInset, backgroundColor: colors.chatScreenBackground }]}>
       <GestureDetector gesture={flowGestures}>
         <View style={styles.panSlot} onLayout={onCanvasLayout}>
           <AnimatedSvg
