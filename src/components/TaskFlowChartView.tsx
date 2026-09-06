@@ -9,6 +9,7 @@ import {
   StyleSheet,
   Platform,
   ActivityIndicator,
+  useWindowDimensions,
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -537,6 +538,7 @@ export function TaskFlowChartView({
   /** 与 Web 画布边线浅色 #b1b1b7、深色 #3e3e3e 一致 */
   const choreRegionStroke = isDark ? '#3e3e3e' : WEB.edge;
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
+  const win = useWindowDimensions();
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
   const scale = useSharedValue(1);
@@ -552,6 +554,22 @@ export function TaskFlowChartView({
   const canvasW = useSharedValue(0);
   const canvasH = useSharedValue(0);
 
+  /**
+   * 【有效视口】panSlot 的 onLayout 是主来源；**量不到时用窗口尺寸减 inset 兜底**。
+   *
+   * 起因：协同工作区把这个组件放进了 PagerView 的懒挂载页里，真机上出现过 onLayout 没给出
+   * 有效尺寸的情况 —— viewport 停在 {0,0}，于是下面 slotW/slotH 取 Math.max(1, 0) = 1，
+   * Svg 只有 1×1 → **画布什么都画不出来，而 panSlot(flex:1) 和底部提示条照常占位**，
+   * 看起来就是"一大片空白 + 一条提示"。fit 那条 effect 也因为 viewport<=0 直接早退，
+   * 于是连 transform 都没算过。
+   *
+   * 兜底值只是估算（窗口高减去上下 inset），一旦真的 onLayout 回来会立刻被覆盖 —— fit 与
+   * viewBox 都挂在这两个值上，会跟着重算。ProjectScreen 那边量得到，走不到兜底分支。
+   */
+  const effViewportW = viewport.w > 1 ? viewport.w : Math.max(1, win.width);
+  const effViewportH =
+    viewport.h > 1 ? viewport.h : Math.max(1, win.height - topInset - bottomInset);
+
   const [model, setModel] = useState<FlowChartBuiltModel>(() => emptyFlowModel());
   const [isBuilding, setIsBuilding] = useState(false);
   /** 世界坐标下当前视口（含边距）；与 Svg viewBox 同源。null 表示尚未同步，先渲染全部节点避免闪空 */
@@ -562,12 +580,12 @@ export function TaskFlowChartView({
 
   /** 每次图构建完成且视口已量好：自动「缩小到能看见全图」并居中 */
   useEffect(() => {
-    if (isBuilding || chartError || svgW <= 0 || svgH <= 0 || viewport.w <= 0 || viewport.h <= 0) {
+    if (isBuilding || chartError || svgW <= 0 || svgH <= 0 || effViewportW <= 0 || effViewportH <= 0) {
       return;
     }
     const { scale: s, translateX: tx, translateY: ty } = fitFlowChartToViewport(
-      viewport.w,
-      viewport.h,
+      effViewportW,
+      effViewportH,
       svgW,
       svgH
     );
@@ -580,8 +598,8 @@ export function TaskFlowChartView({
     chartError,
     svgW,
     svgH,
-    viewport.w,
-    viewport.h,
+    effViewportW,
+    effViewportH,
     scale,
     translateX,
     translateY,
@@ -629,9 +647,9 @@ export function TaskFlowChartView({
   }, [svgW, svgH, canvasW, canvasH]);
 
   useEffect(() => {
-    vpW.value = viewport.w;
-    vpH.value = viewport.h;
-  }, [viewport.w, viewport.h, vpW, vpH]);
+    vpW.value = effViewportW;
+    vpH.value = effViewportH;
+  }, [effViewportW, effViewportH, vpW, vpH]);
 
   useEffect(() => {
     visibleRectQuantizedKeyRef.current = '';
@@ -908,8 +926,8 @@ export function TaskFlowChartView({
   }
 
   const patternId = 'flowDots';
-  const slotW = Math.max(1, viewport.w);
-  const slotH = Math.max(1, viewport.h);
+  const slotW = Math.max(1, effViewportW);
+  const slotH = Math.max(1, effViewportH);
 
   return (
     <View style={[styles.root, { paddingTop: topInset, paddingBottom: bottomInset, backgroundColor: colors.chatScreenBackground }]}>
