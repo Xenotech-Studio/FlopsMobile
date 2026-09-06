@@ -255,6 +255,16 @@ export function WorkspaceBody({
   /* ── 翻页器 ↔ 选中项双向同步（ref 比对避免回环） ── */
   const pagerRef = useRef<PagerView | null>(null);
   const pagerPageRef = useRef(selectedIndex);
+  /**
+   * 【本次翻页是我们自己叫的,不是用户划的】下面那条同步 effect 调 setPage 之后,PagerView
+   * 照样会回一发 onPageSelected —— 分不出来的话,**被动跟随会被当成用户主动切而回写服务端**。
+   *
+   * 那正是"桌面端切 mode → 手机端闪一下又弹回来"的成因:远端帧把走马灯挪过去 → onPageSelected
+   * 误判成用户操作 → POST 回服务端 → 服务端广播 → 两端互相纠正,来回震荡。
+   * 存目标 index 而不是布尔:连续两次程序化翻页时,布尔会被第一发 onPageSelected 提前清掉,
+   * 第二发就漏成"用户操作"。
+   */
+  const programmaticPageRef = useRef(-1);
   /** tab 集合指纹：增删文档会让索引整体错位，此时要重新把翻页器摆到选中项上。 */
   const tabsSig = tabKeys.join('|');
   const lastSigRef = useRef(tabsSig);
@@ -263,6 +273,8 @@ export function WorkspaceBody({
     lastSigRef.current = tabsSig;
     if (!sigChanged && pagerPageRef.current === selectedIndex) return;
     pagerPageRef.current = selectedIndex;
+    /* 记下"这一发是程序化的",供 onPageSelected 区分（见 programmaticPageRef）。 */
+    programmaticPageRef.current = selectedIndex;
     /* 集合变了是「重新摆位」不是「用户翻页」：直接落位，别播一段无中生有的滑动动画。 */
     if (sigChanged) pagerRef.current?.setPageWithoutAnimation(selectedIndex);
     else pagerRef.current?.setPage(selectedIndex);
@@ -341,7 +353,16 @@ export function WorkspaceBody({
           const i = e.nativeEvent.position;
           pagerPageRef.current = i;
           const key = tabs[i]?.key;
-          if (key) setSelectedKey(key);
+          if (!key) return;
+          if (programmaticPageRef.current === i) {
+            /* 我们自己 setPage 叫来的这一发：只把本地选中对齐,**不回写** ——
+               这条路的来源是"服务端焦点变了"或"点圆点已经写过一次了"。 */
+            programmaticPageRef.current = -1;
+            setSelectedKeyRaw(key);
+            return;
+          }
+          /* 手指真的划过来的：本地切 + 回写服务端。 */
+          setSelectedKey(key);
         }}
       >
         {tabs.map((tab) => {
