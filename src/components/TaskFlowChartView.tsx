@@ -12,6 +12,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { normalizeServerUrl, DEFAULT_SERVER_URL } from '../config';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -46,6 +47,34 @@ import {
 /** 与 Web `EditableNode.css` `.editable-node` width */
 export const FLOW_NODE_WIDTH = 150;
 /** 无换行时的最小卡片高度（与 Web padding 公式一致） */
+
+/**
+ * 【临时调试】流程图诊断日志。
+ *
+ * RN 0.84 起 console.log 不再进 Metro 终端（"JavaScript logs have moved" → DevTools），
+ * 真机排查时开发者拿不到。所以除了照常 console.log，再 fire-and-forget 发一份到服务端的
+ * `/api/debug/mobile_log`，落成文件后可由 GET 读回。
+ *
+ * 只在 __DEV__ 下发；失败完全静默（诊断日志不该反过来影响被诊断的功能）。
+ * **排查完请连同服务端那两个 debug 端点一起删掉。**
+ */
+function flowLog(msg: string): void {
+  if (!__DEV__) return;
+  console.log(msg);
+  try {
+    /* 固定用默认网关：这条通道只在 __DEV__ 下走，且诊断的是布局几何、不涉及账号数据，
+       不值得为它把 session 一路传进这个纯展示组件。 */
+    const base = normalizeServerUrl(DEFAULT_SERVER_URL);
+    void fetch(`${base}api/debug/mobile_log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lines: [msg] }),
+    }).catch(() => {});
+  } catch {
+    /* 静默 */
+  }
+}
+
 const MIN_CARD_HEIGHT = 40;
 const FONT_SIZE = 14;
 const LINE_HEIGHT = 21; // 1.5em
@@ -594,8 +623,7 @@ export function TaskFlowChartView({
     translateY.value = ty;
     visibleRectQuantizedKeyRef.current = '';
     if (__DEV__) {
-      console.log(
-        `[flowchart] fit vp=${effViewportW}x${effViewportH} svg=${svgW}x${svgH}` +
+      flowLog(`[flowchart] fit vp=${effViewportW}x${effViewportH} svg=${svgW}x${svgH}` +
           ` -> scale=${s} tx=${tx} ty=${ty}` +
           ` finite=${Number.isFinite(s) && Number.isFinite(tx) && Number.isFinite(ty)}`,
       );
@@ -651,15 +679,14 @@ export function TaskFlowChartView({
   useEffect(() => {
     canvasW.value = svgW;
     canvasH.value = svgH;
-    if (__DEV__) console.log(`[flowchart] canvas svgW=${svgW} svgH=${svgH}`);
+    if (__DEV__) flowLog(`[flowchart] canvas svgW=${svgW} svgH=${svgH}`);
   }, [svgW, svgH, canvasW, canvasH]);
 
   useEffect(() => {
     vpW.value = effViewportW;
     vpH.value = effViewportH;
     if (__DEV__) {
-      console.log(
-        `[flowchart] effViewport w=${effViewportW} h=${effViewportH}` +
+      flowLog(`[flowchart] effViewport w=${effViewportW} h=${effViewportH}` +
           ` (measured ${viewport.w}x${viewport.h}, win ${win.width}x${win.height},` +
           ` insets top=${topInset} bottom=${bottomInset})`,
       );
@@ -693,8 +720,7 @@ export function TaskFlowChartView({
         maxY: maxY + marginWorld,
       };
       if (__DEV__) {
-        console.log(
-          `[flowchart] visibleRect x=[${Math.round(rect.minX)},${Math.round(rect.maxX)}]` +
+        flowLog(`[flowchart] visibleRect x=[${Math.round(rect.minX)},${Math.round(rect.maxX)}]` +
             ` y=[${Math.round(rect.minY)},${Math.round(rect.maxY)}] scale=${s}`,
         );
       }
@@ -726,8 +752,7 @@ export function TaskFlowChartView({
 
   useEffect(() => {
     if (!__DEV__) return;
-    console.log(
-      `[flowchart] model tasks=${tasks.length} nodesDraw=${nodesDraw.length}` +
+    flowLog(`[flowchart] model tasks=${tasks.length} nodesDraw=${nodesDraw.length}` +
         ` edgesDraw=${edgesDraw.length} isBuilding=${isBuilding} chartError=${chartError ? 'YES' : 'no'}`,
     );
   }, [tasks.length, nodesDraw, edgesDraw, isBuilding, chartError]);
@@ -756,8 +781,7 @@ export function TaskFlowChartView({
   /* 诊断：最终真正画出去的规模（Svg 尺寸 + 裁剪前后的节点/连线数）。 */
   useEffect(() => {
     if (!__DEV__) return;
-    console.log(
-      `[flowchart] draw slot=${Math.max(1, effViewportW)}x${Math.max(1, effViewportH)}` +
+    flowLog(`[flowchart] draw slot=${Math.max(1, effViewportW)}x${Math.max(1, effViewportH)}` +
         ` visibleNodes=${visibleCardNodes.length}/${nodesDraw.length}` +
         ` visibleEdges=${visibleEdges.length}/${edgesDraw.length}` +
         ` rect=${visibleWorldRect ? 'set' : 'null'}`,
@@ -921,7 +945,7 @@ export function TaskFlowChartView({
   const onCanvasLayout = useCallback(
     (e: { nativeEvent: { layout: { width: number; height: number } } }) => {
       const { width, height } = e.nativeEvent.layout;
-      if (__DEV__) console.log(`[flowchart] onLayout w=${width} h=${height}`);
+      if (__DEV__) flowLog(`[flowchart] onLayout w=${width} h=${height}`);
       setViewport({ w: width, h: height });
     },
     []
