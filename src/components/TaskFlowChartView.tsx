@@ -90,9 +90,23 @@ const PAD = 48;
 
 const AnimatedSvg = Animated.createAnimatedComponent(Svg);
 
-/** 流程图画布捏合缩放范围 */
+/**
+ * 流程图画布**捏合**缩放范围。MIN 只管手指捏合的下限（再小就糊得没法看），
+ * **不该拿去钳「缩到全图」那次 fit** —— 见 FIT_MIN_SCALE。
+ */
 const MIN_FLOW_SCALE = 0.35;
 const MAX_FLOW_SCALE = 3.5;
+/**
+ * fit（缩到全图）允许到的最小比例。
+ *
+ * 为什么不能复用 MIN_FLOW_SCALE：大图会被它顶住。实测一个 5153×3220 的项目在 402×266 的
+ * 工作区里，真正的全图比例是 min(378/5153, 242/3220) ≈ 0.073，被 0.35 的下限顶上去之后
+ * 内容宽 1804pt 塞进 402pt 视口 —— clampFlowCanvasPan 只好把它钉在左上角，屏幕上就是
+ * 那张图的左上角一小块；而节点都在别处，于是**一个都不在视口里**，看起来完全空白
+ * （裁剪日志里 visibleNodes=0/142 就是这么来的，裁剪本身没算错）。
+ * 宁可小到看不清也要先让人看见全貌 —— 看不清可以捏合放大，空白则无从下手。
+ */
+const FIT_MIN_SCALE = 0.02;
 
 /** Web `:root` 浅色（`FlowTask/src/index.css`） */
 const WEB = {
@@ -238,7 +252,9 @@ function fitFlowChartToViewport(
   const vw = Math.max(1, viewportW - inset * 2);
   const vh = Math.max(1, viewportH - inset * 2);
   const sRaw = Math.min(vw / canvasW, vh / canvasH);
-  const scale = Math.min(MAX_FLOW_SCALE, Math.max(MIN_FLOW_SCALE, sRaw));
+  /* 下限用 FIT_MIN_SCALE 而不是 MIN_FLOW_SCALE：后者是捏合下限，拿来钳 fit 会让大图
+     根本缩不到全图（见 FIT_MIN_SCALE 的注释）。 */
+  const scale = Math.min(MAX_FLOW_SCALE, Math.max(FIT_MIN_SCALE, sRaw));
   const cw = canvasW * scale;
   const ch = canvasH * scale;
   const c = clampFlowCanvasPan(0, 0, viewportW, viewportH, cw, ch);
@@ -582,6 +598,11 @@ export function TaskFlowChartView({
   const vpH = useSharedValue(0);
   const canvasW = useSharedValue(0);
   const canvasH = useSharedValue(0);
+  /**
+   * 捏合能缩到的**下限**。常态是 MIN_FLOW_SCALE，但大图 fit 出来的比例可能比它还小 ——
+   * 那就以 fit 为准，否则用户一捏合就被弹回 0.35、又回到"只看得见左上角"的状态。
+   */
+  const minPinchScale = useSharedValue(MIN_FLOW_SCALE);
 
   /**
    * 【有效视口】panSlot 的 onLayout 是主来源；**量不到时用窗口尺寸减 inset 兜底**。
@@ -621,6 +642,8 @@ export function TaskFlowChartView({
     scale.value = s;
     translateX.value = tx;
     translateY.value = ty;
+    /* fit 比常规捏合下限还小（大图）时，把下限放宽到 fit —— 否则捏一下就弹回去。 */
+    minPinchScale.value = Math.min(MIN_FLOW_SCALE, s);
     visibleRectQuantizedKeyRef.current = '';
     if (__DEV__) {
       flowLog(`[flowchart] fit vp=${effViewportW}x${effViewportH} svg=${svgW}x${svgH}` +
@@ -638,6 +661,7 @@ export function TaskFlowChartView({
     scale,
     translateX,
     translateY,
+    minPinchScale,
   ]);
 
   useEffect(() => {
@@ -868,7 +892,8 @@ export function TaskFlowChartView({
         'worklet';
         const s0 = Math.max(pinchStartScale.value, 0.001);
         let s2 = s0 * e.scale;
-        if (s2 < MIN_FLOW_SCALE) s2 = MIN_FLOW_SCALE;
+        const sMin = minPinchScale.value;
+        if (s2 < sMin) s2 = sMin;
         if (s2 > MAX_FLOW_SCALE) s2 = MAX_FLOW_SCALE;
         const fx = pinchFocalX.value;
         const fy = pinchFocalY.value;
