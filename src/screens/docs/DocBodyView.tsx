@@ -92,11 +92,35 @@ export type DocBodyViewProps = {
   /** 正文上下额外内边距：让内容贯穿顶/底渐变遮罩。 */
   contentTopInset?: number;
   contentBottomInset?: number;
+  /**
+   * 正文基准字号（透传给 FlowDocBlocks，默认 16）。协同工作区传 14 跟聊天正文对齐；
+   * 全屏读文档（DocPreviewScreen）不传，保持 16。六级标题按它等比缩放。
+   */
+  baseFontSize?: number;
+  /** 正文行高比（透传，默认 1.6）。协同工作区传 1.45 → 14×1.45≈20，与聊天 markdown 一致。 */
+  bodyLineHeightRatio?: number;
+  /**
+   * 正文列最大宽度 + 居中。协同工作区传 380 跟聊天消息列同宽 —— 否则同样字号下文档一行
+   * 字数明显更多，"排版不一致"有一半来自这里而不是字号。
+   * 不传 = 沿用原行为（窄屏满宽、宽屏 READING_MAX_WIDTH）。
+   */
+  maxContentWidth?: number;
 };
 
 export const DocBodyView = React.forwardRef<DocBodyViewHandle, DocBodyViewProps>(
   function DocBodyView(
-    { docId, docType, title, meta, paperViewMode, contentTopInset, contentBottomInset },
+    {
+      docId,
+      docType,
+      title,
+      meta,
+      paperViewMode,
+      contentTopInset,
+      contentBottomInset,
+      baseFontSize,
+      bodyLineHeightRatio,
+      maxContentWidth,
+    },
     ref,
   ) {
     const { session } = useSession();
@@ -257,10 +281,16 @@ export const DocBodyView = React.forwardRef<DocBodyViewHandle, DocBodyViewProps>
         document={doc ?? EMPTY_DOC}
         editable={false}
         virtualized
+        baseFontSize={baseFontSize}
+        bodyLineHeightRatio={bodyLineHeightRatio}
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
           expanded && styles.scrollContentWide,
+          /* 排在 scrollContentWide 之后：协同工作区要的 380 得盖过宽屏那档的 720。 */
+          maxContentWidth != null
+            ? { width: '100%' as const, maxWidth: maxContentWidth, alignSelf: 'center' as const }
+            : null,
           contentTopInset != null ? { paddingTop: contentTopInset } : null,
           contentBottomInset != null ? { paddingBottom: contentBottomInset } : null,
         ]}

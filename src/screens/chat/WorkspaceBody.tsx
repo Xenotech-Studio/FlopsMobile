@@ -85,6 +85,27 @@ export type WorkspaceBodyProps = {
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
 /** 走马灯里的 mode 视觉身份：胶囊图标 + 没有名字时的兜底标签。 */
+/**
+ * 【协同工作区里文档的排版：向聊天正文对齐】
+ *
+ * 文档原生排版是照 web editorChrome.css 抄的（正文 16 / 行高 1.6 = 26），而聊天里 assistant
+ * 正文走 MarkdownContent，是 **14 / 20**。并排放在同一屏时文档明显更大更松 —— 行高差
+ * （26 vs 20，+30%）比字号差（+14%）更抢眼。
+ *
+ * 三个值都只在**这个调用点**生效：全屏读文档（DocPreviewScreen）不传，保持 16/1.6/满宽。
+ *  - 14   ：对齐 MarkdownContent.body.fontSize；六级标题按 14/16 等比缩（32→28、24→21…），
+ *           层级比例自动保持，不用逐级决定
+ *  - 1.45 ：14 × 1.45 ≈ 20，与 MarkdownContent.body.lineHeight 完全一致
+ *  - 380  ：对齐聊天消息列的 maxWidth（ChatScreen.styles scrollContent）。不限宽的话同样
+ *           字号下文档一行字数明显更多，"排版不一致"有一半来自行宽而不是字号
+ *
+ * 没有跟着缩的：块间距 / 缩进步长 / 代码块 padding 这些固定 px，以及**表格**（它内部另有
+ * 一个绝对 14 的基准，列宽是按那个字号定的绝对像素，一起缩会让文字与列宽脱节）。
+ */
+const DOC_BASE_FONT_SIZE = 14;
+const DOC_BODY_LH_RATIO = 1.45;
+const DOC_MAX_CONTENT_WIDTH = 380;
+
 const MODE_ICON: Record<MobileCollabMode, IoniconName> = {
   cowriter: 'document-text-outline',
   coplanner: 'git-branch-outline',
@@ -327,6 +348,10 @@ export function WorkspaceBody({
                   meta={docItems[tab.id]?.meta}
                   contentTopInset={contentTopInset}
                   contentBottomInset={bottomInset}
+                  /* 排版向聊天正文对齐，见 DOC_* 常量。 */
+                  baseFontSize={DOC_BASE_FONT_SIZE}
+                  bodyLineHeightRatio={DOC_BODY_LH_RATIO}
+                  maxContentWidth={DOC_MAX_CONTENT_WIDTH}
                 />
               ) : (
                 <CoplannerPage

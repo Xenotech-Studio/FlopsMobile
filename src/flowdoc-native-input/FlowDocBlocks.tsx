@@ -206,6 +206,22 @@ export type FlowDocBlocksProps = {
   ListHeaderComponent?: React.ReactElement | null;
   /** 虚拟化时的内容内边距样式（对应原 ScrollView contentContainerStyle） */
   contentContainerStyle?: StyleProp<ViewStyle>;
+  /**
+   * 正文基准字号，默认 16（= web editorChrome.css 的 base）。段落、列表、以及**六级标题**
+   * 都以它为基准：标题走 `HEADING_FONT_SIZES[level] * (baseFontSize / 16)` 等比缩放，
+   * 所以只调这一个值，层级比例自动保持。
+   *
+   * 用途：协同工作区里文档要跟聊天正文对齐（传 14）。全屏读文档的场景（DocPreviewScreen）
+   * 不传，保持 16。
+   *
+   * 注意**表格单元格不跟着缩**：它内部另有一个绝对 14 的 Provider，对应 web
+   * `.md-table { font-size: 14px }`，而且列宽（colWidths / DEFAULT_TABLE_COL_WIDTH）是按
+   * 那个字号定的绝对像素 —— 一起缩会让文字与列宽脱节。
+   */
+  baseFontSize?: number;
+  /** 正文行高比，默认 1.6。传 1.45 时 14×1.45≈20，与聊天 markdown 的 14/20 完全一致。
+   *  只作用于正文/列表/段落；标题仍走各级自己的 HEADING_LH_RATIO。 */
+  bodyLineHeightRatio?: number;
 };
 
 /** 文档可切换的 block 类型；FlowDoc 端 paragraph / heading-2..6 / code / quote 都接收同样的 inline children */
@@ -281,6 +297,8 @@ export const FlowDocBlocks = forwardRef<FlowDocBlocksHandle, FlowDocBlocksProps>
       virtualized,
       ListHeaderComponent,
       contentContainerStyle,
+      baseFontSize = 16,
+      bodyLineHeightRatio = BODY_LH_RATIO,
     },
     ref,
   ) {
@@ -496,6 +514,8 @@ export const FlowDocBlocks = forwardRef<FlowDocBlocksHandle, FlowDocBlocksProps>
   // 虚拟化（仅 viewer）：顶层 block 用 FlatList 渲染，只挂可视区 + 缓冲，长文档省内存/首屏快。
   if (virtualized) {
     return (
+      <BaseFontSizeContext.Provider value={baseFontSize}>
+      <BodyLineHeightRatioContext.Provider value={bodyLineHeightRatio}>
       <AttachmentPreviewContext.Provider value={openAttachmentPreview}>
       <FlatList
         data={document}
@@ -533,10 +553,14 @@ export const FlowDocBlocks = forwardRef<FlowDocBlocksHandle, FlowDocBlocksProps>
       />
       {previewModal}
       </AttachmentPreviewContext.Provider>
+      </BodyLineHeightRatioContext.Provider>
+      </BaseFontSizeContext.Provider>
     );
   }
 
   return (
+    <BaseFontSizeContext.Provider value={baseFontSize}>
+    <BodyLineHeightRatioContext.Provider value={bodyLineHeightRatio}>
     <AttachmentPreviewContext.Provider value={openAttachmentPreview}>
     <View style={style}>
       <BlockSequence
@@ -559,6 +583,8 @@ export const FlowDocBlocks = forwardRef<FlowDocBlocksHandle, FlowDocBlocksProps>
       {previewModal}
     </View>
     </AttachmentPreviewContext.Provider>
+    </BodyLineHeightRatioContext.Provider>
+    </BaseFontSizeContext.Provider>
   );
 });
 FlowDocBlocks.displayName = 'FlowDocBlocks';
@@ -813,6 +839,7 @@ function BlockRenderer(ctx: RendererCtx) {
   const { block } = ctx;
   // 基准字号（表格单元格内 = 14，其余 16）。段落用它、标题按 base/16 比例缩放
   const baseFontSize = useContext(BaseFontSizeContext);
+  const bodyLhRatio = useContext(BodyLineHeightRatioContext);
   // 文本类 block 的统一 onContentChange：替换 block.children 为 native 内联回来的 content
   const onWholeChildrenChange = ctx.editable
     ? (newContent: FlowDocContent) => {
@@ -854,7 +881,7 @@ function BlockRenderer(ctx: RendererCtx) {
             ctx={ctx}
             content={inlineToContent(block.children)}
             fontSize={baseFontSize}
-            lineHeight={Math.round(baseFontSize * BODY_LH_RATIO)}
+            lineHeight={Math.round(baseFontSize * bodyLhRatio)}
             onContentChange={onWholeChildrenChange}
             onSplitRequest={onSplitSameType}
             onMergeBackwardRequest={onMergeBackward}
@@ -2273,6 +2300,10 @@ function TableRenderer({ ctx, block }: { ctx: RendererCtx; block: TableBlock }) 
                   ]}
                 >
                   {cell && Array.isArray(cell.children) ? (
+                    /* 表格内字号是**绝对值**、不随外层 baseFontSize 缩：列宽（colWidths /
+                       DEFAULT_TABLE_COL_WIDTH）是按 14 定的绝对像素，字号一起缩会让文字与
+                       列宽脱节（同样列宽塞更多字、跟 web 的换行位置也对不上）。
+                       所以外层传 14 时这里仍是 14，不会变成 14×14/16=12.25。 */
                     <BaseFontSizeContext.Provider value={TABLE_FONT_SIZE}>
                     <BlockSequence
                       blocks={cell.children}
@@ -2368,6 +2399,7 @@ function NestedBlocks({ ctx, children }: { ctx: RendererCtx; children: Descendan
  *  - marker 由 formatListMarker 计算：order_in_list / numberingStyle 全部从数据读 */
 function ListBlockRenderer({ ctx, block }: { ctx: RendererCtx; block: ListBlock }) {
   const baseFontSize = useContext(BaseFontSizeContext);
+  const bodyLhRatio = useContext(BodyLineHeightRatioContext);
   const { inline, nested } = splitListChildren(block.children);
   const marker = formatListMarker(
     block.type,
@@ -2437,7 +2469,7 @@ function ListBlockRenderer({ ctx, block }: { ctx: RendererCtx; block: ListBlock 
             ctx={ctx}
             content={inlineToContent(inline)}
             fontSize={baseFontSize}
-            lineHeight={Math.round(baseFontSize * BODY_LH_RATIO)}
+            lineHeight={Math.round(baseFontSize * bodyLhRatio)}
             onContentChange={onInlineChange}
             onSplitRequest={onSplitList}
             onMergeBackwardRequest={
@@ -2485,6 +2517,7 @@ function TextBlockContainerRenderer({
   block: TextBlockContainer;
 }) {
   const baseFontSize = useContext(BaseFontSizeContext);
+  const bodyLhRatio = useContext(BodyLineHeightRatioContext);
   const { inline, nested } = splitListChildren(block.children);
   // 主文本变化 → 替换 children 头部 inline 段，保留尾部 nested 子块（同 list）
   const onInlineChange = ctx.editable
@@ -2505,7 +2538,7 @@ function TextBlockContainerRenderer({
           ctx={ctx}
           content={inlineToContent(inline)}
           fontSize={baseFontSize}
-          lineHeight={Math.round(baseFontSize * BODY_LH_RATIO)}
+          lineHeight={Math.round(baseFontSize * bodyLhRatio)}
           onContentChange={onInlineChange}
           onMergeBackwardRequest={
             ctx.editable
@@ -2724,6 +2757,10 @@ const HEADING_MARGIN_TOP: Record<1 | 2 | 3 | 4 | 5 | 6, number> = {
 };
 /** 正文行高比例（web data-slate-editor / p line-height: 1.6） */
 const BODY_LH_RATIO = 1.6;
+/** 正文行高比 context：默认 1.6（对齐 web data-slate-editor / p line-height）。
+ *  跟 BaseFontSizeContext 分开两个 context 而不是合成一个对象，是为了不动表格那处
+ *  Provider —— 它只想改字号、不该顺手改行高。 */
+const BodyLineHeightRatioContext = React.createContext(BODY_LH_RATIO);
 /** web --block-spacing = body 16 × 0.5 = 8px（RN 无 margin 折叠，块间隔用半值见各处） */
 const BLOCK_SPACING = 8;
 
