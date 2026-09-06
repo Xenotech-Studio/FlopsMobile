@@ -719,6 +719,18 @@ export function TaskFlowChartView({
   }, [applyClamp, svgW, svgH]);
 
   const flowGestures = useMemo(() => {
+    /**
+     * 【每个回调都显式标 'worklet'】它们全是纯 shared value 运算 + clampFlowCanvasPanWorklet
+     * （本身也是 worklet），**没有一处碰 JS 线程**，所以正确修法是标 worklet，不是
+     * runOnJS(true) —— 后者会把每帧的平移/缩放都甩回 JS 线程，手感直接废掉。
+     *
+     * 为什么非得显式标：Reanimated 的 babel 插件是**按语法形状**认手势回调的 ——
+     * 得是从 `Gesture.Pan()` 起一路不断的链式调用。这里为了按 insidePager 决定要不要加
+     * activeOffsetY/failOffsetX，把链拆成了 `let pan = ...; pan = pan.onStart(...)`，
+     * 插件就认不出来、不再注入 'worklet'，真机于是报
+     * "None of the callbacks in the gesture are worklets"。
+     * 自己标上就跟插件识别与否解耦了，以后再怎么拆链都不会复发。
+     */
     let pan = Gesture.Pan()
       .maxPointers(1);
     if (insidePager) {
@@ -727,14 +739,17 @@ export function TaskFlowChartView({
     }
     pan = pan
       .onStart(() => {
+        'worklet';
         startPanX.value = translateX.value;
         startPanY.value = translateY.value;
       })
       .onUpdate((e) => {
+        'worklet';
         translateX.value = startPanX.value + e.translationX;
         translateY.value = startPanY.value + e.translationY;
       })
       .onEnd(() => {
+        'worklet';
         const s = scale.value;
         const c = clampFlowCanvasPanWorklet(
           translateX.value,
@@ -750,6 +765,7 @@ export function TaskFlowChartView({
 
     const pinch = Gesture.Pinch()
       .onStart((e) => {
+        'worklet';
         pinchStartScale.value = scale.value;
         pinchStartTx.value = translateX.value;
         pinchStartTy.value = translateY.value;
@@ -771,6 +787,7 @@ export function TaskFlowChartView({
         scale.value = s2;
       })
       .onEnd(() => {
+        'worklet';
         const s = scale.value;
         const c = clampFlowCanvasPanWorklet(
           translateX.value,
