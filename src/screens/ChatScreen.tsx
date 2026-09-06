@@ -156,7 +156,6 @@ import {
   collabLayoutActive,
   collabLayoutEqual,
   collabLayoutFromConversationMeta,
-  collabTabs,
   EMPTY_COLLAB_LAYOUT,
   type CollabLayoutState,
 } from '../utils/collabLayout';
@@ -1343,8 +1342,6 @@ export function ChatScreen({
     setCollabDismissedSettled,
     collabDismissProgress,
   ]);
-  /** 关闭态入口上的角标 = 走马灯里有多少项（文档 + 项目 + 两个 mode 占位）。 */
-  const collabTabCount = useMemo(() => collabTabs(collabLayout).length, [collabLayout]);
   /** 协同模式下装聊天消息区的 sheet，留在这里供程序化展开 / 折叠。 */
   const collabSheetRef = useRef<BottomSheet>(null);
   /** sheet 停在最低档（peek）时顶沿的 y = 指示器能落到的最低处。首帧还没量到高度时退化成
@@ -5985,9 +5982,21 @@ export function ChatScreen({
    *    所以这里用**不带任何视觉反馈**的 Pressable，免得图标再自己缩一次；
    *  - 自绘胶囊（Android / iOS<26）：没有整体动画，仍用 AnimatedCircleButton 各格自己 bouncy。
    *    iosForceWorklet 是为了别在白胶囊里再叠一颗玻璃药丸。
+   *
+   * 【这里**刻意没有计数角标**】原来图标右上角挂过一颗 collabTabs().length 的数字角标，撤了：
+   *  1. 形制就是通知计数的形制 —— 实心药丸 + 白字数字，且跟同一行左上角那颗**真的**未读数
+   *     角标共用 headerUnreadBadgeText 和同一套底色 token，一眼分不出来。于是它继承了未读数
+   *     的"待办、需要清零"暗示，而它表达的其实是"这个会话挂着一个协同工作区"这种状态。
+   *  2. 更要命的是那个数**本身就是错的**：collabTabs 对 cocoder / cobrowser 是无条件
+   *     `push(mode, '')` 各铺一个占位项，所以计数恒 ≥ 2，且把两个用户根本没打开过的模式算了
+   *     进去 —— 显示"3"实际是"1 个文档 + 2 个占位"。只改样式不改语义，等于把一个误导性数字
+   *     打扮得好看点，所以直接去掉。
+   *  "有没有"这件事已经由胶囊自己表达了：collabLayoutActive 为真才会张成两格露出这个图标。
+   *  将来若真要回填数量，诚实的口径是「文档数 + 项目数」（排除那两个占位），而且该放进工作区
+   *  里的走马灯指示器 —— 东西在那儿，计数就该长在那儿。
    */
   const collabEntryNode = headerCapsuleMode ? (
-    <Reanimated.View style={[styles.headerCollabSlot, collabEntryStyle]}>
+    <Reanimated.View style={collabEntryStyle}>
       {capsuleUsesSystemPress ? (
         <Pressable style={styles.headerCapsuleSegment} onPress={openCollabWorkspace}>
           <Ionicons name="layers-outline" size={21} color={colors.textSecondary} />
@@ -6001,13 +6010,6 @@ export function ChatScreen({
           <Ionicons name="layers-outline" size={21} color={colors.textSecondary} />
         </AnimatedCircleButton>
       )}
-      {collabTabCount > 0 ? (
-        <View style={styles.headerCapsuleBadge} pointerEvents="none">
-          <Text style={styles.headerUnreadBadgeText} numberOfLines={1}>
-            {collabTabCount > 99 ? '99+' : collabTabCount}
-          </Text>
-        </View>
-      ) : null}
     </Reanimated.View>
   ) : null;
   /* 胶囊里的两格 + 中缝，两条路共用。 */

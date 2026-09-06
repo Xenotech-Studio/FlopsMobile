@@ -352,8 +352,6 @@ export function createChatStyles(c: AppColors) {
   circleBtnDisabled: { opacity: 0.4 },
   /** 左上角按钮槽：相对定位容器，让未读 badge 绝对锚在按钮右上角。宽高交给内部按钮撑。 */
   headerLeftSlot: { position: 'relative' },
-  /** 协同入口按钮槽：相对定位容器，好让角标锚到右上角。 */
-  headerCollabSlot: { position: 'relative' },
   /**
    * 右上角双选项胶囊：协同入口 + ⋯ 并排成一颗。外形跟 header 圆钮同一套（同底色、
    * 同阴影），圆角取高度一半，宽度由两格自适应撑开。
@@ -404,23 +402,10 @@ export function createChatStyles(c: AppColors) {
     height: 18,
     backgroundColor: c.border,
   },
-  /** 胶囊里的角标：收在这一格右上角**内侧**（挂到胶囊外会像浮在按钮外的孤点），
-   *  比独立圆钮那颗小一号，免得压到分隔线。 */
-  headerCapsuleBadge: {
-    position: 'absolute',
-    top: 5,
-    /** 8 而不是 0：格子加宽到 48 后，贴格子右缘会飘到中缝那头、跟图标脱开。
-     *  图标居中占 x∈[13.5,34.5]，右缘留 8 让角标压在图标右上角上。 */
-    right: 8,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    paddingHorizontal: 4,
-    backgroundColor: c.textSecondary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  /** 未读对话数 badge：锚在返回/汉堡按钮右上角。灰底白字，无描边。 */
+  /** 未读对话数 badge：锚在返回/汉堡按钮右上角。灰底白字，无描边。
+   *  **这套形制是「计数/待办」专用**（实心药丸 + 白字数字）。协同入口那格曾经复用过它来显示
+   *  "打开了几项协同资源"，实测被读成未读数（同一行、同一套 token，一眼分不出），已撤 ——
+   *  状态类指示别再往这套形制上挂，见 collabEntryNode 的注释。 */
   headerUnreadBadge: {
     position: 'absolute',
     top: -5,
