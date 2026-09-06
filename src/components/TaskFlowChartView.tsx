@@ -593,6 +593,13 @@ export function TaskFlowChartView({
     translateX.value = tx;
     translateY.value = ty;
     visibleRectQuantizedKeyRef.current = '';
+    if (__DEV__) {
+      console.log(
+        `[flowchart] fit vp=${effViewportW}x${effViewportH} svg=${svgW}x${svgH}` +
+          ` -> scale=${s} tx=${tx} ty=${ty}` +
+          ` finite=${Number.isFinite(s) && Number.isFinite(tx) && Number.isFinite(ty)}`,
+      );
+    }
   }, [
     isBuilding,
     chartError,
@@ -644,17 +651,26 @@ export function TaskFlowChartView({
   useEffect(() => {
     canvasW.value = svgW;
     canvasH.value = svgH;
+    if (__DEV__) console.log(`[flowchart] canvas svgW=${svgW} svgH=${svgH}`);
   }, [svgW, svgH, canvasW, canvasH]);
 
   useEffect(() => {
     vpW.value = effViewportW;
     vpH.value = effViewportH;
-  }, [effViewportW, effViewportH, vpW, vpH]);
+    if (__DEV__) {
+      console.log(
+        `[flowchart] effViewport w=${effViewportW} h=${effViewportH}` +
+          ` (measured ${viewport.w}x${viewport.h}, win ${win.width}x${win.height},` +
+          ` insets top=${topInset} bottom=${bottomInset})`,
+      );
+    }
+  }, [effViewportW, effViewportH, vpW, vpH, viewport.w, viewport.h, win.width, win.height, topInset, bottomInset]);
 
   useEffect(() => {
     visibleRectQuantizedKeyRef.current = '';
   }, [nodesDraw, edgesDraw]);
 
+  /* 诊断：裁剪矩形每次真正变化时打一条（已被 visibleRectQuantizedKeyRef 节流，不会刷屏）。 */
   const publishVisibleWorldRect = useCallback(
     (minX: number, minY: number, vw: number, vh: number, s: number) => {
       const safeS = s < 0.0001 ? 0.0001 : s;
@@ -670,12 +686,19 @@ export function TaskFlowChartView({
       ].join(',');
       if (key === visibleRectQuantizedKeyRef.current) return;
       visibleRectQuantizedKeyRef.current = key;
-      setVisibleWorldRect({
+      const rect = {
         minX: minX - marginWorld,
         minY: minY - marginWorld,
         maxX: maxX + marginWorld,
         maxY: maxY + marginWorld,
-      });
+      };
+      if (__DEV__) {
+        console.log(
+          `[flowchart] visibleRect x=[${Math.round(rect.minX)},${Math.round(rect.maxX)}]` +
+            ` y=[${Math.round(rect.minY)},${Math.round(rect.maxY)}] scale=${s}`,
+        );
+      }
+      setVisibleWorldRect(rect);
     },
     []
   );
@@ -701,6 +724,14 @@ export function TaskFlowChartView({
     [publishVisibleWorldRect]
   );
 
+  useEffect(() => {
+    if (!__DEV__) return;
+    console.log(
+      `[flowchart] model tasks=${tasks.length} nodesDraw=${nodesDraw.length}` +
+        ` edgesDraw=${edgesDraw.length} isBuilding=${isBuilding} chartError=${chartError ? 'YES' : 'no'}`,
+    );
+  }, [tasks.length, nodesDraw, edgesDraw, isBuilding, chartError]);
+
   const visibleCardNodes = useMemo(() => {
     const list = nodesDraw.filter((n) => !n.isChoreArea);
     if (!visibleWorldRect) return list;
@@ -721,6 +752,25 @@ export function TaskFlowChartView({
       )
     );
   }, [choreRegionsDraw, visibleWorldRect]);
+
+  /* 诊断：最终真正画出去的规模（Svg 尺寸 + 裁剪前后的节点/连线数）。 */
+  useEffect(() => {
+    if (!__DEV__) return;
+    console.log(
+      `[flowchart] draw slot=${Math.max(1, effViewportW)}x${Math.max(1, effViewportH)}` +
+        ` visibleNodes=${visibleCardNodes.length}/${nodesDraw.length}` +
+        ` visibleEdges=${visibleEdges.length}/${edgesDraw.length}` +
+        ` rect=${visibleWorldRect ? 'set' : 'null'}`,
+    );
+  }, [
+    effViewportW,
+    effViewportH,
+    visibleCardNodes.length,
+    nodesDraw.length,
+    visibleEdges.length,
+    edgesDraw.length,
+    visibleWorldRect,
+  ]);
 
   const applyClamp = useCallback(() => {
     const vw = viewport.w;
@@ -870,7 +920,9 @@ export function TaskFlowChartView({
 
   const onCanvasLayout = useCallback(
     (e: { nativeEvent: { layout: { width: number; height: number } } }) => {
-      setViewport({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height });
+      const { width, height } = e.nativeEvent.layout;
+      if (__DEV__) console.log(`[flowchart] onLayout w=${width} h=${height}`);
+      setViewport({ w: width, h: height });
     },
     []
   );
@@ -924,6 +976,7 @@ export function TaskFlowChartView({
       </View>
     );
   }
+
 
   const patternId = 'flowDots';
   const slotW = Math.max(1, effViewportW);
