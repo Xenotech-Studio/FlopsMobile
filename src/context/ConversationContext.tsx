@@ -55,6 +55,7 @@ import { useSession } from './SessionContext';
 import { getOrCreateClientInstanceId } from '../utils/clientInstanceId';
 import { notifyRemoteMicBye, notifyRemoteMicInvite } from '../utils/remoteMicInviteBus';
 import { notifyConversationAccessRequest, notifyConversationTitlesRequest } from '../utils/conversationAccessBus';
+import { notifyCollabLayoutFrame } from '../utils/collabLayoutBus';
 import {
   buildSnapshot,
   clearSnapshot,
@@ -535,6 +536,23 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
           if (msg.running) next[id] = true;
           else delete next[id];
           return next;
+        });
+        return;
+      }
+      if (type === 'cowriter_layout' && msg.conversation_id != null) {
+        /* 协同布局跨端实时跟随：别的端（桌面端开关文档 / 另一台手机划走马灯）改了布局，
+           服务端经 inbox 通道广播**整桶**过来。这里只转发，归一化与 seq 守卫归 ChatScreen ——
+           布局 state 是它的局部 state，不在本 context 里。
+           自己触发的回声无害：POST 响应已经把同一份布局写进本地，ChatScreen 那条
+           `next.seq < prev.seq 就丢` 的守卫会把它挡掉，或幂等地再套一遍同样的状态。 */
+        const layout = msg.layout;
+        notifyCollabLayoutFrame({
+          conversationId: String(msg.conversation_id),
+          seq: Math.floor(Number(msg.seq)) || 0,
+          layout:
+            layout && typeof layout === 'object' && !Array.isArray(layout)
+              ? (layout as Record<string, unknown>)
+              : null,
         });
         return;
       }

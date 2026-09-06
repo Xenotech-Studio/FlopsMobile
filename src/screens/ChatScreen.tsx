@@ -169,6 +169,7 @@ import {
   type CollabLayoutState,
   type CollabTabRef,
 } from '../utils/collabLayout';
+import { subscribeCollabLayoutFrame } from '../utils/collabLayoutBus';
 import {
   collabDetentPosition,
   collabSheetPrefsReady,
@@ -1327,6 +1328,34 @@ export function ChatScreen({
     },
     [session],
   );
+  /**
+   * 【跨端实时跟随】别的端改了协同布局（桌面端开关文档 / 另一台手机划走马灯），服务端经
+   * inbox 通道广播整桶过来（server.py `_inbox_sse_notify_cowriter_layout`），
+   * ConversationContext 收下后经 collabLayoutBus 转到这里。
+   *
+   * 复用 hydrate 那条归一化 + seq 守卫，不新造一套：整桶帧的形状与 GET 带回来的
+   * cowriter_layout 完全一致，所以 collabLayoutFromConversationMeta 直接能吃。
+   *
+   * 自己触发的回声无害：POST 响应已经把同一份布局写进本地（seq 也已推进），这条回声要么被
+   * `next.seq < prev.seq` 挡掉，要么 collabLayoutEqual 判等后不 setState。
+   *
+   * 与走马灯的关系：布局一变 → activeKey 变 → WorkspaceBody 的 useFollowedSelection 跟过去；
+   * 那是**被动跟随，不回写**（onSelectTab 只在用户手动划时发），所以不会弹回给服务端成环。
+   */
+  useEffect(() => {
+    return subscribeCollabLayoutFrame((frame) => {
+      if (frame.conversationId !== conversationIdRef.current) return;
+      if (!frame.layout) return;
+      const next = collabLayoutFromConversationMeta(frame.layout, frame.seq);
+      const prev = collabLayoutRef.current;
+      if (next.seq < prev.seq) return;
+      collabLayoutRef.current = next;
+      if (!collabLayoutEqual(prev, next)) setCollabLayout(next);
+      /* 帧到了就等于"这个会话的协同状态已知"，跟 hydrate 同权 —— 否则乐观展开那条链会一直
+         停在"还没加载"，对账 effect 也就永远不会去纠正猜错的情况。 */
+      setCollabLayoutHydrated(true);
+    });
+  }, []);
   /** 这个会话有没有协同内容（**数据侧**判定）。注意 false 有两种含义，见 collabLayoutHydrated。 */
   const collabAvailable = useMemo(() => collabLayoutActive(collabLayout), [collabLayout]);
   /**
