@@ -153,11 +153,12 @@ test('走马灯序列：两桶铺开 + cocoder/cobrowser 各一项占位，顺�
     seq: 1,
     layout: bucket({ coplanner: { project_ids: ['p1', 'p2'], active_project_id: 'p2' } }),
   })!;
+  /* 顺序 = MOBILE_COLLAB_MODES：**coplanner 最左**（项目是总纲，其余是它下面的材料）。 */
   expect(collabTabs(s)).toEqual([
-    { mode: 'cowriter', id: 'd1', key: 'cowriter:d1' },
-    { mode: 'cowriter', id: 'd2', key: 'cowriter:d2' },
     { mode: 'coplanner', id: 'p1', key: 'coplanner:p1' },
     { mode: 'coplanner', id: 'p2', key: 'coplanner:p2' },
+    { mode: 'cowriter', id: 'd1', key: 'cowriter:d1' },
+    { mode: 'cowriter', id: 'd2', key: 'cowriter:d2' },
     { mode: 'cocoder', id: '', key: 'cocoder:' },
     { mode: 'cobrowser', id: '', key: 'cobrowser:' },
   ]);

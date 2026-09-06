@@ -28,8 +28,15 @@ export type CollabLayoutMode = 'default' | (typeof COLLAB_LAYOUT_MODES)[number];
  * cocoder（终端 / 文件树）与 cobrowser（浏览器分栏）目前只有页面没有内容 —— 服务端 layout
  * 对它们只给 active_mode、不给对象 id（见 applyCollabLayoutPayload），所以各占一项 mode 级
  * 占位，UI 画「请在桌面端查看」；等四模态对齐后再换成真内容。
+ *
+ * **coplanner 排最左**（产品定的）：项目是"这次协同在做什么"的总纲，文档/代码/浏览器都是
+ * 它下面的具体材料，从左往右正好是从纲到目。其余三个保持原有相对次序。
+ *
+ * 注意这个顺序**只管走马灯怎么铺**。桶被清空后 active 落到哪儿是另一回事，仍归
+ * activeAfterClear —— 它要跟服务端 `_remaining`（按 LAYOUT_MODES = cowriter 在前遍历）
+ * 一致，两边分家会让"关掉最后一篇文档"后两端停在不同 mode 上。
  */
-export const MOBILE_COLLAB_MODES = ['cowriter', 'coplanner', 'cocoder', 'cobrowser'] as const;
+export const MOBILE_COLLAB_MODES = ['coplanner', 'cowriter', 'cocoder', 'cobrowser'] as const;
 export type MobileCollabMode = (typeof MOBILE_COLLAB_MODES)[number];
 
 export type CowriterSlot = {

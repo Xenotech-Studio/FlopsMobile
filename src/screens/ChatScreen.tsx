@@ -1345,7 +1345,9 @@ export function ChatScreen({
   useEffect(() => {
     return subscribeCollabLayoutFrame((frame) => {
       if (frame.conversationId !== conversationIdRef.current) return;
-      if (!frame.layout) return;
+      /* layout 为 null = 那边把协同布局清空了（退回纯聊天）。**不能当成"这帧没内容"丢掉** ——
+         丢了的话本端会一直挂着一个已经不存在的工作区。collabLayoutFromConversationMeta 对
+         null 归一化出来正是 EMPTY_COLLAB_LAYOUT，如实应用即可。 */
       const next = collabLayoutFromConversationMeta(frame.layout, frame.seq);
       const prev = collabLayoutRef.current;
       if (next.seq < prev.seq) return;
