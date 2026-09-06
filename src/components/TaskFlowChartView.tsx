@@ -538,14 +538,6 @@ export type TaskFlowChartViewProps = {
    */
   bottomInset?: number;
   /**
-   * 放在横向翻页器（走马灯）里时置 true：把画布的**横向**拖拽让给翻页器。
-   *
-   * 不让的话手指横划会被画布的 Pan 吃掉 —— 用户**划不出这一页**，走马灯等于卡死在流程图上。
-   * 代价是画布只能纵向拖；但进场就已经"缩到全图可见"，横向本来也没什么可拖的，
-   * 真要看细节还有双指缩放，以及走马灯的圆点可以直接点着切页。
-   */
-  insidePager?: boolean;
-  /**
    * 缓存视口（缩放 + 平移）的 key。有缓存就恢复、没有才「缩到全图」；不传 = 不缓存。
    *
    * **必须带上"哪个界面"，不能只用 projectId。** Desktop 那侧只用 projectId 是因为它同一
@@ -570,7 +562,6 @@ export function TaskFlowChartView({
   tasks,
   topInset = 0,
   bottomInset = 0,
-  insidePager = false,
   viewportCacheKey,
   backgroundColor,
 }: TaskFlowChartViewProps) {
@@ -971,20 +962,20 @@ export function TaskFlowChartView({
      * （本身也是 worklet），**没有一处碰 JS 线程**，所以正确修法是标 worklet，不是
      * runOnJS(true) —— 后者会把每帧的平移/缩放都甩回 JS 线程，手感直接废掉。
      *
-     * 为什么非得显式标：Reanimated 的 babel 插件是**按语法形状**认手势回调的 ——
-     * 得是从 `Gesture.Pan()` 起一路不断的链式调用。这里为了按 insidePager 决定要不要加
-     * activeOffsetY/failOffsetX，把链拆成了 `let pan = ...; pan = pan.onStart(...)`，
+     * 为什么非得显式标：Reanimated 的 babel 插件是**按语法形状**认手势回调的 —— 得是从
+     * `Gesture.Pan()` 起一路不断的链式调用。这里的链曾经被拆成 `let pan = ...;
+     * pan = pan.onStart(...)`（为了按 insidePager 决定要不要加 activeOffsetY/failOffsetX），
      * 插件就认不出来、不再注入 'worklet'，真机于是报
      * "None of the callbacks in the gesture are worklets"。
      * 自己标上就跟插件识别与否解耦了，以后再怎么拆链都不会复发。
+     *
+     * 【为什么现在是 full-range】曾经在协同工作区里要把横向拖拽让给走马灯翻页
+     * （activeOffsetY + failOffsetX）。走马灯改由指示器承担翻页、PagerView 的
+     * scrollEnabled 关掉之后，这个让渡不但没必要，还**有害**：failOffsetX 让"横移超过
+     * 16pt 就判手势失败"，等于画布根本横拖不动。现在没有竞争者，拖拽从第一像素起就跟手。
      */
-    let pan = Gesture.Pan()
-      .maxPointers(1);
-    if (insidePager) {
-      /* 纵向占优才激活、横向直接判失败 —— 横划于是落到走马灯手上，用户划得出这一页。 */
-      pan = pan.activeOffsetY([-10, 10]).failOffsetX([-16, 16]);
-    }
-    pan = pan
+    const pan = Gesture.Pan()
+      .maxPointers(1)
       .onStart(() => {
         'worklet';
         startPanX.value = translateX.value;
@@ -1054,10 +1045,9 @@ export function TaskFlowChartView({
       });
 
     return Gesture.Simultaneous(pan, pinch);
-    /* insidePager 要列进来：它决定 pan 的激活条件，换了就得重建手势。其余捕获的都是
-       shared value / worklet 常量，本来就稳定。 */
+    /* 捕获的其余都是 shared value / worklet 常量，本来就稳定。 */
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stable shared refs
-  }, [insidePager, commitViewport]);
+  }, [commitViewport]);
 
   const canvasStyle = useAnimatedStyle(() => ({
     transformOrigin: 'left top',

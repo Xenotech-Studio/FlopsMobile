@@ -5,15 +5,19 @@
  * agent 正在操作的那个东西本身，不是聊天。四个 mode 铺成**一条走马灯**：
  *  - cowriter：每篇打开着的 FlowDoc 一页，走 DocBodyView 只读渲染；
  *  - coplanner：每个打开着的 FlowTask 项目一页（复用项目页的 TaskFlowChartView 画流程图，
- *    只读；进场自动缩到全图并居中，可双指缩放 / 纵向拖）；
+ *    只读；进场自动缩到全图并居中，可双指缩放、任意方向拖）；
  *  - cocoder / cobrowser：各一页占位（服务端 layout 只给 active_mode，没有对象数据），
- *    内容显示暂不支持，但页面在序列里 —— 桌面端切过去时手机端跟着停到占位页，滑一下能滑回文档。
- * 顶部的胶囊指示器 = 当前页展开成「图标 + 名字」，其余收成小圆点（可点直达）。
+ *    内容显示暂不支持，但页面在序列里 —— 桌面端切过去时手机端跟着停到占位页，能划回文档。
+ *
+ * 【翻页只走指示器】主画面**不响应横滑**（PagerView 的 scrollEnabled 关掉了）：这一整幅是
+ * 画布/文档的地盘，翻页手势会跟流程图的 pan/pinch 抢同一个方向。翻页交给贴在 sheet 顶沿的
+ * 那条胶囊指示器 —— 当前页展开成「图标 + 名字」的胶囊，其余收成小圆点（可点直达），
+ * 整条带子可横向拖着翻页（松手吸附最近页，快甩进一页）。
  *
  * 边界：**只读**（不编辑文档内容），但切换是**双向**的：
  *  - 服务端换焦点（agent 又改了另一篇 / 桌面端切了 mode）→ 本地跟随 (activeMode, activeId)
  *    二元组跳过去（useFollowedSelection）；
- *  - 用户在这儿横滑 / 点圆点 → 先本地切显示，再经 onSelectTab 回写服务端（ChatScreen 发的
+ *  - 用户拖指示器 / 点圆点 → 先本地切显示，再经 onSelectTab 回写服务端（ChatScreen 发的
  *    POST /cowriter_layout），于是桌面端下次加载会话时停在同一处、手机端重开也驻留。
  * 早期版本刻意"纯本地不回写"，怕抢桌面端焦点；后来明确了：**用户主动划**就是明确的切换
  * 意图，该回写；要避免的只是"被动跟随也回写"那种回弹。
@@ -28,6 +32,7 @@ import {
   View,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import PagerView from 'react-native-pager-view';
 import Reanimated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import LinearGradient from 'react-native-linear-gradient';
@@ -62,13 +67,13 @@ export type WorkspaceBodyProps = {
    *
    * 实现挂在根 View 的 **onStartShouldSetResponderCapture** 上：它在捕获阶段被逐层问到，
    * 我们只是搭个便车看一眼、**恒返回 false**（不认领 responder），所以事件继续往下走 ——
-   * 走马灯 tab 的点击、PagerView 的横滑、文档里的可点元素全都照常拿到这次触摸。
+   * 指示器的点按与横拖、文档里的可点元素、画布的拖拽缩放全都照常拿到这次触摸。
    * 不用 onTouchStartCapture 是因为 RN 的 ViewProps 类型里压根没有它（消息区那处同样写法
    * 至今在 tsc 基线里挂着一条 TS2769），而这个钩子是有类型的、语义也更准。
    */
   onUserTouch?: () => void;
   /**
-   * 用户**主动**切走马灯（横滑翻页 / 点圆点）时回调，带上目标 tab。
+   * 用户**主动**切走马灯（拖指示器翻页 / 点圆点）时回调，带上目标 tab。
    * 只在用户操作时发；服务端推来的跟随（activeKey 变化经 useFollowedSelection 落到本地）
    * **不发** —— 否则会把桌面端的切换原样回弹给服务端，变成一次无意义的写、还平白 +1 seq。
    */
@@ -254,28 +259,15 @@ export function WorkspaceBody({
     [names, docItems, projectNameOf],
   );
 
-  /* ── 翻页器 ↔ 选中项双向同步（ref 比对避免回环） ── */
+  /* ── 翻页器 ↔ 选中项单向同步 ──
+     翻页器的横滑已关掉（见 scrollEnabled={false}），它是纯从动件：只被 selectedIndex 推着走，
+     从不反过来决定选中项。以前那套 userDrivenPageRef / onPageScrollStateChanged 判「这发
+     onPageSelected 是手指还是程序化」的机关随之作废 —— 现在**所有**翻页都是程序化的。 */
   const pagerRef = useRef<PagerView | null>(null);
   const pagerPageRef = useRef(selectedIndex);
-  /**
-   * 【这次翻页是不是手指驱动的】—— 决定 onPageSelected 要不要回写服务端。
-   *
-   * 要解决的问题：同步 effect 调 setPage 之后 PagerView 照样回一发 onPageSelected，分不出来
-   * 的话**被动跟随会被当成用户主动切而回写**，服务端再广播、两端互相纠正 → 闪一下又弹回去。
-   *
-   * 判据用 `onPageScrollStateChanged` 的 **dragging**，而不是"比对我们刚才设的目标 index"。
-   * 后者是**猜**，实测那版间歇性失灵，两个方向的洞都有：
-   *  - **漏写**（用户切了却没同步）：程序化 setPage 落到「已经在这一页」时原生不回
-   *    onPageSelected，或动画被打断导致回调对不上 —— 目标 index 就**留成了陈旧值**，
-   *    之后用户真划到那一页反而被当成回声吞掉；
-   *  - **多写**（跟随却写了）：连着两次程序化翻页时只存得下最后一个目标，第一发
-   *    onPageSelected 对不上，被误判成用户操作又 POST 一次 —— 震荡照旧。
-   *
-   * dragging 是**因果**信号而不是猜测：手指划过必然经过 dragging，程序化翻页只走
-   * settling → idle。而且它每个滚动周期都会重新置位，不会像 index 那样留下陈旧值毒害后续。
-   * 消费即清（onPageSelected 里读完置 false），程序化翻页前也主动清一次。
-   */
-  const userDrivenPageRef = useRef(false);
+  /** selectedIndex 的 ref 镜像：指示器手势要在 onStart 时读起点，但它不该因此重建。 */
+  const selectedIndexRef = useRef(selectedIndex);
+  selectedIndexRef.current = selectedIndex;
   /** tab 集合指纹：增删文档会让索引整体错位，此时要重新把翻页器摆到选中项上。 */
   const tabsSig = tabKeys.join('|');
   const lastSigRef = useRef(tabsSig);
@@ -284,12 +276,59 @@ export function WorkspaceBody({
     lastSigRef.current = tabsSig;
     if (!sigChanged && pagerPageRef.current === selectedIndex) return;
     pagerPageRef.current = selectedIndex;
-    /* 这一发是我们叫的：把手指标记清掉，免得上一轮拖拽的残留把它认成用户操作。 */
-    userDrivenPageRef.current = false;
     /* 集合变了是「重新摆位」不是「用户翻页」：直接落位，别播一段无中生有的滑动动画。 */
     if (sigChanged) pagerRef.current?.setPageWithoutAnimation(selectedIndex);
     else pagerRef.current?.setPage(selectedIndex);
   }, [selectedIndex, tabsSig]);
+
+  /**
+   * 【指示器横滑翻页】——主画面的横滑已让位给画布，翻页改由这条指示器承担。
+   *
+   * 手势放 **JS 线程**（`.runOnJS(true)`）：它只改 React state、叫原生翻页器换页，
+   * 一个 shared value 都不写，没有留在 UI 线程的理由；顺带绕开 Reanimated babel 插件
+   * "按语法形状认 worklet" 那套脆弱依赖（本仓踩过：链式调用一拆就静默失去 worklet）。
+   *
+   * 拖动途中**只切本地**，松手才回写服务端：一次拖拽跨几页就 POST 几次的话，
+   * 桌面端会跟着来回跳。
+   */
+  const panStartRef = useRef({ index: 0, live: 0 });
+  const indicatorPan = useMemo(
+    () =>
+      Gesture.Pan()
+        .runOnJS(true)
+        .activeOffsetX([-8, 8])
+        /* 明显是纵向的拖拽直接判失败，别把"先往下再拐个弯"认成翻页。
+           （这条带子自己收触摸，纵向拖不会落到下面的画布上，只是什么都不做。） */
+        .failOffsetY([-12, 12])
+        .onStart(() => {
+          panStartRef.current = { index: selectedIndexRef.current, live: selectedIndexRef.current };
+        })
+        .onUpdate((e) => {
+          const next = clampIndex(
+            panStartRef.current.index - e.translationX / INDICATOR_PAGE_STEP,
+            tabsRef.current.length,
+          );
+          if (next === panStartRef.current.live) return;
+          panStartRef.current.live = next;
+          const key = tabsRef.current[next]?.key;
+          if (key) setSelectedKeyRaw(key);
+        })
+        .onEnd((e) => {
+          const raw = panStartRef.current.index - e.translationX / INDICATOR_PAGE_STEP;
+          /**
+           * 慢放 = 吸附最近页（round）；快甩 = 朝甩出去的方向进**一页**。
+           * 甩的那一支用 floor+1 / ceil−1 而不是 ceil / floor：位移几乎为零的轻弹
+           * （raw 还停在整数上）也要翻得过去，而不是原地不动。
+           */
+          const dir = e.velocityX < -INDICATOR_FLING_V ? 1 : e.velocityX > INDICATOR_FLING_V ? -1 : 0;
+          const settled =
+            dir === 0 ? Math.round(raw) : dir > 0 ? Math.floor(raw) + 1 : Math.ceil(raw) - 1;
+          const key = tabsRef.current[clampIndex(settled, tabsRef.current.length)]?.key;
+          /* 整段拖拽只回写一次服务端。 */
+          if (key) setSelectedKey(key);
+        }),
+    [setSelectedKey, setSelectedKeyRaw],
+  );
 
   /* 指示器不再占正文顶部那一条（它浮到 sheet 上沿去了），正文直接从 header 下沿开始。 */
   const contentTopInset = topInset;
@@ -358,40 +397,22 @@ export function WorkspaceBody({
         ref={pagerRef}
         style={styles.pager}
         initialPage={selectedIndex}
+        /**
+         * **横滑翻页关掉**：这一整幅是画布/文档的地盘，翻页手势和流程图的 pan/pinch 抢同一个
+         * 方向，抢赢了也是误翻页、抢输了画布拖不动。翻页统一交给底部那条指示器（indicatorPan）。
+         */
+        scrollEnabled={false}
         /* offscreenPageLimit 刻意不设：Android 侧透传给 ViewPager2，0 会直接抛
            IllegalArgumentException（只收 >0 或 -1）。真正的省法在下面 —— 只有当前页
            挂真内容，其余页留空壳，免得一次挂起好几个 DocBodyView（WebView / 富文本重物）。 */
-        /* 手指一碰就置位；onPageSelected 读完即清（见 userDrivenPageRef）。 */
-        onPageScrollStateChanged={(e) => {
-          if (e.nativeEvent.pageScrollState === 'dragging') userDrivenPageRef.current = true;
-        }}
+        /**
+         * 只记页码，**不回写选中项**。翻页器现在是纯从动件（横滑已关），每一发都是我们自己
+         * setPage 叫出来的；把它报回来的页码写回 local 等于让结果去改原因 —— 跨多页的程序化
+         * 滚动途中会报中间页，local 被拽过去、同步 effect 立刻改道，动画被自己打断，
+         * 现象就是"闪一下且没停在正确位置"。同步 effect 靠 pagerPageRef 判断还用不用 setPage，够了。
+         */
         onPageSelected={(e) => {
-          const i = e.nativeEvent.position;
-          pagerPageRef.current = i;
-          const key = tabs[i]?.key;
-          if (!key) return;
-          /* 读完即清：一次滚动周期只算一次用户操作。 */
-          const userDriven = userDrivenPageRef.current;
-          userDrivenPageRef.current = false;
-          if (__DEV__) {
-            console.log(
-              `[carousel] selected=${i} key=${key} userDriven=${userDriven} wouldPOST=${userDriven}`,
-            );
-          }
-          /**
-           * 程序化（服务端焦点变了 / 点圆点已经写过一次了）：**什么都不做**。
-           *
-           * 这里原来会 setSelectedKeyRaw(key) "对齐本地"，那是个反馈环：本地选中本来就是
-           * 这次移动的**源头**（local → selectedIndex → setPage），再把翻页器报回来的页码
-           * 写回 local，等于让结果去改原因。只要有一发 onPageSelected 报的不是最终目标页
-           * （跨多页的程序化滚动途中、或事件被合并/延迟），local 就被拽到中间页 →
-           * 同步 effect 立刻改道去那一页 → 动画被自己打断。
-           * 现象就是"闪了一下，而且没停在正确的位置"。
-           *
-           * pagerPageRef 已在上面记过，同步 effect 靠它判断"还用不用再 setPage"，够了。
-           */
-          if (!userDriven) return;
-          setSelectedKey(key);
+          pagerPageRef.current = e.nativeEvent.position;
         }}
       >
         {tabs.map((tab) => {
@@ -469,6 +490,7 @@ export function WorkspaceBody({
         selectedKey={selectedKey}
         labelOf={labelOf}
         onSelect={setSelectedKey}
+        pan={indicatorPan}
         animStyle={indicatorAnimStyle}
         styles={styles}
         colors={colors}
@@ -506,6 +528,7 @@ function TabIndicator({
   selectedKey,
   labelOf,
   onSelect,
+  pan,
   animStyle,
   styles,
   colors,
@@ -514,21 +537,30 @@ function TabIndicator({
   selectedKey: string;
   labelOf: (tab: CollabTabRef) => string;
   onSelect: (key: string) => void;
+  pan: ReturnType<typeof Gesture.Pan>;
   animStyle: ReturnType<typeof useAnimatedStyle>;
   styles: Styles;
   colors: AppColors;
 }) {
-  /** 项少到不用滚时让整条 strip 透传触摸：它是横跨整幅的浮层，否则胶囊两侧的空白
-   *  会白白吃掉正文那一条的滑动。要滚的时候（项多）才收回触摸。 */
   const scrollable = tabs.length > MAX_STATIC_TABS;
-  return (
+  /**
+   * 项多到要横滚时**不挂翻页手势**：那时横滑的语义是"滚动圆点条去够到远处的项"，
+   * 跟翻页抢同一个方向，只能二选一。而项一多，点圆点直达本来就比划过去快
+   * （划过 9 页 vs 点一下），所以让给滚动 + 点按。项少（常态：四个模式 + 几篇文档）才挂。
+   */
+  const body = (
     /* 外层只负责跟着 sheet 平移（transform 走 UI 线程，比逐帧改 top 省一次布局），
-       触摸一律 box-none 透传给里面的胶囊 / 圆点。 */
+       自身 box-none、把触摸让给里面那条同尺寸的 strip。 */
     <Reanimated.View style={[styles.tabStripWrap, animStyle]} pointerEvents="box-none">
       <ScrollView
         horizontal
         scrollEnabled={scrollable}
-        pointerEvents={scrollable ? 'auto' : 'box-none'}
+        /**
+         * 整条 strip 都收触摸（以前项少时是 box-none 透传的）。当初透传是怕这条横跨整幅的
+         * 浮层把**正文的横滑翻页**吃掉 —— 而正文的横滑已经关了，那个顾虑不存在了；
+         * 现在恰恰相反：这 44pt 高的带子就是翻页控件本身，胶囊两侧的空白也得能划。
+         */
+        pointerEvents="auto"
         showsHorizontalScrollIndicator={false}
         style={styles.tabStrip}
         contentContainerStyle={styles.tabStripContent}
@@ -556,6 +588,8 @@ function TabIndicator({
       </ScrollView>
     </Reanimated.View>
   );
+  if (scrollable) return body;
+  return <GestureDetector gesture={pan}>{body}</GestureDetector>;
 }
 
 /* ──────────────────────── CoPlanner：任务树只读大纲 ──────────────────────── */
@@ -632,7 +666,8 @@ function CoplannerPage({
    * 流程图直接复用项目页那套 TaskFlowChartView —— 它的入参就是 `tasks: TaskItem[]`，
    * 跟这里已经在拉的数据完全同形，不需要中间层。
    *
-   * insidePager：把**横向**拖拽让给走马灯，否则手指横划被画布吃掉、用户划不出这一页。
+   * 画布的拖拽是 full-range 的（不再把横向让给翻页器）：翻页已经改由底部指示器承担，
+   * 主画面这幅没有竞争者了。
    * bottomInset：底下压着聊天 sheet，减掉之后"缩到全图并居中"才居中在真正看得见的那块里。
    * key={projectId}：换项目时整块重建，别让上一张图的缩放/平移残留过来。
    */
@@ -642,7 +677,6 @@ function CoplannerPage({
       tasks={tasks}
       topInset={topInset}
       bottomInset={bottomInset}
-      insidePager
       /* 按项目缓存视口：切回来停在上次离开的缩放/平移上。
          **key 带 `ws:` 前缀**跟项目页分开 —— 两个界面可能同时挂着同一个项目的图，
          而可视区尺寸差很多（这里是被 header/sheet 夹出来的一条带，项目页是整屏）。
@@ -692,6 +726,22 @@ const INDICATOR_STRIP_HEIGHT = PILL_HEIGHT + INDICATOR_PAD * 2;
 const INDICATOR_SHEET_GAP = 10;
 /** 整条走马灯从 sheet 顶沿往上占掉的高度：居中类内容要让开这一段。 */
 const INDICATOR_RESERVE = INDICATOR_SHEET_GAP + PILL_HEIGHT + INDICATOR_PAD;
+/**
+ * 指示器上横拖多少 pt 算翻一页。
+ *
+ * 不按"相邻两项的实际间距"来：胶囊宽到 180、圆点才十几个 pt，用真实间距会让每一页的
+ * 手感忽长忽短。定长反而稳定 —— 56pt 大致是「一次轻扫翻一页、一次舒展的拇指横扫
+ * （约 200pt）走完四个模式」。
+ */
+const INDICATOR_PAGE_STEP = 56;
+/** 超过这个横向速度（pt/s）算「甩」，按方向进一页而不是吸附最近页。 */
+const INDICATOR_FLING_V = 450;
+
+/** 连续页位置 → 合法页序号。 */
+function clampIndex(raw: number, count: number): number {
+  if (count <= 0) return 0;
+  return Math.min(count - 1, Math.max(0, Math.round(raw)));
+}
 /**
  * 底部渐变遮罩：从 sheet 顶沿往上这么高，**下沿到 sheet 顶沿为止，一 pt 都不许往下探**。
  *
