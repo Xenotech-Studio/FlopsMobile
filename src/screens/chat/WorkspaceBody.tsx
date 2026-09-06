@@ -51,6 +51,16 @@ export type WorkspaceBodyProps = {
    * 是"两个空模式"，比转圈更像出错。
    */
   pending?: boolean;
+  /**
+   * 工作区里任何一次触摸开始时调一下（调用方用来收键盘）。
+   *
+   * 实现挂在根 View 的 **onStartShouldSetResponderCapture** 上：它在捕获阶段被逐层问到，
+   * 我们只是搭个便车看一眼、**恒返回 false**（不认领 responder），所以事件继续往下走 ——
+   * 走马灯 tab 的点击、PagerView 的横滑、文档里的可点元素全都照常拿到这次触摸。
+   * 不用 onTouchStartCapture 是因为 RN 的 ViewProps 类型里压根没有它（消息区那处同样写法
+   * 至今在 tsc 基线里挂着一条 TS2769），而这个钩子是有类型的、语义也更准。
+   */
+  onUserTouch?: () => void;
   /** 顶部 header 高度：内容从它下方开始（header 是绝对定位浮层）。 */
   topInset: number;
   /**
@@ -91,6 +101,7 @@ const MODE_LABEL: Record<MobileCollabMode, string> = {
 export function WorkspaceBody({
   layout,
   pending,
+  onUserTouch,
   topInset,
   bottomInset,
   viewportBottomInset,
@@ -238,11 +249,18 @@ export function WorkspaceBody({
     return { transform: [{ translateY: sheetY - WORKSPACE_FADE_HEIGHT }] };
   });
 
+  /** 捕获阶段搭便车：看一眼有触摸开始（调用方拿去收键盘），**恒返回 false 不认领 responder**，
+   *  事件照常往下传给真正的目标。 */
+  const handleUserTouch = useCallback(() => {
+    onUserTouch?.();
+    return false;
+  }, [onUserTouch]);
+
   /* 数据没到就只画 loading + 那条底部渐变：走马灯、指示器一概不挂 —— 挂了就得先按
      EMPTY_COLLAB_LAYOUT 铺出两个占位 tab，等数据到了再整个换掉，闪一次。 */
   if (pending) {
     return (
-      <View style={styles.body}>
+      <View style={styles.body} onStartShouldSetResponderCapture={handleUserTouch}>
         <View
           style={[
             styles.pendingWrap,
@@ -266,7 +284,7 @@ export function WorkspaceBody({
   }
 
   return (
-    <View style={styles.body}>
+    <View style={styles.body} onStartShouldSetResponderCapture={handleUserTouch}>
       <PagerView
         ref={pagerRef}
         style={styles.pager}

@@ -6245,6 +6245,18 @@ export function ChatScreen({
               layout={collabLayout}
               /* 乐观展开、数据还没到：先转圈。见 collabWorkspacePending。 */
               pending={collabWorkspacePending}
+              /**
+               * 碰工作区也收键盘 —— 跟下半部分消息区同一个行为。实现细节见 WorkspaceBody
+               * 的 onUserTouch：捕获阶段旁听、恒不认领 responder，所以走马灯 tab 的点击、
+               * PagerView 的横滑、文档里的可点元素全都照常工作。
+               *
+               * 捕获只沿着「根 → 真正的触摸目标」这条链跑，所以只有**目标落在工作区子树里**
+               * 的触摸才会触发；落在 sheet / composer 上的不在这棵子树下，压根不会 fire ——
+               * 不必判坐标，也不会跟那两处的行为打架。
+               * 不做「键盘弹起时才启用」的开关：dismissComposer 就是一句 native blur，
+               * 没聚焦时是 no-op，加开关反而多一处状态要同步。
+               */
+              onUserTouch={dismissComposer}
               topInset={headerHeight}
               bottomInset={collabSheetPeekHeight}
               /* 当前档真正占掉的高度：居中类页面按它算可视区（sheet 一展开就得往上让） */
