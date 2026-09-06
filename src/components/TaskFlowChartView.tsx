@@ -739,6 +739,14 @@ export function TaskFlowChartView({
         lastViewportRef.current = { scale: cached.scale, tx: cached.tx, ty: cached.ty };
         viewportOwnedRef.current = true;
         visibleRectQuantizedKeyRef.current = '';
+        if (__DEV__) {
+          /* 探针：赋值后立刻读回。日志里 visibleRect 反解出 tx=ty=0，但这里写的是恢复值 ——
+             读回值能区分"根本没写进去"和"写进去又被别人改回 0"。 */
+          flowLog(
+            `[flowchart] restore-applied readback scale=${scale.value}` +
+              ` tx=${translateX.value} ty=${translateY.value}`,
+          );
+        }
         return;
       }
       /* 这条缓存看不见任何东西 —— 无论什么原因，都不如重新 fit。 */
@@ -883,7 +891,7 @@ export function TaskFlowChartView({
 
   /* 诊断：裁剪矩形每次真正变化时打一条（已被 visibleRectQuantizedKeyRef 节流，不会刷屏）。 */
   const publishVisibleWorldRect = useCallback(
-    (minX: number, minY: number, vw: number, vh: number, s: number) => {
+    (minX: number, minY: number, vw: number, vh: number, s: number, rawTx = 0, rawTy = 0) => {
       const safeS = s < 0.0001 ? 0.0001 : s;
       const marginWorld = 120 / safeS;
       const maxX = minX + vw;
@@ -905,7 +913,8 @@ export function TaskFlowChartView({
       };
       if (__DEV__) {
         flowLog(`[flowchart] visibleRect x=[${Math.round(rect.minX)},${Math.round(rect.maxX)}]` +
-            ` y=[${Math.round(rect.minY)},${Math.round(rect.maxY)}] scale=${s}`,
+            ` y=[${Math.round(rect.minY)},${Math.round(rect.maxY)}] scale=${s}` +
+            ` rawTx=${Math.round(rawTx)} rawTy=${Math.round(rawTy)}`,
         );
       }
       setVisibleWorldRect(rect);
@@ -925,11 +934,15 @@ export function TaskFlowChartView({
         vw: w / safe,
         vh: h / safe,
         s: safe,
+        rawTx: translateX.value,
+        rawTy: translateY.value,
       };
     },
     (curr) => {
       if (curr.vw <= 0 || curr.vh <= 0) return;
-      runOnJS(publishVisibleWorldRect)(curr.minX, curr.minY, curr.vw, curr.vh, curr.s);
+      /* 探针：把 worklet 侧真正读到的原始 shared value 一并带出来 —— 判断到底是
+         "反应式读到了旧值"还是"值真的被改回去了"。 */
+      runOnJS(publishVisibleWorldRect)(curr.minX, curr.minY, curr.vw, curr.vh, curr.s, curr.rawTx, curr.rawTy);
     },
     [publishVisibleWorldRect]
   );
