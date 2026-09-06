@@ -641,6 +641,9 @@ function CoplannerPage({
       insidePager
       /* 按项目缓存视口（与 Desktop 同粒度）：切回来停在上次离开的缩放/平移上。 */
       viewportCacheKey={projectId}
+      /* 底色跟工作区同层（collabWorkspaceLayer 也是 drawerBackground），
+         否则流程图会是一块突兀的白板压在暗一档的工作区上。 */
+      backgroundColor={colors.drawerBackground}
     />
   );
 }

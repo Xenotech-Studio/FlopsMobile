@@ -579,6 +579,11 @@ export type TaskFlowChartViewProps = {
    * 有缓存就恢复、没有才「缩到全图」；不传 = 不缓存，每次都 fit（旧行为）。
    */
   viewportCacheKey?: string;
+  /**
+   * 画布底色。默认聊天页画布色（ProjectScreen 的原样）；协同工作区传工作区底色
+   * （drawerBackground），让流程图跟它所在的那层同色，不再是一块突兀的白板。
+   */
+  backgroundColor?: string;
 };
 
 /** 与 Web `FlowChart.css` --flow-chore-region-fill / `EditableNode.css` .chore-area-unified 一致 */
@@ -591,8 +596,10 @@ export function TaskFlowChartView({
   bottomInset = 0,
   insidePager = false,
   viewportCacheKey,
+  backgroundColor,
 }: TaskFlowChartViewProps) {
   const { colors, isDark } = useAppTheme();
+  const canvasBg = backgroundColor ?? colors.chatScreenBackground;
   const choreRegionFill = isDark ? CHORE_REGION_FILL_DARK : CHORE_REGION_FILL_LIGHT;
   /** 与 Web 画布边线浅色 #b1b1b7、深色 #3e3e3e 一致 */
   const choreRegionStroke = isDark ? '#3e3e3e' : WEB.edge;
@@ -724,12 +731,23 @@ export function TaskFlowChartView({
       }
       /* 这条缓存看不见任何东西 —— 无论什么原因，都不如重新 fit。 */
     }
-    const { scale: s, translateX: tx, translateY: ty } = fitFlowChartToViewport(
+    /**
+     * 【画布铺满、内容只在"看得见的那条带"里居中】
+     *
+     * root 不再吃 topInset/bottomInset —— 那会把 panSlot 连同背景一起缩掉，画布就在顶栏
+     * 渐变和 sheet 上沿被切一刀。现在背景/点阵铺满整个组件，**只有 fit 按 inset 收窄**：
+     * 在 (整宽, 整高 − 上下 inset) 里算居中，再把 ty 整体下移 topInset。
+     * 于是内容落在 header 与 sheet 之间那条带子里，而画布本身一直延伸到它们后面 ——
+     * 跟普通聊天页"消息滚到顶栏后面渐隐"是同一套观感。
+     */
+    const bandH = Math.max(1, effViewportH - topInset - bottomInset);
+    const { scale: s, translateX: tx, translateY: tyBand } = fitFlowChartToViewport(
       effViewportW,
-      effViewportH,
+      bandH,
       svgW,
       svgH
     );
+    const ty = tyBand + topInset;
     scale.value = s;
     translateX.value = tx;
     translateY.value = ty;
@@ -765,6 +783,8 @@ export function TaskFlowChartView({
     nodesDraw,
     viewportCacheKey,
     viewportPrefsTick,
+    topInset,
+    bottomInset,
   ]);
 
   useEffect(() => {
@@ -1111,7 +1131,7 @@ export function TaskFlowChartView({
       <View
         style={[
           styles.empty,
-          { paddingTop: topInset, paddingBottom: bottomInset, backgroundColor: colors.chatScreenBackground },
+          { backgroundColor: canvasBg },
         ]}
       >
         <Text style={[styles.emptyText, { color: colors.textMuted }]}>该项目暂无任务</Text>
@@ -1123,7 +1143,7 @@ export function TaskFlowChartView({
   if (isBuilding) {
     return (
       <View
-        style={[styles.root, { paddingTop: topInset, paddingBottom: bottomInset, backgroundColor: colors.chatScreenBackground }]}
+        style={[styles.root, { backgroundColor: canvasBg }]}
       >
         <View style={styles.empty}>
           <ActivityIndicator size="large" color={colors.primary} />
@@ -1135,7 +1155,7 @@ export function TaskFlowChartView({
   if (chartError) {
     return (
       <View
-        style={[styles.root, { paddingTop: topInset, paddingBottom: bottomInset, backgroundColor: colors.chatScreenBackground }]}
+        style={[styles.root, { backgroundColor: canvasBg }]}
       >
         <View style={styles.chartErrorBox}>
           <Text style={[styles.chartErrorTitle, { color: colors.textPrimary }]}>流程图数据异常</Text>
@@ -1146,12 +1166,6 @@ export function TaskFlowChartView({
             请切换到「列表」或「日历」后重试；若仅 Flow 异常，可稍后再试或到网页端查看。
           </Text>
         </View>
-        <Text
-          style={[styles.hint, { backgroundColor: colors.surfaceMuted, color: colors.textMuted }]}
-          numberOfLines={2}
-        >
-          与网页版相同布局 · 单指拖动 · 双指捏合缩放
-        </Text>
       </View>
     );
   }
@@ -1162,7 +1176,7 @@ export function TaskFlowChartView({
   const slotH = Math.max(1, effViewportH);
 
   return (
-    <View style={[styles.root, { paddingTop: topInset, paddingBottom: bottomInset, backgroundColor: colors.chatScreenBackground }]}>
+    <View style={[styles.root, { backgroundColor: canvasBg }]}>
       <GestureDetector gesture={flowGestures}>
         <View style={styles.panSlot} onLayout={onCanvasLayout}>
           <AnimatedSvg
@@ -1186,7 +1200,7 @@ export function TaskFlowChartView({
                 />
               </Pattern>
             </Defs>
-            <SvgRect x={0} y={0} width={svgW} height={svgH} fill={colors.chatScreenBackground} />
+            <SvgRect x={0} y={0} width={svgW} height={svgH} fill={canvasBg} />
             <SvgRect x={0} y={0} width={svgW} height={svgH} fill={`url(#${patternId})`} />
             {visibleChoreRegions.map((r) => (
               <React.Fragment key={`chore-region-${r.parentId}`}>
@@ -1270,12 +1284,6 @@ export function TaskFlowChartView({
           </Animated.View>
         </View>
       </GestureDetector>
-      <Text
-        style={[styles.hint, { backgroundColor: colors.surfaceMuted, color: colors.textMuted }]}
-        numberOfLines={1}
-      >
-        与网页版相同布局 · 单指拖动 · 双指捏合缩放
-      </Text>
     </View>
   );
 }
@@ -1315,11 +1323,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
     textAlign: 'center',
-  },
-  hint: {
-    fontSize: 11,
-    textAlign: 'center',
-    paddingVertical: 6,
   },
   nodeWrap: {
     position: 'absolute',
