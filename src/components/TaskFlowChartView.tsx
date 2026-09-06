@@ -26,6 +26,7 @@ import Animated, {
   useAnimatedProps,
   useAnimatedReaction,
   runOnJS,
+  runOnUI,
 } from 'react-native-reanimated';
 import Svg, { Path, Defs, Pattern, Rect as SvgRect, Circle, Text as SvgText } from 'react-native-svg';
 import type { TaskItem } from '../taskApi';
@@ -665,6 +666,49 @@ export function TaskFlowChartView({
   const lastViewportRef = useRef<{ scale: number; tx: number; ty: number } | null>(null);
 
   /**
+   * 【视口三元组一次性写到 UI 线程】—— 不要在 JS 线程上直接 `scale.value = ...`。
+   *
+   * Reanimated **4** 换掉了 shared value 在 JS 侧的语义
+   * （node_modules/react-native-reanimated/src/mutables.ts → makeMutableNative）：
+   *
+   *   set value → scheduleOnUI(...)   // 异步**排队**，本 tick 不生效
+   *   get value → runOnUISync(...)    // 同步**插队**，读的是 UI 线程此刻的值
+   *
+   * 两个后果，我们两个都踩到了：
+   *
+   * 1. JS 线程上「写完立刻读」必然读到写之前的值 —— 探针日志里那条
+   *    `restore-applied readback scale=1 tx=41 ty=337` 就是这么来的，不是"另一个实例"。
+   * 2. 更要命：任何「JS 线程读-改-写」都会拿**过期值**算出结果、再排到别人的写入
+   *    后面，把刚恢复/fit 好的视口整个覆盖掉。applyClamp 原来就是这么干的，
+   *    它把 restore 写的 (-1413.8, -1257.2) 换成了拿旧值 (41,337) 钳出来的 (0,0)
+   *    —— 5153×3220 的图钉在左上角，屏幕上就是一片空白。
+   *
+   * 所以视口写入统一收进 UI 线程的一个 worklet：三个值原子落地（不会出现"scale 换了、
+   * translate 还没换"的中间帧），也天然跟手势 / clamp 的写入排在同一条队列上。
+   */
+  const applyViewportOnUI = useCallback(
+    (s: number, tx: number, ty: number, minScale: number, label: string) => {
+      runOnUI(
+        (nextScale: number, nextTx: number, nextTy: number, nextMin: number, tag: string) => {
+          'worklet';
+          scale.value = nextScale;
+          translateX.value = nextTx;
+          translateY.value = nextTy;
+          minPinchScale.value = nextMin;
+          if (tag) {
+            /* 读回探针只能在 UI 线程做 —— JS 侧读不到刚排队的写入（见上）。 */
+            runOnJS(flowLog)(
+              `[flowchart]${tag} applied scale=${scale.value}` +
+                ` tx=${translateX.value} ty=${translateY.value}`,
+            );
+          }
+        },
+      )(s, tx, ty, minScale, label);
+    },
+    [scale, translateX, translateY, minPinchScale],
+  );
+
+  /**
    * 【有效视口】panSlot 的 onLayout 是主来源；**量不到时用窗口尺寸减 inset 兜底**。
    *
    * 起因：协同工作区把这个组件放进了 PagerView 的懒挂载页里，真机上出现过 onLayout 没给出
@@ -746,22 +790,17 @@ export function TaskFlowChartView({
         );
       }
       if (showsSomething) {
-        scale.value = cached.scale;
-        translateX.value = cached.tx;
-        translateY.value = cached.ty;
-        /* 恢复值可能低于捏合下限（大图），放宽下限否则一捏就被弹回去。 */
-        minPinchScale.value = Math.min(MIN_FLOW_SCALE, cached.scale);
+        applyViewportOnUI(
+          cached.scale,
+          cached.tx,
+          cached.ty,
+          /* 恢复值可能低于捏合下限（大图），放宽下限否则一捏就被弹回去。 */
+          Math.min(MIN_FLOW_SCALE, cached.scale),
+          __DEV__ ? `${tagRef.current} restore` : '',
+        );
         lastViewportRef.current = { scale: cached.scale, tx: cached.tx, ty: cached.ty };
         viewportOwnedRef.current = true;
         visibleRectQuantizedKeyRef.current = '';
-        if (__DEV__) {
-          /* 探针：赋值后立刻读回。日志里 visibleRect 反解出 tx=ty=0，但这里写的是恢复值 ——
-             读回值能区分"根本没写进去"和"写进去又被别人改回 0"。 */
-          flowLog(
-            `[flowchart]${tagRef.current} restore-applied readback scale=${scale.value}` +
-              ` tx=${translateX.value} ty=${translateY.value}`,
-          );
-        }
         return;
       }
       /* 这条缓存看不见任何东西 —— 无论什么原因，都不如重新 fit。 */
@@ -783,11 +822,14 @@ export function TaskFlowChartView({
       svgH
     );
     const ty = tyBand + topInset;
-    scale.value = s;
-    translateX.value = tx;
-    translateY.value = ty;
-    /* fit 比常规捏合下限还小（大图）时，把下限放宽到 fit —— 否则捏一下就弹回去。 */
-    minPinchScale.value = Math.min(MIN_FLOW_SCALE, s);
+    applyViewportOnUI(
+      s,
+      tx,
+      ty,
+      /* fit 比常规捏合下限还小（大图）时，把下限放宽到 fit —— 否则捏一下就弹回去。 */
+      Math.min(MIN_FLOW_SCALE, s),
+      __DEV__ ? `${tagRef.current} fit` : '',
+    );
     visibleRectQuantizedKeyRef.current = '';
     /**
      * **fit 的结果不写缓存**，只更新 lastViewportRef。
@@ -811,10 +853,7 @@ export function TaskFlowChartView({
     svgH,
     effViewportW,
     effViewportH,
-    scale,
-    translateX,
-    translateY,
-    minPinchScale,
+    applyViewportOnUI,
     nodesDraw,
     viewportCacheKey,
     viewportPrefsTick,
@@ -1008,14 +1047,24 @@ export function TaskFlowChartView({
     visibleWorldRect,
   ]);
 
+  /**
+   * 画布/视口变化后把平移收回合法范围。**整个读-改-写都必须在 UI 线程做**（见
+   * applyViewportOnUI 的说明）：这里原来是 JS 线程版本，读到的 translate 是上一轮的
+   * 陈旧值，钳完再排队写回去 —— 正好覆盖掉同一次 commit 里 restore/fit 刚排的写入。
+   * 搬到 UI 线程后它排在那些写入**之后**执行、读到的是新值，钳的就是恢复好的视口
+   * （合法值钳完不变，等于无操作），不再互相打架。
+   */
   const applyClamp = useCallback(() => {
     const vw = viewport.w;
     const vh = viewport.h;
     if (vw <= 0 || vh <= 0) return;
-    const s = scale.value;
-    const c = clampFlowCanvasPan(translateX.value, translateY.value, vw, vh, svgW * s, svgH * s);
-    translateX.value = c.x;
-    translateY.value = c.y;
+    runOnUI((w: number, h: number, cw: number, ch: number) => {
+      'worklet';
+      const s = scale.value;
+      const c = clampFlowCanvasPanWorklet(translateX.value, translateY.value, w, h, cw * s, ch * s);
+      translateX.value = c.x;
+      translateY.value = c.y;
+    })(vw, vh, svgW, svgH);
   }, [viewport.w, viewport.h, svgW, svgH, translateX, translateY, scale]);
 
   useEffect(() => {
