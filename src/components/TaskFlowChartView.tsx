@@ -12,6 +12,13 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import {
+  ensureFlowViewports,
+  flowViewportsReady,
+  flushFlowViewports,
+  readFlowViewport,
+  saveFlowViewport,
+} from '../utils/flowViewportStore';
 import { normalizeServerUrl, DEFAULT_SERVER_URL } from '../config';
 import Animated, {
   useSharedValue,
@@ -566,6 +573,12 @@ export type TaskFlowChartViewProps = {
    * 真要看细节还有双指缩放，以及走马灯的圆点可以直接点着切页。
    */
   insidePager?: boolean;
+  /**
+   * 按项目缓存视口（缩放 + 平移）的 key —— 传 **projectId**，与 Desktop 的粒度一致
+   * （FitViewOnLoad + ViewportStore：同一个项目在哪儿打开都是同一个视口）。
+   * 有缓存就恢复、没有才「缩到全图」；不传 = 不缓存，每次都 fit（旧行为）。
+   */
+  viewportCacheKey?: string;
 };
 
 /** 与 Web `FlowChart.css` --flow-chore-region-fill / `EditableNode.css` .chore-area-unified 一致 */
@@ -577,6 +590,7 @@ export function TaskFlowChartView({
   topInset = 0,
   bottomInset = 0,
   insidePager = false,
+  viewportCacheKey,
 }: TaskFlowChartViewProps) {
   const { colors, isDark } = useAppTheme();
   const choreRegionFill = isDark ? CHORE_REGION_FILL_DARK : CHORE_REGION_FILL_LIGHT;
@@ -603,6 +617,17 @@ export function TaskFlowChartView({
    * 那就以 fit 为准，否则用户一捏合就被弹回 0.35、又回到"只看得见左上角"的状态。
    */
   const minPinchScale = useSharedValue(MIN_FLOW_SCALE);
+  /**
+   * 视口是否已被「恢复的缓存」或「用户手势」接管 —— 接管后**不再自动 fit**。
+   *
+   * 对齐 Desktop：它只在切项目且无缓存时 fitView，之后窗口怎么变都不再自动重排。
+   * 我们这边 effViewport 会随 sheet 换档变化，不设这个闸的话每换一档就把用户调好的
+   * 视口顶掉。反过来，在用户还没碰、也没恢复过之前保留自动 fit —— 首帧可能用的是
+   * 窗口尺寸兜底值，等真实 onLayout 回来还得靠它再摆一次。
+   */
+  const viewportOwnedRef = useRef(false);
+  /** 最后一次有效视口：卸载时用它落盘，不在 cleanup 里现读 shared value。 */
+  const lastViewportRef = useRef<{ scale: number; tx: number; ty: number } | null>(null);
 
   /**
    * 【有效视口】panSlot 的 onLayout 是主来源；**量不到时用窗口尺寸减 inset 兜底**。
@@ -633,6 +658,8 @@ export function TaskFlowChartView({
     if (isBuilding || chartError || svgW <= 0 || svgH <= 0 || effViewportW <= 0 || effViewportH <= 0) {
       return;
     }
+    /* 已被缓存恢复 / 用户手势接管：不再自动重排（见 viewportOwnedRef）。 */
+    if (viewportOwnedRef.current) return;
     const { scale: s, translateX: tx, translateY: ty } = fitFlowChartToViewport(
       effViewportW,
       effViewportH,
@@ -645,6 +672,10 @@ export function TaskFlowChartView({
     /* fit 比常规捏合下限还小（大图）时，把下限放宽到 fit —— 否则捏一下就弹回去。 */
     minPinchScale.value = Math.min(MIN_FLOW_SCALE, s);
     visibleRectQuantizedKeyRef.current = '';
+    /* fit 出来的也存一份（建立初值），但**不置 owned** —— 视口尺寸还可能再变
+       （兜底值 → 真实 onLayout、sheet 换档），那时还该由 fit 重新摆。 */
+    lastViewportRef.current = { scale: s, tx, ty };
+    if (viewportCacheKey) saveFlowViewport(viewportCacheKey, { scale: s, tx, ty });
     if (__DEV__) {
       flowLog(`[flowchart] fit vp=${effViewportW}x${effViewportH} svg=${svgW}x${svgH}` +
           ` -> scale=${s} tx=${tx} ty=${ty}` +
@@ -662,6 +693,7 @@ export function TaskFlowChartView({
     translateX,
     translateY,
     minPinchScale,
+    viewportCacheKey,
   ]);
 
   useEffect(() => {
@@ -699,6 +731,63 @@ export function TaskFlowChartView({
       cancelAnimationFrame(raf);
     };
   }, [tasks]);
+
+  /**
+   * 【按项目恢复视口】对齐 Desktop 的 FitViewOnLoad ①：有缓存就直接摆过去，没有才让 fit 跑。
+   *
+   * 恢复的 scale **不受 MIN_FLOW_SCALE 钳制** —— 那是捏合下限；用户上次可能就停在比它更小的
+   * 全图比例上（大图 fit 出来就低于它，见 FIT_MIN_SCALE），钳一下等于把人踢回左上角。
+   * 同时把捏合下限放宽到不高于恢复值，否则一捏就被弹上去。
+   */
+  useEffect(() => {
+    if (!viewportCacheKey) return;
+    let cancelled = false;
+    const apply = () => {
+      if (cancelled) return;
+      const vp = readFlowViewport(viewportCacheKey);
+      if (!vp) return;
+      scale.value = vp.scale;
+      translateX.value = vp.tx;
+      translateY.value = vp.ty;
+      minPinchScale.value = Math.min(MIN_FLOW_SCALE, vp.scale);
+      lastViewportRef.current = { scale: vp.scale, tx: vp.tx, ty: vp.ty };
+      /* 标记接管：别让随后的 fit effect（svg/视口就绪时会跑）把它顶掉。 */
+      viewportOwnedRef.current = true;
+      visibleRectQuantizedKeyRef.current = '';
+      if (__DEV__) {
+        flowLog(
+          `[flowchart] restore key=${viewportCacheKey} scale=${vp.scale} tx=${vp.tx} ty=${vp.ty}`,
+        );
+      }
+    };
+    if (flowViewportsReady()) apply();
+    else void ensureFlowViewports().then(apply);
+    return () => {
+      cancelled = true;
+    };
+  }, [viewportCacheKey, scale, translateX, translateY, minPinchScale]);
+
+  /** 手势结束 / fit 落定后记一笔（worklet 侧经 runOnJS 调到这儿）。 */
+  const commitViewport = useCallback(
+    (sc: number, tx: number, ty: number) => {
+      lastViewportRef.current = { scale: sc, tx, ty };
+      viewportOwnedRef.current = true;
+      if (viewportCacheKey) saveFlowViewport(viewportCacheKey, { scale: sc, tx, ty });
+    },
+    [viewportCacheKey],
+  );
+
+  /* 卸载（切走 / 换项目）时立刻落盘：别把最后一次调整留在防抖窗口里丢掉。
+     用 lastViewportRef 而不是在 cleanup 里现读 shared value —— 与 Desktop 同一条教训
+     （它那边卸载时 store.transform 已被重置，现读会把默认原点写盘覆盖正确视口）。 */
+  useEffect(() => {
+    const key = viewportCacheKey;
+    return () => {
+      const vp = lastViewportRef.current;
+      if (key && vp) saveFlowViewport(key, vp);
+      flushFlowViewports();
+    };
+  }, [viewportCacheKey]);
 
   useEffect(() => {
     canvasW.value = svgW;
@@ -877,6 +966,8 @@ export function TaskFlowChartView({
         );
         translateX.value = c.x;
         translateY.value = c.y;
+        /* 落定即记账：手势结束才写，比逐帧存省得多，也正好是"用户满意的那一帧"。 */
+        runOnJS(commitViewport)(s, c.x, c.y);
       });
 
     const pinch = Gesture.Pinch()
@@ -916,13 +1007,15 @@ export function TaskFlowChartView({
         );
         translateX.value = c.x;
         translateY.value = c.y;
+        /* 落定即记账：手势结束才写，比逐帧存省得多，也正好是"用户满意的那一帧"。 */
+        runOnJS(commitViewport)(s, c.x, c.y);
       });
 
     return Gesture.Simultaneous(pan, pinch);
     /* insidePager 要列进来：它决定 pan 的激活条件，换了就得重建手势。其余捕获的都是
        shared value / worklet 常量，本来就稳定。 */
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stable shared refs
-  }, [insidePager]);
+  }, [insidePager, commitViewport]);
 
   const canvasStyle = useAnimatedStyle(() => ({
     transformOrigin: 'left top',

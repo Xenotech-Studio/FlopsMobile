@@ -639,6 +639,8 @@ function CoplannerPage({
       topInset={topInset}
       bottomInset={bottomInset}
       insidePager
+      /* 按项目缓存视口（与 Desktop 同粒度）：切回来停在上次离开的缩放/平移上。 */
+      viewportCacheKey={projectId}
     />
   );
 }

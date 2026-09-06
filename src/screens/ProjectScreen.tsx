@@ -701,7 +701,13 @@ export function ProjectScreen({ projectId, projectName }: ProjectScreenProps) {
                 </View>
               </View>
             ) : (
-              <TaskFlowChartView key={projectId} tasks={flowChartTasks} topInset={headerHeight} />
+              <TaskFlowChartView
+                key={projectId}
+                tasks={flowChartTasks}
+                topInset={headerHeight}
+                /* 与 Desktop 一致：按项目记住视口，回来时停在上次离开的位置。 */
+                viewportCacheKey={projectId}
+              />
             ))}
         </View>
       </ScreenErrorBoundary>
