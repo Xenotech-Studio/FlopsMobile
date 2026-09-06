@@ -45,6 +45,7 @@ import Reanimated, {
   runOnJS,
   useAnimatedReaction,
   useAnimatedStyle,
+  useDerivedValue,
   useSharedValue,
   withSpring,
   withTiming,
@@ -581,8 +582,6 @@ export function ChatScreen({
   /** sheet 当前停在第几档（onAnimate 给目标档、onChange 收尾确认）。 */
   const [collabSheetIndex, setCollabSheetIndex] = useState(1);
   /** 键盘是否弹起 + 弹起高度：协同模式下聊天区高度要按键盘上沿截断（见 collabSheetChatHeight）。 */
-  const [collabKeyboardShown, setCollabKeyboardShown] = useState(false);
-  const [collabKeyboardHeight, setCollabKeyboardHeight] = useState(0);
   /** 底部渐变条高度（叠在滚动内容上，透明→白） */
   const gradientStripHeight = 48;
   /** 输入行高度（输入框+发送+底部留白，模型/助手条绝对叠在留白内，不把整块顶上去） */
@@ -674,22 +673,13 @@ export function ChatScreen({
     collabSheetSnapHeights[collabSheetIndex] ?? collabSheetSnapHeights[collabSheetSnapHeights.length - 1];
   const collabSheetChatHeight = useMemo(() => {
     if (collabSheetContainerHeight <= 0) return 0;
-    const maxH = collabSheetSnapHeights[collabSheetSnapHeights.length - 1];
-    /* 键盘弹起时 interactive 会把 sheet 顶到「最高档 - 键盘高」：可视区涨到最高档，
-       再被键盘上沿截断。没弹键盘就是当前档。 */
-    const visible = collabKeyboardShown
-      ? Math.min(maxH, collabSheetContainerHeight - collabKeyboardHeight)
-      : collabSheetVisibleHeight;
-    /* 不再扣把手高：内容盒的上沿已经被负 marginTop 顶回 sheet 顶沿（见 collabSheetContent），
-       所以它要的就是「当前档整档高」，扣了就会短一截、底下多出一条空带。 */
-    return Math.max(0, visible);
-  }, [
-    collabSheetContainerHeight,
-    collabSheetSnapHeights,
-    collabSheetVisibleHeight,
-    collabKeyboardShown,
-    collabKeyboardHeight,
-  ]);
+    /* **不再按键盘截断**：键盘弹起时整个 sheet 会跟着 composer 上移同样的距离
+       （见 collabSheetKbShift），底沿正好停在键盘上沿，整档高度原样可见 —— 高度不用动。
+       旧写法是在补偿 gorhom `keyboardBehavior='interactive'` 那种「直接跳到最高档再减键盘高」
+       的位移，那条行为已经关掉（改传 'extend'）。
+       也不扣把手高：内容盒的上沿已经被负 marginTop 顶回 sheet 顶沿（见 collabSheetContent）。 */
+    return Math.max(0, collabSheetVisibleHeight);
+  }, [collabSheetContainerHeight, collabSheetVisibleHeight]);
   /* bottomOverlay 的 bottom 偏移：iOS 完全由 lib KAV 缩 scrollAndGradientWrap (flex:1) 自动上浮
    * (base=0)；Android lib KAV 同样接管几何，base=0 即可（之前 RN KAV 在 Android adjustResize
    * 下 absolute children 飘忽，那条手挂 h offset 是兜底）。lib 两端统一 native 接管。 */
@@ -1443,6 +1433,40 @@ export function ChatScreen({
     conversationId,
     collabDismissProgress,
   ]);
+  /**
+   * 【键盘弹起时 sheet 跟着 composer 上移同样的距离】
+   *
+   * 为什么不用 gorhom 自己那套：`keyboardBehavior='interactive'` 的实现是
+   * `Math.max(0, highestDetentPosition - keyboardHeightInContainer)` —— 不管当前停在哪档，
+   * 键盘一弹就**先跳到最高档**再减键盘高。停在 peek 时那是整屏的窜动，根本不是"跟着 composer
+   * 平移"。而且它的键盘量来自自己的 keyboardWillShow + 用 easing/duration 重建的 timing，
+   * 跟 composer 那侧 react-native-keyboard-controller 的逐帧 frame 不是同一个源 ——
+   * 就算距离对了，曲线也对不齐，中途必然错位。
+   *
+   * 所以：**把键盘从 gorhom 手里拿走**（keyboardBehavior 改 'extend'：源码里 extend 只影响
+   * BottomSheetContent 的高度计算，getEvaluatedPosition 里没有它的分支 = 位置不受键盘影响），
+   * 位移改由这里统一驱动，跟 composer 共用同一个 kbAnimHeight。同源 = 逐帧同步。
+   *
+   * 钳制：最多上移到 sheet 顶沿贴住 header 下沿（= 容器顶，gorhom 那句 `Math.max(0, ...)`
+   * 也是这个意思）。不钳的话最高档 + 全键盘会把把手推到屏幕外、拖都拖不着。
+   * peek / mid 这些常用档位留白足够，实际就是完整跟随。
+   */
+  const collabSheetKbShift = useDerivedValue(() => {
+    const kb = Math.max(0, -kbAnimHeight.value); // kbAnimHeight 是负数偏移语义
+    const room = Math.max(0, collabSheetPosition.value - headerHeight);
+    return Math.min(kb, room);
+  });
+  /** sheet 平移后的**视觉**顶沿。走马灯指示器 / 工作区底部渐变跟的是看得见的那条边。
+   *  档位判定（顶部淡出带、回底热区、过顶溶解）一律仍用未平移的 collabSheetPosition ——
+   *  键盘只是把 sheet 整体挪了一下，它停在哪一档没变。 */
+  const collabSheetVisualTopY = useDerivedValue(
+    () => collabSheetPosition.value - collabSheetKbShift.value,
+  );
+  /** sheet 整体跟随键盘的位移。挂在 BottomSheet 外面一层，gorhom 内部坐标系不受影响 ——
+   *  拖拽用的是手势位移增量，常量父级 transform 不会让它算错。 */
+  const collabSheetKbStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: -collabSheetKbShift.value }],
+  }));
   /** 协同模式下装聊天消息区的 sheet，留在这里供程序化展开 / 折叠。 */
   const collabSheetRef = useRef<BottomSheet>(null);
   /** sheet 停在最低档（peek）时顶沿的 y = 指示器能落到的最低处。首帧还没量到高度时退化成
@@ -1660,25 +1684,6 @@ export function ChatScreen({
   const collabEntryStyle = useAnimatedStyle(() => ({
     opacity: interpolate(collabDismissProgress.value, [0.35, 1], [0, 1], Extrapolation.CLAMP),
   }));
-  /* 键盘开合：协同模式下聊天区高度要按键盘上沿截断（见 collabSheetChatHeight）。
-     只在协同模式挂监听，普通聊天页不用为此多两个订阅。 */
-  useEffect(() => {
-    if (!collabActive) {
-      setCollabKeyboardShown(false);
-      return;
-    }
-    const showEvt = IS_ANDROID ? 'keyboardDidShow' : 'keyboardWillShow';
-    const hideEvt = IS_ANDROID ? 'keyboardDidHide' : 'keyboardWillHide';
-    const subShow = Keyboard.addListener(showEvt, (e) => {
-      setCollabKeyboardHeight(Math.round(e?.endCoordinates?.height ?? 0));
-      setCollabKeyboardShown(true);
-    });
-    const subHide = Keyboard.addListener(hideEvt, () => setCollabKeyboardShown(false));
-    return () => {
-      subShow.remove();
-      subHide.remove();
-    };
-  }, [collabActive]);
   /* 进/出协同模式时消息区换了容器 → React 必然重挂一次（跨父节点没法保留实例），
      滚动位置随之回到顶部。重新武装钉底窗口，让内容量完高度后自己贴回底部
      （armForOpen 是时间窗口式的，图片/附件慢慢量出高度也能跟上）。 */
@@ -6245,7 +6250,7 @@ export function ChatScreen({
               /* 当前档真正占掉的高度：居中类页面按它算可视区（sheet 一展开就得往上让） */
               viewportBottomInset={collabSheetVisibleHeight}
               /* 走马灯指示器贴着 sheet 上沿走：sheet 拖到哪档，tabs 就跟到哪 */
-              sheetTopY={collabSheetPosition}
+              sheetTopY={collabSheetVisualTopY}
               sheetTopYMax={collabSheetLowestTopY}
             />
           </Reanimated.View>
@@ -6253,11 +6258,16 @@ export function ChatScreen({
       ) : null}
       {/* ── 协同工作模式：聊天消息区落进 bottom sheet ──
        * 位置在 KeyboardAvoidingView **之前** = 画在 composer 之下：折叠 sheet 也能边看文档边输入。
-       * 键盘避让在这里由 sheet 自己做（keyboardBehavior='interactive'，容器是整页高、
-       * 量到的 containerOffset.bottom=0，偏移量正好是键盘高）；composer 那侧仍归 KAV 管。
-       * 两者各自避让同一个键盘、互不叠加 —— 把 sheet 塞进 KAV 里才会双重避让（KAV 先缩容器、
-       * sheet 再按整个键盘高往上顶）。 */}
+       *
+       * 键盘避让：sheet **仍然不能塞进 KAV**（塞进去会双重避让 —— KAV 先缩容器、sheet 再自己
+       * 顶一次）。改成外面套一层只做位移的浮层，位移量与 composer 同源（kbAnimHeight），
+       * 于是两者逐帧同步、距离相同；gorhom 那侧的键盘行为已关（keyboardBehavior='extend'）。
+       * 浮层 box-none：它铺满整页，不能把触摸从底下的工作区抢走。 */}
       {collabActive ? (
+        <Reanimated.View
+          style={[StyleSheet.absoluteFill, collabSheetKbStyle]}
+          pointerEvents="box-none"
+        >
         <BottomSheet
           ref={collabSheetRef}
           snapPoints={collabSheetSnapPoints}
@@ -6341,12 +6351,14 @@ export function ChatScreen({
              BottomSheetScrollView：关掉内容区拖拽手势，免得跟列表滚动抢 responder。
              sheet 靠顶部 handle 拖，或由 collabSheetRef 程序化展开/折叠。 */
           enableContentPanningGesture={false}
-          /* interactive 的实际语义（lib 内 getEvaluatedPosition）：键盘一弹就把 sheet 顶到
-             「最高档 - 键盘高」，收键盘再由 blurBehavior='restore' 回到原来那档。于是
-             「点输入框 → 聊天升起来看得见上下文 → 收键盘 → 回到刚才那档继续看文档」，
-             折叠态也不会被永久顶开。 */
-          keyboardBehavior="interactive"
-          keyboardBlurBehavior="restore"
+          /* **键盘不归 gorhom 管**：'extend' 在源码里只影响 BottomSheetContent 的高度计算
+             （animatedContentHeightMax 减去键盘高），getEvaluatedPosition 里**没有它的位置
+             分支** = sheet 的位置完全不受键盘影响。而我们的内容盒是显式高度、又在 detached
+             下 overflow:visible，gorhom 那份内容高度根本没参与，所以 extend 在这里是纯粹的
+             「什么都不做」—— 正是我们要的。
+             位移改由 collabSheetKbShift 统一驱动，跟 composer 共用 kbAnimHeight，逐帧同步。
+             blurBehavior 一并去掉：sheet 从没因为键盘离开过档位，没有什么可 restore 的。 */
+          keyboardBehavior="extend"
           /* 面与把手都自渲染：溶解过渡要让这两样跟着进度淡出（见 collabSheetChromeStyle）。
              backgroundStyle 照旧传 —— gorhom 会把它拼进 style 交给下面这个组件，圆角 /
              hairline / 投影全都原样生效 —— 面仍是这一层在画，圆角与投影都没搬家。
@@ -6403,6 +6415,7 @@ export function ChatScreen({
             </Reanimated.View>
           </View>
         </BottomSheet>
+        </Reanimated.View>
       ) : null}
 
       <KeyboardAvoidingView
