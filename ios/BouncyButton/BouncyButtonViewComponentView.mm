@@ -87,9 +87,6 @@ static const CGFloat kPressBounce = 0.0;
 static const NSTimeInterval kReleaseDuration = 0.5;
 static const CGFloat kReleaseBounce = 0.35;
 
-/* 定义在文件末尾（跟其它颜色工具放一起），玻璃胶囊那段在前面就要用，先声明。 */
-static UIColor *_bb_uiColorFromHex(NSString *hex);
-
 @interface BouncyButtonViewComponentView () <RCTBouncyButtonViewViewProtocol>
 @end
 
@@ -110,15 +107,11 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
   // 当前 glass material tint + prominence（控制按钮 base color / 实色感）
   NSString *_glassTintColorHex;
   BOOL _glassProminent;
-  /* 【玻璃胶囊模式】(iOS 26+) —— 一枚玻璃胶囊，内含并排若干格。
-     胶囊本体**就是 _glassButton 本人**（glassButtonConfiguration + cornerStyle=Capsule），
-     胶囊模式下它退化成不吃触摸的背景板；各格是叠在它上面的普通 UIButton。
-     不自己搭 UIVisualEffectView + UIGlassEffect 的原因见 applyCapsuleSegmentsJson。
-     _capsuleMenuButton: 标了 "menu":true 的那一格，UIMenu 挂它身上。 */
-  NSMutableArray<UIButton *> *_capsuleButtons;
-  NSMutableArray<UIView *> *_capsuleDividers;
-  UIButton *_capsuleMenuButton;
-  NSString *_capsuleSegmentsJson;
+  /* 【已移除：玻璃胶囊模式】本组件一度支持「一枚玻璃胶囊 + 并排若干格」（glassCapsuleSegmentsJson）。
+     后来右上角那颗胶囊改用 BouncyGlassCard（项目里已验证能画出玻璃的那套：UIVisualEffectView +
+     UIGlassEffect，形状走 UIView.cornerConfiguration 而非 layer mask），各格退回普通 JS 子 view，
+     这条原生链路就再没有调用方了，整条删掉。**单钮的 glass / SF Symbol / UIMenu 全部保留。**
+     要再做胶囊别翻这里，去看 BouncyGlassCard —— 那才是能出效果的路。 */
   // iOS < 26 legacy 路径
   BOOL _pressing;
   CGFloat _pressScale;
@@ -176,16 +169,6 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
     self.layer.transform = CATransform3DIdentity;
     _pressing = NO;
   }
-  /* 胶囊各格拆掉、_glassButton 恢复成能点的普通圆钮：回收后的下一个 callsite 多半就是它。 */
-  if (_capsuleButtons.count > 0) {
-    for (UIButton *b in _capsuleButtons) [b removeFromSuperview];
-    for (UIView *d in _capsuleDividers) [d removeFromSuperview];
-    _capsuleButtons = nil;
-    _capsuleDividers = nil;
-    _capsuleMenuButton = nil;
-    _glassButton.userInteractionEnabled = YES;
-  }
-  _capsuleSegmentsJson = nil;
   _menuActionsJson = nil;
   _sfSymbolName = nil;
   _sfSymbolPointSize = 0;
@@ -272,16 +255,6 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
     _bouncyDisabled = newViewProps.bouncyDisabled;
     if (_glassButton) {
       _glassButton.enabled = !_bouncyDisabled;
-    }
-  }
-  /* 胶囊要排在 menu 之前处理：菜单得挂到「menu 那一格」上，宿主先立起来。 */
-  if (oldViewProps.glassCapsuleSegmentsJson != newViewProps.glassCapsuleSegmentsJson ||
-      oldViewProps.sfSymbolColorHex != newViewProps.sfSymbolColorHex ||
-      oldViewProps.sfSymbolPointSize != newViewProps.sfSymbolPointSize) {
-    if (_glassButton) {
-      [self applyCapsuleSegmentsJson:RCTNSStringFromString(newViewProps.glassCapsuleSegmentsJson)
-                            colorHex:RCTNSStringFromString(newViewProps.sfSymbolColorHex)
-                           pointSize:newViewProps.sfSymbolPointSize];
     }
   }
   if (oldViewProps.menuActionsJson != newViewProps.menuActionsJson) {
@@ -372,217 +345,6 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
   [super unmountChildComponentView:childComponentView index:index];
 }
 
-// MARK: - Glass capsule mode (iOS 26+)
-
-/* 一枚玻璃胶囊 + 并排若干格。JSON 非空（≥2 段）进胶囊模式，空则回到普通单钮。
-
-   为什么不是「N 颗玻璃按钮并排」：那是 N 枚独立药丸、中间有缝，不是参考图里那种
-   「一整枚 + 中间一条细分隔」。这里的做法是：**胶囊本体沿用本组件已有的 _glassButton**
-   （系统 glassButtonConfiguration + cornerStyle=Capsule，铺满 self.bounds），胶囊模式下
-   把它降级成不吃触摸的背景板；各格是叠在它之上的普通 UIButton，只管命中与内容。
-   于是整块材质由系统画、跟同屏其它玻璃钮同源，我们只排版。
-   「各格独立高亮」由我们给被按的那一格做 scale spring（复用本文件既有的
-   kPressDuration / kReleaseDuration 参数）。 */
-- (void)applyCapsuleSegmentsJson:(NSString *)json
-                        colorHex:(NSString *)colorHex
-                       pointSize:(CGFloat)pointSize {
-  if (@available(iOS 26.0, *)) {
-  } else {
-    return;
-  }
-  if ([json isEqualToString:_capsuleSegmentsJson]) return;
-  _capsuleSegmentsJson = json;
-
-  NSArray *segs = nil;
-  if (json.length > 0) {
-    id parsed = [NSJSONSerialization
-        JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
-                   options:0
-                     error:NULL];
-    if ([parsed isKindOfClass:[NSArray class]] && [(NSArray *)parsed count] >= 2) {
-      segs = parsed;
-    }
-  }
-
-  /* 先拆旧的：胶囊模式是「重建」而不是「增量改」——段数 / 顺序 / 图标都可能变，
-     重建几个 UIButton 的成本远低于维护一套 diff。 */
-  for (UIButton *b in _capsuleButtons) [b removeFromSuperview];
-  for (UIView *d in _capsuleDividers) [d removeFromSuperview];
-  _capsuleButtons = nil;
-  _capsuleDividers = nil;
-  _capsuleMenuButton = nil;
-
-  if (segs == nil) {
-    _glassButton.userInteractionEnabled = YES;
-    /* 菜单宿主回到 _glassButton：重新按当前 JSON 挂一次，别留着指向已销毁的格子。 */
-    NSString *pendingMenu = _menuActionsJson;
-    _menuActionsJson = nil;
-    [self applyMenuActionsJson:pendingMenu ?: @""];
-    return;
-  }
-
-  /* 【胶囊本体 = _glassButton 本人】
-     不再自己搭 UIVisualEffectView + UIGlassEffect。两个理由，都是真机像素量出来的：
-     1) 手搭那版材质根本不显形 —— 胶囊内量到 (218,218,220)，比页面 (246,246,248) 还暗，
-        那是我们自己那层落影透出来的；而同屏返回钮（系统 glassButtonConfiguration）量到
-        (252,252,252)，白得干干净净。材质本身没问题，是搭法不对。
-     2) 就算让它显形，UIGlassEffect 是**容器**玻璃 —— 一层很淡的磨砂，本来就不是按钮那种
-        亮白质感。而目标（Android 版胶囊内 (255,255,255)、返回钮同样 (255,255,255)）要的
-        正是「按钮」那种实白。
-     所以直接复用本组件已有的 _glassButton：它就是一颗 glassButtonConfiguration +
-     cornerStyle=Capsule 的系统玻璃按钮，尺寸跟着 self.bounds 走 —— 天生就是我们要的胶囊，
-     且视觉与同屏返回钮**同款同源**。它在胶囊模式下只当背景板，不吃触摸（触摸归下面各格）。 */
-  _glassButton.hidden = NO;
-  _glassButton.userInteractionEnabled = NO;
-
-  UIColor *tint = _bb_uiColorFromHex(colorHex) ?: [UIColor labelColor];
-  CGFloat symbolSize = pointSize > 0 ? pointSize : 20;
-  _capsuleButtons = [NSMutableArray arrayWithCapacity:segs.count];
-  _capsuleDividers = [NSMutableArray arrayWithCapacity:MAX(0, (NSInteger)segs.count - 1)];
-
-  for (NSUInteger i = 0; i < segs.count; i++) {
-    NSDictionary *seg = segs[i];
-    if (![seg isKindOfClass:[NSDictionary class]]) continue;
-    NSString *segId = [seg[@"id"] isKindOfClass:[NSString class]] ? seg[@"id"] : @"";
-    NSString *symbol = [seg[@"sfSymbol"] isKindOfClass:[NSString class]] ? seg[@"sfSymbol"] : @"";
-    NSString *badge = [seg[@"badge"] isKindOfClass:[NSString class]] ? seg[@"badge"] : @"";
-    BOOL isMenu = [seg[@"menu"] boolValue];
-
-    UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
-    btn.accessibilityIdentifier = segId;
-    btn.tintColor = tint;
-    if (symbol.length > 0) {
-      UIImageSymbolConfiguration *symCfg =
-          [UIImageSymbolConfiguration configurationWithPointSize:symbolSize
-                                                          weight:UIImageSymbolWeightRegular];
-      UIImage *img = [UIImage systemImageNamed:symbol withConfiguration:symCfg];
-      [btn setImage:[img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]
-           forState:UIControlStateNormal];
-    }
-    [btn addTarget:self
-                  action:@selector(handleCapsuleTouchDown:)
-        forControlEvents:UIControlEventTouchDown | UIControlEventTouchDragEnter];
-    [btn addTarget:self
-                  action:@selector(handleCapsuleTouchUp:)
-        forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside |
-                         UIControlEventTouchDragExit | UIControlEventTouchCancel];
-    if (!isMenu) {
-      [btn addTarget:self
-                    action:@selector(handleCapsuleSegmentPress:)
-          forControlEvents:UIControlEventTouchUpInside];
-    }
-    [self addSubview:btn];
-    [_capsuleButtons addObject:btn];
-    if (isMenu) _capsuleMenuButton = btn;
-
-    if (badge.length > 0) {
-      UILabel *badgeLabel = [[UILabel alloc] init];
-      badgeLabel.text = badge;
-      badgeLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
-      badgeLabel.textColor = [UIColor systemBackgroundColor];
-      badgeLabel.textAlignment = NSTextAlignmentCenter;
-      badgeLabel.backgroundColor = [UIColor secondaryLabelColor];
-      badgeLabel.layer.masksToBounds = YES;
-      badgeLabel.tag = 9901;  // layoutSubviews 靠它认出角标
-      [btn addSubview:badgeLabel];
-    }
-
-    if (i + 1 < segs.count) {
-      UIView *divider = [[UIView alloc] init];
-      divider.backgroundColor = [[UIColor separatorColor] colorWithAlphaComponent:0.6];
-      divider.userInteractionEnabled = NO;
-      [self addSubview:divider];
-      [_capsuleDividers addObject:divider];
-    }
-  }
-
-  /* 一行自检：胶囊到底建没建、几格、多大、材质那颗在不在。装机后用
-     `npx react-native log-ios` 或 Xcode 控制台搜 "[BouncyButton] capsule" 就能确认，
-     不用再靠肉眼猜是不是走到了这条路。 */
-  NSLog(@"[BouncyButton] capsule built: segs=%lu bounds=%@ glassBody=%@ menuSeg=%@",
-        (unsigned long)_capsuleButtons.count, NSStringFromCGRect(self.bounds),
-        _glassButton ? @"YES" : @"NO", _capsuleMenuButton ? @"YES" : @"NO");
-
-  /* 菜单改挂到 menu 那一格上：清掉 diff 缓存逼它重建一次。 */
-  NSString *menuJson = _menuActionsJson;
-  _menuActionsJson = nil;
-  [self applyMenuActionsJson:menuJson ?: @""];
-  [self setNeedsLayout];
-}
-
-/** 菜单宿主：胶囊模式挂 menu 那一格，否则还是整颗玻璃钮。 */
-- (UIButton *)menuHostButton {
-  return _capsuleMenuButton ?: _glassButton;
-}
-
-- (void)layoutSubviews {
-  [super layoutSubviews];
-  NSUInteger n = _capsuleButtons.count;
-  if (n == 0) return;
-  /* 胶囊本体是 _glassButton（autoresizingMask 已经让它铺满 self.bounds），这里只排各格。 */
-  CGRect b = self.bounds;
-  CGFloat segW = b.size.width / (CGFloat)n;
-  for (NSUInteger i = 0; i < n; i++) {
-    UIButton *btn = _capsuleButtons[i];
-    btn.frame = CGRectMake(segW * i, 0, segW, b.size.height);
-    UILabel *badgeLabel = (UILabel *)[btn viewWithTag:9901];
-    if (badgeLabel) {
-      [badgeLabel sizeToFit];
-      CGFloat h = 16;
-      CGFloat w = MAX(h, badgeLabel.bounds.size.width + 8);
-      /* 收在格子右上角内侧：贴着胶囊边缘更像一体，也不会压到分隔线。 */
-      badgeLabel.frame = CGRectMake(segW - w - 2, 5, w, h);
-      badgeLabel.layer.cornerRadius = h / 2.0;
-    }
-    if (i < _capsuleDividers.count) {
-      UIView *divider = _capsuleDividers[i];
-      CGFloat dh = 18;
-      CGFloat hairline = 1.0 / MAX(1.0, self.traitCollection.displayScale);
-      divider.frame =
-          CGRectMake(segW * (i + 1) - hairline / 2.0, (b.size.height - dh) / 2.0, hairline, dh);
-    }
-  }
-}
-
-/* 各格独立高亮：只缩被按的那一格的内容（图标 + 角标），玻璃本体交给系统的 interactive。 */
-- (void)handleCapsuleTouchDown:(UIButton *)sender {
-  if (_bouncyDisabled) return;
-  [UIView animateWithDuration:kPressDuration
-                        delay:0
-        usingSpringWithDamping:1.0
-         initialSpringVelocity:0
-                       options:UIViewAnimationOptionAllowUserInteraction |
-                               UIViewAnimationOptionBeginFromCurrentState
-                    animations:^{
-                      sender.transform = CGAffineTransformMakeScale(0.88, 0.88);
-                      sender.alpha = 0.6;
-                    }
-                    completion:nil];
-}
-
-- (void)handleCapsuleTouchUp:(UIButton *)sender {
-  [UIView animateWithDuration:kReleaseDuration
-                        delay:0
-        usingSpringWithDamping:0.55
-         initialSpringVelocity:0
-                       options:UIViewAnimationOptionAllowUserInteraction |
-                               UIViewAnimationOptionBeginFromCurrentState
-                    animations:^{
-                      sender.transform = CGAffineTransformIdentity;
-                      sender.alpha = 1.0;
-                    }
-                    completion:nil];
-}
-
-- (void)handleCapsuleSegmentPress:(UIButton *)sender {
-  if (_bouncyDisabled) return;
-  NSString *segId = sender.accessibilityIdentifier ?: @"";
-  if (auto eventEmitter =
-          std::static_pointer_cast<const BouncyButtonViewEventEmitter>(_eventEmitter)) {
-    eventEmitter->onCapsuleSegmentPress({.segmentId = std::string([segId UTF8String])});
-  }
-}
-
 // MARK: - Touch / event handling (glass path)
 
 /* menu 模式下 iOS 26 的 UIButton + glass material 会自动做"按钮 morph 成菜单容器"
@@ -668,7 +430,7 @@ static UIColor *_bb_uiColorFromHex(NSString *hex);
   }
   _menuActionsJson = [json copy];
 
-  UIButton *menuHost = [self menuHostButton];
+  UIButton *menuHost = _glassButton;
   if (!menuHost) {
     return;
   }

@@ -26,7 +26,6 @@ import type {
 
 type PressEvent = Readonly<{}>;
 type MenuActionEvent = Readonly<{ actionId: string }>;
-type CapsuleSegmentEvent = Readonly<{ segmentId: string }>;
 
 interface NativeProps extends ViewProps {
   /** 按下放大到多少（默认 1.12） */
@@ -75,26 +74,6 @@ interface NativeProps extends ViewProps {
   glassProminent?: WithDefault<boolean, false>;
   /** tap 识别成功（手指在 view 内松开）时触发。menu 模式下不发——UIButton 把 tap 转给
    *  UIMenu 弹出，emit 走 onMenuAction。 */
-  /**
-   * 【玻璃胶囊模式】iOS 26+ 专属。非空（≥2 段）时，本 view 不再是一颗玻璃圆钮，而是
-   * **一枚连续的 Liquid Glass 胶囊，内含并排若干格**（参考 Claude iOS 右上角那颗）：
-   * 一个 UIVisualEffectView + UIGlassEffect 做胶囊本体，格子是放在它 contentView 里的
-   * 普通 UIButton（各自 target-action、各自按压回弹），格间一条 hairline 分隔。
-   *
-   * Schema:
-   *   [
-   *     {"id":"collab","sfSymbol":"square.stack","badge":"3"},
-   *     {"id":"menu","sfSymbol":"ellipsis","menu":true}
-   *   ]
-   * - id 必填，点中时经 onCapsuleSegmentPress 上报；
-   * - sfSymbol 必填，格子图标（材质 tint，颜色取 sfSymbolColorHex）；
-   * - badge 可选，非空时在该格右上角画一颗数字角标；
-   * - menu 可选，true 的那一格挂 menuActionsJson 建出来的原生 UIMenu
-   *   （showsMenuAsPrimaryAction），点它直接弹系统菜单、不发 onCapsuleSegmentPress。
-   */
-  glassCapsuleSegmentsJson?: WithDefault<string, ''>;
-  /** 胶囊某一格被点中（menu 格除外，那格走 onMenuAction）。 */
-  onCapsuleSegmentPress?: DirectEventHandler<CapsuleSegmentEvent>;
   onBouncyPress?: DirectEventHandler<PressEvent>;
   /** 用户在原生 UIMenu 里选中一条 action 时触发；actionId = menuActionsJson 里对应条目的 id */
   onMenuAction?: DirectEventHandler<MenuActionEvent>;
