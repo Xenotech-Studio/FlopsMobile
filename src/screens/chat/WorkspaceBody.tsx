@@ -375,11 +375,19 @@ export function WorkspaceBody({
               `[carousel] selected=${i} key=${key} userDriven=${userDriven} wouldPOST=${userDriven}`,
             );
           }
-          /* 程序化（服务端焦点变了 / 点圆点已经写过一次了）：只对齐本地，不回写。 */
-          if (!userDriven) {
-            setSelectedKeyRaw(key);
-            return;
-          }
+          /**
+           * 程序化（服务端焦点变了 / 点圆点已经写过一次了）：**什么都不做**。
+           *
+           * 这里原来会 setSelectedKeyRaw(key) "对齐本地"，那是个反馈环：本地选中本来就是
+           * 这次移动的**源头**（local → selectedIndex → setPage），再把翻页器报回来的页码
+           * 写回 local，等于让结果去改原因。只要有一发 onPageSelected 报的不是最终目标页
+           * （跨多页的程序化滚动途中、或事件被合并/延迟），local 就被拽到中间页 →
+           * 同步 effect 立刻改道去那一页 → 动画被自己打断。
+           * 现象就是"闪了一下，而且没停在正确的位置"。
+           *
+           * pagerPageRef 已在上面记过，同步 effect 靠它判断"还用不用再 setPage"，够了。
+           */
+          if (!userDriven) return;
           setSelectedKey(key);
         }}
       >
