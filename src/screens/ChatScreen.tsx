@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   View,
   Text,
@@ -1106,6 +1113,13 @@ export function ChatScreen({
   /** 布局态镜像：seq 守卫要在 setState 之外先算完（updater 必须是纯函数），
    *  且流式期间每秒几十帧都要读最新值，进不了 onEvent 那个长寿闭包的依赖。 */
   const collabLayoutRef = useRef<CollabLayoutState>(EMPTY_COLLAB_LAYOUT);
+  /**
+   * 会话详情**到没到**（不管到了之后有没有协同内容）。
+   *
+   * 它跟 collabAvailable 是两件事：后者为 false 有两种含义 ——「还没加载」和「加载完了、
+   * 这个会话没有协同内容」。乐观布局（按本地记录先摆成展开）必须能分辨这两者，否则要么
+   * 永远不敢乐观、要么错了也不知道回退。 */
+  const [collabLayoutHydrated, setCollabLayoutHydrated] = useState(false);
   /** SSE 布局帧 → 归一化 → 只有「可见形状真的变了」才写 state。
    *  seq 光往前走（同一篇文档被连改十次）不该把这棵 5000 行的聊天页推着重渲染。 */
   const applyCollabLayoutEvent = useCallback((payload: unknown) => {
@@ -1117,6 +1131,9 @@ export function ChatScreen({
   }, []);
   /** 会话 meta 里的整桶快照 → 布局态。会话没有该字段 = 非协同，归零。 */
   const hydrateCollabLayout = useCallback((conversation: Conversation) => {
+    /* 放在 seq 守卫**之前**：守卫命中说明我们手上已经有更新的数据，那更是「到了」。
+       这一位一旦立起来，collabAvailable=false 就从"还不知道"变成"确实没有"。 */
+    setCollabLayoutHydrated(true);
     const seq = Math.floor(Number(conversation.cowriter_layout_seq)) || 0;
     const prev = collabLayoutRef.current;
     /* 同一会话内会反复 hydrate（history_revision、回前台 resync 都走同一个 funnel），
@@ -1130,11 +1147,15 @@ export function ChatScreen({
   /** 协同布局「溶解」进度 0→1（设计见下面 useAnimatedReaction 那段）。声明提到这儿是因为
    *  换会话的复位 effect 要把它列进依赖 —— 依赖数组在渲染期求值，声明晚了会踩 TDZ。
    *
-   *  **初值是 1（= 已收起）**，跟 collabDismissed 的初值配套。它不只驱动溶解动画，还驱动
-   *  右上角胶囊的宽度（0 = 收成一格圆钮、1 = 两格露出协同入口）。协同布局改成默认收起后，
-   *  这里若还留 0，有协同数据的会话一进去胶囊就是收成一格的样子 —— 协同入口被裁在外面、
-   *  点都点不到，也就没法展开抽屉了。 */
-  const collabDismissProgress = useSharedValue(1);
+   *  它不只驱动溶解动画，还驱动右上角胶囊的宽度（0 = 收成一格圆钮、1 = 两格露出协同入口），
+   *  所以**初值必须跟首帧的布局一致**：
+   *   - 本地记录说上次开着 → 0（首帧就是展开态，胶囊收成一格）；
+   *   - 其余情况 → 1（收起态，胶囊张开两格、协同入口点得到）。
+   *  留死 1 的话，乐观展开那条路首帧会「sheet 已经开着、胶囊却还是关闭态的两格」；
+   *  留死 0 则反过来：有协同数据的会话一进去协同入口就被裁在胶囊外面、点都点不到。 */
+  const collabDismissProgress = useSharedValue(
+    readCollabSheetPref(conversationId)?.opened ? 0 : 1,
+  );
   /** 松手已判定为「要关」：补完动画接管进度，逐帧那条 reaction 不再插手。 */
   const collabDismissCommitted = useSharedValue(false);
   /**
@@ -1251,10 +1272,71 @@ export function ChatScreen({
       position: collabPrefRef.current.position,
     });
   }, []);
-  /** 每个会话只恢复一次（协同数据可能分多帧到达，别反复弹开）。 */
-  const collabRestoredForRef = useRef<string | null>(null);
+  /** 这个会话有没有协同内容（**数据侧**判定）。注意 false 有两种含义，见 collabLayoutHydrated。 */
+  const collabAvailable = useMemo(() => collabLayoutActive(collabLayout), [collabLayout]);
+  /**
+   * 协同抽屉此刻是不是收着 —— **纯本地视图状态**：不回写 /cowriter_layout、不动会话里的
+   * 协同数据，桌面端毫无感知。收起时 header 上留一个入口，点一下展开。
+   *
+   * 默认收起：有协同数据不等于自动展开，只让右上角胶囊张开提示"这里有东西"。于是 SSE 首次
+   * 把协同数据推进来时页面不会自己跳成分屏 —— 那个行为在桌面端一边编辑时会反复把手机这边
+   * 的聊天挤走。**例外是本地记录说上次是展开的**，那就一进来直接展开（初值就从 prefs 读）。
+   */
+  const [collabDismissed, setCollabDismissed] = useState(
+    () => !readCollabSheetPref(conversationId)?.opened,
+  );
+  /**
+   * 【乐观展开】本地记录说这个会话上次开着抽屉 —— 在协同数据到达之前就先按展开布局。
+   *
+   * 解决的是"回到对话要经历三段式"：加载中(全屏无入口) → 数据到了(有入口但还是全屏) →
+   * 才出 sheet。根子在于原来的恢复逻辑挂在 collabAvailable 上，而那是**异步**的；而 prefs
+   * 是同步可读的内存镜像（模块 import 时就预热），conversationId 一定就能查。
+   * 所以布局决策提前到 prefs：第一帧就是展开态，数据到了再校验。
+   *
+   * 数据到达后若发现这个会话其实已经没有协同内容了，由下面那条对账 effect 撤销。
+   */
+  const [collabOptimisticOpen, setCollabOptimisticOpen] = useState(
+    () => !!readCollabSheetPref(conversationId)?.opened,
+  );
+  /** 展开时落在哪个高度（0..1 百分比，null = 用默认 mid）。存百分比而不是下标，见 collabSheetPrefs。 */
+  const [collabOpenPosition, setCollabOpenPosition] = useState<number | null>(
+    () => readCollabSheetPref(conversationId)?.position ?? null,
+  );
+  /**
+   * 展开时 sheet 落在哪一档（gorhom 的 index prop）。由百分比 + 当前档位表**推导**出来，
+   * 不是另一份 state —— 少一处要同步的东西。
+   *
+   * 首帧 collabHostHeight 还是 0、三档退化成 [peek, peek+1, peek+2]，但 collabDetentPosition
+   * 是**归一化**的（除以 max-peek），所以百分比→下标的映射在退化档位表下依然正确，
+   * 不必等量完布局。
+   *
+   * **不要拿它去跟用户拖拽同步**：它一变就是给 gorhom 下一次 snap 指令。用户自己拖出来的
+   * 档位记在 collabSheetIndex 里，两者分工不同。
+   */
+  const collabOpenIndex = useMemo(
+    () =>
+      collabOpenPosition == null
+        ? COLLAB_SHEET_HALF_INDEX
+        : nearestCollabDetent(collabSheetSnapHeights, collabOpenPosition),
+    [collabOpenPosition, collabSheetSnapHeights],
+  );
+  /**
+   * 「按此刻所知，这个会话该不该有协同 UI」。数据说有 → 有；数据还没到但本地记录说上次开着
+   * → 也按有算。header 胶囊与布局分叉都看它，两者因此在同一帧一起立起来，不会再出现
+   * 「入口先冒出来、sheet 半秒后才跟上」。
+   */
+  const collabPresumedAvailable = collabAvailable || collabOptimisticOpen;
+  /** 手机端此刻要不要进协同布局；false = 普通聊天页原样。停在哪个 tab 归 WorkspaceBody 管。 */
+  const collabActive = collabPresumedAvailable && !collabDismissed;
+  /** 乐观展开了、但协同数据还没到：工作区先摆一个 loading，别拿两个占位 tab 冒充内容。 */
+  const collabWorkspacePending = collabActive && !collabAvailable;
   const prevCollabConvIdRef = useRef(conversationId);
-  useEffect(() => {
+  /**
+   * 换会话：**用 useLayoutEffect**，在这一帧提交后、上屏前就把协同布局定死。
+   * 用 useEffect 的话会先画出一帧旧布局（上一个会话展开着、新会话该收起，或反过来），
+   * 正是用户看到的那种中间态。prefs 是同步读的，所以这里能一次性把结论算完。
+   */
+  useLayoutEffect(() => {
     const prev = prevCollabConvIdRef.current;
     prevCollabConvIdRef.current = conversationId;
     /* 「空 → 有 id」是本次发送刚把会话建出来，不是换会话：这一轮 run 里已经到达的布局帧要留着。 */
@@ -1263,83 +1345,61 @@ export function ChatScreen({
     flushCollabSheetPrefs();
     collabLayoutRef.current = EMPTY_COLLAB_LAYOUT;
     setCollabLayout(EMPTY_COLLAB_LAYOUT);
-    /* 换会话一律先回到**收起态**，再由下面那条 effect 按该会话自己的记录决定要不要展开。
-       关掉/展开是「这个会话」的偏好，不该跟着人跑到下一个会话。 */
-    setCollabDismissed(true);
-    setCollabOpenIndex(COLLAB_SHEET_HALF_INDEX);
-    collabRestoredForRef.current = null;
-    collabPrefRef.current.position = 0;
-    /* 跟着回到「已收起」那一端：胶囊张开成两格、协同入口点得到（进度也驱动胶囊宽度）。 */
-    collabDismissProgress.value = 1;
+    setCollabLayoutHydrated(false);
+    /* 新会话的布局**当场**按它自己的本地记录定，不再等数据。 */
+    const pref = readCollabSheetPref(conversationId);
+    const open = !!pref?.opened;
+    setCollabOptimisticOpen(open);
+    setCollabOpenPosition(pref?.position ?? null);
+    setCollabDismissed(!open);
+    collabPrefRef.current.position = pref?.position ?? 0;
+    if (open) setCollabSheetIndex(nearestCollabDetent(collabSheetSnapHeights, pref!.position));
+    /* 进度是溶解动画的量，同时驱动胶囊宽度：展开态 0（胶囊收成一格），收起态 1（张开两格）。 */
+    collabDismissProgress.value = open ? 0 : 1;
     collabDismissCommitted.value = false;
-  }, [conversationId, collabDismissProgress, collabDismissCommitted]);
+  }, [conversationId, collabSheetSnapHeights, collabDismissProgress, collabDismissCommitted]);
   /* 组件卸载（退出对话）时把最后一次改动落盘。 */
   useEffect(() => () => flushCollabSheetPrefs(), []);
-  /** 这个会话有没有协同内容（数据侧判定）。要不要真画 sheet 还要看用户有没有把它关掉。 */
-  const collabAvailable = useMemo(() => collabLayoutActive(collabLayout), [collabLayout]);
   /**
-   * 协同抽屉此刻是不是收着 —— **纯本地视图状态**：不回写 /cowriter_layout、不动会话里的
-   * 协同数据，桌面端毫无感知。收起时 header 上留一个带角标的入口，点一下展开。
-   *
-   * **初值是 true（收起）**：有协同数据不再等于自动展开，只让右上角胶囊亮起角标提示"这里
-   * 有东西"，展不展开由用户说了算。于是 SSE 首次把协同数据推进来时页面不会自己跳成分屏 ——
-   * 之前那个行为在桌面端一边编辑时会反复把手机这边的聊天挤走。
-   * 上次展开过的会话由下面 collabRestoredForRef 那条 effect 按本地记录恢复。
+   * prefs 预热没赶上首帧时的兜底（模块 import 就排队了，正常轮不到这条）。读到再补一次决策。
    */
-  const [collabDismissed, setCollabDismissed] = useState(true);
-  /**
-   * 展开时 sheet 落在哪一档（gorhom 的 index prop）。常态是 mid；只有"按本地记录恢复"
-   * 那条路会把它改成别的档。
-   *
-   * **不要拿它去跟用户拖拽同步**：它一变就是给 gorhom 下一次 snap 指令。用户自己拖出来的
-   * 档位记在 collabSheetIndex 里，两者分工不同。
-   */
-  const [collabOpenIndex, setCollabOpenIndex] = useState(COLLAB_SHEET_HALF_INDEX);
-  /** 手机端此刻要不要进协同布局；false = 普通聊天页原样。停在哪个 tab 归 WorkspaceBody 管。 */
-  const collabActive = collabAvailable && !collabDismissed;
-  /**
-   * 按本地记录恢复：这个会话上次是展开着的，就替用户再展开一次，并落到最接近上次那个
-   * 高度百分比的档位。
-   *
-   * 时机必须挂在 collabAvailable 上而不是 conversationId：协同数据是异步到的（会话详情 /
-   * SSE），id 变的那一刻还没有档位可展。ref 保证每个会话只恢复一次，后续布局帧再来也
-   * 不会把用户手动收起的抽屉又弹开。
-   *
-   * 恢复走的是**普通入场**（sheet 从屏底升上来），不是 openCollabWorkspace 那套"全屏收下来
-   * 的倒放" —— 倒放是给"用户从全屏点入口"用的，进对话时并没有一个全屏态可以倒着播。
-   */
+  const collabPrefsAppliedRef = useRef(collabSheetPrefsReady());
   useEffect(() => {
-    if (!collabAvailable) return;
-    if (collabRestoredForRef.current === conversationId) return;
+    if (collabPrefsAppliedRef.current) return;
     let cancelled = false;
-    const apply = () => {
-      if (cancelled) return;
-      collabRestoredForRef.current = conversationId;
+    void ensureCollabSheetPrefs().then(() => {
+      if (cancelled || collabPrefsAppliedRef.current) return;
+      collabPrefsAppliedRef.current = true;
       const pref = readCollabSheetPref(conversationId);
       if (!pref?.opened) return;
-      const index = nearestCollabDetent(collabSheetSnapHeights, pref.position);
+      setCollabOptimisticOpen(true);
+      setCollabOpenPosition(pref.position);
       collabPrefRef.current.position = pref.position;
-      /* 两个 index 都要给：collabOpenIndex 决定 sheet 落在哪档，collabSheetIndex 决定
-         聊天区高度按哪档算 —— 少给后者，第一帧会用 mid 的高度。 */
-      setCollabOpenIndex(index);
-      setCollabSheetIndex(index);
-      /* 进度直接拨到「展开」那端，不做动画：这条路 sheet 是从屏底正常入场的，没有一个
-         全屏态可以倒着播；而盯位置那条 reaction 一旦接管也会立刻把它算成 0，withTiming
-         只会被它盖掉。代价是胶囊从两格瞬间收成一格，落在打开会话那一下、不显眼。 */
       collabDismissProgress.value = 0;
       setCollabDismissedSettled(false);
-    };
-    /* 预热通常早就完了（模块 import 时就排队，这里已经是挂载之后），没赶上才走异步。 */
-    if (collabSheetPrefsReady()) apply();
-    else void ensureCollabSheetPrefs().then(apply);
+    });
     return () => {
       cancelled = true;
     };
+  }, [conversationId, collabDismissProgress, setCollabDismissedSettled]);
+  /**
+   * 对账：数据到了，但这个会话**其实已经没有协同内容**（桌面端关完了 / 换了会话性质）。
+   * 撤销乐观展开，并把本地记录改成收起 —— 否则每次进来都会先错误地展开一下。
+   *
+   * 直接切而不做收起动画：这是"我们猜错了"的纠正，越快越好；拖一段动画反而像是内容被抽走。
+   */
+  useEffect(() => {
+    if (!collabLayoutHydrated || !collabOptimisticOpen || collabAvailable) return;
+    setCollabOptimisticOpen(false);
+    setCollabDismissed(true);
+    setCollabOpenPosition(null);
+    collabDismissProgress.value = 1;
+    saveCollabSheetPref(conversationId, { opened: false, position: 0 });
   }, [
+    collabLayoutHydrated,
+    collabOptimisticOpen,
     collabAvailable,
     conversationId,
-    collabSheetSnapHeights,
-    setCollabDismissedSettled,
     collabDismissProgress,
   ]);
   /** 协同模式下装聊天消息区的 sheet，留在这里供程序化展开 / 折叠。 */
@@ -5894,7 +5954,7 @@ export function ChatScreen({
    * 挂载条件若还挂在 collabDismissed 上，胶囊只会在状态翻转那一刻才挂出来，而那时
    * progress 已经是 1 —— 只能补一段定时动画，跟手是做不到的。
    */
-  const headerCapsuleMode = collabAvailable;
+  const headerCapsuleMode = collabPresumedAvailable;
   /** 玻璃胶囊那条路：按压反馈交给整颗胶囊（系统 interactive glass 带着 children 一起形变），
    *  各格因此**不再自己缩**。自绘胶囊没有这个整体动画，仍由各格自己做 bouncy。 */
   const capsuleUsesSystemPress = IS_IOS_LIQUID_GLASS && headerCapsuleMode;
@@ -5966,9 +6026,10 @@ export function ChatScreen({
     /* 档位 state 先跟到最高档：sheet 这次是「从全屏收下来」，聊天区高度得按最高档起算，
        否则第一帧会用半屏档的高度。收下来后 onAnimate/onChange 会把它带回去。 */
     setCollabSheetIndex(COLLAB_SHEET_MAX_INDEX);
-    /* 收下来的落点固定是 mid：这条路是"从全屏倒放回抽屉"，落点若是记录里的最高档，
-       placing 与 settling 同档、整段位移动画就没了。会话级记忆只管进对话时那一次恢复。 */
-    setCollabOpenIndex(COLLAB_SHEET_HALF_INDEX);
+    /* 收下来的落点固定是 mid（position 置 null）：这条路是"从全屏倒放回抽屉"，落点若是
+       记录里的最高档，placing 与 settling 同档、整段位移动画就没了。
+       会话级记忆只管进对话时那一次恢复。 */
+    setCollabOpenPosition(null);
     /* placing：sheet 无动画直接出现在最高档（index=max + 入场动画 duration:0）。
        此刻视觉上跟用户看到的全屏几乎重合，所以「什么都还没发生」。
        两帧后转 settling，那时才同时开跑「sheet 收下来」和「progress 退回 0」。 */
@@ -6083,7 +6144,7 @@ export function ChatScreen({
           topSolidHeight={insets.top + 8}
           gradientBaseHex={colors.chatScreenBackground}
         />
-        {collabAvailable ? (
+        {collabPresumedAvailable ? (
           <Reanimated.View
             style={[StyleSheet.absoluteFill, collabHeaderBaseStyle]}
             pointerEvents="none"
@@ -6134,6 +6195,8 @@ export function ChatScreen({
           <Reanimated.View style={[styles.collabWorkspaceInner, collabWorkspaceContentStyle]}>
             <WorkspaceBody
               layout={collabLayout}
+              /* 乐观展开、数据还没到：先转圈。见 collabWorkspacePending。 */
+              pending={collabWorkspacePending}
               topInset={headerHeight}
               bottomInset={collabSheetPeekHeight}
               /* 当前档真正占掉的高度：居中类页面按它算可视区（sheet 一展开就得往上让） */

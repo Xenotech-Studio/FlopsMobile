@@ -45,6 +45,12 @@ import {
 
 export type WorkspaceBodyProps = {
   layout: CollabLayoutState;
+  /**
+   * 协同数据还没到，但布局已经按本地记录乐观展开了 —— 先摆 loading，别用走马灯里那两个
+   * 常驻占位 tab（cocoder / cobrowser）冒充内容：它们恒存在，不摆 loading 的话用户看到的
+   * 是"两个空模式"，比转圈更像出错。
+   */
+  pending?: boolean;
   /** 顶部 header 高度：内容从它下方开始（header 是绝对定位浮层）。 */
   topInset: number;
   /**
@@ -84,6 +90,7 @@ const MODE_LABEL: Record<MobileCollabMode, string> = {
 
 export function WorkspaceBody({
   layout,
+  pending,
   topInset,
   bottomInset,
   viewportBottomInset,
@@ -230,6 +237,33 @@ export function WorkspaceBody({
     const sheetY = Math.min(sheetTopY.value, sheetTopYMax);
     return { transform: [{ translateY: sheetY - WORKSPACE_FADE_HEIGHT }] };
   });
+
+  /* 数据没到就只画 loading + 那条底部渐变：走马灯、指示器一概不挂 —— 挂了就得先按
+     EMPTY_COLLAB_LAYOUT 铺出两个占位 tab，等数据到了再整个换掉，闪一次。 */
+  if (pending) {
+    return (
+      <View style={styles.body}>
+        <View
+          style={[
+            styles.pendingWrap,
+            { paddingTop: contentTopInset, paddingBottom: viewportBottomInset },
+          ]}
+          pointerEvents="none"
+        >
+          <ActivityIndicator size="small" color={colors.textSecondary} />
+        </View>
+        <Reanimated.View style={[styles.bottomFade, fadeAnimStyle]} pointerEvents="none">
+          <LinearGradient
+            colors={fadeColors}
+            locations={FADE_LOCATIONS}
+            style={StyleSheet.absoluteFill}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+          />
+        </Reanimated.View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.body}>
@@ -567,6 +601,9 @@ function createStyles(c: AppColors) {
     body: { flex: 1 },
     pager: { flex: 1 },
     page: { flex: 1 },
+    /** 「乐观展开但数据没到」那一屏：转圈居中在 header 下沿与 sheet 上沿之间，
+     *  padding 跟占位页取同一套 inset，数据到了换成走马灯时视觉重心不跳。 */
+    pendingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     /** 底部渐变遮罩：同样贴原点 + translateY 跟随 sheet；在正文之上、指示器之下。 */
     bottomFade: {
       position: 'absolute',
