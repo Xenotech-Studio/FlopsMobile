@@ -4,7 +4,8 @@
  * 协同模式的形态是「工作区占页面主体 + 聊天消息区落进底部 sheet」，所以这里画的是
  * agent 正在操作的那个东西本身，不是聊天。四个 mode 铺成**一条走马灯**：
  *  - cowriter：每篇打开着的 FlowDoc 一页，走 DocBodyView 只读渲染；
- *  - coplanner：每个打开着的 FlowTask 项目一页（任务树只读大纲）；
+ *  - coplanner：每个打开着的 FlowTask 项目一页（复用项目页的 TaskFlowChartView 画流程图，
+ *    只读；进场自动缩到全图并居中，可双指缩放 / 纵向拖）；
  *  - cocoder / cobrowser：各一页占位（服务端 layout 只给 active_mode，没有对象数据），
  *    内容显示暂不支持，但页面在序列里 —— 桌面端切过去时手机端跟着停到占位页，滑一下能滑回文档。
  * 顶部的胶囊指示器 = 当前页展开成「图标 + 名字」，其余收成小圆点（可点直达）。
@@ -429,7 +430,18 @@ export function WorkspaceBody({
                 <CoplannerPage
                   projectId={tab.id}
                   topInset={contentTopInset}
-                  bottomInset={bottomInset}
+                  /**
+                   * 流程图是**居中类**页面（自己缩到全图 + 居中），不是滚动类 —— 所以跟占位页
+                   * 取同一个 inset：**当前档高** + 让开整条指示器。
+                   *
+                   * 之前沿用了旧任务大纲那份 `bottomInset`（= sheet **最低档**）。滚动类页面
+                   * 垫最低档是对的（内容本来就该能继续滚到 sheet 底下去），但居中类页面垫它，
+                   * 算出来的"可视区"会把 sheet 盖住的那块也算进去 —— 图于是居中到 sheet 后面。
+                   * sheet 停在高档位时上方只剩一条，看起来就是「什么都没加载出来」。
+                   * WorkspaceBodyProps 里 viewportBottomInset 的注释早写过这个坑，占位页
+                   * 当初就是这么翻的车，我换流程图时漏了这条。
+                   */
+                  bottomInset={viewportBottomInset + INDICATOR_RESERVE}
                   styles={styles}
                   colors={colors}
                 />
