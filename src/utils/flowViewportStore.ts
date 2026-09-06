@@ -18,7 +18,13 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const STORE_KEY = '@FlopsMobile/flowViewport.v1';
+/**
+ * v1 → v2：v1 期间「fit 的结果也写缓存」，而 fit 有可能在模型还没建出来时就跑过一次
+ * （拿 emptyFlowModel 的 320×200 占位画布算，得出 1.18125 这种离谱比例）。那种坏值一旦
+ * 落盘，下次挂载会被恢复并接管视口，把正确的 fit 永久挡掉 —— 表现就是流程图一片空白。
+ * 换 key 直接把这批脏数据丢掉；现在只有用户手势会写缓存，不会再产生这类值。
+ */
+const STORE_KEY = '@FlopsMobile/flowViewport.v2';
 
 /** 最多记多少个项目的视口。超了按写入时间淘汰最旧的 —— 丢了最多是下次回到该项目重新 fit。 */
 const MAX_ENTRIES = 120;

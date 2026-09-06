@@ -658,6 +658,13 @@ export function TaskFlowChartView({
     if (isBuilding || chartError || svgW <= 0 || svgH <= 0 || effViewportW <= 0 || effViewportH <= 0) {
       return;
     }
+    /**
+     * **模型还没真建出来就不要 fit。** emptyFlowModel 给的是占位画布（320×200），
+     * 拿它算出来的比例（378/320 = 1.18125）跟真实图（5153×3220 → 0.073）差十几倍，
+     * 摆过去等于把视口钉在一个几百 pt 的小窗口里，真实节点一个都不在里面。
+     * Desktop 的 FitViewOnLoad 有同款守卫（nodeCount>0 才 fitView，否则挂起等节点到位）。
+     */
+    if (nodesDraw.length === 0) return;
     /* 已被缓存恢复 / 用户手势接管：不再自动重排（见 viewportOwnedRef）。 */
     if (viewportOwnedRef.current) return;
     const { scale: s, translateX: tx, translateY: ty } = fitFlowChartToViewport(
@@ -672,10 +679,15 @@ export function TaskFlowChartView({
     /* fit 比常规捏合下限还小（大图）时，把下限放宽到 fit —— 否则捏一下就弹回去。 */
     minPinchScale.value = Math.min(MIN_FLOW_SCALE, s);
     visibleRectQuantizedKeyRef.current = '';
-    /* fit 出来的也存一份（建立初值），但**不置 owned** —— 视口尺寸还可能再变
-       （兜底值 → 真实 onLayout、sheet 换档），那时还该由 fit 重新摆。 */
+    /**
+     * **fit 的结果不写缓存**，只更新 lastViewportRef。
+     *
+     * 缓存的语义是「用户上次把图调到哪儿」，自动算出来的 fit 不属于用户意图；而且写进去
+     * 一旦算错（就像上面那次拿占位画布算出的 1.18125），下次挂载会被 restore 读回来并
+     * 置 owned，把正确的 fit 永久挡掉 —— 实测正是这么白屏的。
+     * 没有缓存的项目每次进来重新 fit 即可，本来就是期望行为。
+     */
     lastViewportRef.current = { scale: s, tx, ty };
-    if (viewportCacheKey) saveFlowViewport(viewportCacheKey, { scale: s, tx, ty });
     if (__DEV__) {
       flowLog(`[flowchart] fit vp=${effViewportW}x${effViewportH} svg=${svgW}x${svgH}` +
           ` -> scale=${s} tx=${tx} ty=${ty}` +
@@ -693,7 +705,7 @@ export function TaskFlowChartView({
     translateX,
     translateY,
     minPinchScale,
-    viewportCacheKey,
+    nodesDraw.length,
   ]);
 
   useEffect(() => {
@@ -741,6 +753,9 @@ export function TaskFlowChartView({
    */
   useEffect(() => {
     if (!viewportCacheKey) return;
+    /* 与 fit 同一条守卫：模型没建出来就别摆视口，等 nodesDraw 到位这条 effect 会重跑。 */
+    if (nodesDraw.length === 0) return;
+    if (viewportOwnedRef.current) return;
     let cancelled = false;
     const apply = () => {
       if (cancelled) return;
@@ -765,7 +780,7 @@ export function TaskFlowChartView({
     return () => {
       cancelled = true;
     };
-  }, [viewportCacheKey, scale, translateX, translateY, minPinchScale]);
+  }, [viewportCacheKey, nodesDraw.length, scale, translateX, translateY, minPinchScale]);
 
   /** 手势结束 / fit 落定后记一笔（worklet 侧经 runOnJS 调到这儿）。 */
   const commitViewport = useCallback(
