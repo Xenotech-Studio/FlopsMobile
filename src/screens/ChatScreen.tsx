@@ -1298,6 +1298,26 @@ export function ChatScreen({
   const [collabOptimisticOpen, setCollabOptimisticOpen] = useState(
     () => !!readCollabSheetPref(conversationId)?.opened,
   );
+  /**
+   * 【按记忆恢复的那次挂载不要入场动画】sheet 直接出现在目标档，不从屏底升起。
+   *
+   * 理由：这不是"有新东西出现"，而是"你上次就把它开在这儿" —— 升起动画在这里是多余的
+   * 一段等待。用户主动点入口开（openCollabWorkspace）那条路仍有动画，而且是特意设计的
+   * "从全屏收下来"的倒放，两者不冲突（下面 animationConfigs 里 placing/settling 优先级更高）。
+   *
+   * 做法只能是 `animationConfigs={{duration:0}}`：**animateOnMount={false} 在 v5.2.8 是坏的**
+   * —— isAnimatedOnMount 初值 `!animateOnMount || index === -1`，传 false 时它一上来就是 true，
+   * 于是那条唯一会调 setToPosition 的分支被整个跳过，sheet 永远停在 INITIAL_POSITION（屏外）。
+   * 而 mount 分支确实消费这个 prop：`animateToPosition(pos, MOUNT, undefined, animationConfigs)`，
+   * 且 animateToPosition 内部 `configs || _providedAnimationConfigs` 会兜到 prop 上。
+   *
+   * **但这个 prop 是"所有动画的默认配置"，不是只在 mount 用**（就是上面那句 fallback）。
+   * 一直传 duration:0 的话，之后用户拖拽松手的回弹 snap 也会变成瞬时 —— 所以它是 state，
+   * 落位后立刻收回（见下面 onChange 与兜底 effect）。
+   */
+  const [collabSheetInstantMount, setCollabSheetInstantMount] = useState(
+    () => !!readCollabSheetPref(conversationId)?.opened,
+  );
   /** 展开时落在哪个高度（0..1 百分比，null = 用默认 mid）。存百分比而不是下标，见 collabSheetPrefs。 */
   const [collabOpenPosition, setCollabOpenPosition] = useState<number | null>(
     () => readCollabSheetPref(conversationId)?.position ?? null,
@@ -1330,6 +1350,15 @@ export function ChatScreen({
   const collabActive = collabPresumedAvailable && !collabDismissed;
   /** 乐观展开了、但协同数据还没到：工作区先摆一个 loading，别拿两个占位 tab 冒充内容。 */
   const collabWorkspacePending = collabActive && !collabAvailable;
+  /** 挂载那一次：乐观展开时把档位 state 也对齐到目标档 —— 否则首帧聊天区仍按 mid 的高度算，
+   *  而 sheet 已经瞬时落在 max，底下会露出一条没有内容的 sheet 面。用 layout effect 是为了
+   *  赶在上屏之前改掉。onAnimate 随后也会报同一个值，重复设置是幂等的。 */
+  const collabMountAlignedRef = useRef(false);
+  useLayoutEffect(() => {
+    if (collabMountAlignedRef.current) return;
+    collabMountAlignedRef.current = true;
+    if (collabOptimisticOpen) setCollabSheetIndex(collabOpenIndex);
+  }, [collabOptimisticOpen, collabOpenIndex]);
   const prevCollabConvIdRef = useRef(conversationId);
   /**
    * 换会话：**用 useLayoutEffect**，在这一帧提交后、上屏前就把协同布局定死。
@@ -1350,6 +1379,7 @@ export function ChatScreen({
     const pref = readCollabSheetPref(conversationId);
     const open = !!pref?.opened;
     setCollabOptimisticOpen(open);
+    setCollabSheetInstantMount(open);
     setCollabOpenPosition(pref?.position ?? null);
     setCollabDismissed(!open);
     collabPrefRef.current.position = pref?.position ?? 0;
@@ -1360,6 +1390,16 @@ export function ChatScreen({
   }, [conversationId, collabSheetSnapHeights, collabDismissProgress, collabDismissCommitted]);
   /* 组件卸载（退出对话）时把最后一次改动落盘。 */
   useEffect(() => () => flushCollabSheetPrefs(), []);
+  /**
+   * 「瞬时挂载」配置的兜底回收。正常由 onChange 收回（sheet 一落位就发），这里只防
+   * onChange 因故没来 —— 万一收不回去，用户之后每一次拖拽松手都会变成没有回弹的瞬移，
+   * 那是个不容易联想到源头的怪 bug，值得多这一道保险。
+   */
+  useEffect(() => {
+    if (!collabSheetInstantMount) return;
+    const t = setTimeout(() => setCollabSheetInstantMount(false), 400);
+    return () => clearTimeout(t);
+  }, [collabSheetInstantMount]);
   /**
    * prefs 预热没赶上首帧时的兜底（模块 import 就排队了，正常轮不到这条）。读到再补一次决策。
    */
@@ -1373,6 +1413,7 @@ export function ChatScreen({
       const pref = readCollabSheetPref(conversationId);
       if (!pref?.opened) return;
       setCollabOptimisticOpen(true);
+      setCollabSheetInstantMount(true);
       setCollabOpenPosition(pref.position);
       collabPrefRef.current.position = pref.position;
       collabDismissProgress.value = 0;
@@ -6030,6 +6071,8 @@ export function ChatScreen({
        记录里的最高档，placing 与 settling 同档、整段位移动画就没了。
        会话级记忆只管进对话时那一次恢复。 */
     setCollabOpenPosition(null);
+    /* 这条路有自己的一套动画（placing → settling），别让"瞬时挂载"那档配置插进来。 */
+    setCollabSheetInstantMount(false);
     /* placing：sheet 无动画直接出现在最高档（index=max + 入场动画 duration:0）。
        此刻视觉上跟用户看到的全屏几乎重合，所以「什么都还没发生」。
        两帧后转 settling，那时才同时开跑「sheet 收下来」和「progress 退回 0」。 */
@@ -6232,12 +6275,19 @@ export function ChatScreen({
           index={collabReopenPhase === 'placing' ? COLLAB_SHEET_MAX_INDEX : collabOpenIndex}
           /* placing：0ms = 瞬时落位；settling：跟 progress 同时长的 timing，两条动画同步；
              idle：交还默认弹簧，用户自己拖档位时手感不变。 */
+          /* placing：0ms 瞬时落位；settling：跟 progress 同时长的 timing；
+             instantMount：按记忆恢复的那次挂载，同样 0ms —— 直接出现在目标档，不从屏底升起。
+             其余一律 undefined，交还 gorhom 默认弹簧 —— **这个 prop 是所有动画的默认配置**
+             （animateToPosition 内 `configs || _providedAnimationConfigs`），赖着不还的话
+             用户拖拽松手的回弹也会变瞬时。 */
           animationConfigs={
             collabReopenPhase === 'placing'
               ? COLLAB_SHEET_INSTANT_ANIM
               : collabReopenPhase === 'settling'
                 ? COLLAB_SHEET_REOPEN_ANIM
-                : undefined
+                : collabSheetInstantMount
+                  ? COLLAB_SHEET_INSTANT_ANIM
+                  : undefined
           }
           /* 档位变化 → 聊天区高度要跟着变（见 collabSheetChatHeight）。
              onAnimate 给的是**目标**档，动画一开始就把 ScrollView 调到位（展开时新露出来的
@@ -6248,6 +6298,9 @@ export function ChatScreen({
           onChange={(index) => {
             if (index < 0) return;
             setCollabSheetIndex(index);
+            /* 落位了 → 交还默认弹簧。onChange 由 animateToPositionCompleted 触发，
+               此刻那次 0ms 动画早已把 configs 取走用完，收回是安全的。 */
+            setCollabSheetInstantMount(false);
             /* onChange = **驻留档位已经稳定**（拖拽甩动结束、动画收尾），这才是记账的时机；
                onAnimate 给的只是目标，拖到一半松手回弹也会触发，记下去会记成没停过的档。
                档位换算成百分比再存，理由见 collabSheetPrefs 文件头。 */
