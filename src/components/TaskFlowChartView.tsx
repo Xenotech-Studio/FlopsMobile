@@ -626,6 +626,19 @@ export function TaskFlowChartView({
    * 窗口尺寸兜底值，等真实 onLayout 回来还得靠它再摆一次。
    */
   const viewportOwnedRef = useRef(false);
+  /** 视口缓存预热完成的信号：预热没赶上首帧时，读到 null 会先走 fit；
+   *  预热回来后 bump 一下让上面那条决策 effect 重跑，把缓存补上。 */
+  const [viewportPrefsTick, setViewportPrefsTick] = useState(0);
+  useEffect(() => {
+    if (flowViewportsReady()) return;
+    let cancelled = false;
+    void ensureFlowViewports().then(() => {
+      if (!cancelled) setViewportPrefsTick((t) => t + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   /** 最后一次有效视口：卸载时用它落盘，不在 cleanup 里现读 shared value。 */
   const lastViewportRef = useRef<{ scale: number; tx: number; ty: number } | null>(null);
 
@@ -667,6 +680,50 @@ export function TaskFlowChartView({
     if (nodesDraw.length === 0) return;
     /* 已被缓存恢复 / 用户手势接管：不再自动重排（见 viewportOwnedRef）。 */
     if (viewportOwnedRef.current) return;
+    /**
+     * 【恢复缓存 与 缩到全图 是同一个决策，必须在同一处做】
+     *
+     * 之前拆成两条 effect，靠先后顺序碰运气 —— 而 restore 因为也加了 nodesDraw 守卫而变晚，
+     * 结果**总在 fit 之后跑、无条件把 fit 覆盖掉**（日志实证：fit 算出 0.067，18ms 后
+     * restore 写回 1.18125）。缓存里但凡有一条坏值，正确的 fit 就永远出不来。
+     *
+     * 所以合成一处：先试缓存，**且缓存必须通过"这个视口里真的看得见节点"这条校验**，
+     * 过不了就当没有、老老实实 fit。校验直接对着 nodesDraw 做相交测试，跟用户看到的
+     * "有没有东西"完全同源 —— 不管坏值是怎么进来的（历史 bug、换了设备尺寸、图重排过），
+     * 都能自愈，不用再靠换 storage key 去擦。
+     * 合法的深度放大不会被误伤：那种视口里必然框着它放大的那个节点。
+     */
+    const cached = viewportCacheKey ? readFlowViewport(viewportCacheKey) : null;
+    if (cached) {
+      const m = 120 / (cached.scale < 0.0001 ? 0.0001 : cached.scale);
+      const minX = -cached.tx / cached.scale;
+      const minY = -cached.ty / cached.scale;
+      const rect = {
+        minX: minX - m,
+        minY: minY - m,
+        maxX: minX + effViewportW / cached.scale + m,
+        maxY: minY + effViewportH / cached.scale + m,
+      };
+      const showsSomething = nodesDraw.some((n) => rectsOverlap(nodeOuterBounds(n), rect));
+      if (__DEV__) {
+        flowLog(
+          `[flowchart] restore key=${viewportCacheKey} scale=${cached.scale}` +
+            ` tx=${cached.tx} ty=${cached.ty} showsNodes=${showsSomething}`,
+        );
+      }
+      if (showsSomething) {
+        scale.value = cached.scale;
+        translateX.value = cached.tx;
+        translateY.value = cached.ty;
+        /* 恢复值可能低于捏合下限（大图），放宽下限否则一捏就被弹回去。 */
+        minPinchScale.value = Math.min(MIN_FLOW_SCALE, cached.scale);
+        lastViewportRef.current = { scale: cached.scale, tx: cached.tx, ty: cached.ty };
+        viewportOwnedRef.current = true;
+        visibleRectQuantizedKeyRef.current = '';
+        return;
+      }
+      /* 这条缓存看不见任何东西 —— 无论什么原因，都不如重新 fit。 */
+    }
     const { scale: s, translateX: tx, translateY: ty } = fitFlowChartToViewport(
       effViewportW,
       effViewportH,
@@ -705,7 +762,9 @@ export function TaskFlowChartView({
     translateX,
     translateY,
     minPinchScale,
-    nodesDraw.length,
+    nodesDraw,
+    viewportCacheKey,
+    viewportPrefsTick,
   ]);
 
   useEffect(() => {
@@ -744,43 +803,6 @@ export function TaskFlowChartView({
     };
   }, [tasks]);
 
-  /**
-   * 【按项目恢复视口】对齐 Desktop 的 FitViewOnLoad ①：有缓存就直接摆过去，没有才让 fit 跑。
-   *
-   * 恢复的 scale **不受 MIN_FLOW_SCALE 钳制** —— 那是捏合下限；用户上次可能就停在比它更小的
-   * 全图比例上（大图 fit 出来就低于它，见 FIT_MIN_SCALE），钳一下等于把人踢回左上角。
-   * 同时把捏合下限放宽到不高于恢复值，否则一捏就被弹上去。
-   */
-  useEffect(() => {
-    if (!viewportCacheKey) return;
-    /* 与 fit 同一条守卫：模型没建出来就别摆视口，等 nodesDraw 到位这条 effect 会重跑。 */
-    if (nodesDraw.length === 0) return;
-    if (viewportOwnedRef.current) return;
-    let cancelled = false;
-    const apply = () => {
-      if (cancelled) return;
-      const vp = readFlowViewport(viewportCacheKey);
-      if (!vp) return;
-      scale.value = vp.scale;
-      translateX.value = vp.tx;
-      translateY.value = vp.ty;
-      minPinchScale.value = Math.min(MIN_FLOW_SCALE, vp.scale);
-      lastViewportRef.current = { scale: vp.scale, tx: vp.tx, ty: vp.ty };
-      /* 标记接管：别让随后的 fit effect（svg/视口就绪时会跑）把它顶掉。 */
-      viewportOwnedRef.current = true;
-      visibleRectQuantizedKeyRef.current = '';
-      if (__DEV__) {
-        flowLog(
-          `[flowchart] restore key=${viewportCacheKey} scale=${vp.scale} tx=${vp.tx} ty=${vp.ty}`,
-        );
-      }
-    };
-    if (flowViewportsReady()) apply();
-    else void ensureFlowViewports().then(apply);
-    return () => {
-      cancelled = true;
-    };
-  }, [viewportCacheKey, nodesDraw.length, scale, translateX, translateY, minPinchScale]);
 
   /** 手势结束 / fit 落定后记一笔（worklet 侧经 runOnJS 调到这儿）。 */
   const commitViewport = useCallback(
